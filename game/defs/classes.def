@@ -25,6 +25,7 @@
 // Items: player, item_suit / healthkit / battery / longjump, world_items,
 //   ammo_*, weapon_*, player_weaponstrip, weaponbox, grenade,
 //   monster_tripmine, func_healthcharger, func_recharge.
+// FX (M3 follow-up): infodecal, env_glow.
 CLASS(WORLDSPAWN, "worldspawn")
 CLASS(INFO_PLAYER_START, "info_player_start")
 CLASS(INFO_PLAYER_DEATHMATCH, "info_player_deathmatch")
@@ -141,3 +142,5 @@ CLASS(GARG_STOMP, "garg_stomp")
 CLASS(STREAK_SPIRAL, "streak_spiral")
 CLASS(ENV_SMOKER, "env_smoker")
 CLASS(WEAPON_TRIPMINE, "weapon_tripmine")
+CLASS(INFODECAL, "infodecal")
+CLASS(ENV_GLOW, "env_glow")

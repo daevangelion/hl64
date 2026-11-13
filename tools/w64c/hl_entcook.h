@@ -436,10 +436,10 @@ static const struct { const char *name; uint16_t flags; } hle_classes[] = {
 	{"weapon_mp5", 0}, {"weapon_handgrenade", 0}, {"weapon_tripmine", 0},
 	{"weaponbox", 0},
 	{"player_weaponstrip", HLE_CF_LOGIC},
-	/* sound / fx (env_glow, env_beam, env_laser are dropped: no N64 beam
-	 * renderer, and a glow would cost an entity each) */
+	/* sound / fx (env_beam, env_laser are dropped: no N64 beam renderer);
+	 * GoldSrc shows placed decals and glows (HLSDK CDecal, CGlow) */
 	{"ambient_generic", 0}, {"speaker", 0}, {"env_beverage", 0},
-	{"env_sprite", 0},
+	{"env_sprite", 0}, {"env_glow", 0}, {"infodecal", 0},
 	{"env_explosion", HLE_CF_LOGIC}, {"env_shake", HLE_CF_LOGIC},
 	{"env_fade", HLE_CF_LOGIC}, {"env_message", HLE_CF_LOGIC},
 	{"env_render", HLE_CF_LOGIC}, {"env_spark", HLE_CF_LOGIC},
@@ -551,6 +551,9 @@ static const struct { const char *name; uint16_t kind; } hle_xkeys[] = {
 	{"rockets",HLE_KF}, {"uranium",HLE_KF}, {"Hornets",HLE_KF},
 	{"Hand Grenade",HLE_KF}, {"Satchel Charge",HLE_KF}, {"Trip Mine",HLE_KF},
 	{"Snarks",HLE_KF}, {"ARgrenades",HLE_KF},
+	/* infodecal (CDecal::KeyValue): the decals.wad name; the id step
+	 * writes its decal id (hle-format-v1.md "Ids") */
+	{"texture",HLE_KS},
 	{NULL, 0}
 };
 

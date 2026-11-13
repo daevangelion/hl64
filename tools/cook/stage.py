@@ -19,7 +19,7 @@ sounds are derived from those maps' entity lumps, the class table
                         sequence-group files
   sprites/<x>.sc4       cart CI4 sprites (tools/cook/hl_sprite_cook.py) of
                         every sprite the maps and the game effects name
-  gsfx/decals.i4        the decals the game shoots (cart I4)
+  gsfx/decals.i4        the decals the game shoots (cart I4, tools/cook/decals.py)
   gsfx/palette.lmp      the player's gfx/palette.lmp (palette-index colours)
   gfx/palette.lmp       the palette the ui8 sheets index (the same file,
                         or --ref-palette)
@@ -37,13 +37,16 @@ sounds are derived from those maps' entity lumps, the class table
                         (trigger touch ranks into the .hle),
                         tools/w64c/hleids.py (class / key / typed value ids
                         into the .hle, from the id spaces restab gives the
-                        staged names), tools/w64c/w64c.py
+                        staged names; infodecal textures outside the global
+                        sheet -> <staging>/maps/<m>.decl, the map's DECL
+                        sheet), tools/w64c/w64c.py
                         (docs/formats/w64-format.md)
   maps/campaign.cwg     tools/cook/hl_campaign.py graph + tools/w64c/w64seam.py
                         seams (docs/formats/cwg-format.md)
 
 `make cook` then runs tools/restab over the directory (campaign.rtb) and
-`tools/w64c/hleids --check` (the packages' ids equal the final table's).
+`tools/w64c/hleids --check` (the packages' ids equal the final table's; the
+HLE and decal region proofs).
 Intermediates (.wci4, .hle, the unproved graph, hl_hud_rects.h generated
 from the player's hud.txt, converted sounds) stay in the staging directory.
 Rerunning rewrites the same bytes and touches nothing unchanged; files a
@@ -73,7 +76,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from tools.cook import bake_hlhud, bake_ui, hl_classes, hl_sound_classes, hl_sound_refs
-from tools.cook import hl_sprite_cook
+from tools.cook import decals, hl_sprite_cook
 from tools.cook.data import Data, DataError
 from tools.cook.hl_classes import BspError
 from tools.restab import restab, rtb
@@ -96,17 +99,6 @@ HUD_SHEETS = bake_hlhud.SHEETS
 # gfx.wad pictures baked to ui8 (menu / pause / loading art and the font).
 UI_LUMPS = ("lambda", "lambda64", "lambda32", "paused", "backtile", "conchars",
             "creditsfont")
-
-# GoldSrc decals the game shoots, in HLSDK decals.h order (dlls/world.cpp
-# gDecals: index -> decals.wad name): the sheet's entry i is decal index i,
-# so the engine maps the game's index without names.
-DECAL_NAMES = (
-    [f"{{shot{i}" for i in range(1, 6)] + [f"{{lambda0{i}" for i in range(1, 7)]
-    + ["{scorch1", "{scorch2"] + [f"{{blood{i}" for i in range(1, 7)]
-    + [f"{{yblood{i}" for i in range(1, 7)] + [f"{{break{i}" for i in range(1, 4)]
-    + [f"{{bigshot{i}" for i in range(1, 6)] + ["{spit1", "{spit2", "{bproof1", "{gargstomp"]
-    + [f"{{smscorch{i}" for i in range(1, 4)] + ["{mommablob", "{mommablob"])
-DECAL_I4_MAX = 64  # texels per side (TMEM); larger lumps are halved
 
 MAX_SEQ_GROUPS = 15
 
@@ -314,68 +306,14 @@ def stage_sprites(data: Data, maps: List[str], ents, res: Dict[str, Set[str]],
 
 
 def stage_decals(data: Data, ct: Content) -> None:
-    """gsfx/decals.i4 (big-endian): u32 magic 'DI4'2, u16 count, u16 28, then
-    per decal, in HLSDK decals.h order (entry i = the game's decal index i),
-    name[16] (lower case), u8 texel w, h, world w, h (the lump's size), u8
-    tint r, g, b (palette[255]), pad, u32 data offset (a name listed twice
-    shares its texels); then I4 texels (high nibble first, 8-aligned): the
-    '{' decal's palette index is its alpha, quantised to 4 bits; sides over
-    DECAL_I4_MAX averaged down by 2 until they fit (scorch 96 -> 48 texels,
-    still 96 units)."""
-    wad = data.need("decals.wad")
-    what = data.where("decals.wad")
-    if len(wad) < 12 or wad[:4] != b"WAD3":
-        raise CookError(f"{what}: not a WAD3")
-    count, dirofs = struct.unpack_from("<ii", wad, 4)
-    if count < 0 or dirofs < 0 or dirofs + 32 * count > len(wad):
-        raise CookError(f"{what}: directory outside the file")
-    lumps: Dict[str, Tuple[int, int]] = {}
-    for i in range(count):
-        pos, _dsize, size, typ, _cmp, _pad, raw = struct.unpack_from(
-            "<iiibbh16s", wad, dirofs + 32 * i)
-        if typ == 0x43:
-            lumps[raw.split(b"\0")[0].decode("latin-1").lower()] = (pos, size)
-    missing = [n for n in DECAL_NAMES if n not in lumps]
-    if missing:
-        raise CookError(f"{what}: decals missing: " + ", ".join(missing))
-    entries, blobs, done = [], [], {}
-    ofs = 8 + 28 * len(DECAL_NAMES)
-    ofs = (ofs + 7) & ~7
-    for name in DECAL_NAMES:
-        if name in done:
-            entries.append(done[name])
-            continue
-        pos, size = lumps[name]
-        if pos < 0 or size < 40 or pos + size > len(wad):
-            raise CookError(f"{what}: decal {name} outside the file")
-        w, h, o0, _o1, _o2, o3 = struct.unpack_from("<II4I", wad, pos + 16)
-        if w < 1 or h < 1 or w > 255 or h > 255:
-            raise CookError(f"{what}: decal {name} is {w}x{h}")
-        pal = pos + o3 + (w // 8) * (h // 8) + 2
-        if pos + o0 + w * h > pos + size or pal + 256 * 3 > pos + size:
-            raise CookError(f"{what}: decal {name} texels or palette outside its lump")
-        tint = wad[pal + 255 * 3:pal + 256 * 3]
-        px = list(wad[pos + o0:pos + o0 + w * h])
-        tw, th = w, h
-        while tw > DECAL_I4_MAX or th > DECAL_I4_MAX:
-            px = [(px[(2 * y) * tw + 2 * x] + px[(2 * y) * tw + 2 * x + 1]
-                   + px[(2 * y + 1) * tw + 2 * x] + px[(2 * y + 1) * tw + 2 * x + 1] + 2) // 4
-                  for y in range(th // 2) for x in range(tw // 2)]
-            tw, th = tw // 2, th // 2
-        if tw % 16 or th < 1:
-            raise CookError(f"{what}: decal {name}: {tw}x{th} texels not storable")
-        q = [(v * 15 + 127) // 255 for v in px]
-        blob = bytes((q[k] << 4) | q[k + 1] for k in range(0, len(q), 2))
-        entries.append(name.encode("latin-1").ljust(16, b"\0")
-                       + bytes((tw, th, w, h)) + tint + b"\0"
-                       + struct.pack(">I", ofs))
-        done[name] = entries[-1]
-        blobs.append(blob.ljust((len(blob) + 7) & ~7, b"\0"))
-        ofs += len(blobs[-1])
-    head = struct.pack(">IHH", 0x44493402, len(DECAL_NAMES), 28) + b"".join(entries)
-    out = head.ljust((len(head) + 7) & ~7, b"\0") + b"".join(blobs)
+    """gsfx/decals.i4: the decals the game shoots, in HLSDK decals.h order
+    (tools/cook/decals.py)."""
+    try:
+        out = decals.sheet(data.need("decals.wad"), decals.DECAL_NAMES, data.where("decals.wad"))
+    except decals.DecalError as e:
+        raise CookError(str(e)) from None
     ct.put("gsfx/decals.i4", out)
-    log(f"    gsfx/decals.i4: {len(DECAL_NAMES)} decals, {len(out)} bytes")
+    log(f"    gsfx/decals.i4: {decals.GLOBAL_COUNT} decals, {len(out)} bytes")
 
 
 def stage_2d(data: Data, ct: Content, staging: Path, ref_palette: Optional[bytes]) -> None:
@@ -484,6 +422,11 @@ def cook_world(data: Data, maps: List[str], ct: Content, staging: Path, hlecook:
     if not materials.is_file():
         raise CookError(f"{materials}: missing (surface materials)")
     env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    wad, wad_where = data.need("decals.wad"), data.where("decals.wad")
+    try:
+        lumps = decals.wad_lumps(wad, wad_where)
+    except decals.DecalError as e:
+        raise CookError(str(e)) from None
 
     def one(m: str) -> None:
         bsp = data.root / "maps" / f"{m}.bsp"
@@ -495,12 +438,26 @@ def cook_world(data: Data, maps: List[str], ct: Content, staging: Path, hlecook:
         run([hlecook, bsp, cook / f"{m}.hle"])
         run([PY, "-m", "tools.w64c.touchrank", bsp, cook / f"{m}.hle"], env=env, cwd=ROOT)
         hle = cook / f"{m}.hle"
+        blob = hle.read_bytes()
+        # placed decals: textures outside the global sheet -> the map's DECL
+        local, absent = hleids.map_decals(hleids.decal_textures(blob, m), lumps)
+        for name in absent:
+            log(f"    warning: {m}: infodecal texture {name} not in {wad_where}: no decal "
+                "(HLSDK CDecal removes the entity)")
+        decl = cook / f"{m}.decl"
+        if local:
+            try:
+                decl.write_bytes(decals.sheet(wad, local, f"{wad_where} ({m})"))
+            except decals.DecalError as e:
+                raise CookError(str(e)) from None
+        else:
+            decl.unlink(missing_ok=True)
         log(f"+ hleids {hle}")
-        hle.write_bytes(hleids.apply(hle.read_bytes(), ids, m))
+        hle.write_bytes(hleids.apply(blob, ids.for_map(local), m))
         run([PY, "-m", "tools.w64c.w64c", bsp, cook / f"{m}.wci4", out_dir / f"{m}.w64",
              "--hle", cook / f"{m}.hle", "--materials", materials,
-             "--json", cook / f"{m}.json"], env=env, cwd=ROOT,
-            stdout=subprocess.DEVNULL)
+             "--json", cook / f"{m}.json", *(["--decl", decl] if local else [])],
+            env=env, cwd=ROOT, stdout=subprocess.DEVNULL)
 
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
         for f in [ex.submit(one, m) for m in maps]:

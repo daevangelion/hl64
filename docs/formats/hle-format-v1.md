@@ -95,7 +95,11 @@ stays, so `rec_key_str` keeps working at spawn time.
     N)`), `!NAME` in `message`, `sentence`, `noise*`, `UseSentence`,
     `UnUseSentence` → `RES_K_SENTENCE`, a speaker's `message` (no `preset`)
     and a talk monster's plain `UseSentence` / `UnUseSentence` →
-    `RES_K_GROUP`.
+    `RES_K_GROUP`; infodecal `texture` → decal id: below 42 the entry of
+    the global sheet `gsfx/decals.i4` (HLSDK decals.h order), 42 + i entry
+    i of the map's own placed-decal sheet (the package's `DECL` chunk,
+    w64-format.md), 0xFFFF when the player's `decals.wad` lacks the texture
+    (HLSDK `CDecal::Spawn` removes the entity; the cook warns).
   - `HLE_KN`: the classes.def id when the name is a classname
     (`m_iszEntity "monster_barney"`).
   - `HLE_KF`, `HLE_KV`: 0xFFFF.
@@ -117,14 +121,26 @@ largest open block (chunk + runtime, logic blocks for logic records only) +
 rejects a chunk without `HLE_F_IDS`, an id outside its space (classes,
 keys.def, patterns, global states, titles, each `res_t` kind's count,
 submodels of the layer), a lump map that disagrees with its record, and
-name / multisource lists naming dropped lumps.
+name / multisource lists naming dropped lumps. The same check proves the
+decal region (tools/cook/decals.py): align16(global sheet) + 2 ×
+align16(largest `DECL`) + `HL64_FX_DECALS` × `HL64_FX_DECAL_VERTS` × 10 B
+(piece vertices) must fit `HL64_DECAL_TEXELS_KB`; it prints the need.
 
 ## Cook rules
 
 - Classes: only `hle_classes[]` (what the native game spawns); others are
-  dropped (`info_node`, `env_glow`, `env_beam`, `env_bubbles`,
-  `infodecal`, `env_sound`, `trigger_autosave`, `func_tank*`,
-  `func_tracktrain`, …).
+  dropped (`info_node`, `env_beam`, `env_bubbles`, `env_sound`,
+  `trigger_autosave`, `func_tank*`, `func_tracktrain`, …). `infodecal`
+  and `env_glow` are kept: GoldSrc shows placed decals and glows.
+  - `infodecal` (HLSDK `CDecal`): physical record (class flags 0), every
+    one kept. Keys: `texture` (`HLE_KS`, keys.def `TEXTURE`; id = decal id,
+    above; `rec_key_decal`), `origin` (`HLE_KV`); the targetname is the
+    record's `tname`. No targetname: the decal is placed at spawn
+    (`StaticDecal`); with one: placed when used (`TriggerDecal`).
+  - `env_glow` (HLSDK `CGlow`, effects.cpp): physical record. Keys:
+    `model` (`HLE_KS`, sprite `res_t`), `origin`, `rendercolor` (`HLE_KV`),
+    `rendermode`, `renderamt`, `renderfx`, `scale`, `framerate`
+    (`HLE_KF`), as the map sets them (absent = HLSDK default).
 - Pruned: logic classes that act only when used and have no targetname
   (`multi_manager`, `trigger_relay`, `multisource`, `env_render`,
   `env_shake`, `env_fade`, `env_message`, `player_weaponstrip`,
