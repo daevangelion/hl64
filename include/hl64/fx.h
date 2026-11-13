@@ -119,7 +119,9 @@ uint16_t fx_text_current(float *alpha);
 
 typedef struct {
 	uint32_t	temps, temps_peak, particles_peak, beams_peak, decals, decal_drops;
-	uint32_t	trans_drawn, trans_dropped, us, us_max;
+	uint32_t	trans_drawn, trans_dropped;
+	uint32_t	us, us_max;	/* effects time per frame: sum, worst frame (sim + draw) */
+	uint32_t	sim_us, part_us, trans_us, decal_us;	/* sums of us by part */
 	uint32_t	frames, dlights;	/* fx_frame calls, lights allocated */
 } fx_stats_t;
 void	fx_stats(fx_stats_t *s, int reset);

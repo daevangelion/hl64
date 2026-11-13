@@ -345,6 +345,7 @@ static int cmd_mem(const dbg_cmd_t *c)
 	ent_mem_log();
 	res_mem_line();
 	rec_mem_line();
+	decal_mem_line();
 	mem_heap_lifetime(&total_mal, &total_fr, &fails, &live_n, &live_kb, &peak_kb);
 	log_printf("mem: allocs %u frees %u fails %u live %u (%u KB) peak %u KB stack %d\n",
 		total_mal, total_fr, fails, live_n, live_kb, peak_kb, sys_stack_peak());
@@ -600,9 +601,12 @@ static void rollup(void)
 
 		fx_stats(&f, 1);
 		n = f.frames ? f.frames : 1;
-		log_printf("prof fx_us avg=%lu max=%lu trans=%lu temps_peak=%lu parts_peak=%lu "
-			"beams_peak=%lu decals=%lu drops=%lu dlights=%lu\n", (unsigned long)f.us / n,
-			(unsigned long)f.us_max, (unsigned long)f.trans_drawn / n,
+		log_printf("prof fx_us avg=%lu max=%lu sim=%lu part=%lu trans_us=%lu decal=%lu "
+			"trans=%lu temps_peak=%lu parts_peak=%lu beams_peak=%lu decals=%lu drops=%lu "
+			"dlights=%lu\n", (unsigned long)f.us / n, (unsigned long)f.us_max,
+			(unsigned long)f.sim_us / n, (unsigned long)f.part_us / n,
+			(unsigned long)f.trans_us / n, (unsigned long)f.decal_us / n,
+			(unsigned long)f.trans_drawn / n,
 			(unsigned long)f.temps_peak, (unsigned long)f.particles_peak,
 			(unsigned long)f.beams_peak, (unsigned long)f.decals,
 			(unsigned long)(f.decal_drops + f.trans_dropped), (unsigned long)f.dlights);

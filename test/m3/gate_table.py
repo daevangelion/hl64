@@ -117,7 +117,7 @@ def main():
             note("dehydrate", d["peak"], "mem rec: store peak")
         if l.startswith("mem fx: decals"):
             d = kv(l)
-            note("decals", d["sheet"] + d["verts"], "mem fx: sheet+verts")
+            note("decals", d["peak"], "mem fx: peak (sheet+verts+slot sheets)")
         m = re.match(r"mem: hud (\d+) of (\d+) B", l)
         if m:
             note("hud", int(m.group(1)), "mem: hud")

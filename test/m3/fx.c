@@ -1431,7 +1431,9 @@ static int test_placed(const char *name)
 	int map = wld_map_find(name), slot, lump, f;
 	int decals = 0, statics = 0, local = 0, triggered = 0, glows = 0, live = 0, left = 0;
 	decal_stats_t ds;
-	char note[200];
+	fx_stats_t fs;
+	uint32_t base;
+	char note[320];
 
 	begin();
 	if (map < 0)
@@ -1473,6 +1475,8 @@ static int test_placed(const char *name)
 			rec_wake(gid);
 	}
 	decal_stats(&ds, 1);
+	base = ds.region_peak;
+	fx_stats(&fs, 1);
 	for (f = 0; f < 900; f++)
 	{
 		eng_frame();
@@ -1499,6 +1503,8 @@ static int test_placed(const char *name)
 	CHECK(!left, "%s: %d infodecals not removed after spraying", name, left);
 	CHECK(live == glows, "%s: %d of %d env_glow live with a sprite", name, live, glows);
 	CHECK(decal_count() >= statics, "%s: %d decals live", name, decal_count());
+	CHECK(!local || ds.region_peak > base, "%s: decal region peak %lu B misses the map sheet "
+		"(boot %lu B)", name, (unsigned long)ds.region_peak, (unsigned long)base);
 	/* the targeted ones spray when used (TriggerDecal), gone 0.1 s on */
 	for (lump = 0; lump < 1024; lump++)
 	{
@@ -1526,9 +1532,20 @@ static int test_placed(const char *name)
 	CHECK(ds.statics == statics + triggered, "%s: %d of %d triggered infodecals placed", name,
 		ds.statics - statics, triggered);
 	CHECK(!left, "%s: %d infodecals left after use", name, left);
+	/* the effects time roll-up: max is the worst frame of what avg sums */
+	fx_stats(&fs, 0);
+	CHECK(fs.frames && (uint64_t)fs.us_max * fs.frames >= fs.us
+		&& fs.us == fs.sim_us + fs.part_us + fs.trans_us + fs.decal_us,
+		"%s: fx_us sum %lu over %lu frames, max %lu (sim %lu part %lu trans %lu decal %lu)", name,
+		(unsigned long)fs.us, (unsigned long)fs.frames, (unsigned long)fs.us_max,
+		(unsigned long)fs.sim_us, (unsigned long)fs.part_us, (unsigned long)fs.trans_us,
+		(unsigned long)fs.decal_us);
 	snprintf(note, sizeof(note), "%s: infodecal %d (%d targetless placed in %d frames, %d map-sheet, "
-		"%d of %d triggered placed on use), env_glow %d/%d live, decals live %d", name, decals,
-		statics, f, local, ds.statics - statics, triggered, live, glows, decal_count());
+		"%d of %d triggered placed on use), env_glow %d/%d live, decals live %d, region peak %lu B "
+		"(boot %lu), fx_us avg %lu max %lu", name, decals, statics, f, local,
+		ds.statics - statics, triggered, live, glows, decal_count(), (unsigned long)ds.region_peak,
+		(unsigned long)base, (unsigned long)(fs.us / (fs.frames ? fs.frames : 1)),
+		(unsigned long)fs.us_max);
 	finish("PLACED", note);
 	return fails != 0;
 }

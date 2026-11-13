@@ -158,8 +158,9 @@ void		part_draw(void);
 int		part_live(void);
 /* Palette colour of a palette index (gsfx/palette.lmp; grey ramp without it). */
 void		part_color(uint8_t index, uint8_t rgb[3]);
-/* Profile: effects draw time (renderer side) joins fx_stats us. */
-void		fx_add_us(uint32_t us);
+/* Profile: effects draw time (renderer side) joins fx_stats us, by part. */
+enum { FX_US_PART, FX_US_TRANS, FX_US_DECAL };
+void		fx_add_us(int part, uint32_t us);
 
 /* ---- decals (decal.c) --------------------------------------------------------- */
 
@@ -179,6 +180,7 @@ typedef struct {
 	uint16_t	live, placed, pending, dropped, replaced, pieces, verts_max, nosheet;
 	uint16_t	statics;	/* fx_decal_static placements */
 	uint32_t	place_us;
+	uint32_t	region_peak;	/* decal region bytes: sheet + verts + slot sheets (peak) */
 } decal_stats_t;
 void		decal_stats(decal_stats_t *s, int reset);
 /* Test builds: decal i's pieces (global vertices) for checks. */

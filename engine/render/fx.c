@@ -46,8 +46,10 @@ static struct {
 	/* text */
 	uint16_t	title;
 	double		title_start;
-	/* profile window */
-	uint32_t	us_sum, frames;
+	/* profile window; frame_us = this frame's effects time so far (sim +
+	 * draw), folded into us_max when the next frame starts or the window
+	 * is read */
+	uint32_t	us_sum, frames, frame_us;
 } fx;
 
 /* ---- clock, random stream, frames ------------------------------------------ */
@@ -851,16 +853,26 @@ void fx_frame(double time, double dt)
 	if (beam_live() > (int)fx_s.st.beams_peak)
 		fx_s.st.beams_peak = (uint32_t)beam_live();
 	us = (uint32_t)(sys_time_us() - t0);
+	/* the previous frame (its sim and its draw) is complete */
+	if (fx.frame_us > fx_s.st.us_max)
+		fx_s.st.us_max = fx.frame_us;
+	fx.frame_us = us;
 	fx_s.st.us += us;
-	if (us > fx_s.st.us_max)
-		fx_s.st.us_max = us;
+	fx_s.st.sim_us += us;
 	fx.frames++;
 }
 
-/* Draw-side time is added by the renderer (fx_draw_*). */
-void fx_add_us(uint32_t us)
+/* Draw-side time, added by the renderer (fx_draw_*) to the frame's. */
+void fx_add_us(int part, uint32_t us)
 {
 	fx_s.st.us += us;
+	fx.frame_us += us;
+	if (part == FX_US_PART)
+		fx_s.st.part_us += us;
+	else if (part == FX_US_TRANS)
+		fx_s.st.trans_us += us;
+	else
+		fx_s.st.decal_us += us;
 }
 
 void fx_stats(fx_stats_t *s, int reset)
@@ -868,6 +880,9 @@ void fx_stats(fx_stats_t *s, int reset)
 	decal_stats_t d;
 
 	decal_stats(&d, 0);
+	/* read after the frame's draw (the roll-up): the frame counts whole */
+	if (fx.frame_us > fx_s.st.us_max)
+		fx_s.st.us_max = fx.frame_us;
 	*s = fx_s.st;
 	s->temps = (uint32_t)tent_live();
 	s->decals = d.live;
@@ -877,5 +892,6 @@ void fx_stats(fx_stats_t *s, int reset)
 	{
 		memset(&fx_s.st, 0, sizeof(fx_s.st));
 		fx.frames = 0;
+		fx.frame_us = 0;	/* its time is in the window just read */
 	}
 }
