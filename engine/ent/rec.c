@@ -41,17 +41,6 @@
 #include "engine/phys/phys.h"
 #include "engine/world/wld.h"
 
-/* The game (game/: slices GameCore, GameMon, Items) defines these; until
- * it is linked the engine opens maps and runs timers without spawning or
- * dispatching anything. */
-#pragma weak game_map_opened
-#pragma weak game_map_closing
-#pragma weak game_spawn_record
-#pragma weak game_spawn_logic
-#pragma weak game_use
-#pragma weak game_logic_use
-#pragma weak game_logic_timer
-
 /* record runtime flags */
 #define RT_LOGIC	0x01
 #define RT_POINT	0x02
@@ -120,7 +109,7 @@ typedef struct {
 	uint16_t	arg;
 	gid_t16		gid;		/* TM_REC record; TM_FIRE caller record */
 	name_t		target, killtarget;
-	uint16_t	pad;
+	uint16_t	hold;		/* re-armed by its own callback in pass `hold`: waits */
 	ent_h		act, caller;
 	float		value;
 } rtimer_t;			/* 32 */
@@ -156,6 +145,8 @@ static struct {
 	uint32_t	ntm, seq, nfrozen;
 	uint32_t	defer_head, ndefer;
 	uint32_t	sync_wakes;	/* this frame's in-call hydrations */
+	uint16_t	pass;		/* rec_run_timers pass number, never 0 */
+	gid_t16		running;	/* record whose timer callback runs, GID_NONE */
 	gid_t16		caller;		/* rec_caller_gid */
 	gid_t16		self;		/* record / entity being dispatched */
 	rec_stats_t	st;		/* window counters + current state */
@@ -355,7 +346,7 @@ static int hydrate(rmap_t *m, int ri, int reserve)
 	t->h = ent_handle_of(e);
 	prev = eng_frame_layer();
 	eng_set_frame_layer(m->slot);
-	ok = game_spawn_record ? game_spawn_record(gid, e) : 0;
+	ok = game_spawn_record(gid, e);
 	eng_set_frame_layer(prev);
 	if (ok < 0)
 	{
@@ -380,8 +371,7 @@ static void spawn_logic(rmap_t *m, int ri)
 	t->state = REC_LIVE;
 	prev = eng_frame_layer();
 	eng_set_frame_layer(m->slot);
-	if (game_spawn_logic)
-		game_spawn_logic(gid_of(m, ri));
+	game_spawn_logic(gid_of(m, ri));
 	eng_set_frame_layer(prev);
 }
 
@@ -826,8 +816,7 @@ static void use_ent(int e, int act, int caller, gid_t16 caller_gid, int use_type
 	R.caller = caller_gid != GID_NONE ? caller_gid : caller >= 0 ? ent_idc(caller)->gid : GID_NONE;
 	R.self = ent_idc(e)->gid;
 	eng_set_frame_layer(ent_idc(e)->layer);
-	if (game_use)
-		game_use(e, act, caller, use_type, value);
+	game_use(e, act, caller, use_type, value);
 	eng_set_frame_layer(prev);
 	R.caller = pc;
 	R.self = ps;
@@ -841,8 +830,7 @@ static void use_logic(gid_t16 gid, int act, int caller, gid_t16 caller_gid, int 
 	R.caller = caller_gid != GID_NONE ? caller_gid : caller >= 0 ? ent_idc(caller)->gid : GID_NONE;
 	R.self = gid;
 	eng_set_frame_layer(GID_SLOT(gid));
-	if (game_logic_use)
-		game_logic_use(gid, act, caller, use_type, value);
+	game_logic_use(gid, act, caller, use_type, value);
 	eng_set_frame_layer(prev);
 	R.caller = pc;
 	R.self = ps;
@@ -1006,6 +994,9 @@ void rec_timer(gid_t16 gid, float t, uint16_t arg, int activator)
 	tm->kind = TM_REC;
 	tm->gid = gid;
 	tm->arg = arg;
+	/* one think per frame (think-and-time.md 2, 5): a record re-arming
+	 * itself from its own callback runs on a later pass even when due */
+	tm->hold = gid == R.running ? R.pass : 0;
 	tm->act = handle_or_none(activator);
 	tm->use_type = ent_is_live(activator);	/* had an activator */
 }
@@ -1056,8 +1047,9 @@ static void run_timer(rtimer_t *tm)
 		prev = eng_frame_layer();
 		eng_set_frame_layer(GID_SLOT(c.gid));
 		R.self = c.gid;
-		if (game_logic_timer)
-			game_logic_timer(c.gid, c.arg, slot_or_none(c.act, c.use_type));
+		R.running = c.gid;
+		game_logic_timer(c.gid, c.arg, slot_or_none(c.act, c.use_type));
+		R.running = GID_NONE;
 		R.self = ps;
 		eng_set_frame_layer(prev);
 		return;
@@ -1076,6 +1068,8 @@ void rec_run_timers(double time, double dt)
 	uint64_t t0 = sys_time_us();
 
 	R.sync_wakes = 0;
+	if (++R.pass == 0)
+		R.pass = 1;
 	while (R.ntm)
 	{
 		rtimer_t *best = NULL;
@@ -1085,7 +1079,7 @@ void rec_run_timers(double time, double dt)
 		{
 			rtimer_t *tm = &R.tm[i];
 
-			if (tm->kind == TM_FREE || (double)tm->t > time + dt)
+			if (tm->kind == TM_FREE || (double)tm->t > time + dt || tm->hold == R.pass)
 				continue;
 			if (!best || tm->t < best->t || (tm->t == best->t && tm->seq < best->seq))
 				best = tm;
@@ -1290,8 +1284,7 @@ int rec_map_open(int layer)
 	m->open = 1;
 	prev = eng_frame_layer();
 	eng_set_frame_layer(layer);
-	if (game_map_opened)
-		game_map_opened(layer);
+	game_map_opened(layer);
 	eng_set_frame_layer(prev);
 	thaw(m);
 	log_printf("rec: %s open in slot %d: %u records (%u logic, %u pending), chunk %lu B, "
@@ -1376,8 +1369,7 @@ void rec_map_close(int slot)
 		return;
 	prev = eng_frame_layer();
 	eng_set_frame_layer(slot);
-	if (game_map_closing)
-		game_map_closing(slot);
+	game_map_closing(slot);
 	eng_set_frame_layer(prev);
 	freeze(m);
 	/* the map's live entities go with it (M4 dehydrates them first) */
@@ -1817,7 +1809,7 @@ void rec_reset(void)
 		R.hold[j].n = NAME_NONE;
 	R.ntm = R.nfrozen = R.ndefer = R.defer_head = R.sync_wakes = 0;
 	R.seq = 0;
-	R.caller = R.self = GID_NONE;
+	R.caller = R.self = R.running = GID_NONE;
 	R.store_used = 0;
 	memset(&R.st, 0, sizeof(R.st));
 	R.us_sum = 0;

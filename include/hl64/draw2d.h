@@ -27,11 +27,16 @@ void	d2_fill(int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b, uint8_
 /* Text in the player's HL font (cooked), returns the width drawn. */
 int	d2_text(int x, int y, const char *s, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 void	d2_screen(int *w, int *h);
+/* Row height of the text font, 0 when the font is missing. */
+int	d2_text_height(void);
 
 /* Engine: boot (sheets resident in the HUD region), frame begin / flush
  * after the 3D draw. */
 void	d2_init(void);
 void	d2_begin(void);
 void	d2_end(void);
+/* PROFILE roll-up: CPU us per frame (avg, max), draws per frame, HUD
+ * region bytes; resets the window. */
+void	d2_rollup(uint32_t *avg, uint32_t *max, uint32_t *draws, uint32_t *bytes);
 
 #endif

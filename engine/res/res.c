@@ -355,9 +355,6 @@ res_t res_def(int line)
 	return R.loaded && line >= 0 && (uint32_t)line < R.ndefs ? R.defs[line] : RES_NONE;
 }
 
-/* Slice Studio defines it (engine/render/studio*.c); 1 until linked */
-#pragma weak studio_body_count
-
 int res_model_frames(res_t r)
 {
 	int i = entry(r);
@@ -366,7 +363,7 @@ int res_model_frames(res_t r)
 		return 1;
 	if (R.res[i].kind == RES_K_SPRITE)
 		return R.sprframes[RES_INDEX(r)];
-	if (R.res[i].kind == RES_K_MODEL && studio_body_count)
+	if (R.res[i].kind == RES_K_MODEL)
 		return studio_body_count(r);
 	return 1;
 }
