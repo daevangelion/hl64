@@ -1410,9 +1410,12 @@ static float box_d2(const rrt_t *t, const float p[3])
 	return d2;
 }
 
+/* Test builds (host and cart) count records so the entity state hashes
+ * of host and ares runs agree (K10); playable builds spend 2 ms of wall
+ * time (architecture.md 6.4). */
 static int budget_left(uint64_t t0, uint32_t done)
 {
-#ifdef HL64_HOST
+#ifdef HL64_TEST
 	(void)t0;
 	return done < REC_BUDGET_HOST;
 #else

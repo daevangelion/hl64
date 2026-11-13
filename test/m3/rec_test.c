@@ -434,6 +434,11 @@ static void test_campaign(void)
 		rec_stats(&s, 1);
 		if ((int)s.hydrated > maxhyd)
 			maxhyd = (int)s.hydrated;
+		/* test builds: a record count, not wall time (K10): the first
+		 * frame at the hall has more than 8 records in reach */
+		if (f == 0)
+			CHECK(s.hydrated == REC_BUDGET_HOST, "deterministic budget: %u on the first frame",
+				s.hydrated);
 	}
 	CHECK(maxhyd > 0 && maxhyd <= REC_BUDGET_HOST, "budget: max %d per frame", maxhyd);
 	printf("pump: max %d hydrated per frame, live=%d pending=%d\n", maxhyd,
@@ -597,7 +602,9 @@ static void test_res(void)
 	CHECK(res_count(RES_K_MODEL) > 0 && res_count(RES_K_SOUND) > 0 && res_count(RES_K_SENTENCE) > 0,
 		"res counts");
 	CHECK(res_titles() > 0 && res_title(0) && res_title_text(0) && !res_title(0xFFFF), "titles");
-	CHECK(res_classes() == RC__N, "classes.def lines %d vs %d", res_classes(), RC__N);
+	/* classes.def is append-only: content cooked with fewer lines is valid */
+	CHECK(res_classes() > 0 && res_classes() <= RC__N, "classes.def lines %d vs %d",
+		res_classes(), RC__N);
 	CHECK(res_name(RES_MAKE(RES_K_MODEL, 0))[0] != 0, "host names");
 	CHECK(res_model_frames(RES_MAKE(RES_K_SPRITE, 0)) >= 1, "sprite frames");
 	printf("res: %d ids, %d titles, title 0 '%.20s'\n", total, res_titles(), res_title_text(0));
