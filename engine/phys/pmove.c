@@ -91,10 +91,18 @@ static int box_has(const col_ent_t *e, const float p[3])
 	return 1;
 }
 
+/* Service cost under the move (prof): pm_shared's calls are timed at the
+ * boundary; the services' own nested calls use the static bodies. */
+static void prof_add(uint64_t t0, uint32_t *us, uint32_t *calls)
+{
+	*us += (uint32_t)(sys_time_us() - t0);
+	(*calls)++;
+}
+
 /* World contents: the home layer's leaf in its own frame; where that is
  * SOLID (or outside it) the other open layers, globally (col_true_contents
  * order). */
-int phy_pm_true_contents(const float p[3])
+static int true_contents(const float p[3])
 {
 	const wld_layer_t *H = P.home;
 	float g[3];
@@ -117,9 +125,18 @@ int phy_pm_true_contents(const float p[3])
 	return col_true_contents(g);
 }
 
-int phy_pm_contents(const float p[3], int *truecont)
+int phy_pm_true_contents(const float p[3])
 {
-	int w = phy_pm_true_contents(p), i;
+	uint64_t t0 = sys_time_us();
+	int c = true_contents(p);
+
+	prof_add(t0, &P.prof.contents_us, &P.prof.contents);
+	return c;
+}
+
+static int contents(const float p[3], int *truecont)
+{
+	int w = true_contents(p), i;
 
 	if (truecont)
 		*truecont = w;
@@ -135,6 +152,15 @@ int phy_pm_contents(const float p[3], int *truecont)
 			return e->skin;
 	}
 	return w;
+}
+
+int phy_pm_contents(const float p[3], int *truecont)
+{
+	uint64_t t0 = sys_time_us();
+	int c = contents(p, truecont);
+
+	prof_add(t0, &P.prof.contents_us, &P.prof.contents);
+	return c;
 }
 
 int phy_pm_model_bounds(uint16_t model, float mins[3], float maxs[3])
@@ -153,10 +179,20 @@ int phy_pm_model_bounds(uint16_t model, float mins[3], float maxs[3])
 	return 1;
 }
 
+static void clip(const col_ent_t *pe, int usehull, const float start[3], const float end[3],
+	col_trace_t *tr)
+{
+	P.prof.clips++;
+	col_clip(pe, start, phy_pm_mins[usehull], phy_pm_maxs[usehull], end, tr);
+}
+
 void phy_pm_trace_ent(const col_ent_t *pe, int usehull, const float start[3], const float end[3],
 	col_trace_t *tr)
 {
-	col_clip(pe, start, phy_pm_mins[usehull], phy_pm_maxs[usehull], end, tr);
+	uint64_t t0 = sys_time_us();
+
+	clip(pe, usehull, start, end, tr);
+	prof_add(t0, &P.prof.trace_us, &P.prof.traces);
 }
 
 /* the physents a player trace with these flags examines */
@@ -173,7 +209,7 @@ static int pe_skip(const col_ent_t *e, int i, int flags, int ignore_pe)
 	return 0;
 }
 
-void phy_pm_trace(const float start[3], const float end[3], int flags, int usehull, int ignore_pe,
+static void trace(const float start[3], const float end[3], int flags, int usehull, int ignore_pe,
 	col_trace_t *tr)
 {
 	int i, k;
@@ -189,7 +225,7 @@ void phy_pm_trace(const float start[3], const float end[3], int flags, int usehu
 
 		if (pe_skip(&phy_pm.pe[i], i, flags, ignore_pe))
 			continue;
-		phy_pm_trace_ent(&phy_pm.pe[i], usehull, start, end, &t);
+		clip(&phy_pm.pe[i], usehull, start, end, &t);
 		/* trace-and-hulls.md 4.4 step 5 */
 		if (t.allsolid || t.startsolid || t.frac < tr->frac)
 		{
@@ -216,7 +252,16 @@ void phy_pm_trace(const float start[3], const float end[3], int flags, int usehu
 	}
 }
 
-int phy_pm_test(const float pos[3], int usehull, col_trace_t *tr)
+void phy_pm_trace(const float start[3], const float end[3], int flags, int usehull, int ignore_pe,
+	col_trace_t *tr)
+{
+	uint64_t t0 = sys_time_us();
+
+	trace(start, end, flags, usehull, ignore_pe, tr);
+	prof_add(t0, &P.prof.trace_us, &P.prof.traces);
+}
+
+static int test_pos(const float pos[3], int usehull, col_trace_t *tr)
 {
 	int i;
 
@@ -226,7 +271,7 @@ int phy_pm_test(const float pos[3], int usehull, col_trace_t *tr)
 
 		if (pe_skip(&phy_pm.pe[i], i, 0, -1))
 			continue;
-		phy_pm_trace_ent(&phy_pm.pe[i], usehull, pos, pos, &t);
+		clip(&phy_pm.pe[i], usehull, pos, pos, &t);
 		if (t.startsolid || t.allsolid)
 		{
 			if (tr)
@@ -245,6 +290,15 @@ int phy_pm_test(const float pos[3], int usehull, col_trace_t *tr)
 		memcpy(tr->end, pos, sizeof(tr->end));
 	}
 	return -1;
+}
+
+int phy_pm_test(const float pos[3], int usehull, col_trace_t *tr)
+{
+	uint64_t t0 = sys_time_us();
+	int r = test_pos(pos, usehull, tr);
+
+	prof_add(t0, &P.prof.trace_us, &P.prof.traces);
+	return r;
 }
 
 /* ---- physents (pmove-host.md 2) ------------------------------------------- */

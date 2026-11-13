@@ -39,6 +39,10 @@ typedef struct {
 	uint32_t	physents_max;
 	uint32_t	overflow;	/* frames that dropped physents / ladders */
 	uint32_t	sounds;		/* pm_shared sound requests (no audio before M3) */
+	/* the services under the move, timed where pm_shared calls them */
+	uint32_t	traces, trace_us;	/* player traces and position tests */
+	uint32_t	clips;			/* physent clips inside them */
+	uint32_t	contents, contents_us;	/* point contents */
 } phy_player_prof_t;
 /* The window since the last call (reset = 1 starts a new one). */
 void		phy_player_prof(phy_player_prof_t *p, int reset);
