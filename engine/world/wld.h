@@ -114,16 +114,23 @@ typedef struct {
  * sys_error on a bad package. Boot / New Game / setpos only (load I/O). */
 wld_layer_t	*wld_open(int map);
 /* Seam open (M4, architecture.md 5.4 req. 1): never blocks. Takes a free
- * layer slot and queues the directory, tables and pinned hull-0 COLL reads
- * at OPEN priority; returns the open layer if the map is already open, NULL
- * when no slot / no layer-directory room (the caller counts open_fail). */
+ * layer slot and queues the header, directory, tables, pinned hull-0 COLL
+ * and ENTS reads at OPEN priority (stepped by wld_stream_frame); returns
+ * the open layer if the map is already open (ready or not), NULL when no
+ * slot is free (the caller counts open_fail). */
 wld_layer_t	*wld_open_async(int map);
 /* 1 once an async-opened layer has its directory, tables and pinned hull 0
- * resident (point->leaf, traces and HLE open are then valid). */
+ * resident (point->leaf, traces and HLE open are then valid; wld_open
+ * layers are ready at return); 0 while in flight; -1 when the open failed
+ * (no layer-region room after the fenced frees retired): count open_fail
+ * and wld_close it. */
 int		wld_layer_ready(const wld_layer_t *L);
 void		wld_close(wld_layer_t *L);
-wld_layer_t	*wld_layer(int slot);		/* NULL when closed */
-wld_layer_t	*wld_layer_of_map(int map);	/* NULL when not open */
+/* Ready layer of a slot: NULL when closed or while its async open is in
+ * flight (every layer loop sees whole layers only). */
+wld_layer_t	*wld_layer(int slot);
+/* Layer holding map, ready or still opening; NULL when not open. */
+wld_layer_t	*wld_layer_of_map(int map);
 
 /* BSP leaf of a map-local point (hull 0, grid start node). */
 int		wld_point_leaf(const wld_layer_t *L, const float p[3]);
@@ -165,9 +172,22 @@ void		wld_frame(uint32_t frame);
  * 0x8000 | n = BSP model n's MOVR, each with its TEXP pages) at SEAM
  * priority, plus the B hull-0 window; one seam pin per layer (a new call
  * replaces it). io_set_seam(1) while any seam pin is not resident. */
+/* pool: native byte order, copied (at most WLD_PIN_POOL entries). */
+#define WLD_PIN_POOL	128
 void		wld_pin_seam(wld_layer_t *B, const uint16_t *pool, int n);
 void		wld_unpin_seam(wld_layer_t *B);
-int		wld_pin_resident(const wld_layer_t *B);	/* 1 when nothing pinned is missing */
+/* The seam pin's B window (with wld_pin_seam; wld_unpin_seam clears it):
+ * a B-local player box (switch eye box + delta - view offset, hull
+ * extents); the COLL grid lists of that box +- the collision window are
+ * pinned at SEAM priority so B's first traces never read synchronously. */
+void		wld_pin_seam_window(wld_layer_t *B, const float mins[3], const float maxs[3]);
+/* 1 when nothing of B's seam pin (set and window) is missing. */
+int		wld_pin_resident(const wld_layer_t *B);
+/* Point pin (teleport destinations, route look-ahead SETPOS): the eye-leaf
+ * set and the collision window around map-local org of an open map, PIN
+ * class; lapses after 3 s or when the player arrives within 64 u. A call
+ * for the same map and point re-arms it; at most 4 live (the oldest goes). */
+void		wld_pin_point(int map, const float org[3]);
 /* Step 9: the target-set inputs of the home layer (eye map-local, velocity);
  * the set (open, pin lapse, prefetch at eye + v * {0.25, 0.5, 1} s,
  * collision window + v * 0.5 s) is rebuilt only when an input changed
