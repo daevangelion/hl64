@@ -52,6 +52,10 @@ typedef struct {
 	/* OPEN-seam cross-layer draw (cwg-format.md): 0 off, 1 on, 2 on and
 	 * log the meshlets drawn per frame (`ren: open seam ...`) */
 	uint8_t		r_openseam;
+	/* cart colour dithering of the 3D passes (plat/n64/n64.h N64_DITHER):
+	 * 1 on, 0 off (truncated 16-bit output; the M1 gate's old-cart
+	 * comparison renders that way) */
+	uint8_t		r_dither;
 } settings_t;
 
 extern settings_t settings;
@@ -87,7 +91,8 @@ extern settings_t settings;
 	X(STICK_DEADZONE, stick_deadzone, U8, 0, 64, 1) \
 	X(SHOW_FPS, show_fps, U8, 0, 1, 1) \
 	X(DEBUG_OVERLAY, debug_overlay, U8, 0, 1, 0) \
-	X(R_OPENSEAM, r_openseam, U8, 0, 2, 0)
+	X(R_OPENSEAM, r_openseam, U8, 0, 2, 0) \
+	X(R_DITHER, r_dither, U8, 0, 1, 0)
 
 enum {
 #define SETTINGS_ENUM(id, field, type, lo, hi, persist) SET_##id,

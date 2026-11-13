@@ -7,11 +7,15 @@
 #          hldemo1 poses on the host; the draw-list recorder's counts must
 #          equal the cook-side prediction (test/m1/predict.py) at every pose;
 #          the cook's world-surfaces tests (W1-W5, tools/w64c).
-#   ares:  the same poses on an HL64_TEST ROM: SSIM >= 0.95 against the old
-#          cart's world-only shots of the same poses (masks: HUD, harness
-#          bars, the dome scientist), the cart's counts equal the prediction
-#          too; a PROFILE ROM holds the dome pose: world CPU <= 2000 us
-#          (mean of the 1 s roll-ups at the pose).
+#   ares:  the same poses on an HL64_TEST ROM with colour dithering off
+#          (r_dither 0, the old cart's undithered 16-bit output): SSIM >= 0.95
+#          against the old cart's world-only shots of the same poses (masks:
+#          HUD, harness bars, the dome scientist); each pose again with
+#          dithering on: per channel 3.6 brighter on average than off
+#          (test/m1/dither.py: the truncation residual the dither restores);
+#          the cart's counts equal the prediction too; a PROFILE ROM
+#          (dithering on) holds the dome pose: world CPU <= 2000 us (mean of
+#          the 1 s roll-ups at the pose).
 #
 # Poses are the old cart's eye positions (black-box capture of the old
 # cart: setpos origin + view height 28 + its 1/32 offset). The old cart's
@@ -69,15 +73,19 @@ POSES=(
 	"dome -1999.96875 -619.96875 224.03125 0 270 0"
 	"elevator -2499.96875 -99.96875 224.03125 0 0 0"
 )
-# Commands: fov, then per pose setpos, shot after 35 frames, stats.
-CMDS=(--cmd "@2 set fov $FOV")
+# Commands: fov, colour dithering off (the old cart's output path: the SSIM
+# reference was rendered undithered), then per pose setpos, shot after 35
+# frames, stats, and the same pose again with dithering on (shot label + 10;
+# test/m1/dither.py), back off for the next pose.
+CMDS=(--cmd "@2 set fov $FOV" --cmd "@2 set r_dither 0")
 f=5
 i=1
 for p in "${POSES[@]}"; do
 	read -r name x y z pi ya ro <<<"$p"
 	CMDS+=(--cmd "@$f setpos $MAP $x $y $z $pi $ya $ro" --cmd "@$((f + 35)) shot $i"
-		--cmd "@$((f + 36)) stats $i")
-	f=$((f + 40))
+		--cmd "@$((f + 36)) stats $i" --cmd "@$((f + 36)) set r_dither 1"
+		--cmd "@$((f + 40)) shot $((i + 10))" --cmd "@$((f + 41)) set r_dither 0")
+	f=$((f + 45))
 	i=$((i + 1))
 done
 CMDS+=(--cmd "@$f quit 0")
@@ -162,18 +170,25 @@ grep -q '^predict: PASS' "$OUT/predict-cart.log" || soft "cart counts differ fro
 # masks (inclusive): harness bars, `say:` prompt, HUD health/suit, HUD
 # flashlight icon; dome: the scientist
 MASK=(--mask 0,0,319,3 --mask 8,0,47,7 --mask 11,216,115,229 --mask 295,11,309,19)
+# per pose two dumps: r_dither 0 (SSIM against the undithered old cart) and
+# r_dither 1 (dither live and unbiased against the first: dither.py)
 i=0
 for p in "${POSES[@]}"; do
 	read -r name _ <<<"$p"
 	extra=()
 	[[ $name == dome ]] && extra=(--mask 69,113,93,175)
-	ppm="$ROMDIR/ares-test-$(printf %04d $i).ppm"
-	[[ -f "$ppm" ]] || fail "no screenshot for $name"
+	ppm="$ROMDIR/ares-test-$(printf %04d $((2 * i))).ppm"
+	on="$ROMDIR/ares-test-$(printf %04d $((2 * i + 1))).ppm"
+	[[ -f "$ppm" && -f "$on" ]] || fail "no screenshots for $name"
 	s="$(python3 "$ROOT/test/m1/ssim.py" "$ppm" "$M1_REF/$name-B.png" "${MASK[@]}" "${extra[@]}" \
 		--diff "$OUT/diff-$name.png" | awk '{print $2}')"
 	echo "ssim $name $s"
 	python3 -c "import sys; sys.exit(0 if float('$s') >= 0.95 else 1)" || soft "SSIM $name $s < 0.95"
+	d="$(python3 "$ROOT/test/m1/dither.py" "$ppm" "$on" "${MASK[@]}" "${extra[@]}")" \
+		|| soft "$name: dithered shot not the undithered one + 3.6 per channel ($d)"
+	echo "$name $d"
 	cp "$ppm" "$OUT/$name.ppm"
+	cp "$on" "$OUT/$name-dither.ppm"
 	i=$((i + 1))
 done
 
