@@ -116,7 +116,9 @@ file (precache-and-resources.md R2). The same check proves the HLE region
 against the structs) it takes rec_init's tables + the largest open-time
 need (16-aligned chunk + records × (runtime + logic + 2) + 16) + the
 largest open block (chunk + runtime, logic blocks for logic records only) +
-2 × the largest runtime, each 16-aligned, prints it, and fails above
+2 × the largest frozen runtime part (a closed map keeps 2-bit record
+states, padded to 4 B, + its logic blocks; `REC_FROZEN_MAPS` 2), each
+16-aligned, prints it, and fails above
 `HL64_HLE_BLOBS_KB`. The engine (`engine/ent/rec_hle.c`)
 rejects a chunk without `HLE_F_IDS`, an id outside its space (classes,
 keys.def, patterns, global states, titles, each `res_t` kind's count,
@@ -166,12 +168,15 @@ align16(largest `DECL`) + `HL64_FX_DECALS` × `HL64_FX_DECAL_VERTS` × 10 B
 
 ## Runtime requirements (hl64 `engine/ent/rec.c`)
 
-- Up to 4 resident chunks (the HLE slots of architecture.md 5.3, the same
-  slot number as the world layer); global
-  record id `gid = slot << 10 | lump`, carried in the entity's `id`
-  component (architecture.md 6.2); names resolve in the caller's source
-  map, callers without one use the home map (cross-map `changetarget`
-  fires through the target map's name index).
+- One resident chunk per open map (the HLE slot = the world layer slot,
+  2); global record id `gid = slot << 10 | lump`, carried in the entity's
+  `id` component (architecture.md 6.2); names resolve in the caller's
+  source map, callers without one use the home map (cross-map
+  `changetarget` fires through the target map's name index). The chunk is
+  read asynchronously at OPEN priority once the layer is ready; nothing of
+  the map hydrates before it lands. A closed map keeps only its frozen
+  runtime part (2-bit record states + logic blocks, 2 maps; a third
+  freeze forgets the oldest) by CWG map; the chunk is re-read on reopen.
 - Physical records: the game's spawn for the class reads the typed keys in
   place (strings point into the chunk, nothing allocated). Logic records:
   a small per-record state block plus a class handler; point records are
@@ -184,6 +189,8 @@ align16(largest `DECL`) + `HL64_FX_DECALS` × `HL64_FX_DECAL_VERTS` × 10 B
   the timer peak. Measured (hl64 cook, M3): hldemo1 48,912 B chunk (447
   records: 166 logic, 275 physical) + 14,278 B runtime (24 B per record,
   16 B per logic record, the pending list); hldemo2 44,624 B (420 records).
+  M4 (c6 cook): hldemo1 488 records (166 logic) frozen part 2,780 B,
+  hldemo2 486 (133 logic) 2,252 B.
 
 ## Node graph (`HLN1`, optional tail)
 

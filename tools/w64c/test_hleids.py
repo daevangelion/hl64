@@ -267,9 +267,9 @@ class HleIds(unittest.TestCase):
         return path
 
     def test_hle_region_accounting(self) -> None:
-        """open_chunk's bytes for the synthetic chunk: need bounds logic and
+        """the engine's bytes for the synthetic chunk: need bounds logic and
         pending space by the records, the open block keeps logic blocks of
-        the logic records only"""
+        the logic records only, the frozen part is 2-bit states + logic"""
         rt, logic, tables = hleids.accounting(hleids.DEFAULT_REC_INT)
         self.assertEqual((rt, logic), (24, 16))
         blob = self.blob + bytes(-len(self.blob) % 16)
@@ -281,12 +281,14 @@ class HleIds(unittest.TestCase):
         self.assertEqual(s.need, len(blob) + 42 * n + 16)
         self.assertEqual(s.block, ((len(blob) + 24 * n + 16 * nlog + 3) & ~3) + 2 * n)
         self.assertEqual(s.runtime, s.block - len(blob))
+        self.assertEqual(s.frozen, (((n + 3) // 4 + 3) & ~3) + 16 * nlog)
         empty = blob[:18] + bytes(2) + blob[20:96] + bytes(16)                # no records
         small = hleids.slot_bytes("s", empty, rt, logic)
-        self.assertEqual((small.need, small.block), (112 + 16, 112))
+        self.assertEqual((small.need, small.block, small.frozen), (112 + 16, 112, 0))
         r = hleids.hle_region([small, s], tables)
         self.assertIs(r.opening, s)
-        self.assertEqual(r.total, tables + a16(s.need) + a16(s.block) + 2 * a16(s.runtime))
+        self.assertIs(r.frozen, s)
+        self.assertEqual(r.total, tables + a16(s.need) + a16(s.block) + 2 * a16(s.frozen))
         for bad in (b"", blob[:50], b"HLX1" + blob[4:], blob[:52] + struct.pack("<I", len(blob)) + blob[56:]):
             with self.assertRaises(hleids.IdError):
                 hleids.slot_bytes("m", bad, rt, logic)

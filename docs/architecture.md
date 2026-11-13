@@ -223,24 +223,29 @@ what a closing map keeps:
 
 - **Open** map (geometry layer resident): full slot, chunk + runtime.
 - **Frozen** map (closed with frozen timers or logic still referenced):
-  runtime only — record state, timers, logic thinks, masters and the
-  name→record index a cross-map fire or timer callback can reach (the
-  cook puts those in the runtime part). The chunk (immutable cooked
-  records and keys) is dropped and re-read from the cart when the map
-  reopens: ≈ 50 KB on the OPEN DMA priority in the approach window, before
-  any of its records can hydrate (no record of a closed map can).
-- **Cook check** (`hleids`, measured by M3Lead2): need = shared tables +
-  the **opening** map at its open-time need (the heap must hold it while
-  it opens) + one open map's resident slot + 2 × frozen runtime, each
-  16-aligned, over the worst maps of the campaign. With `infodecal` and
-  `env_glow` cooked (user decision: GoldSrc shows them), measured need:
-  Uplink + Hazard **187232 B** (tables 16688 + opening hldemo1 72512 +
-  open hldemo1 67344 + 2 × 15344); retail campaign estimate **194768 B**
-  (worst c2a5f). Before that change: 176176 B Uplink + Hazard, 185184 B
-  for the 83 retail maps. `HL64_HLE_BLOBS_KB` is **240 KB** (retail
-  × 1.25); the cook proof stays the hard bound and fails any campaign
-  over the carve. Evidence: `/scratch/hl64/tmp/M3Lead2/cook4.log`,
-  `cook5.log`, `/scratch/hl64/tmp/Rec/retail/`, Rec commit `48e213e`.
+  runtime only — record states (2 bits each: pending / live logic /
+  killed / dry), logic blocks (logic thinks, masters' state). Timers
+  frozen by remaining time, deferred uses by (map, lump) / runtime id and
+  runtime entities by (map, runtime id) sit in the shared tables; deltas in
+  the dehydrate store. The name index comes back with the chunk: no fire
+  can reach a frozen map (names carry the open slot; uses into it wait in
+  the FIFO). The chunk (immutable cooked records and keys) is dropped and
+  re-read from the cart when the map reopens: ≈ 50 KB on the OPEN DMA
+  priority in the approach window, before any of its records can hydrate
+  (no record of a closed map can). Two frozen maps are kept; a third
+  freeze forgets the oldest (it reopens as cooked).
+- **Cook check** (`hleids`): need = shared tables + the **opening** map at
+  its open-time need (the heap must hold it while it opens) + one open
+  map's resident slot + 2 × frozen runtime part, each 16-aligned, over the
+  worst maps of the campaign. Measured (M4 Rec, c6 cook, Uplink + Hazard):
+  **165440 B** (tables 20016 + opening hldemo1 72512 + open hldemo1 67344
+  + 2 × frozen hldemo1 2780). Earlier (M3, runtime-sized frozen slots):
+  187232 B Uplink + Hazard, retail estimate 194768 B (worst c2a5f).
+  `HL64_HLE_BLOBS_KB` stays **240 KB**; the cook proof is the hard bound
+  and fails any campaign over the carve. Evidence:
+  `/scratch/hl64/tmp/M3Lead2/cook4.log`, `cook5.log`,
+  `/scratch/hl64/tmp/Rec/retail/`, Rec commits `48e213e` (M3) and the
+  M4 Rec commit (test/m4/rec.sh frozen proof).
 
 ### 4.2 CPU per frame (33.3 ms at 30 fps)
 
