@@ -64,7 +64,7 @@ typedef struct {
 
 static item_t		items[HL64_FX_TRANS_MAX], cuts[HL64_FX_TRANS_MAX];
 static int		nitems, ncuts;
-static float		frac[HL64_MAX_ENTITIES];	/* fade remainders (fx 5-8) */
+static int32_t		frac[HL64_MAX_ENTITIES];	/* fade remainders, 1/65536 (fx 5-8) */
 static fx_draw_stats_t	ds, last;
 
 void	tent_draw(int i, uint8_t blend, int mode);
@@ -165,7 +165,7 @@ void trans_frame(double dt)
 	for (e = 1; e < HL64_MAX_ENTITIES; e++)
 	{
 		ent_rnd_t *r;
-		float rate, step;
+		int32_t rate, step;
 		int amt;
 
 		if (!ent_is_live(e))
@@ -181,16 +181,18 @@ void trans_frame(double dt)
 			frac[e] = 0;
 			continue;
 		}
-		/* exact per-second rates, the remainder kept between frames */
-		step = rate * (float)dt + frac[e];
-		amt = r->renderamt + (int)step;
-		frac[e] = step - (float)(int)step;
-		if (amt <= 0)
+		/* exact per-second rates in 16.16 fixed point, the remainder
+		 * kept between frames */
+		step = (int32_t)lrint((double)rate * dt * 65536.0) + frac[e];
+		amt = r->renderamt + step / 65536;
+		frac[e] = step % 65536;
+		/* at the bound it moves to: stay (the remainder dropped) */
+		if (amt <= 0 && rate < 0)
 		{
 			amt = 0;
 			frac[e] = 0;
 		}
-		if (amt >= 255)
+		if (amt >= 255 && rate > 0)
 		{
 			amt = 255;
 			frac[e] = 0;
