@@ -391,6 +391,9 @@ static int line(char *s)
 			return -1;
 		layer = L->slot;
 		eng_set_frame_layer(layer);
+		/* the world entity (slot 0), as the game spawns it */
+		if (!ent_get(ENT_WORLD))
+			ent_alloc_at(ENT_WORLD);
 		return 0;
 	}
 	if (!strncmp(s, "clock ", 6))
@@ -435,6 +438,11 @@ static int line(char *s)
 		ent_tm(i)->think = ent_tm(i)->touch = ent_tm(i)->blocked = probe ? 1 : 0;
 		th[i].mode = 0;
 		th[i].done = 0;
+		/* as ent_set_movetype does (slice Ent): a motion movetype starts
+		 * with watertype EMPTY (GoldSrc's first physics frame) */
+		ent_phys(i)->watertype = (mt == MOVETYPE_STEP || mt == MOVETYPE_FLY
+			|| mt == MOVETYPE_TOSS || mt == MOVETYPE_FLYMISSILE || mt == MOVETYPE_BOUNCE
+			|| mt == MOVETYPE_BOUNCEMISSILE || mt == MOVETYPE_PUSHSTEP) ? COL_EMPTY : 0;
 		ent_link(e);
 		ent_motion_changed(i);
 		return 0;

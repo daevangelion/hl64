@@ -66,6 +66,7 @@ typedef struct {
 	double		die;		/* game time (f64 s); dead once die < time */
 	uint8_t		color[3];
 	uint8_t		world;		/* lights the world (elights do not) */
+	uint16_t	entity;		/* elight: the only model it lights (0: every model) */
 } ren_dlight_t;
 
 /* Light for key (reused), else the first dead light, else light 0;
@@ -79,5 +80,21 @@ ren_dlight_t	*ren_dlight(int i);
 /* World vertex falloff (dlights.md 3): contribution of one light at
  * signed plane distance p and in-plane distance q. */
 float		ren_dlight_falloff(float radius, float minlight, float p, float q);
+/* Model intensity (dlights.md 4, lightstyles.md 4): probe base + amount x
+ * value(style slot) / 264 (slot < 0: no style term) + every live light's
+ * max(0, radius - distance) at org (global; elights only on their own
+ * entity e), floored at 32, clamped at 255. */
+int		ren_model_light(int e, const float org_g[3], float base, int style_slot, int amount);
+/* Per frame after ren_dlight_frame: the lights of entity effects
+ * (EF_MUZZLEFLASH 0.1 s and consumed, EF_BRIGHTLIGHT / EF_DIMLIGHT one
+ * frame, the player's EF_DIMLIGHT as the flashlight; dlights.md 1-2). */
+void		ren_dlight_sources(double time);
+/* Flashlight (dlights.md 2): trace 2000 u from eye (global) along pitch /
+ * yaw passing entity pass; end point (an entity hit with a studio or
+ * sprite model: its origin) and brightness. */
+void		ren_flashlight_place(const float eye[3], const float ang[3], int pass, float out[3],
+			float *bright);
+/* 1 up to 500 u, then (500 / d)^2 quantised to 1/255. */
+float		ren_flashlight_bright(float d);
 
 #endif

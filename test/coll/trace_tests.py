@@ -410,10 +410,42 @@ def run_layers(a, rep):
         rep.check("T8", int(res[i][1]) == SOLID and int(res[i][2]) == SOLID,
                   "outside every layer: contents %s" % res[i][1:])
 
+_cooked = {}
+
+
+def studio_files(a, model):
+    """The cooked files (path without extension) of the model the probe ran
+    the monster with: from --content when staged there, else cooked now from
+    the player's data (--data) into a scratch directory -- the GoldSrc probe
+    ran Uplink's models (monster_scientist: models/scientistu.mdl), which
+    the game's cook need not stage. None when neither has it."""
+    base = model[:-4].lower()
+    if os.path.isfile(os.path.join(a.content, base + ".s64")):
+        return base
+    if model in _cooked:
+        return _cooked[model]
+    _cooked[model] = None
+    if a.data and os.path.isfile(os.path.join(a.data, model)):
+        import atexit
+        import shutil
+        import tempfile
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+        from tools.studio import studiocook
+        out = tempfile.mkdtemp(prefix="hl64-t10-")
+        atexit.register(shutil.rmtree, out, True)
+        mdl, anim, _ = studiocook.cook_model(studiocook.lookup(a.data), model)
+        os.makedirs(os.path.join(out, "models"), exist_ok=True)
+        for ext, data in ((".s64", mdl), (".a64", anim)):
+            with open(os.path.join(out, base + ext), "wb") as f:
+                f.write(data)
+        _cooked[model] = os.path.join(out, base)
+    return _cooked[model]
+
+
 def run_hitbox(a, rep, m):
     """T10 on the T-hitbox capture: each monster in its four poses (sequence,
     frame, controllers, blending, body) plays its cooked studio model
-    (models/<x>.s64 + .a64 in --content, tools/studio/studiocook.py), so
+    (models/<x>.s64 + .a64 in --content, else cooked from --data), so
     line traces test the pose's hitboxes through the studio module's
     hitbox source (engine/render/studio.c, game_studio_pose); hull traces
     use the bounding box. Every trace must equal GoldSrc: flags and
@@ -428,9 +460,10 @@ def run_hitbox(a, rep, m):
             if mon is not None:
                 run.cmd("X %d" % mon["i"])
             mon = rec["ent"]
-            base = mon["model"][:-4].lower()
-            if not os.path.isfile(os.path.join(a.content, base + ".s64")):
-                rep.check("T10", False, "%s: %s.s64 not cooked in %s" % (m, base, a.content))
+            base = studio_files(a, mon["model"])
+            if base is None:
+                rep.check("T10", False, "%s: %s neither cooked in %s nor in --data %s" % (
+                    m, mon["model"], a.content, a.data))
                 return
             if base not in models:
                 models[base] = len(models)
@@ -697,6 +730,9 @@ def main():
     ap.add_argument("--content", required=True, help="cooked content (maps/*.w64)")
     ap.add_argument("--fixtures", default=os.environ.get("HL64_FIXTURES",
                                                           "/scratch/hl64/fixtures"))
+    ap.add_argument("--data", default=os.environ.get("HL64_DATA", "/scratch/hl1/valve"),
+                    help="the player's Half-Life game directory (T10 cooks the probe's "
+                         "studio models missing from --content)")
     ap.add_argument("--maps", nargs="*", default=MAPS)
     ap.add_argument("--tests", default="T1,T2,T3,T4,T5,T6,T7,T8,T9,T10")
     ap.add_argument("--show", type=int, default=10, help="mismatches printed per test")

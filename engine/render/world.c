@@ -12,28 +12,32 @@
  * recolour of styled meshlets 515-551, the scratch-copy structure of
  * the dynamic-light pass 581-633 / 650-662). Its Quake bindings
  * (entity_t, cl_*, r_refdef, d_lightstylevalue, cvars, Con_*) are gone:
- * the view is ren_cam, movers come from the layer's placements, style
+ * the view is ren_cam, movers come from the brush entities' components
+ * (M3; the layer's ENTS placements while no brush entity exists), style
  * values from engine/world. The flagged ranges are rewritten from the
  * specs: texture animation (431-453) from world-surfaces.md 4, the
  * dynamic-light falloff (634-649) from dlights.md 3. tiny3d / rdpq calls
- * live behind gpu.h. Not carried: the flashlight pool (needs the M2
- * trace and the M3 player light), OPEN-seam cross-layer draw (M4),
- * transformed-mover matrix slots (M1 movers are static: one translation
- * each).
+ * live behind gpu.h. Not carried: the flashlight pool (the flashlight is
+ * a vertex light, dlights.md 2), OPEN-seam cross-layer draw (M4).
  *
  * Movers at rest at the map origin are world-space geometry: they join
  * the world list (one page sort, per-meshlet cull, no matrix). Movers
- * with an origin draw their own list under a translation.
+ * with an origin or angles draw their own list under their matrix;
+ * translucent render modes draw in the translucent pass
+ * (engine/render/trans.c, render-fx.md 2).
  */
 #include <math.h>
 #include <string.h>
 
+#include "hl64/ent.h"
 #include "hl64/limits.h"
 #include "hl64/settings.h"
 #include "hl64/studio.h"
 #include "engine/core/sys.h"
 #include "engine/mem/carve.h"
+#include "engine/render/gpu_fx.h"
 #include "engine/render/ren.h"
+#include "engine/render/trans.h"
 #include "engine/world/wld.h"
 
 #define ZNEAR		4.0f
@@ -423,6 +427,146 @@ static int at_origin(const wld_mover_t *mv)
 	return mv->origin[0] == 0 && mv->origin[1] == 0 && mv->origin[2] == 0;
 }
 
+/* ---- movers as entities (M3) --------------------------------------------------------
+ *
+ * A brush entity whose model is a MOVR submodel of this layer is drawn from
+ * its components: origin, angles, render mode (render-fx.md 2, brush
+ * column). Normal and TransAlpha draw in the opaque pass (at rest at the
+ * map origin they join the world list); the other modes go to the
+ * translucent pass (engine/render/trans.c), which calls ren_mover_draw
+ * back to front. A layer without brush entities (no game, records not
+ * spawned: the M1 free-camera view) draws the ENTS placements instead. */
+
+static uint16_t	mov_ent[HL64_MAX_ENTITIES];
+static int	nmov;
+
+static int mover_sub(const wld_layer_t *L, int e)
+{
+	res_t m = ent_rnd(e)->model;
+	int sub;
+
+	if (RES_KIND(m) != RES_K_SUBMODEL || RES_SUB_SLOT(m) != L->slot)
+		return -1;
+	sub = RES_SUB_NUM(m);
+	if (sub >= L->dir->nsub || L->subs[sub].kind != W64_SUB_MOVR)
+		return -1;
+	return sub;
+}
+
+static void collect_movers(const wld_layer_t *L)
+{
+	int e;
+
+	nmov = 0;
+	for (e = 1; e < HL64_MAX_ENTITIES; e++)
+		if (ent_is_live(e) && ent_idc(e)->layer == L->slot && mover_sub(L, e) >= 0)
+			mov_ent[nmov++] = (uint16_t)e;
+}
+
+static int rotated(const float a[3])
+{
+	return a[0] != 0 || a[1] != 0 || a[2] != 0;
+}
+
+/* Model matrix of a mover (local -> camera-relative): the collision
+ * frame's axes (engine/coll: forward, -right, up), its origin. */
+static void mover_matrix(int e, const float org_g[3], ren_mat_t *mt)
+{
+	float f[3], r[3], u[3];
+	int k;
+
+	memset(mt, 0, sizeof(*mt));
+	ren_angle_axes(ent_cv(e)->angles, f, r, u);
+	for (k = 0; k < 3; k++)
+	{
+		mt->m[0][k] = f[k];
+		mt->m[1][k] = -r[k];
+		mt->m[2][k] = u[k];
+		mt->m[3][k] = org_g[k] - eye_g[k];
+	}
+	mt->m[3][3] = 1.0f;
+}
+
+/* The entity's linked box (map-local) meets a visible sector and the
+ * frustum. */
+static int ent_visible(const wld_layer_t *L, int e, const uint16_t *list, int cnt)
+{
+	const col_ent_t *cv = ent_cv(e);
+	int16_t bb[6];
+	float d[4];
+	int i, k;
+
+	for (k = 0; k < 3; k++)
+	{
+		bb[k] = (int16_t)floorf(cv->absmin[k]);
+		bb[k + 3] = (int16_t)ceilf(cv->absmax[k]);
+	}
+	plane_d(L->gofs, d);
+	if (box_culled(bb, d))
+		return 0;
+	for (i = 0; i < cnt; i++)
+	{
+		const int16_t *sb = L->sects[list[i]].bbox;
+
+		for (k = 0; k < 3; k++)
+			if (bb[k] > sb[k + 3] || bb[k + 3] < sb[k])
+				break;
+		if (k == 3)
+			return 1;
+	}
+	return 0;
+}
+
+static int mover_opaque(int e)
+{
+	int m = ent_cv(e)->rendermode;
+
+	return m == 0 || m == 4;	/* Normal, TransAlpha (alpha compare) */
+}
+
+/* One mover under its own matrix (opaque pass or the translucent pass). */
+static void draw_mover(wld_layer_t *L, int e, int lit)
+{
+	const w64_sub_t *sb = &L->subs[mover_sub(L, e)];
+	float org[3];
+	ren_mat_t mt;
+	uint8_t *ch;
+	int k, n;
+
+	for (k = 0; k < 3; k++)
+		org[k] = L->gofs[k] + ent_cv(e)->origin[k];
+	if (!(ch = wld_chunk_use(L, sb->chunk)))
+	{
+		st.missing++;
+		return;
+	}
+	/* meshlets are culled by the linked box already: keep them all */
+	{
+		static const float none[4] = { -1e30f, -1e30f, -1e30f, -1e30f };
+
+		n = add_meshlets(L, 0, sb->chunk, ch, none);
+	}
+	if (!n)
+		return;
+	st.movers++;
+	mover_matrix(e, org, &mt);
+	gpu_matrix_push(&mt);
+	draw_list(L, n, org, lit);
+	gpu_matrix_pop();
+}
+
+void ren_mover_draw(int e, int gpu_mode, const uint8_t prim[4])
+{
+	wld_layer_t *L;
+
+	if (!ent_is_live(e) || !(L = wld_layer(ent_idc(e)->layer)) || mover_sub(L, e) < 0)
+		return;
+	gpu_fx_mode(gpu_mode, prim);
+	last_bind = NULL;
+	draw_mover(L, e, 0);
+	last_bind = NULL;
+}
+
 static void draw_layer(wld_layer_t *L)
 {
 	const uint16_t *list;
@@ -454,29 +598,87 @@ static void draw_layer(wld_layer_t *L)
 		st.sectors++;
 		n = add_meshlets(L, n, s->rend_chunk, ch, d);
 	}
+	collect_movers(L);
 	/* movers at rest at the map origin join the world list */
-	for (i = 0; i < L->nmovers; i++)
+	if (nmov)
 	{
-		const wld_mover_t *mv = &L->movers[i];
-		const w64_sub_t *sb = &L->subs[mv->sub];
-		uint8_t *ch;
-
-		if (!at_origin(mv) || !mover_visible(L, mv, list, cnt) || box_culled(sb->bbox, d))
-			continue;
-		ch = wld_chunk_use(L, sb->chunk);
-		if (!ch)
+		for (i = 0; i < nmov; i++)
 		{
-			st.missing++;
-			continue;
+			int e = mov_ent[i];
+			const w64_sub_t *sb;
+			uint8_t *ch;
+
+			if (!mover_opaque(e) || (ent_rnd(e)->effects & EF_NODRAW)
+				|| rotated(ent_cv(e)->origin) || rotated(ent_cv(e)->angles)
+				|| !ent_visible(L, e, list, cnt))
+				continue;
+			sb = &L->subs[mover_sub(L, e)];
+			if (!(ch = wld_chunk_use(L, sb->chunk)))
+			{
+				st.missing++;
+				continue;
+			}
+			st.movers++;
+			n = add_meshlets(L, n, sb->chunk, ch, d);
 		}
-		st.movers++;
-		n = add_meshlets(L, n, sb->chunk, ch, d);
 	}
+	else
+		for (i = 0; i < L->nmovers; i++)
+		{
+			const wld_mover_t *mv = &L->movers[i];
+			const w64_sub_t *sb = &L->subs[mv->sub];
+			uint8_t *ch;
+
+			if (!at_origin(mv) || !mover_visible(L, mv, list, cnt) || box_culled(sb->bbox, d))
+				continue;
+			ch = wld_chunk_use(L, sb->chunk);
+			if (!ch)
+			{
+				st.missing++;
+				continue;
+			}
+			st.movers++;
+			n = add_meshlets(L, n, sb->chunk, ch, d);
+		}
 	push_translation(L->gofs);
 	draw_list(L, n, L->gofs, 1);
 	gpu_matrix_pop();
 
-	/* movers placed by an origin: one translated list each */
+	if (nmov)
+	{
+		/* moved / rotated opaque movers under their matrix; translucent
+		 * ones to the translucent pass (blend 0: not drawn, still solid) */
+		for (i = 0; i < nmov; i++)
+		{
+			int e = mov_ent[i];
+			float c[3], d2 = 0;
+
+			if ((ent_rnd(e)->effects & EF_NODRAW) || !ent_visible(L, e, list, cnt))
+				continue;
+			if (!mover_opaque(e))
+			{
+				for (k = 0; k < 3; k++)
+				{
+					c[k] = L->gofs[k] + 0.5f * (ent_cv(e)->absmin[k] + ent_cv(e)->absmax[k]);
+					d2 += (c[k] - eye_g[k]) * (c[k] - eye_g[k]);
+				}
+				ren_trans_brush(e, d2);
+				continue;
+			}
+			if (!rotated(ent_cv(e)->origin) && !rotated(ent_cv(e)->angles))
+				continue;	/* in the world list */
+			if (moved >= HL64_REN_MOVERS_MAX)
+			{
+				st.dropped++;
+				continue;
+			}
+			moved++;
+			draw_mover(L, e, 1);
+		}
+		return;
+	}
+
+	/* M1 placements with an origin: one translated list each */
 	for (i = 0; i < L->nmovers; i++)
 	{
 		const wld_mover_t *mv = &L->movers[i];
@@ -552,11 +754,17 @@ void ren_frame(double time)
 	last_bind = NULL;
 
 	gpu_begin(&v);
+	fx_draw_begin();
 	for (i = 0; i < HL64_WORLD_LAYERS; i++)
 		if ((L = wld_layer(i)) && L->map == ren_cam.map)
 			draw_layer(L);
 	st.world_us = (uint32_t)(sys_time_us() - t0);
+	/* frame step 11 (architecture.md 3.2): studio, particles,
+	 * translucent, decals, view model; the HUD follows */
 	studio_draw(time);
+	fx_draw_particles();
+	fx_draw_trans();
+	fx_draw_decals();
 	studio_draw_view();
 	gpu_end();
 	last = st;
