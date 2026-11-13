@@ -10,7 +10,8 @@ of the layout:
   keyname table  id = keys.def line order of the key name (exact; a key
                  name the cook keeps and keys.def lacks is an error)
   key values     HLE_KS: res_t of a resource value (a model / sprite /
-                 sound name as restab tables it, `*N` -> RES_K_SUBMODEL
+                 sound name as restab tables it; 0xFFFF for a sound the
+                 player's data lacks, `*N` -> RES_K_SUBMODEL
                  index N, `!NAME` in a sentence key -> RES_K_SENTENCE, a
                  speaker's `message` or a talk monster's UseSentence /
                  UnUseSentence group name -> RES_K_GROUP), the lightstyle
@@ -218,8 +219,8 @@ def typed(key: str, v: str, cname: str, preset: bool, ids: Ids, at: str) -> Tupl
     if (key, cname) in (("message", "env_message"), ("chaptertitle", "worldspawn")):
         return "title", ids.titles.get(v.upper(), NONE)
     if key in restab.SENTENCE_KEYS and v.startswith("!") and len(v) > 1:
-        # restab stops on names sentences.txt lacks; one missing here lost
-        # every word to missing sounds (GoldSrc plays nothing)
+        # one missing here is absent from the player's sentences.txt or
+        # lost every word to missing sounds (GoldSrc plays nothing)
         return "res", ids.sentences.get(v[1:].upper(), NONE)
     if key == "monstertype":
         return "cls", ids.classes.get(v.lower(), NONE)
@@ -233,6 +234,10 @@ def typed(key: str, v: str, cname: str, preset: bool, ids: Ids, at: str) -> Tupl
     rk = restab.res_kind_of_value(v)
     if rk is not None:
         if rk not in ids.res:
+            # restab tables every keyed sound the content holds: one it lacks
+            # is missing from the player's data (absent, no id)
+            if rk[0] == rtb.KIND_SOUND:
+                return "res", NONE
             raise IdError(f"{at}: {rtb.KIND_NAMES[rk[0]]} {rk[1]!r} not in the table")
         return "res", ids.res[rk]
     return "res", NONE

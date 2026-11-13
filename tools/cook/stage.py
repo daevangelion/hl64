@@ -26,7 +26,9 @@ sounds are derived from those maps' entity lumps, the class table
   gfx/*.ui8             HUD sheets (tools/cook/bake_hlhud.py) and the
                         gfx.wad pictures (tools/cook/bake_ui.py)
   sound/**/*.wav64      wav64 of every referenced sample
-                        (tools/cook/hl_sound_refs.py, hl_sound_classes.py)
+                        (tools/cook/hl_sound_refs.py, hl_sound_classes.py);
+                        one the player's data lacks gets a warning naming
+                        its referrer and is absent (no id; res.def ones stop)
   sound/sentences.txt   pruned to the referenced sentences
   titles.txt            pruned to the env_message titles
   maps/<m>.w64          layer packages: tools/cook/bake_world_tex.py ->
@@ -183,17 +185,41 @@ class Content:
 # references
 # ---------------------------------------------------------------------------
 
-def key_refs(ents: List[Dict[str, str]], kind: int) -> Set[str]:
+def key_refs(ents: List[Dict[str, str]], kind: int, m: str = "",
+             why: Optional[Dict[str, str]] = None) -> Set[str]:
     """Lower-case resource names of `kind` that entity key values name, by
     restab's rule (tools/restab/restab.py res_kind_of_value), so the content
-    holds every file restab will table."""
+    holds every file restab will table; `why` gets each name's first
+    referrer in map `m`."""
     out: Set[str] = set()
-    for e in ents:
-        for v in e.values():
+    for lump, e in enumerate(ents):
+        for k, v in e.items():
             rk = restab.res_kind_of_value(v)
             if rk and rk[0] == kind:
                 out.add(rk[1])
+                if why is not None:
+                    why.setdefault(rk[1], hl_sound_refs.entity_ref(m, lump, e, k))
     return out
+
+
+def missing_sentence_keys(ents: List[Dict[str, str]], m: str, table: Dict[str, Tuple[str, str]],
+                          out: Dict[str, str]) -> None:
+    """Sentences / groups map `m`'s keys name by restab's rule (`!NAME` in a
+    sentence key, a non-preset speaker's `message` or a talk monster's
+    group) that the player's sentences.txt (`table`, UPPER names) lacks:
+    "sentence X" / "sentence group X" -> first referrer into `out`."""
+    groups = {restab.group_name(n) for n in table}
+    for lump, e in enumerate(ents):
+        speaker = e.get("classname") == "speaker" and e.get("preset", "") in ("", "0")
+        for k, v in e.items():
+            if k in restab.SENTENCE_KEYS and v.startswith("!") and len(v) > 1:
+                if v[1:].upper() not in table:
+                    out.setdefault(f"sentence {v[1:].upper()}",
+                                   hl_sound_refs.entity_ref(m, lump, e, k))
+            elif (k == "message" and speaker or k in restab.GROUP_KEYS) and v:
+                if v.upper() not in groups:
+                    out.setdefault(f"sentence group {v.upper()}",
+                                   hl_sound_refs.entity_ref(m, lump, e, k))
 
 
 def read_res_def(defs: Optional[Path]) -> Dict[str, Set[str]]:
@@ -385,16 +411,30 @@ def stage_sounds(data: Data, maps: List[str], ents, models: Dict[str, bytes],
     except (DataError, BspError, ValueError) as e:
         raise CookError(str(e)) from None
     keyed: Set[str] = set()
+    why = dict(refs.why)
     for m in maps:
-        keyed |= key_refs(ents[m], rtb.KIND_SOUND)
+        keyed |= key_refs(ents[m], rtb.KIND_SOUND, m, why)
     samples = {lower_rel(s) for s in refs.samples | words}
     samples |= keyed
     missing = sorted(s for s in samples if not data.has("sound/" + s))
-    hard = sorted(s for s in missing if s in keyed)
-    if hard:
-        raise CookError("sounds the maps name are missing from the game data: " + ", ".join(hard))
-    if missing:
-        log("    note: not in the game data (skipped): " + ", ".join(missing))
+    # the game's own res.def sounds must exist (restab gives each line an id);
+    # a sound only maps, models or sentences name is absent: restab gives it
+    # no id (keys -> 0xFFFF, RES_NONE at run time; sentence words dropped)
+    defsnd = {lower_rel(s[6:] if s.startswith("sound/") else s) for s in res["SOUND"]}
+    game = [s for s in missing if s in defsnd]
+    if game:
+        raise CookError("game/defs/res.def sounds missing from the game data: " + ", ".join(game))
+    for s in missing:
+        log(f"    warning: sound/{s}: not in the game data, referenced by "
+            f"{why.get(s, '?')}: absent")
+    # sentences / groups the player's sentences.txt lacks: absent (restab
+    # gives them no id; res.def ones stop there)
+    gone = dict(refs.missing_sentences)
+    for m in maps:
+        missing_sentence_keys(ents[m], m, table, gone)
+    for name in sorted(gone):
+        log(f"    warning: {name}: not in the game data's sound/sentences.txt, referenced by "
+            f"{gone[name]}: absent")
     have = sorted(set(samples) - set(missing))
     ct.put("sound/sentences.txt", hl_sound_refs.sentences_txt(refs, table).encode("latin-1"))
     ct.put("titles.txt", hl_sound_refs.titles_txt(refs, titles).encode("latin-1"))

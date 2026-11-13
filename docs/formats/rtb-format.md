@@ -266,12 +266,17 @@ directory `d` is the SOUND `d/w.wav`.
 
 Every name must resolve to a staged file: the cook fails with the
 referencing map and lump (`hldemo1:573 shootmodel: no file …`) or
-definition line. Sentence words are the exception, as GoldSrc skips a word
-whose sample is missing: the word is dropped with a warning naming the
-sentences.txt line and word, a sentence left without words is dropped (its
-group skips it; a map key naming it gets no id), and only a `res.def`
-SENTENCE / GROUP line that loses every word stops the cook. Names are
-compared lower case with `/` separators and no leading `/`.
+definition line. Sounds are the exception (the player's data lacks some
+files its maps name, e.g. c1a1f's ambient_generic `headcrab/hc_run2.wav`):
+the stage prints one warning per missing sample naming its referrer, a
+SOUND a map key names without a staged file gets no resource (restab
+notes it; tools/w64c/hleids writes 0xFFFF, RES_NONE at run time, which the
+mixer drops), and, as GoldSrc skips a word whose sample is missing, a
+sentence word is dropped with a warning naming the sentences.txt line and
+word, a sentence left without words is dropped (its group skips it; a map
+key naming it gets no id). Only a `res.def` SOUND without its file, or a
+`res.def` SENTENCE / GROUP line that loses every word, stops the cook.
+Names are compared lower case with `/` separators and no leading `/`.
 
 ## Sizes
 

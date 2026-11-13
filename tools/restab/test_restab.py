@@ -6,6 +6,8 @@ rejection (cook inputs and rtb bytes). Run from the repository root:
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import random
 import struct
@@ -127,9 +129,18 @@ class CookTest(Base):
                              files=self.files_with(maps__mapb_DOT_w64=None))
         self.assertCookFails(r"no file maps/mapb\.ent",
                              files=self.files_with(maps__mapb_DOT_ent=None))
-        self.assertCookFails(r"mapa:4 message: sentence SC_NOPE",
-                             files=self.files_with(maps__mapa_DOT_ent=testdata.ENTS_A.replace(
-                                 b"SC_HELLO0", b"SC_NOPE")))
+        # a sentence / group a map names that sentences.txt lacks is absent
+        # (no id, a note); res.def ones stay required
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            t = self.cook(files=self.files_with(maps__mapa_DOT_ent=testdata.ENTS_A.replace(
+                b"SC_HELLO0", b"SC_NOPE")))
+        self.assertIn("mapa:4 message: sentence SC_NOPE not in sound/sentences.txt: absent",
+                      err.getvalue())
+        self.assertNotIn("SC_NOPE", t.sentence_names)
+        defs = dict(testdata.DEFS)
+        defs["res.def"] += b'RES(SENTENCE, NOPE1, "NOPE1")\n'
+        self.assertCookFails(r"res\.def:5: sentence NOPE1 not in", defs=defs)
         defs = dict(testdata.DEFS)
         defs["res.def"] += b'RES(GROUP, NOPE, "NOPE")\n'
         self.assertCookFails(r"res\.def:5: sentence group NOPE", defs=defs)
@@ -226,16 +237,21 @@ class CookTest(Base):
         t = self.cook(files=self.files_with(maps__mapa_DOT_ent=ents), defs=defs)
         self.assertIn("HG_ALERT", t.group_names)
         ents = testdata.ENTS_A + b'{\n"classname" "speaker"\n"message" "NOPE"\n}\n'
-        self.assertCookFails("NOPE", files=self.files_with(maps__mapa_DOT_ent=ents))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            t = self.cook(files=self.files_with(maps__mapa_DOT_ent=ents))
+        self.assertIn("sentence group NOPE not in sound/sentences.txt: absent", err.getvalue())
+        self.assertNotIn("NOPE", t.group_names)
         ents = testdata.ENTS_A + (b'{\n"classname" "speaker"\n"message" "NOPE"\n'
                                   b'"preset" "2"\n}\n')
-        self.cook(files=self.files_with(maps__mapa_DOT_ent=ents))  # preset: no group
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.cook(files=self.files_with(maps__mapa_DOT_ent=ents))
+        self.assertNotIn("NOPE", err.getvalue())  # preset: no group
 
     def test_missing_word_sounds(self) -> None:
         """GoldSrc skips a word whose sample is missing: the word goes, a
         sentence without words goes, its group skips it"""
-        import contextlib
-        import io
         f = self.files_with(sound__vox__hello_DOT_wav64=None)
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
@@ -252,6 +268,19 @@ class CookTest(Base):
         with contextlib.redirect_stderr(err):
             self.assertCookFails("SENTENCE SC_HELLO1: none of its words", files=f)
         self.assertIn("sentences.txt:3 SC_HELLO1: no word left", err.getvalue())
+
+    def test_missing_keyed_sound_absent(self) -> None:
+        """a sound map keys name that the player's data lacks is absent: no
+        resource, no error (hleids gives the keys 0xFFFF); a res.def sound
+        stays required (test_unresolved_names)"""
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            t = self.cook(files=self.files_with(sound__doors__doormove1_DOT_wav64=None))
+        self.assertIn("mapa:1 noise1: no sound/doors/doormove1.wav64: absent", err.getvalue())
+        first, n = t.kind_first(rtb.KIND_SOUND), t.kind_count(rtb.KIND_SOUND)
+        self.assertNotIn("doors/doormove1.wav", t.res_names[first:first + n])
+        self.assertIn("weapons/click.wav", t.res_names[first:first + n])
+        self.assertNotIn("sound/doors/doormove1.wav64", [f.path for f in t.files])
 
     def test_region_limits(self) -> None:
         """architecture.md 4.3: the cook proves the RESTAB and scratch regions"""
