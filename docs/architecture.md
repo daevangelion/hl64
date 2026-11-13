@@ -514,8 +514,16 @@ following the audit's §1.5 ranges (16.2; the Quake-interface glue is D9):
   in trace-and-hulls.md). COLL chunks: 8 B nodes, axial node classes by
   index range (no plane fetch for axial nodes), non-axial planes per chunk,
   extern gids, grid start nodes. Walks are iterative with an explicit stack
-  (≤ 64), in map-local coordinates (global − `g_M`), leaf contents from the
-  layer table.
+  of **192** entries, in map-local coordinates (global − `g_M`), leaf
+  contents from the layer table. Measured maximum root-to-leaf depth over
+  every model and hull: hldemo3 146, the other nine maps 32–48 (hldemo1 37,
+  hldemo2 46, t0a0 40, t0a0a 44, t0a0b 48, t0a0b1 39, t0a0b2 48, t0a0c 42,
+  t0a0d 32); stack overflow is `sys_error`, and the cook rejects a map
+  deeper than 192. Retail campaign depths are not measured yet.
+- **Precision**: non-axial plane distances and split fractions are
+  computed in IEEE double on host and cart (GoldSrc uses x87 extended
+  precision; float missed the ±1e-5 fraction tolerance on t0a0 by 1.1e-5,
+  trace-and-hulls.md 2); positions and results stay float.
 - **Hitboxes**: line traces against studio-model monsters test the bounding
   box, then the current pose's hitboxes (GoldSrc hitgroups for damage);
   poses are computed on demand and cached per frame (trace-and-hulls.md 4.5).
@@ -792,7 +800,7 @@ rev must equal the SDK's `libdragon_rev`), toolchain
 ### 18.2 Code conventions
 
 - C99, no VLAs; recursion only where the depth is bounded by data limits
-  (hull walks use explicit stacks).
+  (hull walks use an explicit 192-entry stack, 8).
 - djb-style minimalism: small modules, one data path, no speculative
   abstraction, no allocation on the steady path.
 - Data-oriented: per-frame loops iterate arrays of one component over an
@@ -801,8 +809,10 @@ rev must equal the SDK's `libdragon_rev`), toolchain
 - Integer where it saves cycles or bytes without changing GoldSrc-visible
   results: time (u64 µs), ids, colours, light values, quantised render
   data (s16 verts, 8.8 scale). Floats for positions, velocities, angles and
-  collision; no `-ffast-math` in `coll/`, `phys/`; host builds with
-  `-ffp-contract=off` and SSE2 so host and cart agree bit for bit.
+  collision results, IEEE double for non-axial plane distances and split
+  fractions in hull walks (8); no `-ffast-math` in `coll/`, `phys/`; host
+  builds with `-ffp-contract=off` and SSE2 so host and cart agree bit for
+  bit.
 - Hostile input: every cooked file is untrusted — magic, version, counts
   against `limits.h` and against bytes present, offsets inside their chunk,
   alignment, CRC (directory at open; chunks on the host always, on the

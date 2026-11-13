@@ -14,14 +14,17 @@ appear in cooked leaves.
 
 - **Point contents** at p (`pfnPointContents`): the hull-0 leaf contents of
   the world at p, with CURRENT_* reported as WATER — except that a point
-  inside a `func_ladder` brush entity (SOLID_NOT, `skin` = CONTENTS_LADDER;
-  inside = in a SOLID leaf of the entity's hull-0 model at its origin)
-  returns LADDER (−16) whatever the world contents there
+  inside a contents brush entity (`func_ladder`: SOLID_NOT, `skin` =
+  CONTENTS_LADDER; inside = in a SOLID leaf of the entity's hull-0 model at
+  its origin) returns the brush's contents (LADDER −16)
   **[probe:measured T-points]** (702 samples inside ladders; the world
-  there was EMPTY 689 / WATER 13). Other contents brushes (`func_water`)
-  are not yet measured and are expected to behave the same way **[probe]**.
+  there was EMPTY 689 / WATER 13) — **unless the world is SOLID at p**: then
+  SOLID (−2) wins **[probe:measured T-points]** (13 samples, all 10 maps).
+  Other contents brushes (`func_water`) are not yet measured and are
+  expected to behave the same way **[probe]**.
   Mechanism: each open layer keeps the short list of its contents brush
-  entities; a point tests their linked boxes, then their hull 0.
+  entities; a point tests the world first (SOLID returns at once), then
+  their linked boxes, then their hull 0.
 - **True point contents** (pmove's `PM_TruePointContents`) stays
   world-only and keeps CURRENT_* **[probe:measured PM-bot]**; pmove adds
   physent contents itself (pmove-host.md).
@@ -30,6 +33,11 @@ appear in cooked leaves.
   `n·p − d` (axial nodes: `p[axis] − d`); ≥ 0 → front child, < 0 → back
   child; a negative child is a leaf (hull 0: BSP leaf index → contents
   table; hulls 1–3: contents value).
+- Depth: the deepest root-to-leaf path over every model and hull of the 10
+  Uplink/Hazard maps is 146 nodes (hldemo3; the others 32–48), **measured**
+  on the cooked COLL trees (Coll, 2026-11-13). Walks use an explicit stack of
+  192 entries; overflow is `sys_error`, and the cook rejects any map deeper
+  than 192. Depths of the retail campaign maps are not yet measured.
 
 ## 2. Hulls
 
@@ -41,8 +49,21 @@ appear in cooked leaves.
 | 3 | (−16,−16,−18)…(16,16,18) | ducked player, small boxes |
 
 (HLSDK `VEC_HULL_MIN/MAX`, `VEC_DUCK_HULL_MIN/MAX`.) A clip hull is solid
-space expanded by the hull box; a moving box (mins, maxs) at p is traced as
-the point `p + (mins − hull.mins)`.
+space expanded by the hull box; for hulls 1–3 a moving box (mins, maxs) at
+p is traced as the point `p + (mins − hull.mins)`. **Hull 0 traces the
+box's origin itself**, with no `mins − hull.mins` offset: a box that
+selects hull 0 (size.x ≤ 8) collides as a point at its origin, e.g. a
+0 × 0 × 18 box moving up stops with its origin 1/32 u below the ceiling,
+its top inside the ceiling **[probe:measured T-entities]** (`hullsel_0_*`
+cases, all 10 maps).
+
+**Precision**: signed distances to non-axial planes and the split
+fractions are computed in IEEE double (GoldSrc evaluates them in x87
+extended precision); single-precision float misses the ±1e-5 fraction
+tolerance (t0a0 by 1.1e-5) **[probe:measured T-segments]**. Axial nodes
+(`p[axis] − d`) are exact in float. The host and the cart both use IEEE
+double for these steps (the VR4300 FPU has double precision in hardware);
+positions and results stay float.
 
 **Hull selection** for a moving box against a BSP model, `size = maxs −
 mins`: size.x ≤ 8 → hull 0; else size.x ≤ 36 → hull 3 if size.z ≤ 36,
@@ -59,7 +80,7 @@ hull's expansion (a 24×24×48 box collides as hull 1) **[probe T-entities]**.
 | `flFraction` | 0…1 travelled before impact; 1 = no impact |
 | `vecEndPos` | `start + fraction·(end − start)` (world frame) |
 | `vecPlaneNormal`, `flPlaneDist` | impacted surface, oriented to face the side the segment came from |
-| `pHit` | entity hit (world = entity 0); none when fraction = 1 and not startsolid |
+| `pHit` | entity hit (world = entity 0). On a miss (fraction 1, not start-solid): `pfnTraceLine` reports the world (0); `pfnTraceHull`, `pfnTraceModel` and `pfnTraceMonsterHull` report none (−1) **[probe:measured T-entities]** |
 | `iHitgroup` | hitbox group (4.5), 0 otherwise |
 
 Impact rules (behaviour; the mechanism is free):
@@ -94,7 +115,8 @@ impact wins, ties to the lower slot.
 
 ### 4.2 Brush entities (SOLID_BSP)
 Hull k by 2 from the moving box, placed at `o = origin + (hull.mins −
-moving.mins)`.
+moving.mins)` for hulls 1–3 and `o = origin` for hull 0 (2: hull 0 traces
+the moving origin) **[probe:measured T-entities]**.
 
 - Unrotated: local = world − o; end point = local end + o (world space);
   the plane normal is the model-frame normal (equal to world space here);
@@ -123,20 +145,39 @@ accepted within 0.001 u.
 ### 4.4 Move query
 `move(start, mins, maxs, end, type, pass)`:
 
-1. World first; if all-solid, stop.
-2. Candidates: entities in the spatial grid cells the move box (swept to the
-   world's end point, +1 u) touches (area-links-and-touch.md 2), in
-   ascending entity index.
-3. Skip: SOLID_NOT and SOLID_TRIGGER; the pass entity; with type
-   `ignore_monsters` (1) everything not SOLID_BSP; with the ignore-glass
-   bit (0x100) entities whose rendermode is not Normal; box-vs-point pairs
-   (pass entity has size, candidate has zero size); entities owned by the
-   pass entity; the pass entity's owner **[probe T-entities]**.
+1. World first (4.1), giving world fraction `fw` and end point `ew`.
+2. Candidates: entities in the spatial grid cells the move box (swept from
+   start to `ew`, +1 u) touches (area-links-and-touch.md 2), in ascending
+   entity index (6).
+3. Skip: SOLID_NOT and SOLID_TRIGGER; the pass entity; entities owned by
+   the pass entity; the pass entity's owner; box-vs-point pairs (pass
+   entity has size, candidate has zero size); with the ignore-glass bit
+   (0x100) entities whose rendermode is not Normal **[probe T-entities]**;
+   - with type `ignore_monsters` (1): everything except SOLID_BSP entities
+     **and SOLID_BBOX entities with MOVETYPE_PUSHSTEP** (`func_pushable`
+     still blocks) **[probe:measured T-entities]**;
+   - brush entities flagged FL_MONSTERCLIP (1 << 23, `func_monsterclip`)
+     unless the pass entity also has FL_MONSTERCLIP (a `func_monsterclip`
+     blocks only movers that carry the flag) **[probe:measured T-entities]**.
 4. Type `missile` (2): candidates with FL_MONSTER are clipped as if the
    moving box were ±15 on every axis.
-5. A candidate replaces the current result if it is all-solid, start-solid
+5. Each candidate is clipped against the segment **start → `ew`** (not the
+   original end); its fraction `fe` on that segment is reported as
+   `fe · fw`, its end point as `start + fe·fw·(end − start)`. A candidate
+   that holds the start reports start-solid and all-solid at fraction
+   `fw` and end point `ew` **[probe:measured T-entities]**, T-allsolid.
+6. A candidate replaces the current result if it is all-solid, start-solid
    or nearer; a start-solid current result stays start-solid; a
    non-replacing start-solid candidate marks the result start-solid.
+   **No early stop**: an all-solid result does not end the candidate loop;
+   every candidate is clipped **[probe:measured T-entities]**.
+7. Order: GoldSrc visits candidates in its area-node order, hl64 in
+   ascending entity index. The combined result can differ only when two
+   candidates tie or both hold the start (which one's plane or `pHit` is
+   reported). This is a **known deviation**, classified separately by the
+   tests (T12) rather than fixed: measured counts so far T2 6 / 176 000,
+   T9 25 / 80 000, T5 9 / 48 600 traces **[probe:measured T-segments,
+   T-allsolid, T-entities]**.
 
 ### 4.5 Hitboxes
 A zero-size line trace that hits the bounding box of a SOLID_SLIDEBOX or
@@ -164,14 +205,15 @@ materials"; HLSDK `TEXTURETYPE` letters).
 | # | property | data |
 |---|---|---|
 | T0 | cooked COLL walks equal BSP clipnode walks (contents, path) for every point/segment of the old cook proof | self-contained on the player's BSPs (w64check rules) |
-| T1 | point contents equals GoldSrc, including LADDER inside every `func_ladder` (702 samples) whatever the world contents there; true point contents (pmove) stays world-only | **[probe:measured T-points]**, PM-bot |
-| T2 | segment traces equal GoldSrc: flags exact, fraction ±1e-5, end ±0.001 u, normal exact, distance ±1e-4 | probe T-segments: 2000 segments ≤ 192 u per map per hull + 200 ≤ 4096 u |
+| T1 | point contents equals GoldSrc: LADDER inside every `func_ladder` (702 samples) where the world is EMPTY or WATER, SOLID where the world is SOLID (13 samples); true point contents (pmove) stays world-only | **[probe:measured T-points]**, PM-bot |
+| T2 | segment traces equal GoldSrc: flags exact, fraction ±1e-5 (non-axial plane maths in double, 2), end ±0.001 u, normal exact, distance ±1e-4; ORDER mismatches counted under T12, not as failures | **[probe:measured T-segments]**: 2000 segments ≤ 192 u per map per hull + 200 ≤ 4096 u |
 | T3 | world impacts with fraction in (0,1): `normal·end − dist` ∈ [1/32 − 1e-3, 1/32 + 1e-3], except where the GoldSrc fixture for the same segment is itself short — GoldSrc has 3 of 26 890 such impacts (stand-off 0.0023–0.0197). Rule: a short impact passes only if T-segments has the same segment and hl64's end point equals GoldSrc's within T2's tolerance; any other short impact fails; the count of short impacts must not exceed GoldSrc's on the same inputs. Brush-entity impacts are excluded (their distance is model-frame, 4.2) | **[probe:measured T-segments]** + self-contained |
 | T4 | end points never classify SOLID in the traced hull | self-contained |
-| T5 | box entities, filters, missile ±15, owner skips, ignore-glass; unrotated brush-entity impacts: end point and normal world space, distance model-frame (4699 impacts) | **[probe:measured T-entities]** |
-| T6 | hull selection for sizes {0, 8, 8.01, 32, 36, 36.01, 64} × z {18, 36, 36.01, 72} | probe T-entities (entities of those sizes traced against a door) |
+| T5 | box entities, filters, missile ±15, owner skips, ignore-glass; `ignore_monsters` still hits SOLID_BBOX + MOVETYPE_PUSHSTEP; FL_MONSTERCLIP brushes skipped unless the passer has FL_MONSTERCLIP; candidate fractions = fraction on start → world end × world fraction, a start-stuck candidate all-solid at the world's fraction and end; no early stop after an all-solid candidate; `pHit` on a miss 0 for TraceLine, −1 for TraceHull / TraceModel / TraceMonsterHull; unrotated brush-entity impacts: end point and normal world space, distance model-frame (4699 impacts) | **[probe:measured T-entities]** |
+| T6 | hull selection for sizes {0, 8, 8.01, 32, 36, 36.01, 64} × z {18, 36, 36.01, 72}; hull-0 boxes collide at their origin with no offset (a 0 × 0 × 18 box stops with its origin 1/32 u off the ceiling) | **[probe:measured T-entities]** (`hullsel_*` cases) |
 | T7 | rotated brushes at yaw 0/30/90/135° and pitched with a feet-origin box: end point and normal world space, distance model-frame (25 616 impacts) | **[probe:measured T-rotated]** |
 | T8 | layers: outside every layer is SOLID; a B-layer trace in global coordinates equals the B-local trace + `g_B` | self-contained |
-| T9 | all-solid result fields | probe T-allsolid |
+| T9 | all-solid result fields, including start-stuck entity candidates (fraction and end of the world trace) | **[probe:measured T-allsolid]**, T-entities |
 | T10 | hitboxes: head/chest/leg shots on scientist, barney, hgrunt, zombie at 4 poses give GoldSrc's hitgroups and end points ±0.01 u | probe T-hitbox |
-| T11 | no allocation, bounded stack, no read outside a chunk for any input incl. NaN/inf (NaN → start-solid all-solid, logged once) | host fuzz |
+| T11 | no allocation, hull-walk stack ≤ 192 entries (overflow → `sys_error`), no read outside a chunk for any input incl. NaN/inf (NaN → start-solid all-solid, logged once) | host fuzz |
+| T12 | ORDER classification: a mismatch counts as ORDER (known deviation, 4.4 step 7) only if GoldSrc's result equals the step-6 combination of hl64's own per-candidate results taken in some permutation; every other mismatch fails. ORDER counts are reported per capture and must not grow (baseline: T2 6 / 176 000, T9 25 / 80 000, T5 9 / 48 600) | **[probe:measured T-segments, T-allsolid, T-entities]** |
