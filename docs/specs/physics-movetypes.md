@@ -147,20 +147,27 @@ Ordinary monster walking is done by the game through walk moves (6).
 1. Not on ground at the frame start: add gravity (no friction in the air:
    a pushable shoved off a ledge keeps 150 u/s until it lands).
 2. Velocity non-zero, the **ground move** (STEP too):
-   - a 1 u downward probe with its own box against the **world only**
-     (brush entities are not seen); horizontal speed s > 0 consumes the
-     entity friction scale (then 1); if the probe hit (not start-solid):
-     control = max(s, stopspeed), s' = max(0, s − dt·control·
-     sv_friction·scale), velocity.xy ×= s'/s (200 → 192 → 184.32 … at dt
-     0.01);
+   - horizontal speed s > 0 consumes the entity friction scale (then 1);
+     **ground friction** when the entity was on the ground at the frame
+     start (FL_ONGROUND) and check_bottom (6) holds there: control =
+     max(s, stopspeed), s' = max(0, s − dt·control·sv_friction·scale),
+     velocity.xy ×= s'/s (200 → 192 → 184.32 … at dt 0.01);
    - FL_ONGROUND cleared; check velocity; slide; a slide onto a floor of
      the world or a SOLID_BSP entity sets FL_ONGROUND and groundentity;
-     else the world-only probe from the new origin sets FL_ONGROUND
-     (groundentity unchanged); link with touch.
+     else FL_ONGROUND is set (groundentity unchanged) when any of the four
+     bottom corners, 1 u under the box, is world SOLID (point contents:
+     brush entities are not seen); link with touch.
    On a brush-entity platform FL_ONGROUND therefore alternates frame by
-   frame and there is no ground friction; landing on the world brakes on
-   the landing frame **[probe:measured P-step ledge48, P-pushable
-   pushstep_ledge]**.
+   frame, and the frames that start on the ground brake only where
+   check_bottom holds: a box whose front corners are already past the
+   platform's edge slides on unbraked (pushstep_ledge, ledge48); the
+   hldemo3 `func_pushable` standing on the edges of two `momentary_door`s
+   brakes every other frame (120 → 115.2 → 110.59 …); landing on the
+   world brakes on the landing frame (FL_ONGROUND from the corner test
+   the frame before); a monster sinking past a 45° slope gets FL_ONGROUND
+   once a corner is 1 u into it, 17 u above the slope under its centre
+   **[probe:measured P-step ledge48 water_step, P-pushable pushstep_ledge
+   map_pushable_0]**.
 3. Think. 4. Water level.
 **[probe:measured P-pushable, P-step]**
 
@@ -267,9 +274,16 @@ velocity. No splash sound from the engine. Contents brushes
 ## 6. Monster step moves (engine services)
 
 - **check_bottom(e)**: true when the four bottom corners at mins.z − 1 are
-  SOLID world contents; else a line from the bottom centre down 36 u must
-  hit, and each corner's line to the same depth must hit no more than 18 u
-  below the centre hit.
+  SOLID world contents; else a line (move query, `ignore_monsters`: brush
+  entities count) at the bottom centre from **a step above the bottom to
+  a step below it** (mins.z + 18 → mins.z − 18) must hit, and each
+  corner's line over the same span must hit no more than 18 u below the
+  centre hit **[probe:measured P-walkmove world_stairs]** (the lift: a
+  corner line that starts at mins.z is all-solid where a corner pokes
+  into a ramp the hull lets the box rest against — t0a0d climbs it; a
+  corner whose ground is more than 18 u under the box fails the step
+  even when the centre's ground is within 18 u of it — t0a0b, t0a0b1,
+  t0a0d stop at the stair top; the 2006 walk results of 10 maps).
 - **walk_move(e, yaw, dist, mode)** (`pfnWalkMove`; modes NORMAL,
   WORLDONLY, CHECKONLY): displacement (cos, sin, 0)·dist.
   FL_FLY/FL_SWIM: try with vertical adjustment toward the enemy (−8 when
@@ -285,12 +299,10 @@ velocity. No splash sound from the engine. Contents brushes
   change flags / ground (HLSDK CheckLocalMove restores the origin)
   **[probe:measured P-walkmove flat]** (mode 2 results equal mode 0).
   Measured: world stairs (8 u risers) are climbed; an 18 u step made of a
-  **brush entity** (SOLID_BSP) is never stepped onto — the move fails at
-  contact **[probe:measured P-walkmove]** (7 maps); hl64: the walker's
-  box at the level destination intersecting a SOLID_BSP entity (not the
-  world) fails the move. Known residual: on t0a0b, t0a0b1 and t0a0d the
-  probe stops at one stair (top steps against brush-entity landings)
-  where hl64 climbs (64 of 2006 walk results).
+  **brush entity** (SOLID_BSP) is never stepped onto — the walker lands
+  on its top, and the corners still over the floor are 18 1/32 u down,
+  past the check_bottom span **[probe:measured P-walkmove step18]** (7
+  maps).
 - **move_to_origin(e, goal, dist, mode)** (`pfnMoveToOrigin`): walk_move
   straight at the goal; if blocked, the eight compass directions ordered
   by how much nearer each brings the goal (ties in a random order from
@@ -321,13 +333,13 @@ state. (Client-side: awaits the retail-client capture plan.)
 | P5 | pusher timing: door ltime ends at nextthink (0.78125), think on the frame ltime reaches it; a blocked door's ltime stalls and its think does not run | **[probe:measured K-pusher]** |
 | P6 | push: a crate on a lift rises; a door with a 4 u gap and 100 u travel moves a crate 95 u and leaves it overlapping by 1 u; a monster against a closing door blocks it, `blocked` once per blocked frame, earlier candidates return | **[probe:measured P-push]** |
 | P7 | rotating door carries an entity round the hinge; non-client yaw follows, client yaw does not | **[probe:measured P-rotate]** |
-| P8 | corpses collapse instead of blocking | **[probe:measured P-push]** |
-| P9 | pushable friction (200 → 192 → 184.32 at dt 0.01, 120-start map pushables likewise) and falling off a ledge with no air friction | **[probe:measured P-pushable]** |
-| P10 | walk_move: world 8 u stairs climbed; an 18 u SOLID_BSP brush-entity step fails at contact; overhang > 18 u fails check_bottom; partial ground correction | **[probe:measured P-walkmove]** |
+| P8 | corpses collapse instead of blocking; a collapsed corpse the door has passed lands on the world every frame (its toss trace stops on the floor at fraction 0, where the move query clips no entities, trace-and-hulls.md 4.4) | **[probe:measured P-push corpse]** |
+| P9 | pushable friction (200 → 192 → 184.32 at dt 0.01, 120-start map pushables likewise) and falling off a ledge with no air friction; friction only from a frame-start ground where check_bottom holds (hldemo3 pushable on two `momentary_door`s: every other frame) | **[probe:measured P-pushable]** |
+| P10 | walk_move: world 8 u stairs climbed up to the step whose corners leave the check_bottom span; an 18 u SOLID_BSP brush-entity step fails; overhang > 18 u fails check_bottom; partial ground correction | **[probe:measured P-walkmove]** |
 | P11 | drop_to_floor codes and origins | probe P-walkmove |
 | P12 | conveyor: an item resting on an FL_CONVEYOR pusher (speed 100) never moves while its basevelocity is 100; on leaving a trigger_push, velocity += basevelocity·(1 + dt/2) | **[probe:measured P-toss]** |
 | P13 | active set: a resting crate, a resting gib and an idle func_wall are not stepped (zone counters 0) yet react on the frame something moves them | host counters |
-| P14 | water: toss/bounce/step entities reach waterlevel 3; entering liquid halves vz; SKY (−6) counts as liquid | **[probe:measured W-water]** |
+| P14 | water: toss/bounce/step entities reach waterlevel 3; entering liquid halves vz; SKY (−6) counts as liquid; a monster sinking past a slope gets FL_ONGROUND from the corner test | **[probe:measured W-water, P-step water_step]** |
 | P15 | SOLID_BSP with a movetype other than PUSH is a fatal error naming the class | **[probe:measured]** (Oracle2 run logs) + host spawn-all test |
 
 hl64 host results (`test/m3/phys.py`, every capture scenario rebuilt on
@@ -335,15 +347,24 @@ the cooked maps and replayed frame by frame; origin / velocity ±0.001,
 flags, ground, water level and type, size, ltime / nextthink, thinks and
 blocks exact; 56 070 frames, 10 maps): P1 50/50, P2 80/80, P3 20/20
 (10 landings + 10 slide self-tests), P4 39/39, P5 = K4 52/52, P6 35/35,
-P7 3/3 (the bot rides by the pmove host), P9 38/39, P10 1942/2006 walk
-results, P11 181/181, P12 19/19, P13 10/10, P14 31/32, P15 10/10, P8 0/7.
-Residuals: P8 — every frame up to and including the corpse's collapse
-matches; from the frame the door passes the collapsed point (stuck at the
-blocker) GoldSrc lands it on the world each frame (FL_ONGROUND) while
-hl64's move query reports it all-solid inside the door, so it keeps
-falling in place without FL_ONGROUND (a start-held brush candidate on a
-zero-length world segment, trace-and-hulls.md 4.4 step 5, needs a
-capture); P9 hldemo3 `func_pushable` resting on two `momentary_door`s
-brakes every other frame in GoldSrc (none in hl64); P10 the top stair on
-t0a0b, t0a0b1, t0a0d (6 above); P14 t0a0b1: a monster sinking in deep
-water gets FL_ONGROUND 17 u above the floor in GoldSrc.
+P7 3/3 (the bot rides by the pmove host), P8 7/7, P9 39/39, P10
+2006/2006 walk results, P11 181/181, P12 19/19, P13 10/10, P14 32/32,
+P15 10/10; impact touches 31 568 (the probe logged 31 537; 32 485
+before the fraction-0 rule of trace-and-hulls.md 4.4). The former
+residuals were engine rules, measured on these captures: P8 the move
+query's fraction-0 rule (the corpse, 1/32 u to 2 u inside the passing
+door, lands on the floor each frame); P9 the friction gate (3 STEP /
+PUSHSTEP); P10 the check_bottom lift (6; it also explains the brush
+step, so hl64's former "a level destination meeting a SOLID_BSP entity
+fails" rule is gone); P14 the corner ground test (3 PUSHSTEP).
+Map data, not an engine bug (c3a2d cook of slice Items,
+`/scratch/hl64/tmp/Items/c3a2d`): the three `weapon_tripmine`s at
+(1528, −600, −248), (1528, −640, −248) and (1528, −716, −160) start with
+their HLSDK single-player box (−16 −16 0)…(16 16 28) inside a world
+shelf block (hull-3 move query from the origin all-solid, ent 0; the
+same box dropped from 40 u above rests at −215.97 / −215.97 / −167.97),
+so they take the trapped toss step 4 of 3: velocity 0, no FL_ONGROUND,
+sinking by gravity·dt² per frame — 8 u/s at dt 0.01, 26.7 u/s at 1/30 s
+(the reported −248 → −303 in about 2 s). GoldSrc does the same on the
+same hull: P-toss t0a0b1 scenario 6, entity 85: −164 → −164.08 →
+−164.16 …, velocity 0, flags 0.
