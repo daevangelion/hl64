@@ -42,6 +42,7 @@ OPS: Dict[int, Tuple[str, str]] = {
     0x10: ("SHOT", ""),
     0x11: ("STATS", ""),
     0x12: ("PASS", ""),
+    0x13: ("START", ""),
 }
 OPCODE = {name: code for code, (name, _) in OPS.items()}
 
@@ -211,10 +212,12 @@ def read(data: bytes, table: Optional[rtb.Table] = None) -> Program:
             raise RbcError(lines_ofs + 2 * i, f"op {i}: source line 0")
         # per-opcode a / b rules
         ok_a = a == 0
-        if name in ("WAIT_MAP", "WAIT_NEAR", "WAIT_CLASS", "SETPOS", "DROP"):
+        if name in ("WAIT_MAP", "WAIT_NEAR", "WAIT_CLASS", "SETPOS", "DROP", "START"):
             lim(p, b, nmaps, "map")
             if name == "SETPOS":
                 ok_a = a <= 1
+            if name == "START" and i:
+                raise RbcError(p, f"op {i}: START is not the first op")
         elif name in ("WAIT_MOVED", "WAIT_GONE"):
             lim(p, b, ntarg, "target")
         elif name == "WAIT_GLOBAL":
@@ -305,6 +308,8 @@ def disasm(prog: Program, table: Optional[rtb.Table] = None) -> str:
             arg = f"{m(op.b)} {cl(w[0])} ({w[1]:g} {w[2]:g} {w[3]:g})"
         elif name in ("SHOT", "STATS"):
             arg = w[0]
+        elif name == "START":
+            arg = m(op.b)
         else:
             arg = ""
         out.append(f"{i:5d} {op.line:5d} {name} {arg}".rstrip())

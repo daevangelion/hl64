@@ -100,6 +100,16 @@ def compile_route(text: str, source: str, table: rtb.Table) -> List[rbc.Op]:
             if bit is None:
                 raise err(f"unknown button {verb}")
             op("BUTTONS", 0, bit if verb[0] == "+" else 0, (0 if verb[0] == "+" else bit,))
+        elif verb == "startmap":
+            # test builds: New Game on this map (its first info_player_start)
+            nargs(1)
+            if ops:
+                raise err("startmap must be the first step")
+            m = table.map_id(args[0])
+            if m is None:
+                raise err(f"map {args[0]!r} not in the campaign")
+            cur_map = m
+            op("START", 0, m)
         elif verb == "wait":
             nargs(1)
             op("WAIT", words=(seconds(0),))

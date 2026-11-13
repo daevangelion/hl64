@@ -5,7 +5,7 @@
  * line as text, parsed here only (architecture 12) into the binary
  * commands the cart's channels deliver.
  *
- *   hl64-host [--root DIR] [--frames N] [--route FILE.rbc]
+ *   hl64-host [--root DIR] [--frames N] [--route FILE.rbc] [--play]
  *             [--cmd "[@FRAME] NAME ARGS..."]... [--write-cmds FILE]
  *
  * --root        cart root (the DFS image source; mounted like the cart's
@@ -15,6 +15,8 @@
  *               FRAME (default 1). Settings may be named: "set gravity 600".
  * --route       a compiled route (.rbc) to run instead of the cart root's
  *               route.rbc (engine/test/route.c)
+ * --play        without a route: New Game at the campaign start and play
+ *               (eng_play; the playable build's boot), not the free camera
  * --write-cmds  write the parsed commands as a cart command file
  *               (dbg.h DBG_FILE_*) and exit instead of running.
  */
@@ -49,7 +51,7 @@ static unsigned extra_files(const char *root, int ncmds, int route)
 
 static int usage(void)
 {
-	fprintf(stderr, "usage: hl64-host [--root DIR] [--frames N] [--route FILE.rbc] "
+	fprintf(stderr, "usage: hl64-host [--root DIR] [--frames N] [--route FILE.rbc] [--play] "
 		"[--cmd \"[@FRAME] NAME ARGS...\"]... [--write-cmds FILE]\n");
 	return 2;
 }
@@ -170,6 +172,8 @@ int main(int argc, char **argv)
 			eng_route_path = argv[++i];
 			route = 1;
 		}
+		else if (!strcmp(argv[i], "--play"))
+			eng_play = 1;
 		else
 			return usage();
 		if (!cmd)

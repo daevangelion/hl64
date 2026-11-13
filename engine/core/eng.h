@@ -11,14 +11,18 @@
 #include <stdint.h>
 
 /* Boot steps after the platform's: carve, settings, io, debug channel,
- * entities, world, input, player, and a compiled route when one is
- * present (it spawns the player at the campaign start). Logs the carve
- * table and "boot ok". */
+ * entities, world, input, player, and New Game (records, the player at the
+ * start map's info_player_start) when a compiled route is present or
+ * eng_play is set. Logs the carve table and "boot ok". */
 void		eng_boot(const char *platform);
 void		eng_frame(void);
 
 /* The route eng_boot loads: "route.rbc" at the cart root unless the
  * platform names another before eng_boot (host --route). */
 extern const char *eng_route_path;
+/* Without a route: New Game at the campaign start and play on pad input.
+ * Playable builds 1; HL64_TEST builds 0 (their routeless boots fly the
+ * free camera) unless the platform sets it before eng_boot (host --play). */
+extern int eng_play;
 
 #endif
