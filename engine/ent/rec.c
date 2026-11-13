@@ -2376,7 +2376,7 @@ static void defer_retarget(uint16_t map, uint16_t id, int runtime, uint16_t nmap
 void rec_twin_alias(gid_t16 a, gid_t16 b)
 {
 	rmap_t *ma, *mb;
-	int ra = rec_index(a, &ma), rb = rec_index(b, &mb);
+	int ra = rec_index(a, &ma), rb = rec_index(b, &mb), ea, eb;
 	rtwin_t *tw;
 
 	if (ra < 0 || rb < 0 || ma == mb)
@@ -2389,8 +2389,19 @@ void rec_twin_alias(gid_t16 a, gid_t16 b)
 	}
 	tw->a = a;
 	tw->b = b;
-	/* the live copy; b (the copy taking over) unless only a is live */
-	tw->cur = !(rt_entity(&ma->rt[ra]) >= 0 && rt_entity(&mb->rt[rb]) < 0);
+	/* the live copy. a is the home copy (seam.c aliases the approached seam
+	 * home -> B): live, it stays the one names reach, and a B copy the
+	 * reopened map's pump hydrated before the alias (its stale state from
+	 * its own close) retires silently, as the crossing retires A's copy;
+	 * GoldSrc carries the transition volume's (global) entities over the
+	 * copies the level file holds (HLSDK CGlobalState / globalname). Else
+	 * b, the copy taking over. */
+	ea = rt_entity(&ma->rt[ra]);
+	eb = rt_entity(&mb->rt[rb]);
+	tw->cur = ea < 0;
+	if (ea >= 0 && eb >= 0 && !rec_release(eb))
+		log_printf("rec: twin %u:%u: stale B copy not released (game refused)\n",
+			(unsigned)GID_SLOT(b), (unsigned)GID_LUMP(b));
 }
 
 void rec_twin_clear(int slot)
