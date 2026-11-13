@@ -90,6 +90,14 @@ const char	*rec_hle_check(void *blob, uint32_t len, const rec_limits_t *lim,
  * chunk reads complete as load I/O (io_set_load), the slot goes ready.
  * The world layer must be ready (wld_open). */
 void		rec_map_finish(int slot);
+#ifdef HL64_TEST
+/* Test builds: a whole-map class sweep (test/m3/mon.c wakes every record
+ * of `slot`; -1 ends it): no distance release (6.4) anywhere and no pump
+ * in other slots (a neighbour a seam approach opens stays pending), so
+ * the sweep sees its map's entities as M3's one-map world did;
+ * rec_release, wakes, fires and map close work as usual. */
+void		rec_test_class_sweep(int slot);
+#endif
 /* Boot: bind the HLE and dehydrate regions, empty everything. */
 void		rec_init(void);
 /* Close every slot, drop timers, uses, holders and the store (New Game,
