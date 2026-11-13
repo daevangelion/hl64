@@ -3,12 +3,14 @@
 #
 # Snd cart smoke (ares): a PROFILE test ROM over cooked content whose
 # debug command file plays sounds through the real libdragon backend:
-# loops (all 16 voices fill with loops and one-shots), one-shots at the
-# 130 % rate cap (22050 Hz waves at pitch 255: the voice buffer limit),
-# more distinct waves than the 10 open ones (LRU close), sentences.
-# Passes when the cart logs the same sound starts as the host run of the
-# same commands, the harness exits 0, and prints the `prof snd_us` lines
-# (CPU, voices, waves, SOUND region use).
+# 7 loops plus one-shots, one-shots at the 130 % rate cap (22050 Hz waves
+# at pitch 255: the voice buffer limit), more distinct waves than the 10
+# open ones (LRU close), sentences. Passes when sounds start on the cart
+# (event log over ISViewer) and the harness exits 0 (libdragon asserts on a
+# voice buffer too small or a bad wave); prints the `prof snd_us` lines
+# (CPU, voices, waves, SOUND region use). Start timing against the host
+# run of the same commands is diffed for information only (one-shot ends,
+# hence steals, follow real playback on the cart).
 #
 # Usage: test/m3/snd_ares.sh
 # Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content), ARES_BIN.
