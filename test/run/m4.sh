@@ -17,7 +17,7 @@
 #          lines; K9: a second run stepping every live entity (`stepall 1`)
 #          gives identical route ops and player / entity / seam / rec
 #          records.
-#   ares:  m4 on a PROFILE HL64_TEST ROM (`mem` at the last stats frame):
+#   ares:  m4 on a PROFILE HL64_TEST ROM (PASS runs `mem`; a `mem world:` line):
 #          the same checks with forced switches reported instead of
 #          failing; K10: route ops and player / entity records identical
 #          to the host's; the host's heap after the carve equal to the
@@ -178,10 +178,9 @@ rm -rf "$BC"
 mkdir -p "$ROMDIR"
 cp -al "$CONTENT" "$BC"
 cp "$RBC" "$BC/route.rbc"
-# `mem` at the route's last stats record (frames match the host's: K10)
-LAST="$(sed -n 's/^stats [0-9]* frame=\([0-9]*\) .*/\1/p' "$OUT/host.log" | tail -1)"
-[[ -n "$LAST" ]] || fail "no stats record in the host run"
-"$B/hl64-host" --write-cmds "$ROMDIR/m4.cmd" "${CMDS[@]}" --cmd "@$LAST mem"
+# the PROFILE route's PASS runs `mem` with the last stats record (the
+# cart's frame numbers need not be the host's: async opens)
+"$B/hl64-host" --write-cmds "$ROMDIR/m4.cmd" "${CMDS[@]}"
 make -C "$ROOT" --no-print-directory BUILD_DIR="$ROMDIR" HL64_TEST=1 PROFILE=1 \
 	HL64_CONTENT="$BC" HL64_CMDS="$ROMDIR/m4.cmd" rom >"$OUT/rom-build.log" 2>&1 \
 	|| { tail -40 "$OUT/rom-build.log" >&2; fail "PROFILE rom build"; }
@@ -201,6 +200,7 @@ tr -d '\r' <"$ROMDIR/ares.log" >"$OUT/ares.log"
 check "$OUT/ares.log" ares --forced-ok
 [[ $CODE -eq 0 ]] || fail "ares exit $CODE"
 grep -q '^TESTHARNESS exit 0' "$OUT/ares.log" || fail "no harness exit 0"
+grep -q '^mem world: ' "$OUT/ares.log" || fail "no \`mem world:\` line (PASS's mem): want peaks not ruled"
 say "m4: route PASS (ares), $(grep -c '^seam: switch ' "$OUT/ares.log") switches," \
 	"$(grep -c '^seam: switch .*(forced' "$OUT/ares.log" || true) forced (host 0)"
 diff <(records 'player|ents' "$OUT/host.log") <(records 'player|ents' "$OUT/ares.log") >"$OUT/k10.diff" \

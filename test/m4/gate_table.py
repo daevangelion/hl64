@@ -13,7 +13,7 @@ docs/architecture.md 4.1: a peak above 90% of the region, or whose peak x
 test/m3/gate_table.py). The world pools render / texture / collision are
 LRU caches that fill to their size: the rule takes the run's WANT peak
 (`mem world: <pool>_want_peak=`, the open + pin class chunks wanted at
-once; the `mem` command at the route's last stats frame, so it covers
+once; the `mem` command the PROFILE route's PASS runs with its last stats record, so it covers
 every window), the window's resident peak is shown as information.
 
 Old-tree baseline (doc only, not measured here): the old tree's cart
