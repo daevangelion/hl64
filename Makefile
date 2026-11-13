@@ -49,7 +49,7 @@ GAME_SRC := game/pm/pm_shared.c game/pm/pm_math.c game/pm/pm_host.c game/hl/play
 	game/hud/view.c
 # M3 slices: each slice adds its own sources on its own line only
 # (merges stay trivial; local://M3-contract.md).
-ENGINE_SRC_ENT :=
+ENGINE_SRC_ENT := engine/ent/heap.c engine/ent/pass.c engine/ent/priv.c
 ENGINE_SRC_PHYS :=
 ENGINE_SRC_REC :=
 ENGINE_SRC_STUDIO :=
