@@ -1832,10 +1832,11 @@ int studio_hitboxes(const col_ent_t *e, const col_hitbox_t **out)
 	if (!ent_is_live(e->index))
 		return 0;
 	r = ent_rnd(e->index);
-	/* never a synchronous read in a trace: while the current sequence's
-	 * animation (or the info) is still landing (a sequence change a frame
-	 * or two ago; requested here), the box stands for the hitboxes */
-	if (!anim_ready(r->model, r->sequence) || !(m = info_of(r->model))
+	/* never a synchronous read in a playing frame's trace: while the
+	 * current sequence's animation (or the info) is still landing (a
+	 * sequence change a frame or two ago; requested here), the box stands
+	 * for the hitboxes; load I/O (boot, tools, map loads) reads it */
+	if ((!anim_ready(r->model, r->sequence) && !io_loading()) || !(m = info_of(r->model))
 		|| !m->info->numhitboxes)
 		return 0;
 	memset(&p, 0, sizeof(p));
