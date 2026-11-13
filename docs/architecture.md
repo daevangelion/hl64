@@ -308,9 +308,11 @@ translation `T`). Requirements:
 2. Switch: a touch seam switches when the eye enters the switch box, or
    when an armed changelevel stops being touched / has been touched 1 s
    outside the box (`forced`); USEONLY seams switch when used.
-3. Crossing: home := B; positions of the player and riders `+T`; velocity,
+3. Crossing: home := B; the player and riders re-base once into B's frame
+   (`local += g_M(A) − g_M(B) + T`: the global position moves by exactly
+   the seam's `T`, cwg-format.md); velocity,
    angles, punch, inventory and the entity itself kept; twins copy A's state
-   to B (origin + T, mover phase, think time, velocity) and A's copy retires
+   to B (origin in B's frame, mover phase, think time, velocity) and A's copy retires
    silently; `changetarget` fires in B; changelevel touches ignored until a
    frame with none.
 4. Leave: A's chunks drop by LRU; A's records dehydrate by distance
@@ -324,6 +326,23 @@ GoldSrc shows a loading pause and a level transition at these points; the
 continuous world is a deliberate improvement, and every state rule above
 reproduces what GoldSrc's transition would leave the player with
 (entities in the transition volume carried over, others frozen).
+
+**Coordinate frames.** Simulation runs map-local, as GoldSrc runs in the
+one loaded map's coordinates; f32 at global coordinates (≈ ±5000 u and
+more) rounds differently, and with pmove in global coordinates 81 PM-bot
+runs failed PM2 against 2 home-local (M2Close, measured).
+
+- The player and pmove use the home layer's frame
+  (specs/pmove-host.md 2.1): physents are home-frame copies (other
+  layers' worlds at `g_M(L) − g_M(home)`), every pmove service takes and
+  returns home-local points, the camera is the view + `g_M(home)`, route
+  `WAIT_NEAR` compares map-local.
+- Every other entity uses the frame of its own layer (`id.layer`), the
+  same rule (8, "Frames").
+- Global = local + `g_M(layer)` only for the spatial grid, linking and
+  touch candidate tests, residency and dehydration distances, rendering
+  (per-layer camera-relative matrices, 9) and sound distances.
+- A home or layer change re-bases the origin once (step 3 above).
 
 ### 5.5 Visibility
 
@@ -548,6 +567,19 @@ following the audit's §1.5 ranges (16.2; the Quake-interface glue is D9):
 - **Physics**: per-movetype GoldSrc semantics over the active set
   (physics-movetypes.md, think-and-time.md); the player is pmove
   (pmove-host.md, D2).
+- **Frames** (rule for M3 and later, same reason as pmove, 5.4): every
+  entity is simulated in the map-local frame of its own layer
+  (`id.layer`). `xf.origin` and `box` (mins, maxs, absmin, absmax) are
+  stored map-local; movetype steps, traces, point contents, walk moves,
+  pushers and all game code see map-local values, as GoldSrc's game does,
+  so the P-*/K-* probe captures (map-local) compare directly and record
+  origins hydrate without translation. Global (`+ g_M(layer)`) only in the
+  grid node box, link/touch candidate tests, residency, rendering and
+  sound distances. An interaction across layers (a trace, push, touch or
+  rider near a seam) converts the other entity into the mover's frame by
+  `g_M(other) − g_M(own)`, as pmove's physents do. An entity changes layer
+  only when carried across a seam, re-basing once (5.4 step 3); twins are
+  already in B's frame.
 - Surface materials come from the cooked material table (no faces or
   texinfo on the cart).
 

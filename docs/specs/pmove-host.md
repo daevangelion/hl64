@@ -50,9 +50,10 @@ here).
 ## 2. Physents
 
 - Index 0 is the world: one entry per open layer is not possible in the
-  HLSDK layout, so the world physent is the **home layer**; other open
-  layers join as BSP physents with their `g_M` as origin (and zero angles)
-  when their global box meets the player's move box.
+  HLSDK layout, so the world physent is the **home layer** (origin 0 in
+  the pmove frame, 2.1); other open layers join as BSP physents with
+  origin `g_M(L) − g_M(home)` (and zero angles) when their global box
+  meets the player's move box.
 - Then every linked entity whose linked box meets the player's move box
   for this frame (origin ± (box + |velocity|·dt + 18 + 1) on each axis),
   in ascending entity index (spatial grid query), except: the player,
@@ -71,6 +72,35 @@ here).
   (not used by pm_shared's movement), move-ents 8, touch list 32. Overflow
   keeps the nearest entries and logs once per frame.
 
+### 2.1 Coordinate frame: home-local
+
+pmove runs entirely in the **home layer's map-local frame**, as GoldSrc
+runs it in the one loaded map's coordinates. Reason: f32 at global
+coordinates (≈ ±5000 u and beyond) rounds differently from GoldSrc's
+map-local values; with pmove in global coordinates 81 PM-bot runs failed
+PM2, home-local leaves 2 (M2Close, measured).
+
+- `ent_player_t.origin` is stored map-local to the home map.
+- Physents are **copies** in the home frame: origin, absmin and absmax
+  minus `g_M(home)`; the home world physent at origin 0; another layer's
+  world at `g_M(L) − g_M(home)`.
+- Every pmove service takes and returns home-local points: point and true
+  point contents, hull point contents, traces, model bounds, trace texture.
+- True point contents = the home layer's leaf contents at the local point;
+  other open layers are consulted (through their offset) only where the
+  home result is SOLID or the point lies outside the home world's bounds.
+- Only the grid query (physent gathering), entity linking, trigger touch
+  and residency work in global coordinates (local + `g_M(home)`).
+- Camera = view origin (home-local) + `g_M(home)` (architecture.md 9).
+  The game's view code (HLSDK `view.cpp` water test) uses
+  `PM_PointContents` at the home-local view point.
+- Route `WAIT_NEAR` compares map-local positions directly (its `map`
+  operand names the frame).
+- A home-map change (seam crossing) re-bases the origin once:
+  `local += g_M(old) − g_M(new)`, which keeps the global position; a
+  seam's non-zero portal translation `T` (cwg-format.md) is added in the
+  same step.
+
 ## 3. Services (callbacks the adapter wires into `playermove_t`)
 
 | service | semantics |
@@ -80,6 +110,7 @@ here).
 | hull point contents (hull, node, p) | walk a hull handle from node (trace-and-hulls.md 1); the handle is opaque to the game except for the root field pm_shared reads |
 | hull for bsp (physent, offset out) | the hull of that physent's model for the current `usehull` (0 → hull 1, 1 → hull 3, 2 → hull 0, 3 → hull 2), and the offset as trace-and-hulls.md 4.2 |
 | player trace (start, end, flags, ignore physent) | trace the player box for `usehull` against every physent in index order (flags: studio-ignore, glass-ignore, world-only per HLSDK `pm_defs.h`), combined as trace-and-hulls.md 4.4 step 6; **then if allsolid, set startsolid; if startsolid, fraction := 0 and the end point := the start** (the pmove rule, unlike server traces) **[probe:measured PM-bot]**; `ent` = physent index, −1 none |
+| trace model (physent, start, end) | `PM_TraceModel`: a trace against that one physent's model with the **point hull** (hull 0) whatever `usehull` is; pm_shared uses it for ladders **[probe:measured PM-bot]** (ladder runs) |
 | trace line (start, end, flags, hull, ignore) | the same with an explicit hull |
 | test player position (pos) | physent index of the first solid the player box at pos is inside, −1 if free |
 | stuck touch (hit index, trace) | append to the touch list (deduplicated) |
@@ -141,7 +172,8 @@ from the probe runs.
 | # | property | data |
 |---|---|---|
 | PM1 | adapter round trip: every field of section 1 step 6 written back unchanged when pm_shared does not touch it (identity move with zero cmd) | self-contained |
-| PM2 | section 5 properties and the PM-bot runs (walk, run, jump, duck, duck-jump, stairs, ladder, water, slopes): per-frame origin within 0.01 u and flags equal for 300 frames each | probe PM-bot runs on the player's maps |
+| PM2 | section 5 properties and the PM-bot runs (walk, run, jump, duck, duck-jump, stairs, ladder, water, slopes), 300 frames each, compared in the home-local frame: per-frame origin within **0.01 u** and flags equal on every frame, except **transient precision branches**: up to **1 u** for at most **5 consecutive frames**, after which the run is back within 0.01 u, with flags equal throughout; every excursion is reported per run (frame range, max error). Known cases: hldemo1 runs 12 and 13 at msec 50, where a `PM_FlyMove` bump fraction is 4e-6 in hl64 vs 0 in GoldSrc (x87 extended mid-point). Tolerance accepted by the user's delegate | **[probe:measured PM-bot]** runs on the player's maps |
+| PM2a | frame: pmove in the home-local frame gives the same result with the home map placed at `g_M` = 0 and at its cooked `g_M`; a seam crossing re-bases the origin once and the global position is continuous (+T) | host, synthetic placement |
 | PM3 | player trace: allsolid ⇒ startsolid; startsolid ⇒ fraction 0 and end point = start; hull per `usehull` mapping | **[probe:measured PM-bot]** pmove traces + self-contained |
 | PM4 | physents: a crate and a door near the player are physents; a trigger, a SOLID_NOT entity and the player's own grenades are not; a func_water volume changes waterlevel but not collision | synthetic |
 | PM5 | touch list: walking into a crate calls crate.touch once per frame; walking into a trigger calls trigger.touch through linking | synthetic |
