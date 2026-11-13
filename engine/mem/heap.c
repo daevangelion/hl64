@@ -12,6 +12,12 @@
  * Re-entrancy: libdragon may allocate inside a counted call; nested calls
  * pass straight through so the counters are never updated mid-change.
  *
+ * Region redirect (heap.h mem_heap_redirect): while a redirect is active
+ * the allocating wraps hand out its region's blocks instead (plat/n64/
+ * audio.c: libdragon's mixer and wav64 blocks in the SOUND region); frees
+ * and reallocs of its blocks go back to it whenever they happen. Those
+ * blocks are not counted here (the region reports its own use).
+ *
  * Host build (HL64_HOST): same --wrap and counters over plat/host's
  * heap_host.c, a fixed arena the size of the cart's post-carve heap, so an
  * allocation that fails on the cart fails on the host.

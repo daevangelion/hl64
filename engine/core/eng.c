@@ -546,6 +546,7 @@ static void rollup(void)
 			(unsigned long)m.kind_us[PHY_K_PUSHSTEP] / n, (unsigned long)m.traces / n);
 	}
 	rec_prof_line();
+	game_mon_prof();
 	{
 		fx_stats_t f;
 		unsigned long n;
@@ -564,11 +565,13 @@ static void rollup(void)
 
 		snd_stats(&s, 1);
 		log_printf("prof snd_us avg=%lu max=%lu voices_peak=%lu loops_peak=%lu waves_peak=%lu "
-			"started=%lu stolen=%lu dropped=%lu mem=%lu mem_peak=%lu region=%lu\n",
+			"started=%lu stolen=%lu dropped=%lu mem=%lu mem_peak=%lu region=%lu "
+			"audio_io=%luB audio_io_us=%lu pump_us=%lu\n",
 			(unsigned long)s.us, (unsigned long)s.us_max, (unsigned long)s.voices_peak,
 			(unsigned long)s.loops_peak, (unsigned long)s.waves_peak,
 			(unsigned long)s.started, (unsigned long)s.stolen, (unsigned long)s.dropped,
-			(unsigned long)s.mem, (unsigned long)s.mem_peak, (unsigned long)s.mem_region);
+			(unsigned long)s.mem, (unsigned long)s.mem_peak, (unsigned long)s.mem_region,
+			(unsigned long)io.audio_bytes, (unsigned long)io.audio_us, (unsigned long)s.pump_us);
 	}
 #ifdef HL64_PROFILE
 	sys_prof_dump(eng.rollup_frames);

@@ -309,6 +309,10 @@ int		ent_client_in_pvs(int e);
  * viewer's eye leaf. */
 int		ent_point_in_pvs(int viewer, const float p[3]);
 
+/* pfnGetEntityIllum: the light level 0-255 entity e is drawn with (studio
+ * probe base + light styles + dlights; engine/render/studio.c). */
+int		ent_illum(int e);
+
 /* ---- frames (architecture.md 8) ------------------------------------------ */
 
 /* The layer whose frame engine calls from game code use: set by the

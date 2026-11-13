@@ -60,6 +60,14 @@ Probes on faces lit by more than one non-zero animated style keep the
 strongest; the rest is baked at map-start values [EST: covers the Uplink
 and Hazard rooms; the cook reports probes that lose a term].
 
+`pfnGetEntityIllum` (engine `ent_illum`, used by e.g. monster_cockroach's
+light test) returns this model light at the entity: the light a studio
+entity is drawn with, for other entities the same formula at their origin.
+hl64 follows single-player Half-Life (a listen server: server and client
+in one process share the lighting). A dedicated HLDS has no client
+lighting and answers 128 everywhere (capture L-illum, Oracle2, hl64
+`d2bf3d8`), so that capture is not hl64's oracle for this call.
+
 ## 5. Tests
 
 | # | property | data |
