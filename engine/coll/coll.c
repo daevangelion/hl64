@@ -722,7 +722,9 @@ void col_clip(const col_ent_t *e, const float start[3], const float mins[3], con
 	src_t s;
 	int k;
 
-	if (e->solid == COL_SOLID_BSP)
+	/* contents brushes (func_ladder, func_water: SOLID_NOT, skin < -1) are
+	 * traced through their model too: PM_LadderMove aims at the ladder */
+	if (e->solid == COL_SOLID_BSP || (e->model != COL_NONE && e->skin < -1))
 	{
 		int hull = col_hull_for_size(mins, maxs);
 		float o[3];
