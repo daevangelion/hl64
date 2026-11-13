@@ -38,6 +38,7 @@
 #include <string.h>
 
 #include "hl64/game.h"
+#include "hl64/ent.h"
 #include "hl64/grid.h"
 #include "hl64/limits.h"
 #include "hl64/settings.h"
@@ -214,11 +215,10 @@ static void pmtrace(int usehull, const float s[3], const float e[3])
 static uint32_t touch_log[256];
 static int ntouch_log;
 
-static void on_touch(uint16_t fn, col_ent_t *self, col_ent_t *other)
+static void on_touch(int self, int other)
 {
-	(void)fn;
 	if (ntouch_log < 256)
-		touch_log[ntouch_log++] = (uint32_t)self->index << 16 | other->index;
+		touch_log[ntouch_log++] = (uint32_t)self << 16 | (uint32_t)other;
 }
 
 static int count_touch(uint16_t self, uint16_t other)
@@ -521,7 +521,11 @@ static void test_pm5(const float org[3])
 	memcpy(p, org, sizeof(p));
 	trig = place(12, -1, p, ang, box[0], box[1], COL_SOLID_TRIGGER, 0, 0, -1, 0);
 	ent_set_touch(trig, 2);
-	phy_set_touch_call(on_touch);
+	{
+		static const phy_game_hooks_t hooks = { NULL, on_touch, NULL };
+
+		phy_set_game_hooks(&hooks);
+	}
 	for (frame = 0; frame < 40; frame++)
 	{
 		int i, contact = 0;
@@ -540,7 +544,7 @@ static void test_pm5(const float org[3])
 		CHECK(count_touch(ENT_PLAYER, 10) == 0, "PM5: the player has no touch function");
 	}
 	CHECK(touching > 10, "PM5: walked into the crate on %d frames only", touching);
-	phy_set_touch_call(NULL);
+	phy_set_game_hooks(NULL);
 	free_all();
 	printf("PM5 done\n");
 }
