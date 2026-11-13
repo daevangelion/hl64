@@ -44,9 +44,11 @@
 
 enum { POOL_RENDER, POOL_TEXTURE, POOL_COLL, NPOOLS };
 
+/* block descriptors per pool: measured peaks on the m4 route (render 145,
+ * texture 198, collision 231) x 1.25 */
 #define DESC_RENDER	192
-#define DESC_TEXTURE	160
-#define DESC_COLL	128
+#define DESC_TEXTURE	256
+#define DESC_COLL	288
 #define DESC_LAYERS	8
 
 typedef struct {
