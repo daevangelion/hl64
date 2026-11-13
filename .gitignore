@@ -1,0 +1,4 @@
+# build outputs (BUILD_DIR defaults to build/; scratch belongs on /scratch)
+/build/
+*.z64
+*.elf
