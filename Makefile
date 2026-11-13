@@ -56,7 +56,9 @@ ENGINE_SRC_STUDIO :=
 ENGINE_SRC_SND :=
 ENGINE_SRC_FX :=
 ENGINE_SRC_D2 :=
-GAME_SRC_CORE := game/hl/util.c game/hl/dispatch.c game/hl/world.c game/hl/triggers.c game/hl/logic.c
+GAME_SRC_CORE := game/hl/util.c game/hl/dispatch.c game/hl/world.c game/hl/triggers.c game/hl/logic.c \
+	game/hl/doors.c game/hl/buttons.c game/hl/lights.c game/hl/ambient.c \
+	game/hl/material.c
 GAME_SRC_MON :=
 GAME_SRC_ITEMS :=
 GAME_SRC_STUDIO :=

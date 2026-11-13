@@ -22,8 +22,7 @@
  * use-targets, CBaseToggle moves, masters, damage dispatch.
  *
  * Every position here is map-local in the frame of eng_frame_layer()
- * (architecture.md 8); the trace wrappers add and remove the layer's
- * placement around the engine's global-coordinate collision calls.
+ * (architecture.md 8), as engine/coll takes and returns them.
  */
 #ifndef HL64_GAME_UTIL_H
 #define HL64_GAME_UTIL_H
@@ -42,13 +41,6 @@
 #include "hl64/pmove.h"
 #include "hl64/settings.h"
 #include "hl64/snd.h"
-
-/* rec.h additions on m3-rec (Rec): typed record keys for global states,
- * lightstyle patterns and classnames; the GLOB count. */
-int		rec_key_global(gid_t16 gid, key_t16 k);	/* id or -1 */
-int		rec_key_pattern(gid_t16 gid, key_t16 k);	/* pattern id or -1 */
-cls_t		rec_key_cls(gid_t16 gid, key_t16 k);
-int		res_globals(void);
 
 /* ---- ids ------------------------------------------------------------------ */
 
@@ -383,7 +375,6 @@ void		UTIL_ScreenFade(int r, int g, int b, int alpha, float fade_time, float hol
 
 /* ---- game-side lifetime hooks (dispatch.c) ------------------------------- */
 
-void		game_material_init(void);
 /* Run think-kind function f on e (m_pfnCallWhenMoveDone and the like). */
 void		game_call_think(int e, fn_t f);
 
