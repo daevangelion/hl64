@@ -834,7 +834,15 @@ static int request(wld_layer_t *L, int c, int cls)
 	while (!(ch->blk = mem_pool_alloc(&pools[p], size, &ch->data)))
 	{
 		const mem_pool_t *pl = &pools[p];
+		io_req_t *q = weaker_queued(p, cls);
 
+		/* a queued-not-started read of a weaker class gives its room
+		 * up first: its block frees at once (nothing landed in it) */
+		if (q)
+		{
+			cancel_queued(q);
+			continue;
+		}
 		/* evicted REND / TEXP bytes free behind their fence: once the
 		 * fenced bytes cover the request, wait for them (two frames)
 		 * instead of evicting the rest of the pool */
