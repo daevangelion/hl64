@@ -557,6 +557,7 @@ void ren_frame(double time)
 			draw_layer(L);
 	st.world_us = (uint32_t)(sys_time_us() - t0);
 	studio_draw(time);
+	studio_draw_view();
 	gpu_end();
 	last = st;
 }

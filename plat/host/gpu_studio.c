@@ -55,11 +55,16 @@ void gpu_studio_release(void *state)
 	(void)state;
 }
 
-void gpu_studio_begin(void)
+void gpu_studio_frame(void)
 {
 	pool_used = 0;
 	memset(&cur, 0, sizeof(cur));
 	cur.hash = 2166136261u;
+	done = cur;
+}
+
+void gpu_studio_begin(void)
+{
 }
 
 void gpu_studio_end(void)

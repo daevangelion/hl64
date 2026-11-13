@@ -50,7 +50,11 @@ typedef struct {
 	uint8_t			pad[3];
 } gpu_studio_ent_t;
 
-/* Before / after the studio entities of a frame (render mode state). */
+/* Once per frame before any studio draw: flips the matrix pool halves,
+ * resets the frame's counters. */
+void		gpu_studio_frame(void);
+/* Around each group of studio draws (render mode state; the world's state
+ * is restored by gpu_studio_end). */
 void		gpu_studio_begin(void);
 void		gpu_studio_end(void);
 /* One entity; 0 drawn, -1 when the frame's matrix pool is full. */

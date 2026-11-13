@@ -1076,8 +1076,9 @@ static int blend_mode(int e, uint8_t *alpha)
 	}
 }
 
+/* mode < 0: the entity's own render mode and blend. */
 static void draw_entity(int e, double time, wld_layer_t *L, const uint16_t *list, int cnt,
-	const float eye[3])
+	const float eye[3], int mode, uint8_t alpha)
 {
 	const ent_rnd_t *r = ent_rnd(e);
 	gpu_studio_ent_t ge;
@@ -1109,7 +1110,13 @@ static void draw_entity(int e, double time, wld_layer_t *L, const uint16_t *list
 	ge.tex = tex_buf;
 	lv = light_at(L, list, cnt, org, org_g);
 	ge.rgba[0] = ge.rgba[1] = ge.rgba[2] = (uint8_t)lv;
-	ge.mode = (uint8_t)blend_mode(e, &ge.rgba[3]);
+	if (mode < 0)
+		ge.mode = (uint8_t)blend_mode(e, &ge.rgba[3]);
+	else
+	{
+		ge.mode = (uint8_t)mode;
+		ge.rgba[3] = alpha;
+	}
 	if (gpu_studio_draw(m->gstate, m->mesh, &ge))
 	{
 		st.dropped++;
@@ -1152,15 +1159,30 @@ static int visible(const wld_layer_t *L, const uint16_t *list, int cnt, const co
 	return 0;
 }
 
-static void draw_view(const float eye[3]);
+/* The frame's eye-leaf sector list per drawn layer (studio_draw). */
+static const uint16_t	*lay_list[HL64_WORLD_LAYERS];
+static int		lay_cnt[HL64_WORLD_LAYERS];
+static double		draw_time;
+
+static void timed(uint64_t t0)
+{
+	uint64_t t1 = sys_time_us();
+
+	st.draw_us += (uint32_t)(t1 - t0);
+	st.us_sum += (uint32_t)(t1 - t0);
+	if (t1 - t0 > st.us_max)
+		st.us_max = (uint32_t)(t1 - t0);
+}
 
 void studio_draw(double time)
 {
 	static cand_t cand[HL64_STUDIO_DRAWN];
-	uint64_t t0 = sys_time_us(), t1;
+	uint64_t t0 = sys_time_us();
 	const float *eye = ren_cam.org;
 	int li, e, n = 0, i;
 
+	draw_time = time;
+	gpu_studio_frame();
 	gpu_studio_begin();
 	for (li = 0; li < HL64_WORLD_LAYERS; li++)
 	{
@@ -1169,11 +1191,15 @@ void studio_draw(double time)
 		float eye_l[3];
 		int cnt, k;
 
+		lay_list[li] = NULL;
+		lay_cnt[li] = 0;
 		if (!L || L->map != ren_cam.map)
 			continue;
 		for (k = 0; k < 3; k++)
 			eye_l[k] = eye[k] - L->gofs[k];
 		list = wld_leaf_sectors(L, wld_point_leaf(L, eye_l), &cnt);
+		lay_list[li] = list;
+		lay_cnt[li] = cnt;
 		n = 0;
 		for (e = 2; e < HL64_MAX_ENTITIES; e++)
 		{
@@ -1213,7 +1239,7 @@ void studio_draw(double time)
 		/* opaque first, then translucent back to front */
 		for (i = 0; i < n; i++)
 			if (!cand[i].trans)
-				draw_entity(cand[i].e, time, L, list, cnt, eye);
+				draw_entity(cand[i].e, time, L, list, cnt, eye, -1, 0);
 		for (;;)
 		{
 			int best = -1;
@@ -1224,17 +1250,89 @@ void studio_draw(double time)
 			if (best < 0)
 				break;
 			cand[best].trans = 2;
-			draw_entity(cand[best].e, time, L, list, cnt, eye);
+			draw_entity(cand[best].e, time, L, list, cnt, eye, -1, 0);
 		}
 	}
-	draw_view(eye);
 	gpu_studio_end();
-	t1 = sys_time_us();
-	st.draw_us += (uint32_t)(t1 - t0);
-	st.us_sum += (uint32_t)(t1 - t0);
-	if (t1 - t0 > st.us_max)
-		st.us_max = (uint32_t)(t1 - t0);
+	timed(t0);
 	st.frames++;
+}
+
+void studio_draw_trans(int e, int gpu_mode, uint8_t alpha)
+{
+	uint64_t t0 = sys_time_us();
+	int li;
+
+	if (!is_studio(e))
+		return;
+	li = ent_idc(e)->layer;
+	if (li < 0 || li >= HL64_WORLD_LAYERS || !lay_list[li])
+		return;
+	gpu_studio_begin();
+	draw_entity(e, draw_time, wld_layer(li), lay_list[li], lay_cnt[li], ren_cam.org, gpu_mode,
+		alpha);
+	gpu_studio_end();
+	timed(t0);
+}
+
+void studio_draw_temp(res_t model, int body, int skin, const float org_g[3], const float ang[3],
+	int gpu_mode, uint8_t alpha)
+{
+	uint64_t t0 = sys_time_us();
+	smodel_t *m = mesh_of(model);
+	gpu_studio_ent_t ge;
+	game_pose_t p;
+	int li, lv = 128;
+
+	if (!m)
+		return;
+	memset(&p, 0, sizeof(p));
+	p.model = model;
+	if (game_studio_pose(&p, bones, MAXBONES) < m->info->numbones)
+		return;
+	slot_matrices(m);
+	memset(&ge, 0, sizeof(ge));
+	model_matrix(&ge.model, org_g, ang, 1.0f, ren_cam.org);
+	ge.bones = (const float (*)[3][4])slots;
+	ge.nbones = m->mesh->nbslots;
+	ge.nruns = pick_runs(m, body, skin);
+	ge.runs = runs_buf;
+	ge.tex = tex_buf;
+	for (li = 0; li < HL64_WORLD_LAYERS; li++)
+	{
+		wld_layer_t *L = wld_layer(li);
+		float local[3];
+		int k;
+
+		if (!L || !lay_list[li])
+			continue;
+		for (k = 0; k < 3; k++)
+			local[k] = org_g[k] - L->gofs[k];
+		lv = light_at(L, lay_list[li], lay_cnt[li], local, org_g);
+		break;
+	}
+	ge.rgba[0] = ge.rgba[1] = ge.rgba[2] = (uint8_t)lv;
+	ge.rgba[3] = gpu_mode ? alpha : 255;
+	ge.mode = (uint8_t)gpu_mode;
+	gpu_studio_begin();
+	if (gpu_studio_draw(m->gstate, m->mesh, &ge))
+		st.dropped++;
+	else
+		st.drawn++;
+	gpu_studio_end();
+	timed(t0);
+}
+
+static void draw_view(const float eye[3]);
+
+void studio_draw_view(void)
+{
+	uint64_t t0 = sys_time_us();
+
+	gpu_studio_begin();
+	draw_view(ren_cam.org);
+	gpu_studio_end();
+	timed(t0);
 }
 
 /* ---- view model ------------------------------------------------------------------------------ */

@@ -130,11 +130,16 @@ static void to_t3d(T3DMat4 *o, const float b[3][4])
 	}
 }
 
-void gpu_studio_begin(void)
+void gpu_studio_frame(void)
 {
 	frame_flip ^= 1;
 	pool_used = 0;
 	memset(&cur, 0, sizeof(cur));
+	done = cur;
+}
+
+void gpu_studio_begin(void)
+{
 	rdpq_mode_combiner(RDPQ_COMBINER1((TEX0, 0, PRIM, 0), (TEX0, 0, PRIM, 0)));
 	t3d_state_set_drawflags(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH | T3D_FLAG_NO_LIGHT
 		| T3D_FLAG_CULL_BACK);

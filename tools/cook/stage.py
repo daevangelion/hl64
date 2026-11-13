@@ -247,9 +247,10 @@ def stage_models(data: Data, maps: List[str], ents, res: Dict[str, Set[str]],
             if not data.has(seq) or seq in names:
                 break
             out[seq] = data.need(seq)
-    for n in sorted(names):
+    low = {k.lower(): v for k, v in out.items()}
+    for n in sorted({x.lower(): x for x in names}.values()):
         try:
-            model, anim, _ = studiocook.cook_model(lambda rel: out.get(rel.lower()), n)
+            model, anim, _ = studiocook.cook_model(lambda rel: low.get(rel.lower()), n)
         except studiocook.CookError as e:
             raise CookError(f"studio: {e}") from None
         ct.put(n[:-4] + ".s64", model)

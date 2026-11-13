@@ -43,6 +43,16 @@ void		studio_want(res_t model, int sequence);
 void		studio_init(void);
 void		studio_frame(void);
 void		studio_draw(double time);
+/* The renderer's translucent pass (engine/render/trans.c, back to front):
+ * entity e, already found visible by studio_draw, in gpu_mode
+ * (engine/render/gpu_studio.h GPU_STUDIO_BLEND / ADD) with alpha. */
+void		studio_draw_trans(int e, int gpu_mode, uint8_t alpha);
+/* A temporary studio model (gibs, shells, debris: TE_BREAKMODEL /
+ * TE_MODEL) at a global placement, sequence 0 frame 0. */
+void		studio_draw_temp(res_t model, int body, int skin, const float org_g[3],
+			const float ang[3], int gpu_mode, uint8_t alpha);
+/* The view model (studio_view_model) after the translucent pass. */
+void		studio_draw_view(void);
 /* The hitbox source studio_init installs (coll.h col_hitbox_fn): the
  * entity's cooked hitboxes on the bones of its server pose
  * (game_studio_pose), in its own map-local frame. */
