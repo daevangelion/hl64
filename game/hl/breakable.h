@@ -52,5 +52,12 @@ void		MaterialSoundRandom(int e, int material, float volume);
 /* ExplosionCreate(center, angles, owner, magnitude, doDamage) */
 void		ExplosionCreate(const float center[3], const float angles[3], int owner,
 			int magnitude, int do_damage);
+/* A breakable record's material key (matWood when absent / bad). */
+int		Breakable_Material(gid_t16 gid);
+/* CBreakable::Precache for a material and gibmodel key (RES_NONE none):
+ * its gib and sound precaches; the shard model. */
+res_t		Breakable_Precache(int material, res_t gibmodel);
+/* A spawnobject key value as a class (CLS_NONE none / not in the game). */
+cls_t		Breakable_SpawnObject(int i);
 
 #endif

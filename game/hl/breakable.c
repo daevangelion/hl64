@@ -100,7 +100,7 @@ void MaterialSoundRandom(int e, int material, float volume)
 
 /* pSpawnObjects (func_break.cpp), as classes.def ids; CLS_NONE for the
  * classes the game does not have */
-static cls_t spawn_object(int i)
+cls_t Breakable_SpawnObject(int i)
 {
 	static const cls_t objs[] = {
 		CLS_NONE, CLS_ITEM_BATTERY, CLS_ITEM_HEALTHKIT, CLS_WEAPON_9MMHANDGUN,
@@ -115,9 +115,16 @@ static cls_t spawn_object(int i)
 
 	if (i <= 0 || i >= (int)(sizeof objs / sizeof objs[0]))
 		return CLS_NONE;
-	if (objs[i] == CLS_NONE)
-		log_printf("game: func_breakable spawnobject %d: class not in the game\n", i);
 	return objs[i];
+}
+
+static cls_t spawn_object(int i)
+{
+	cls_t c = Breakable_SpawnObject(i);
+
+	if (i > 0 && c == CLS_NONE)
+		log_printf("game: func_breakable spawnobject %d: class not in the game\n", i);
+	return c;
 }
 
 static int IsBreakable(int e)
@@ -129,7 +136,6 @@ static void CBreakable_KeyValue(int e, gid_t16 gid)
 {
 	CBreakable *p = PRIV(CBreakable, e);
 	const char *s;
-	int i;
 
 	CBaseDelay_KeyValue(e, gid);
 	p->m_iszSpawnObject = CLS_NONE;
@@ -137,19 +143,17 @@ static void CBreakable_KeyValue(int e, gid_t16 gid)
 		return;
 	s = rec_key_str(gid, K_EXPLOSION);
 	p->m_Explosion = s && (s[0] == 'd' || s[0] == 'D') ? expDirected : expRandom;
-	i = (int)KeyF(gid, K_MATERIAL, 0);
-	p->m_Material = (i < 0 || i >= matLastMaterial) ? matWood : i;
+	p->m_Material = Breakable_Material(gid);
 	p->m_iszGibModel = rec_key_res(gid, K_GIBMODEL);
 	p->m_iszSpawnObject = spawn_object((int)KeyF(gid, K_SPAWNOBJECT, 0));
 	p->m_iExplodeMagnitude = (int)KeyF(gid, K_EXPLODEMAGNITUDE, 0);
 }
 
-static void CBreakable_Precache(int e)
+res_t Breakable_Precache(int material, res_t gibmodel)
 {
-	CBreakable *p = PRIV(CBreakable, e);
 	res_t gib = RES_NONE;
 
-	switch (p->m_Material)
+	switch (material)
 	{
 	case matWood:
 		gib = RESID(MDL_WOODGIBS);
@@ -194,11 +198,25 @@ static void CBreakable_Precache(int e)
 		PRECACHE(RESID(DEBRIS_BUSTCEILING));
 		break;
 	}
-	MaterialSoundPrecache(p->m_Material);
-	if (p->m_iszGibModel)
-		gib = p->m_iszGibModel;
-	p->m_idShard = gib;
+	MaterialSoundPrecache(material);
+	if (gibmodel)
+		gib = gibmodel;
 	PRECACHE(gib);
+	return gib;
+}
+
+static void CBreakable_Precache(int e)
+{
+	CBreakable *p = PRIV(CBreakable, e);
+
+	p->m_idShard = Breakable_Precache(p->m_Material, p->m_iszGibModel);
+}
+
+int Breakable_Material(gid_t16 gid)
+{
+	int i = (int)KeyF(gid, K_MATERIAL, 0);
+
+	return (i < 0 || i >= matLastMaterial) ? matWood : i;
 }
 
 static void DamageSound(int e)
