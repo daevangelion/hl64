@@ -248,8 +248,11 @@ void		phy_ent_stats(phy_ent_stats_t *s, int reset);
 
 #define WALKMOVE_NORMAL		0
 #define WALKMOVE_WORLDONLY	1
-#define WALKMOVE_CHECKONLY	2
+#define WALKMOVE_CHECKONLY	2	/* moves origin, no link / touches / ground */
 int		phy_walk_move(int e, float yaw, float dist, int mode);
+/* Blocking entity of the last walk_move / move_to_origin / step trace
+ * (HLSDK gpGlobals->trace_ent), -1 none. */
+int		phy_trace_ent(void);
 int		phy_move_to_origin(int e, const float goal[3], float dist, int mode);
 /* -1 all-solid, 0 nothing below, 1 dropped */
 int		phy_drop_to_floor(int e);
