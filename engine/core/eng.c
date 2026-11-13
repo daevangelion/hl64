@@ -29,6 +29,8 @@
 #include "engine/mem/carve.h"
 #include "engine/mem/heap.h"
 #include "engine/render/gpu.h"
+#include "engine/render/gpu_studio.h"
+#include "hl64/studio.h"
 #include "engine/render/ren.h"
 #include "engine/world/wld.h"
 #include "engine/in/in.h"
@@ -142,6 +144,15 @@ static void log_draw(const char *what, uint32_t label)
 	log_printf("%s %lu gpu: binds=%lu meshlets=%lu verts=%lu tris=%lu hash=%08lx\n", what,
 		(unsigned long)label, (unsigned long)g.binds, (unsigned long)g.meshlets,
 		(unsigned long)g.verts, (unsigned long)g.tris, (unsigned long)g.hash);
+	{
+		gpu_studio_stats_t sg;
+
+		gpu_studio_stats(&sg);
+		log_printf("%s %lu studio: ents=%lu runs=%lu meshlets=%lu verts=%lu tris=%lu "
+			"mats=%lu hash=%08lx\n", what, (unsigned long)label, (unsigned long)sg.ents,
+			(unsigned long)sg.runs, (unsigned long)sg.meshlets, (unsigned long)sg.verts,
+			(unsigned long)sg.tris, (unsigned long)sg.mats, (unsigned long)sg.hash);
+	}
 }
 
 static int cmd_shot(const dbg_cmd_t *c)
@@ -220,6 +231,23 @@ static int cmd_prof(const dbg_cmd_t *c)
 	eng.rollup_t0 = sys_time_us();
 	eng.rollup_world_us = 0;
 	eng.rollup_world_max = 0;
+	if (eng.world)
+	{
+		studio_stats_t ss;
+
+		studio_stats(&ss, 1);
+		log_printf("prof studio_us avg=%lu max=%lu drawn=%lu bones_us=%lu draw_us=%lu "
+			"pool=%lu pool_peak=%lu sync=%lu models=%lu anims=%lu culled=%lu pending=%lu "
+			"nofit=%lu dropped=%lu\n",
+			(unsigned long)(ss.frames ? ss.us_sum / ss.frames : 0), (unsigned long)ss.us_max,
+			(unsigned long)(ss.frames ? ss.drawn / ss.frames : 0),
+			(unsigned long)(ss.frames ? ss.bones_us / ss.frames : 0),
+			(unsigned long)(ss.frames ? ss.draw_us / ss.frames : 0),
+			(unsigned long)ss.pool_used, (unsigned long)ss.pool_peak,
+			(unsigned long)ss.sync_loads, (unsigned long)ss.models, (unsigned long)ss.anims,
+			(unsigned long)ss.culled, (unsigned long)ss.pending, (unsigned long)ss.nofit,
+			(unsigned long)ss.dropped);
+	}
 	return 0;
 }
 
@@ -273,6 +301,7 @@ void eng_boot(const char *platform)
 	if (eng.world)
 	{
 		ren_init();
+		studio_init();
 		ren_cam_init();
 	}
 	in_init();
@@ -410,6 +439,7 @@ void eng_frame(void)
 		wld_frame(eng.frame);
 		wld_style_tick(eng.time);
 		ren_dlight_frame(eng.time, (double)dt * 1e-6);
+		studio_frame();
 	}
 
 	/* 11-12 render into a free framebuffer; submit for paced present */

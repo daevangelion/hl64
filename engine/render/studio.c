@@ -1,0 +1,1479 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * studio.c -- studio models in the engine (docs/architecture.md 9.4, D3(b);
+ * docs/formats/studio-format.md; docs/specs/trace-and-hulls.md 4.5,
+ * lightstyles.md 4, dlights.md 4, physics-movetypes.md 7, render-fx.md 2):
+ *
+ *  - residency in POOL_STUDIO of three units per cooked model: the info
+ *    block (loaded synchronously on first use, pinned while a live entity
+ *    uses the model), the draw mesh (read asynchronously when the model is
+ *    first visible, recorded once by the platform) and the per-sequence
+ *    animation chunks (read asynchronously when a sequence is wanted;
+ *    studio_anim returns NULL meanwhile and the pose holds); LRU eviction
+ *    of what the current frame does not use;
+ *  - the draw of the visible studio entities: the eye leaf's sector list
+ *    and the view frustum against the entity's linked box, bones from
+ *    game_studio_setup_bones into the platform's double-buffered matrix
+ *    pool, one block replay per drawn run; light = the REND probe under
+ *    the entity (base value; the cooked probes carry no style term yet)
+ *    plus dynamic lights, floor 32, clamp 255; STEP entities interpolated
+ *    between their think steps; render modes by col_ent_t.rendermode;
+ *  - the view model: CPU-skinned with chrome (game_studio_chrome_*);
+ *  - the hitbox source of engine/coll: the server pose
+ *    (game_studio_pose) of the entity, its cooked hitboxes on their bones.
+ *
+ * Residency follows the old tree's studio pool (source/mod_studio.c,
+ * provenance-audit.md entry QUAKE-INTERFACE: retargeted; its units are the
+ * D3(b) blocks here, its model_t / COM_* / Con_* / host_framecount
+ * bindings replaced by res_t, engine/io, engine/mem and the frame
+ * counter); the draw split from n64/port/r64_studio.c (QUAKE-INTERFACE;
+ * its 599-609 frame wrap lives in game/studio as HLSDK code) and the
+ * STB2 draw of r64_studio_bake.c (plat/n64/gpu_studio.c).
+ */
+#include <math.h>
+#include <string.h>
+
+#include "hl64/coll.h"
+#include "hl64/ent.h"
+#include "hl64/game.h"
+#include "hl64/limits.h"
+#include "hl64/rec.h"
+#include "hl64/settings.h"
+#include "hl64/studio.h"
+#include "hl64/studio_fmt.h"
+#include "engine/core/log.h"
+#include "engine/core/sys.h"
+#include "engine/io/io.h"
+#include "engine/mem/carve.h"
+#include "engine/mem/pool.h"
+#include "engine/render/gpu_studio.h"
+#include "engine/render/ren.h"
+#include "engine/world/wld.h"
+
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define ST_SWAP	1
+#else
+#define ST_SWAP	0
+#endif
+
+#define MAXBONES	128
+#define REQS		16		/* reads in flight */
+#define MAT_KB		64		/* studio scratch: matrix frame pools */
+#define VIEW_KB		64		/* studio scratch: view model vertices (2 halves) */
+#define MESH_GRACE	3		/* frames a mesh stays after its last draw (GPU) */
+#define STEP_SNAP	64.0f		/* physics-movetypes.md 7 */
+#define STEP_MAX	0.2
+
+enum { U_ABSENT, U_LOADING, U_LANDED, U_RESIDENT, U_BAD };
+
+typedef struct {
+	uint32_t	rom, size, arom, asize;
+	uint8_t		files;		/* rom / arom resolved */
+	uint8_t		info_st, mesh_st;
+	uint8_t		pad;
+	uint16_t	numseq, ntex;
+	sfmt_info_t	*info;
+	mem_blk_t	*info_blk;
+	sfmt_mesh_t	*mesh;
+	mem_blk_t	*mesh_blk;
+	void		*gstate;
+	mem_blk_t	*gstate_blk;
+	uint32_t	info_used, mesh_used, pinned;
+	uint32_t	info_ofs, info_size, mesh_ofs, mesh_size;
+} smodel_t;
+
+typedef struct {
+	uint16_t	model;		/* MODEL index + 1, 0 free */
+	uint16_t	seq;
+	uint8_t		st;
+	uint8_t		req;		/* in-flight request slot + 1 */
+	uint16_t	pad;
+	uint16_t	*data;
+	mem_blk_t	*blk;
+	uint32_t	used;
+} sanim_t;
+
+typedef struct {
+	io_req_t	r;
+	uint8_t		kind;		/* 0 free, 1 mesh, 2 anim */
+	uint16_t	idx;
+} sreq_t;
+
+/* STEP interpolation: the last two think-step placements per slot. */
+typedef struct {
+	uint16_t	serial;
+	uint8_t		valid, pad;
+	float		org[2][3], ang[2][3];
+	double		t[2];
+} sstep_t;
+
+static mem_pool_t	pool, spool;
+static mem_blk_t	desc[HL64_STUDIO_BLOCKS], sdesc[256];
+static smodel_t		models[HL64_STUDIO_MODELS];
+static sanim_t		anims[HL64_STUDIO_ANIMS];
+static sreq_t		reqs[REQS];
+static sstep_t		steps[HL64_MAX_ENTITIES];
+static uint32_t		frame = 1;
+static studio_stats_t	st;
+static studio_view_t	view;
+static int		view_set;
+static w64_vert_t	*view_verts[2];
+static uint32_t		view_slots;
+static int		view_flip;
+#ifdef HL64_HOST
+static const char	*bound[HL64_STUDIO_MODELS][2];
+#endif
+
+/* ---- byte order (host) ------------------------------------------------------- */
+
+static void sw16(void *p, uint32_t n)
+{
+#if ST_SWAP
+	uint16_t *q = p;
+
+	while (n--)
+	{
+		*q = __builtin_bswap16(*q);
+		q++;
+	}
+#else
+	(void)p;
+	(void)n;
+#endif
+}
+
+static void sw32(void *p, uint32_t n)
+{
+#if ST_SWAP
+	uint32_t *q = p;
+
+	while (n--)
+	{
+		*q = __builtin_bswap32(*q);
+		q++;
+	}
+#else
+	(void)p;
+	(void)n;
+#endif
+}
+
+static int in(uint32_t ofs, uint32_t n, uint32_t size)
+{
+	return ofs <= size && n <= size - ofs;
+}
+
+/* Swap (host) and check an info block in place; 0 ok. */
+static int fix_info(sfmt_info_t *h, uint32_t size, int nb_check)
+{
+	uint8_t *b = (uint8_t *)h;
+	uint32_t i;
+
+	if (size < sizeof(*h))
+		return -1;
+	sw32(&h->magic, 1);
+	sw16(&h->numseq, 1);
+	sw32(&h->flags, 1);
+	sw32(h->eyeposition, 15);
+	sw16(&h->numevents, 2);
+	sw32(&h->bone_ofs, 12);
+	if (h->magic != SFMT_INFO_MAGIC || (nb_check && h->numbones > MAXBONES)
+		|| !in(h->bone_ofs, 56u * h->numbones, size)
+		|| !in(h->ctl_ofs, 16u * h->numctl, size) || h->numctl > 8
+		|| !in(h->hitbox_ofs, 28u * h->numhitboxes, size)
+		|| !in(h->attach_ofs, 16u * h->numattach, size)
+		|| !in(h->seq_ofs, 96u * h->numseq, size)
+		|| !in(h->event_ofs, 12u * h->numevents, size)
+		|| !in(h->bodypart_ofs, 8u * h->numbodyparts, size)
+		|| !in(h->trans_ofs, (uint32_t)h->numtransitions * h->numtransitions, size)
+		|| !in(h->str_ofs, h->str_size, size) || !h->str_size
+		|| b[h->str_ofs + h->str_size - 1] != 0)
+		return -1;
+	for (i = 0; i < h->numbones; i++)
+	{
+		sfmt_bone_t *bn = (sfmt_bone_t *)(b + h->bone_ofs) + i;
+
+		sw32(bn->value, 12);
+		if (bn->parent >= (int)i || bn->parent < -1)
+			return -1;
+		for (int k = 0; k < 6; k++)
+			if (bn->ctl[k] >= h->numctl)
+				return -1;
+	}
+	for (i = 0; i < h->numctl; i++)
+	{
+		sfmt_ctl_t *c = (sfmt_ctl_t *)(b + h->ctl_ofs) + i;
+
+		sw16(&c->type, 1);
+		sw32(&c->start, 2);
+	}
+	for (i = 0; i < h->numhitboxes; i++)
+	{
+		sfmt_hitbox_t *x = (sfmt_hitbox_t *)(b + h->hitbox_ofs) + i;
+
+		sw32(x->bbmin, 6);
+		if (x->bone >= h->numbones)
+			return -1;
+	}
+	for (i = 0; i < h->numattach; i++)
+	{
+		sfmt_attach_t *a = (sfmt_attach_t *)(b + h->attach_ofs) + i;
+
+		sw32(a->org, 3);
+		if (a->bone >= h->numbones)
+			return -1;
+	}
+	for (i = 0; i < h->numseq; i++)
+	{
+		sfmt_seq_t *s = (sfmt_seq_t *)(b + h->seq_ofs) + i;
+
+		sw16(&s->label, 1);
+		sw32(&s->fps, 2);
+		sw16(&s->activity, 5);
+		sw32(&s->motiontype, 10);
+		sw16(s->blendtype, 2);
+		sw32(s->blendstart, 4);
+		sw16(&s->nextseq, 1);
+		sw32(&s->anim_ofs, 2);
+		if (s->label >= h->str_size || (uint32_t)s->event_first + s->numevents > h->numevents
+			|| !s->numblends || s->numblends > 4 || s->motionbone >= h->numbones)
+			return -1;
+	}
+	for (i = 0; i < h->numevents; i++)
+	{
+		sfmt_event_t *e = (sfmt_event_t *)(b + h->event_ofs) + i;
+
+		sw32(&e->frame, 2);
+		sw16(&e->options, 2);
+		if (e->options >= h->str_size)
+			return -1;
+	}
+	for (i = 0; i < h->numbodyparts; i++)
+	{
+		sfmt_bodypart_t *p = (sfmt_bodypart_t *)(b + h->bodypart_ofs) + i;
+
+		sw16(p, 4);
+		if (!p->base || !p->nummodels || (uint32_t)p->sub_first + p->nummodels > h->nsub)
+			return -1;
+	}
+	return 0;
+}
+
+/* Swap (host) and check a mesh block; 0 ok. */
+static int fix_mesh(sfmt_mesh_t *m, uint32_t size, const sfmt_info_t *h)
+{
+	uint8_t *b = (uint8_t *)m;
+	uint32_t i, slot = 0;
+
+	if (size < sizeof(*m))
+		return -1;
+	sw32(&m->magic, 1);
+	sw16(&m->nsub, 6);
+	sw16(&m->ntex, 2);
+	sw32(&m->bslot_ofs, 10);
+	if (m->magic != SFMT_MESH_MAGIC || m->nsub != h->nsub || (m->nslots & 1)
+		|| !in(m->bslot_ofs, m->nbslots, size) || !in(m->sub_ofs, 4u * m->nsub, size)
+		|| !in(m->run_ofs, 8u * m->nruns, size) || !in(m->meshlet_ofs, 8u * m->nmeshlets, size)
+		|| !in(m->load_ofs, 4u * m->nloads, size) || (m->vert_ofs & 15)
+		|| !in(m->vert_ofs, 16u * m->nslots, size) || !in(m->tri_ofs, 3u * m->ntris, size)
+		|| !in(m->skin_ofs, 2u * m->nskinref * m->nfamilies, size)
+		|| !in(m->tex_ofs, 4u * m->ntex, size) || !m->nfamilies
+		|| (m->nbone_ofs && !in(m->nbone_ofs, m->nslots, size)))
+		return -1;
+	for (i = 0; i < m->nbslots; i++)
+		if (b[m->bslot_ofs + i] >= h->numbones)
+			return -1;
+	sw16(b + m->sub_ofs, 2u * m->nsub);
+	for (i = 0; i < m->nsub; i++)
+	{
+		const sfmt_sub_t *s = (const sfmt_sub_t *)(b + m->sub_ofs) + i;
+
+		if ((uint32_t)s->run_first + s->run_count > m->nruns)
+			return -1;
+	}
+	sw16(b + m->run_ofs, 4u * m->nruns);
+	for (i = 0; i < m->nruns; i++)
+	{
+		const sfmt_run_t *r = (const sfmt_run_t *)(b + m->run_ofs) + i;
+
+		if (r->skinref >= m->nskinref || (uint32_t)r->meshlet_first + r->meshlet_count
+			> m->nmeshlets)
+			return -1;
+	}
+	for (i = 0; i < m->nmeshlets; i++)
+	{
+		sfmt_meshlet_t *ml = (sfmt_meshlet_t *)(b + m->meshlet_ofs) + i;
+		uint32_t l, cache = 0, t;
+
+		sw16(&ml->load_first, 1);
+		sw16(&ml->tri_first, 2);
+		if ((uint32_t)ml->load_first + ml->nloads > m->nloads || !ml->nverts
+			|| ml->nverts > 64 || (uint32_t)ml->tri_first + ml->ntris > m->ntris)
+			return -1;
+		for (l = ml->load_first; l < (uint32_t)ml->load_first + ml->nloads; l++)
+		{
+			const sfmt_load_t *ld = (const sfmt_load_t *)(b + m->load_ofs) + l;
+
+			if (ld->bslot >= m->nbslots || ld->cache != cache || !ld->count)
+				return -1;
+			cache += ld->count;
+			slot += ld->count + (ld->count & 1u);
+		}
+		if (cache != ml->nverts)
+			return -1;
+		for (t = 3u * ml->tri_first; t < 3u * ((uint32_t)ml->tri_first + ml->ntris); t++)
+			if (b[m->tri_ofs + t] >= ml->nverts)
+				return -1;
+	}
+	if (slot != m->nslots)
+		return -1;
+	for (i = 0; i < m->nslots / 2u; i++)
+	{
+		w64_vert_t *v = (w64_vert_t *)(b + m->vert_ofs) + i;
+
+		sw16(v->posA, 8);
+		sw32(&v->rgbaA, 2);
+		sw16(v->stA, 4);
+	}
+	sw16(b + m->skin_ofs, (uint32_t)m->nskinref * m->nfamilies);
+	for (i = 0; i < (uint32_t)m->nskinref * m->nfamilies; i++)
+		if (((const uint16_t *)(b + m->skin_ofs))[i] >= m->ntex)
+			return -1;
+	sw32(b + m->tex_ofs, m->ntex);
+	for (i = 0; i < m->ntex; i++)
+	{
+		uint32_t o = ((const uint32_t *)(b + m->tex_ofs))[i];
+		w64_texp_t *t = (w64_texp_t *)(b + o);
+
+		if ((o & 15) || !in(o, 48, size))
+			return -1;
+		sw16(&t->w, 2);
+		sw32(&t->ci4_ofs, 2);
+		if (t->ci4_ofs != 48 || !t->w || !t->h || (t->w & (t->w - 1)) || (t->h & (t->h - 1))
+			|| !in(o, 48u + (uint32_t)t->w * t->h / 2u, size))
+			return -1;
+		sw16(b + o + 16, 16);
+	}
+	return 0;
+}
+
+/* ---- model table ---------------------------------------------------------------- */
+
+static int model_index(res_t r)
+{
+	int i = RES_INDEX(r);
+
+	if (RES_KIND(r) != RES_K_MODEL || i >= HL64_STUDIO_MODELS)
+		return -1;
+	return i;
+}
+
+static int model_files(int i)
+{
+	smodel_t *m = &models[i];
+	int file;
+	uint32_t ofs, size;
+
+	if (m->files)
+		return m->rom ? 0 : -1;
+	m->files = 1;
+#ifdef HL64_HOST
+	if (bound[i][0])
+	{
+		m->rom = sys_cart_addr(bound[i][0], &m->size);
+		m->arom = sys_cart_addr(bound[i][1], &m->asize);
+		return m->rom && m->arom ? 0 : -1;
+	}
+#endif
+	if (!res_file(RES_MAKE(RES_K_MODEL, i), &file, &ofs, &size))
+		return -1;
+	m->rom = res_file_rom(file, NULL) + ofs;
+	m->size = size;
+	if (!res_file(RES_MAKE(RES_K_ANIM, i), &file, &ofs, &size))
+		return -1;
+	m->arom = res_file_rom(file, NULL) + ofs;
+	m->asize = size;
+	return m->rom && m->arom ? 0 : -1;
+}
+
+#ifdef HL64_HOST
+void studio_test_bind(int idx, const char *s64, const char *a64)
+{
+	if (idx < 0 || idx >= HL64_STUDIO_MODELS)
+		sys_error("studio_test_bind: index %d", idx);
+	bound[idx][0] = s64;
+	bound[idx][1] = a64;
+	models[idx].files = 0;
+}
+#endif
+
+/* ---- pool ------------------------------------------------------------------------- */
+
+/* Free the least recently used block nobody needs this frame; 0 when none. */
+static int evict_one(void)
+{
+	uint32_t best = 0xFFFFFFFF;
+	int kind = 0, idx = -1, i;
+
+	for (i = 0; i < HL64_STUDIO_ANIMS; i++)
+	{
+		const sanim_t *a = &anims[i];
+
+		if (a->model && a->st == U_RESIDENT && a->used + 1 < frame && a->used < best)
+		{
+			best = a->used;
+			kind = 2;
+			idx = i;
+		}
+	}
+	for (i = 0; i < HL64_STUDIO_MODELS; i++)
+	{
+		const smodel_t *m = &models[i];
+
+		if (m->mesh_st == U_RESIDENT && m->mesh_used + MESH_GRACE < frame && m->mesh_used < best)
+		{
+			best = m->mesh_used;
+			kind = 1;
+			idx = i;
+		}
+		if (m->info_st == U_RESIDENT && m->pinned + 1 < frame && m->info_used + 1 < frame
+			&& m->mesh_st == U_ABSENT && m->info_used < best)
+		{
+			best = m->info_used;
+			kind = 3;
+			idx = i;
+		}
+	}
+	if (idx < 0)
+		return 0;
+	if (kind == 2)
+	{
+		mem_pool_free(&pool, anims[idx].blk, 0);
+		anims[idx].model = 0;
+		anims[idx].st = U_ABSENT;
+	}
+	else if (kind == 1)
+	{
+		smodel_t *m = &models[idx];
+
+		gpu_studio_release(m->gstate);
+		mem_pool_free(&spool, m->gstate_blk, 0);
+		mem_pool_free(&pool, m->mesh_blk, 0);
+		m->mesh = NULL;
+		m->mesh_st = U_ABSENT;
+	}
+	else
+	{
+		smodel_t *m = &models[idx];
+
+		mem_pool_free(&pool, m->info_blk, 0);
+		m->info = NULL;
+		m->info_st = U_ABSENT;
+	}
+	return 1;
+}
+
+static mem_blk_t *alloc(uint32_t size, void **owner)
+{
+	mem_blk_t *b;
+
+	size = (size + 15u) & ~15u;
+	while (!(b = mem_pool_alloc(&pool, size, owner)))
+		if (!evict_one())
+		{
+			st.nofit++;
+			return NULL;
+		}
+	if (pool.used > st.pool_peak)
+		st.pool_peak = pool.used;
+	return b;
+}
+
+/* ---- info -------------------------------------------------------------------------- */
+
+static smodel_t *info_of(res_t r)
+{
+	static sfmt_file_t hdr __attribute__((aligned(16)));
+	int i = model_index(r);
+	smodel_t *m;
+	uint64_t t0;
+
+	if (i < 0)
+		return NULL;
+	m = &models[i];
+	if (m->info_st == U_RESIDENT)
+	{
+		m->info_used = frame;
+		return m;
+	}
+	if (m->info_st == U_BAD || model_files(i) || m->size < 64)
+		return NULL;
+	t0 = sys_time_us();
+	io_read_sync(&hdr, m->rom, 64);
+	sw32(&hdr.magic, 1);
+	sw16(&hdr.version, 2);
+	sw32(&hdr.info_ofs, 6);
+	if (hdr.magic != SFMT_MODEL_MAGIC || hdr.version != SFMT_VERSION || hdr.info_ofs != 64
+		|| (hdr.info_size & 15) || hdr.mesh_ofs != 64 + hdr.info_size || (hdr.mesh_size & 15)
+		|| hdr.mesh_ofs + hdr.mesh_size != m->size || hdr.anim_size != m->asize)
+	{
+		log_printf("studio: model %d: bad .s64 header\n", i);
+		m->info_st = U_BAD;
+		return NULL;
+	}
+	m->info_ofs = hdr.info_ofs;
+	m->info_size = hdr.info_size;
+	m->mesh_ofs = hdr.mesh_ofs;
+	m->mesh_size = hdr.mesh_size;
+	if (!(m->info_blk = alloc(m->info_size, (void **)&m->info)))
+		sys_error("studio: no pool room for model %d info (%lu B)", i,
+			(unsigned long)m->info_size);
+	io_read_sync(m->info, m->rom + m->info_ofs, m->info_size);
+	if (fix_info(m->info, m->info_size, 1))
+	{
+		log_printf("studio: model %d: bad info block\n", i);
+		mem_pool_free(&pool, m->info_blk, 0);
+		m->info = NULL;
+		m->info_st = U_BAD;
+		return NULL;
+	}
+	m->numseq = m->info->numseq;
+	m->info_st = U_RESIDENT;
+	m->info_used = frame;
+	st.sync_loads++;
+	st.models++;
+	(void)t0;
+	return m;
+}
+
+const void *studio_info(res_t model, uint32_t *size)
+{
+	smodel_t *m = info_of(model);
+
+	if (!m)
+		return NULL;
+	if (size)
+		*size = m->info_size;
+	return m->info;
+}
+
+/* ---- reads ----------------------------------------------------------------------------- */
+
+static void req_done(io_req_t *r)
+{
+	sreq_t *q = (sreq_t *)r;
+
+	if (q->kind == 1)
+		models[q->idx].mesh_st = U_LANDED;
+	else if (q->kind == 2)
+		anims[q->idx].st = U_LANDED;
+	if (q->kind == 1)
+		models[q->idx].mesh_blk->locked = 0;
+	else
+		anims[q->idx].blk->locked = 0;
+	q->kind = 0;
+}
+
+static sreq_t *req_get(void)
+{
+	int i;
+
+	for (i = 0; i < REQS; i++)
+		if (!reqs[i].kind)
+			return &reqs[i];
+	return NULL;
+}
+
+static void submit(sreq_t *q, int kind, int idx, uint32_t rom, void *dst, uint32_t len, int prio)
+{
+	memset(&q->r, 0, sizeof(q->r));
+	q->kind = (uint8_t)kind;
+	q->idx = (uint16_t)idx;
+	q->r.rom = rom;
+	q->r.dst = dst;
+	q->r.len = len;
+	q->r.prio = (uint8_t)prio;
+	q->r.cb = req_done;
+	io_submit(&q->r);
+}
+
+/* ---- animation chunks -------------------------------------------------------------------- */
+
+static sanim_t *anim_slot(int mi, int seq, int create)
+{
+	uint32_t h = ((uint32_t)mi * 131u + (uint32_t)seq) % HL64_STUDIO_ANIMS;
+	int k, free_at = -1;
+
+	for (k = 0; k < HL64_STUDIO_ANIMS; k++)
+	{
+		sanim_t *a = &anims[(h + k) % HL64_STUDIO_ANIMS];
+
+		if (a->model == mi + 1 && a->seq == seq)
+			return a;
+		if (!a->model)
+		{
+			if (free_at < 0)
+				free_at = (int)((h + k) % HL64_STUDIO_ANIMS);
+			if (a->st != U_BAD)	/* never used: end of the probe run */
+				break;
+		}
+	}
+	if (!create || free_at < 0)
+		return NULL;
+	anims[free_at].model = (uint16_t)(mi + 1);
+	anims[free_at].seq = (uint16_t)seq;
+	anims[free_at].st = U_ABSENT;
+	return &anims[free_at];
+}
+
+static void anim_land(sanim_t *a, uint32_t size)
+{
+	sw16(a->data, size / 2u);
+	a->st = U_RESIDENT;
+	st.anims++;
+}
+
+/* want_only: request, never return data; sync: a chunk not resident is
+ * read now (a queued read finished first), counted as a sync load. */
+static const void *anim_get(res_t model, int seq, uint32_t *size, int want_only, int sync)
+{
+	smodel_t *m = info_of(model);
+	const sfmt_seq_t *s;
+	sanim_t *a;
+	sreq_t *q;
+	int mi;
+
+	if (!m || seq < 0 || seq >= m->numseq)
+		return NULL;
+	mi = model_index(model);
+	s = &SFMT_SEQS(m->info)[seq];
+	if (!s->anim_size || !in(s->anim_ofs, s->anim_size, m->asize))
+		return NULL;
+	a = anim_slot(mi, seq, 1);
+	if (!a)
+	{
+		st.dropped++;
+		return NULL;
+	}
+	a->used = frame;
+	if (sync && a->st == U_LOADING)
+	{
+		int k;
+
+		for (k = 0; k < REQS; k++)
+			if (reqs[k].kind == 2 && reqs[k].idx == a - anims)
+				io_finish(&reqs[k].r);
+		io_pump();
+	}
+	if (sync && a->st == U_ABSENT)
+	{
+		if (!(a->blk = alloc(s->anim_size, (void **)&a->data)))
+			return NULL;
+		io_read_sync(a->data, m->arom + s->anim_ofs, s->anim_size);
+		st.sync_loads++;
+		a->st = U_LANDED;
+	}
+	if (a->st == U_LANDED)
+		anim_land(a, s->anim_size);
+	if (a->st == U_RESIDENT)
+	{
+		if (size)
+			*size = s->anim_size;
+		return want_only ? NULL : a->data;
+	}
+	if (a->st == U_ABSENT && (q = req_get()) != NULL)
+	{
+		if (!(a->blk = alloc(s->anim_size, (void **)&a->data)))
+			return NULL;
+		a->blk->locked = 1;
+		a->st = U_LOADING;
+		submit(q, 2, (int)(a - anims), m->arom + s->anim_ofs, a->data, s->anim_size,
+			IO_PRIO_PREFETCH);
+	}
+	return NULL;
+}
+
+const void *studio_anim(res_t model, int sequence, uint32_t *size)
+{
+	return anim_get(model, sequence, size, 0, 0);
+}
+
+const void *studio_anim_now(res_t model, int sequence, uint32_t *size)
+{
+	return anim_get(model, sequence, size, 0, 1);
+}
+
+void studio_want(res_t model, int sequence)
+{
+	anim_get(model, sequence, NULL, 1, 0);
+}
+
+/* ---- mesh -------------------------------------------------------------------------------- */
+
+/* The model's recorded mesh, or NULL after requesting it. */
+static smodel_t *mesh_of(res_t r)
+{
+	smodel_t *m = info_of(r);
+	sreq_t *q;
+	uint32_t gsz;
+
+	if (!m)
+		return NULL;
+	m->mesh_used = frame;
+	switch (m->mesh_st)
+	{
+	case U_RESIDENT:
+		return m;
+	case U_ABSENT:
+		if (!(q = req_get()))
+			return NULL;
+		if (!(m->mesh_blk = alloc(m->mesh_size, (void **)&m->mesh)))
+			return NULL;
+		/* GPU-visible: never slides; locked for the DMA as well */
+		m->mesh_blk->locked = 1;
+		m->mesh_st = U_LOADING;
+		submit(q, 1, (int)(m - models), m->rom + m->mesh_ofs, m->mesh, m->mesh_size,
+			IO_PRIO_OPEN);
+		return NULL;
+	case U_LANDED:
+		m->mesh_blk->locked = 1;
+		if (fix_mesh(m->mesh, m->mesh_size, m->info))
+		{
+			log_printf("studio: model %d: bad mesh block\n", (int)(m - models));
+			mem_pool_free(&pool, m->mesh_blk, 0);
+			m->mesh = NULL;
+			m->mesh_st = U_BAD;
+			return NULL;
+		}
+		gsz = gpu_studio_state_size(m->mesh);
+		while (!(m->gstate_blk = mem_pool_alloc(&spool, (gsz + 15u) & ~15u, &m->gstate)))
+		{
+			st.nofit++;
+			return NULL;
+		}
+		m->gstate_blk->locked = 1;
+		if (gpu_studio_build(m->gstate, m->mesh))
+		{
+			mem_pool_free(&spool, m->gstate_blk, 0);
+			return NULL;
+		}
+		m->mesh_st = U_RESIDENT;
+		return m;
+	default:
+		return NULL;
+	}
+}
+
+/* ---- boot, frame ------------------------------------------------------------------------- */
+
+
+void studio_init(void)
+{
+	uint8_t *sc = mem_region(MEM_STUDIO_SCRATCH);
+	uint32_t scb = mem_region_bytes(MEM_STUDIO_SCRATCH);
+
+	mem_pool_init(&pool, "studio", mem_region(MEM_POOL_STUDIO),
+		mem_region_bytes(MEM_POOL_STUDIO), desc, HL64_STUDIO_BLOCKS);
+	if (scb < (MAT_KB + VIEW_KB + 16) * 1024u)
+		sys_error("studio: scratch region %lu B too small", (unsigned long)scb);
+	gpu_studio_init(sc, MAT_KB * 1024u);
+	view_verts[0] = (w64_vert_t *)(sc + MAT_KB * 1024u);
+	view_verts[1] = view_verts[0] + VIEW_KB * 1024u / 2u / sizeof(w64_vert_t);
+	view_slots = VIEW_KB * 1024u / 2u / sizeof(w64_vert_t) * 2u;
+	mem_pool_init(&spool, "studiogpu", sc + (MAT_KB + VIEW_KB) * 1024u,
+		scb - (MAT_KB + VIEW_KB) * 1024u, sdesc, 256);
+	col_set_hitbox_source(studio_hitboxes);
+}
+
+static int is_studio(int e)
+{
+	return ent_is_live(e) && RES_KIND(ent_rnd(e)->model) == RES_K_MODEL;
+}
+
+/* Step 9: pins, wanted chunks, STEP placements (after the entity pass). */
+void studio_frame(void)
+{
+	double now = eng_time();
+	int e, i;
+
+	frame++;
+	mem_pool_retire(&pool, frame);
+	for (e = 1; e < HL64_MAX_ENTITIES; e++)
+	{
+		const ent_rnd_t *r;
+		const col_ent_t *cv;
+		sstep_t *s = &steps[e];
+		int mi;
+
+		if (!is_studio(e))
+		{
+			s->valid = 0;
+			continue;
+		}
+		r = ent_rnd(e);
+		mi = model_index(r->model);
+		if (mi >= 0)
+			models[mi].pinned = frame;
+		studio_want(r->model, r->sequence);
+		cv = ent_cv(e);
+		if (cv->movetype != MOVETYPE_STEP)
+		{
+			s->valid = 0;
+			continue;
+		}
+		if (!s->valid || s->serial != ent_idc(e)->serial)
+		{
+			s->valid = 1;
+			s->serial = ent_idc(e)->serial;
+			for (i = 0; i < 2; i++)
+			{
+				memcpy(s->org[i], cv->origin, sizeof(s->org[i]));
+				memcpy(s->ang[i], cv->angles, sizeof(s->ang[i]));
+				s->t[i] = now;
+			}
+			continue;
+		}
+		if (memcmp(s->org[1], cv->origin, sizeof(s->org[1]))
+			|| memcmp(s->ang[1], cv->angles, sizeof(s->ang[1])))
+		{
+			memcpy(s->org[0], s->org[1], sizeof(s->org[0]));
+			memcpy(s->ang[0], s->ang[1], sizeof(s->ang[0]));
+			s->t[0] = s->t[1];
+			memcpy(s->org[1], cv->origin, sizeof(s->org[1]));
+			memcpy(s->ang[1], cv->angles, sizeof(s->ang[1]));
+			s->t[1] = now;
+		}
+	}
+}
+
+/* Placement drawn for e (map-local): STEP entities between their last
+ * two think steps over the interval between them (<= 0.2 s), a jump over
+ * 64 u snaps (physics-movetypes.md 7); others as they are. */
+static void placement(int e, double time, float org[3], float ang[3])
+{
+	const col_ent_t *cv = ent_cv(e);
+	const sstep_t *s = &steps[e];
+	double span, f;
+	float d2 = 0;
+	int k;
+
+	memcpy(org, cv->origin, 3 * sizeof(float));
+	memcpy(ang, cv->angles, 3 * sizeof(float));
+	if (!s->valid || cv->movetype != MOVETYPE_STEP)
+		return;
+	span = s->t[1] - s->t[0];
+	if (span <= 0)
+		return;
+	if (span > STEP_MAX)
+		span = STEP_MAX;
+	f = (time - s->t[1]) / span;
+	if (f >= 1)
+		return;
+	if (f < 0)
+		f = 0;
+	for (k = 0; k < 3; k++)
+		d2 += (s->org[1][k] - s->org[0][k]) * (s->org[1][k] - s->org[0][k]);
+	if (d2 > STEP_SNAP * STEP_SNAP)
+		return;
+	for (k = 0; k < 3; k++)
+	{
+		float d = s->ang[1][k] - s->ang[0][k];
+
+		if (d > 180)
+			d -= 360;
+		else if (d < -180)
+			d += 360;
+		org[k] = s->org[0][k] + (float)((s->org[1][k] - s->org[0][k]) * f);
+		ang[k] = s->ang[0][k] + (float)(d * f);
+	}
+}
+
+/* ---- light (lightstyles.md 4, dlights.md 4) -------------------------------------------------- */
+
+/* REND probe value at map-local p of layer L (trilinear over the 64 u
+ * lattice of a visible sector containing p); -1 when none is resident. */
+static int probe_at(wld_layer_t *L, const uint16_t *list, int cnt, const float p[3])
+{
+	int i, k;
+
+	for (i = 0; i < cnt; i++)
+	{
+		const w64_sector_t *s = &L->sects[list[i]];
+		const w64_rend_t *r;
+		const int16_t *org;
+		const uint8_t *v;
+		uint8_t *ch;
+		float g[3], fr[3], acc = 0;
+		int c[3], n[3];
+
+		for (k = 0; k < 3; k++)
+			if (p[k] < s->bbox[k] || p[k] > s->bbox[k + 3])
+				break;
+		if (k < 3)
+			continue;
+		if (!(ch = wld_chunk_use(L, s->rend_chunk)))
+			return -1;
+		r = (const w64_rend_t *)ch;
+		if (!r->probe_ofs)
+			return -1;
+		org = (const int16_t *)(ch + r->probe_ofs);
+		v = (const uint8_t *)(org + 3);
+		for (k = 0; k < 3; k++)
+		{
+			n[k] = r->probe_dims[k];
+			g[k] = (p[k] - org[k]) / 64.0f;
+			if (g[k] < 0)
+				g[k] = 0;
+			if (g[k] > n[k] - 1)
+				g[k] = (float)(n[k] - 1);
+			c[k] = (int)g[k];
+			if (c[k] > n[k] - 2)
+				c[k] = n[k] > 1 ? n[k] - 2 : 0;
+			fr[k] = n[k] > 1 ? g[k] - c[k] : 0;
+		}
+		for (k = 0; k < 8; k++)
+		{
+			int x = c[0] + (k & 1 && n[0] > 1), y = c[1] + ((k >> 1) & 1 && n[1] > 1);
+			int z = c[2] + ((k >> 2) & 1 && n[2] > 1);
+			float w = ((k & 1) ? fr[0] : 1 - fr[0]) * (((k >> 1) & 1) ? fr[1] : 1 - fr[1])
+				* (((k >> 2) & 1) ? fr[2] : 1 - fr[2]);
+
+			acc += w * v[(z * n[1] + y) * n[0] + x];
+		}
+		return (int)(acc + 0.5f);
+	}
+	return -1;
+}
+
+static int light_at(wld_layer_t *L, const uint16_t *list, int cnt, const float local[3],
+	const float global[3])
+{
+	int base = probe_at(L, list, cnt, local), i;
+	float v = base < 0 ? 128.0f : (float)base;
+
+	for (i = 0; i < HL64_DLIGHTS; i++)
+	{
+		const ren_dlight_t *d;
+		float dx, dy, dz, a;
+
+		if (!ren_dlight_live(i))
+			continue;
+		d = ren_dlight(i);
+		dx = global[0] - d->origin[0];
+		dy = global[1] - d->origin[1];
+		dz = global[2] - d->origin[2];
+		a = d->radius - sqrtf(dx * dx + dy * dy + dz * dz);
+		if (a > 0)
+			v += a;
+	}
+	if (v < 32)
+		v = 32;
+	if (v > 255)
+		v = 255;
+	return (int)v;
+}
+
+/* ---- draw ------------------------------------------------------------------------------------ */
+
+typedef struct {
+	uint16_t	e;
+	uint16_t	trans;
+	float		dist;
+} cand_t;
+
+static float	bones[MAXBONES][3][4];
+static float	slots[MAXBONES][3][4];
+static uint16_t	runs_buf[256], tex_buf[256];
+
+/* Model matrix: angles (pitch negated, the studio convention), scale,
+ * camera-relative position. */
+static void model_matrix(ren_mat_t *mt, const float org_g[3], const float ang[3], float scale,
+	const float eye[3])
+{
+	float a[3], f[3], r[3], u[3];
+	int k;
+
+	a[0] = -ang[0];
+	a[1] = ang[1];
+	a[2] = ang[2];
+	ren_angle_axes(a, f, r, u);
+	for (k = 0; k < 3; k++)
+	{
+		mt->m[0][k] = f[k] * scale;
+		mt->m[1][k] = -r[k] * scale;
+		mt->m[2][k] = u[k] * scale;
+		mt->m[3][k] = org_g[k] - eye[k];
+	}
+	mt->m[0][3] = mt->m[1][3] = mt->m[2][3] = 0;
+	mt->m[3][3] = 1;
+}
+
+/* The runs of the entity's body parts and their skins. */
+static int pick_runs(const smodel_t *m, int body, int skin)
+{
+	const sfmt_info_t *h = m->info;
+	const sfmt_mesh_t *ms = m->mesh;
+	const uint8_t *b = (const uint8_t *)ms;
+	const sfmt_sub_t *subs = (const sfmt_sub_t *)(b + ms->sub_ofs);
+	const sfmt_run_t *runs = (const sfmt_run_t *)(b + ms->run_ofs);
+	const uint16_t *skins = (const uint16_t *)(b + ms->skin_ofs);
+	int p, n = 0, k;
+
+	if (skin < 0 || skin >= ms->nfamilies)
+		skin = 0;
+	for (p = 0; p < h->numbodyparts; p++)
+	{
+		const sfmt_bodypart_t *bp = &SFMT_BODYPARTS(h)[p];
+		const sfmt_sub_t *s = &subs[bp->sub_first + (body / bp->base) % bp->nummodels];
+
+		for (k = s->run_first; k < s->run_first + s->run_count && n < 256; k++, n++)
+		{
+			runs_buf[n] = (uint16_t)k;
+			tex_buf[n] = skins[skin * ms->nskinref + runs[k].skinref];
+		}
+	}
+	return n;
+}
+
+static void slot_matrices(const smodel_t *m)
+{
+	const uint8_t *bslot = (const uint8_t *)m->mesh + m->mesh->bslot_ofs;
+	float k = 1.0f / (float)(1 << m->mesh->pos_shift);
+	int s, r;
+
+	for (s = 0; s < m->mesh->nbslots; s++)
+	{
+		const float (*b)[4] = bones[bslot[s]];
+
+		for (r = 0; r < 3; r++)
+		{
+			slots[s][r][0] = b[r][0] * k;
+			slots[s][r][1] = b[r][1] * k;
+			slots[s][r][2] = b[r][2] * k;
+			slots[s][r][3] = b[r][3];
+		}
+	}
+}
+
+/* render-fx.md 2 (studio column), blend = renderamt (fx 0). */
+static int blend_mode(int e, uint8_t *alpha)
+{
+	int mode = ent_cv(e)->rendermode;
+
+	*alpha = 255;
+	switch (mode)
+	{
+	case 1:		/* TransColor: as TransTexture */
+	case 2:		/* TransTexture */
+		*alpha = ent_rnd(e)->renderamt;
+		return GPU_STUDIO_BLEND;
+	case 3:		/* Glow: as TransAdd */
+	case 5:		/* TransAdd; the RDP adder wraps: cap at 128 */
+		*alpha = ent_rnd(e)->renderamt > 128 ? 128 : ent_rnd(e)->renderamt;
+		return GPU_STUDIO_ADD;
+	default:	/* Normal, TransAlpha */
+		return GPU_STUDIO_OPAQUE;
+	}
+}
+
+static void draw_entity(int e, double time, wld_layer_t *L, const uint16_t *list, int cnt,
+	const float eye[3])
+{
+	const ent_rnd_t *r = ent_rnd(e);
+	gpu_studio_ent_t ge;
+	smodel_t *m = mesh_of(r->model);
+	float org[3], ang[3], org_g[3];
+	uint64_t t0;
+	int n, k, lv;
+
+	if (!m)
+	{
+		st.pending++;
+		return;
+	}
+	t0 = sys_time_us();
+	n = game_studio_setup_bones(e, bones, MAXBONES);
+	st.bones_us += (uint32_t)(sys_time_us() - t0);
+	if (n < m->info->numbones)
+		return;
+	slot_matrices(m);
+	placement(e, time, org, ang);
+	for (k = 0; k < 3; k++)
+		org_g[k] = org[k] + L->gofs[k];
+	memset(&ge, 0, sizeof(ge));
+	model_matrix(&ge.model, org_g, ang, r->scale > 0 ? r->scale : 1.0f, eye);
+	ge.bones = (const float (*)[3][4])slots;
+	ge.nbones = m->mesh->nbslots;
+	ge.nruns = pick_runs(m, r->body, ent_cv(e)->skin);
+	ge.runs = runs_buf;
+	ge.tex = tex_buf;
+	lv = light_at(L, list, cnt, org, org_g);
+	ge.rgba[0] = ge.rgba[1] = ge.rgba[2] = (uint8_t)lv;
+	ge.mode = (uint8_t)blend_mode(e, &ge.rgba[3]);
+	if (gpu_studio_draw(m->gstate, m->mesh, &ge))
+	{
+		st.dropped++;
+		return;
+	}
+	st.drawn++;
+}
+
+/* Visible: a sector of the eye leaf's list meets the linked box (map-local)
+ * and the box is inside the frustum. */
+static int visible(const wld_layer_t *L, const uint16_t *list, int cnt, const col_ent_t *cv,
+	const float eye[3])
+{
+	const float (*fr)[3] = ren_frustum();
+	int i, k;
+
+	for (i = 0; i < 4; i++)
+	{
+		float d = 0;
+
+		for (k = 0; k < 3; k++)
+		{
+			float v = fr[i][k] >= 0 ? cv->absmax[k] : cv->absmin[k];
+
+			d += fr[i][k] * (v + L->gofs[k] - eye[k]);
+		}
+		if (d < 0)
+			return 0;
+	}
+	for (i = 0; i < cnt; i++)
+	{
+		const int16_t *b = L->sects[list[i]].bbox;
+
+		for (k = 0; k < 3; k++)
+			if (cv->absmin[k] > b[k + 3] || cv->absmax[k] < b[k])
+				break;
+		if (k == 3)
+			return 1;
+	}
+	return 0;
+}
+
+static void draw_view(const float eye[3]);
+
+void studio_draw(double time)
+{
+	static cand_t cand[HL64_STUDIO_DRAWN];
+	uint64_t t0 = sys_time_us(), t1;
+	const float *eye = ren_cam.org;
+	int li, e, n = 0, i;
+
+	gpu_studio_begin();
+	for (li = 0; li < HL64_WORLD_LAYERS; li++)
+	{
+		wld_layer_t *L = wld_layer(li);
+		const uint16_t *list;
+		float eye_l[3];
+		int cnt, k;
+
+		if (!L || L->map != ren_cam.map)
+			continue;
+		for (k = 0; k < 3; k++)
+			eye_l[k] = eye[k] - L->gofs[k];
+		list = wld_leaf_sectors(L, wld_point_leaf(L, eye_l), &cnt);
+		n = 0;
+		for (e = 2; e < HL64_MAX_ENTITIES; e++)
+		{
+			const col_ent_t *cv;
+			uint8_t a;
+			float d = 0;
+
+			if (!is_studio(e) || ent_idc(e)->layer != li || (ent_rnd(e)->effects & EF_NODRAW))
+				continue;
+			cv = ent_cv(e);
+			if (!visible(L, list, cnt, cv, eye))
+			{
+				st.culled++;
+				continue;
+			}
+			for (k = 0; k < 3; k++)
+				d += (cv->origin[k] - eye_l[k]) * (cv->origin[k] - eye_l[k]);
+			if (n < HL64_STUDIO_DRAWN)
+				i = n++;
+			else
+			{
+				/* keep the nearest: replace the farthest */
+				int far = 0;
+
+				for (i = 1; i < n; i++)
+					if (cand[i].dist > cand[far].dist)
+						far = i;
+				st.dropped++;
+				if (cand[far].dist <= d)
+					continue;
+				i = far;
+			}
+			cand[i].e = (uint16_t)e;
+			cand[i].trans = (uint16_t)(blend_mode(e, &a) != GPU_STUDIO_OPAQUE);
+			cand[i].dist = d;
+		}
+		/* opaque first, then translucent back to front */
+		for (i = 0; i < n; i++)
+			if (!cand[i].trans)
+				draw_entity(cand[i].e, time, L, list, cnt, eye);
+		for (;;)
+		{
+			int best = -1;
+
+			for (i = 0; i < n; i++)
+				if (cand[i].trans == 1 && (best < 0 || cand[i].dist > cand[best].dist))
+					best = i;
+			if (best < 0)
+				break;
+			cand[best].trans = 2;
+			draw_entity(cand[best].e, time, L, list, cnt, eye);
+		}
+	}
+	draw_view(eye);
+	gpu_studio_end();
+	t1 = sys_time_us();
+	st.draw_us += (uint32_t)(t1 - t0);
+	st.us_sum += (uint32_t)(t1 - t0);
+	if (t1 - t0 > st.us_max)
+		st.us_max = (uint32_t)(t1 - t0);
+	st.frames++;
+}
+
+/* ---- view model ------------------------------------------------------------------------------ */
+
+void studio_view_model(const studio_view_t *v)
+{
+	view_set = v && v->model != RES_NONE;
+	if (view_set)
+		view = *v;
+}
+
+static float	chrome_up[MAXBONES][3], chrome_right[MAXBONES][3];
+
+static float unpack_n(uint32_t v, int bits, int shift, float k)
+{
+	int x = (int)((v >> shift) & ((1u << bits) - 1));
+
+	if (x >= 1 << (bits - 1))
+		x -= 1 << bits;
+	return (float)x / k;
+}
+
+/* One CPU-skinned vertex: bone b's matrix on the bone-local position,
+ * chrome texture coordinates from the normal's bone when chrome. */
+static void skin_vert(const sfmt_mesh_t *ms, int16_t pos[3], uint16_t nrm, int16_t st[2],
+	int b, int nb, int chrome, const w64_texp_t *tex)
+{
+	float k = (float)(1 << ms->pos_shift), p[3], q;
+	int r;
+
+	for (r = 0; r < 3; r++)
+		p[r] = pos[r] / k;
+	for (r = 0; r < 3; r++)
+	{
+		q = (bones[b][r][0] * p[0] + bones[b][r][1] * p[1] + bones[b][r][2] * p[2]
+			+ bones[b][r][3]) * k;
+		pos[r] = (int16_t)(q < -32768 ? -32768 : q > 32767 ? 32767 : q);
+	}
+	if (chrome)
+	{
+		float n[3], c[2];
+
+		n[0] = unpack_n(nrm, 5, 11, 15.5f);
+		n[1] = unpack_n(nrm, 6, 5, 31.5f);
+		n[2] = unpack_n(nrm, 5, 0, 15.5f);
+		game_studio_chrome_st(chrome_up[nb], chrome_right[nb], n, c);
+		/* chrome coordinates span 64 source texels */
+		st[0] = (int16_t)(c[0] * tex->w / 64.0f * 32.0f);
+		st[1] = (int16_t)(c[1] * tex->h / 64.0f * 32.0f);
+	}
+}
+
+static void draw_view(const float eye[3])
+{
+	smodel_t *m;
+	const sfmt_mesh_t *ms;
+	const uint8_t *b, *bslot, *nbone;
+	const sfmt_run_t *runs;
+	const sfmt_meshlet_t *ml;
+	const sfmt_load_t *ld;
+	const uint16_t *skins;
+	const uint32_t *tofs;
+	const w64_vert_t *src;
+	w64_vert_t *dst;
+	gpu_studio_ent_t ge;
+	game_pose_t p;
+	float f[3], rt[3], u[3];
+	const float *gm;
+	int n, ri, i, l, k, slot = 0, layer, skin;
+
+	if (!view_set)
+		return;
+	view_set = 0;
+	if (!(m = mesh_of(view.model)))
+		return;
+	ms = m->mesh;
+	if (ms->nslots > view_slots)
+	{
+		st.dropped++;
+		return;
+	}
+	layer = ent_is_live(1) ? ent_idc(1)->layer : -1;
+	gm = eng_layer_origin(layer);
+	memset(&p, 0, sizeof(p));
+	p.model = view.model;
+	p.sequence = view.sequence;
+	p.frame = view.frame;
+	memcpy(p.angles, view.ang, sizeof(p.angles));
+	memcpy(p.controller, view.controller, sizeof(p.controller));
+	for (k = 0; k < 3; k++)
+		p.origin[k] = view.org[k] + gm[k] - eye[k];
+	n = game_studio_pose(&p, bones, MAXBONES);
+	if (n < m->info->numbones)
+		return;
+	b = (const uint8_t *)ms;
+	bslot = b + ms->bslot_ofs;
+	nbone = ms->nbone_ofs ? b + ms->nbone_ofs : NULL;
+	runs = (const sfmt_run_t *)(b + ms->run_ofs);
+	ml = (const sfmt_meshlet_t *)(b + ms->meshlet_ofs);
+	ld = (const sfmt_load_t *)(b + ms->load_ofs);
+	skins = (const uint16_t *)(b + ms->skin_ofs);
+	tofs = (const uint32_t *)(b + ms->tex_ofs);
+	src = (const w64_vert_t *)(b + ms->vert_ofs);
+	dst = view_verts[view_flip];
+	view_flip ^= 1;
+	skin = view.skin < ms->nfamilies ? view.skin : 0;
+	if (nbone)
+	{
+		ren_angle_axes(ren_cam.ang, f, rt, u);
+		game_studio_chrome_axes((const float (*)[3][4])bones, n, rt, chrome_up, chrome_right);
+	}
+	memcpy(dst, src, ms->nslots / 2u * sizeof(w64_vert_t));
+	for (ri = 0; ri < ms->nruns; ri++)
+	{
+		const w64_texp_t *tex = (const w64_texp_t *)(b + tofs[skins[skin * ms->nskinref
+			+ runs[ri].skinref]]);
+		int chrome = nbone && (tex->pad2 & SFMT_NF_CHROME);
+
+		for (i = runs[ri].meshlet_first; i < runs[ri].meshlet_first + runs[ri].meshlet_count; i++)
+			for (l = ml[i].load_first; l < ml[i].load_first + ml[i].nloads; l++)
+			{
+				int bone = bslot[ld[l].bslot], c = ld[l].count + (ld[l].count & 1);
+
+				for (k = 0; k < c; k++, slot++)
+				{
+					w64_vert_t *v = &dst[slot >> 1];
+					int nb = nbone ? nbone[slot] : bone;
+
+					if (slot & 1)
+						skin_vert(ms, v->posB, v->normB, v->stB, bone, nb, chrome, tex);
+					else
+						skin_vert(ms, v->posA, v->normA, v->stA, bone, nb, chrome, tex);
+				}
+			}
+	}
+	gpu_writeback(dst, ms->nslots / 2u * sizeof(w64_vert_t));
+	memset(&ge, 0, sizeof(ge));
+	ge.model.m[0][0] = ge.model.m[1][1] = ge.model.m[2][2] = 1.0f / (float)(1 << ms->pos_shift);
+	ge.model.m[3][3] = 1;
+	ge.nruns = pick_runs(m, view.body, view.skin);
+	ge.runs = runs_buf;
+	ge.tex = tex_buf;
+	ge.rgba[0] = ge.rgba[1] = ge.rgba[2] = ge.rgba[3] = 255;
+	if (ent_is_live(1))
+	{
+		float org[3];
+
+		for (k = 0; k < 3; k++)
+			org[k] = view.org[k];
+		/* the player's light at the eye */
+		for (i = 0; i < HL64_WORLD_LAYERS; i++)
+		{
+			wld_layer_t *L = wld_layer(i);
+			const uint16_t *list;
+			float g[3];
+			int cnt, lv;
+
+			if (!L || L->slot != layer)
+				continue;
+			list = wld_leaf_sectors(L, wld_point_leaf(L, org), &cnt);
+			for (k = 0; k < 3; k++)
+				g[k] = org[k] + L->gofs[k];
+			lv = light_at(L, list, cnt, org, g);
+			ge.rgba[0] = ge.rgba[1] = ge.rgba[2] = (uint8_t)lv;
+		}
+	}
+	if (gpu_studio_draw_cpu(m->gstate, ms, dst, &ge))
+		st.dropped++;
+	else
+		st.drawn++;
+}
+
+/* ---- hitbox source (trace-and-hulls.md 4.5) ------------------------------------------------------ */
+
+static col_hitbox_t	hb[255];
+
+int studio_hitboxes(const col_ent_t *e, const col_hitbox_t **out)
+{
+	const ent_rnd_t *r;
+	const sfmt_hitbox_t *x;
+	smodel_t *m;
+	game_pose_t p;
+	int i, n;
+
+	*out = hb;
+	if (!ent_is_live(e->index))
+		return 0;
+	r = ent_rnd(e->index);
+	if (!(m = info_of(r->model)) || !m->info->numhitboxes)
+		return 0;
+	memset(&p, 0, sizeof(p));
+	p.model = r->model;
+	p.sequence = r->sequence;
+	p.frame = r->frame;
+	memcpy(p.origin, e->origin, sizeof(p.origin));
+	memcpy(p.angles, e->angles, sizeof(p.angles));
+	memcpy(p.controller, r->controller, sizeof(p.controller));
+	memcpy(p.blending, r->blending, sizeof(p.blending));
+	n = game_studio_pose(&p, bones, MAXBONES);
+	x = SFMT_HITBOXES(m->info);
+	for (i = 0; i < m->info->numhitboxes; i++)
+	{
+		if (x[i].bone >= n)
+			return 0;
+		memcpy(hb[i].bone, bones[x[i].bone], sizeof(hb[i].bone));
+		memcpy(hb[i].mins, x[i].bbmin, sizeof(hb[i].mins));
+		memcpy(hb[i].maxs, x[i].bbmax, sizeof(hb[i].maxs));
+		hb[i].group = x[i].group;
+	}
+	return m->info->numhitboxes;
+}
+
+/* ---- queries, stats --------------------------------------------------------------------------- */
+
+int studio_body_count(res_t model)
+{
+	smodel_t *m = info_of(model);
+	int i, n = 1;
+
+	if (!m)
+		return 1;
+	for (i = 0; i < m->info->numbodyparts; i++)
+		n *= SFMT_BODYPARTS(m->info)[i].nummodels;
+	return n;
+}
+
+void studio_stats(studio_stats_t *s, int reset)
+{
+	st.pool_used = pool.used;
+	if (pool.used > st.pool_peak)
+		st.pool_peak = pool.used;
+	*s = st;
+	if (reset)
+	{
+		uint32_t models_n = st.models, peak = st.pool_peak, anims_n = st.anims;
+
+		memset(&st, 0, sizeof(st));
+		st.models = models_n;
+		st.pool_peak = peak;
+		st.anims = anims_n;
+	}
+}

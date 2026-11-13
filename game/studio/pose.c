@@ -638,7 +638,7 @@ int game_studio_pose(const game_pose_t *p, float (*out)[3][4], int max)
 		}
 	seq = p->sequence < hdr->numseq ? p->sequence : 0;
 	pseqdesc = &SFMT_SEQS(hdr)[seq];
-	chunk = studio_anim(p->model, seq, NULL);
+	chunk = studio_anim_now(p->model, seq, NULL);
 	cl.curstate.frame = p->frame;
 	cl.curstate.animtime = 0;
 	cl.curstate.framerate = 0;
@@ -655,7 +655,7 @@ int game_studio_pose(const game_pose_t *p, float (*out)[3][4], int max)
 	for (i = 0; i < 3; i++)
 		rot[i][3] = p->origin[i];
 	build_matrices(hdr, (const float (*)[4])rot, out);
-	/* a pose missing its chunk is not memoised (it changes once it lands) */
+	/* a pose missing its chunk (a bad file) is not memoised */
 	if (chunk)
 	{
 		c = sv_next;

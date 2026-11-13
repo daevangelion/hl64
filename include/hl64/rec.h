@@ -162,6 +162,8 @@ void		res_init(void);
 int		res_count(int kind);
 /* Cart file and byte range of a file-kind id; 0 bad id. */
 int		res_file(res_t r, int *file, uint32_t *ofs, uint32_t *size);
+/* PI address of a FILE entry (resolved once at res_init); 0 bad/missing. */
+uint32_t	res_file_rom(int file, uint32_t *size);
 uint8_t		res_flags(res_t r);		/* MODEL: EXTTEX, sequence groups */
 /* game/defs/res.def line -> res_t (DEFS section); RES_NONE when absent. */
 res_t		res_def(int line);

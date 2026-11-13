@@ -21,6 +21,12 @@
  *   C i s[3] e[3] mins[3] maxs[3]           one entity (pfnTraceModel)
  *   L slot hull o[3] s[3] e[3]              world model of a layer at o
  *   N s[3] e[3] type pass                   line trace (pfnTraceLine)
+ *   K idx s64 a64       bind MODEL index idx to cooked studio files
+ *   A i idx seq frame c0 c1 c2 c3 b0 b1 body
+ *                       entity i plays model idx in that pose: line traces
+ *                       test its cooked hitboxes (engine/render/studio.c)
+ *   H i                 entity i's hitboxes -> R H n, then n lines "bone[12]
+ *                       mins[3] maxs[3] group"
  *   G i n               hitboxes of entity i (marks it a studio entity):
  *                       n lines follow, each bone[3][4] mins[3] maxs[3] group
  *   F                   frame boundary (residency fences)
@@ -34,6 +40,8 @@
 
 #include "hl64/coll.h"
 #include "hl64/grid.h"
+#include "hl64/ent.h"
+#include "hl64/studio.h"
 #include "engine/io/io.h"
 #include "engine/mem/carve.h"
 #include "engine/core/log.h"
@@ -47,10 +55,13 @@ static col_hitbox_t	hb[HB_MAX];
 static int		hb_n, hb_ent = -1;
 static uint32_t		frame;
 
+static char		bound[64][2][256];
+
+/* The synthetic hitboxes of hb_ent (G), else the studio pose (B / M). */
 static int hitboxes(const col_ent_t *e, const col_hitbox_t **out)
 {
 	if (e->index != hb_ent)
-		return 0;
+		return studio_hitboxes(e, out);
 	*out = hb;
 	return hb_n;
 }
@@ -130,6 +141,7 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	ent_init();
+	studio_init();
 	col_set_hitbox_source(hitboxes);
 	log_flush();
 	while (fgets(line, sizeof(line), stdin))
@@ -179,6 +191,58 @@ int main(int argc, char **argv)
 			e->skin = (int16_t)n[6];
 			e->movetype = (uint8_t)n[7];
 			ent_link(e);
+			break;
+		}
+		case 'K':
+		{
+			int i;
+
+			if (sscanf(s, "%d", &i) != 1 || i < 0 || i >= 64
+				|| sscanf(s, "%*d %255s %255s", bound[i][0], bound[i][1]) != 2)
+				bad(line);
+			studio_test_bind(i, bound[i][0], bound[i][1]);
+			break;
+		}
+		case 'A':
+		{
+			ent_rnd_t *r;
+			long q[10];
+			int k;
+
+			/* A slot model seq frame c0 c1 c2 c3 b0 b1 body: studio pose */
+			if (!ints(&s, q, 3) || !floats(&s, v, 1) || !ints(&s, q + 3, 7)
+				|| !ent_get((int)q[0]))
+				bad(line);
+			r = ent_rnd((int)q[0]);
+			r->model = RES_MAKE(RES_K_MODEL, q[1]);
+			r->sequence = (uint16_t)q[2];
+			r->frame = v[0];
+			for (k = 0; k < 4; k++)
+				r->controller[k] = (uint8_t)q[3 + k];
+			r->blending[0] = (uint8_t)q[7];
+			r->blending[1] = (uint8_t)q[8];
+			r->body = (uint8_t)q[9];
+			ent_get((int)q[0])->studio = r->model;
+			break;
+		}
+		case 'H':
+		{
+			const col_hitbox_t *h;
+			int i, k, cnt;
+
+			/* H slot: the entity's hitboxes -> R H n, then n lines */
+			if (!ints(&s, n, 1) || !ent_get((int)n[0]))
+				bad(line);
+			cnt = hitboxes(ent_get((int)n[0]), &h);
+			printf("R H %d\n", cnt);
+			for (i = 0; i < cnt; i++)
+			{
+				for (k = 0; k < 12; k++)
+					printf("%.9g ", (double)h[i].bone[k / 4][k % 4]);
+				printf("%.9g %.9g %.9g %.9g %.9g %.9g %d\n", (double)h[i].mins[0],
+					(double)h[i].mins[1], (double)h[i].mins[2], (double)h[i].maxs[0],
+					(double)h[i].maxs[1], (double)h[i].maxs[2], h[i].group);
+			}
 			break;
 		}
 		case 'X':

@@ -14,6 +14,7 @@
 
 #include <stdint.h>
 
+#include "hl64/coll.h"
 #include "hl64/types.h"
 
 /* The model's cooked info block (bones, controllers, sequences with
@@ -25,22 +26,56 @@ const void	*studio_info(res_t model, uint32_t *size);
 /* Animation chunk of one sequence (D3(b)): resident or NULL; a NULL
  * chunk requests it (prefetch class) and the game holds the last pose. */
 const void	*studio_anim(res_t model, int sequence, uint32_t *size);
+/* The same chunk now: read synchronously when not resident (counted as a
+ * sync load); the server pose (hitboxes, attachments, AI) cannot hold. */
+const void	*studio_anim_now(res_t model, int sequence, uint32_t *size);
 /* Body combinations of the model (product of body-part model counts;
  * GoldSrc ModelFrames for studio models), 1 when not resident yet. */
 int		studio_body_count(res_t model);
 /* Interest in a sequence's chunk ahead of use (scripted sequences). */
 void		studio_want(res_t model, int sequence);
 
-/* Engine: boot, per-frame residency (live entity models pinned), draw of
- * the visible studio entities with bones from game_studio_setup_bones,
+/* Engine: boot, per-frame residency (live entity models pinned, their
+ * current sequences' chunks wanted, STEP interpolation state), the draw
+ * of the visible studio entities with bones from game_studio_setup_bones
+ * (called by the renderer between the world and the translucent pass),
  * hitbox source for engine/coll (col_set_hitbox_source). */
 void		studio_init(void);
 void		studio_frame(void);
+void		studio_draw(double time);
+/* The hitbox source studio_init installs (coll.h col_hitbox_fn): the
+ * entity's cooked hitboxes on the bones of its server pose
+ * (game_studio_pose), in its own map-local frame. */
+int		studio_hitboxes(const col_ent_t *e, const col_hitbox_t **out);
+
+/* View model (HUD / weapons slice; architecture.md 9.4): this frame's
+ * first-person model, CPU-skinned with chrome, drawn after the entities.
+ * org / ang: the view (game_calc_view) in the player's frame; the pose
+ * is game_studio_pose of (model, sequence, frame, controller) placed at
+ * the eye. Call once per frame before the draw; model RES_NONE = none. */
+typedef struct {
+	res_t		model;
+	uint16_t	sequence;
+	float		frame;		/* pev units, gs_view_frame */
+	float		org[3], ang[3];
+	uint8_t		body, skin;
+	uint8_t		controller[4];
+	uint8_t		pad[2];
+} studio_view_t;
+void		studio_view_model(const studio_view_t *v);
 
 typedef struct {
 	uint32_t	models, pool_used, pool_peak, anims, sync_loads;
 	uint32_t	drawn, bones_us, draw_us, us_max;
+	uint32_t	frames, us_sum, culled, pending, nofit, dropped;
 } studio_stats_t;
+/* Counters since the last reset (pool fields: now / peak). */
 void		studio_stats(studio_stats_t *s, int reset);
+
+#ifdef HL64_HOST
+/* Host tests without a resource table: bind MODEL index idx to cooked
+ * files (paths under the content root). */
+void		studio_test_bind(int idx, const char *s64, const char *a64);
+#endif
 
 #endif
