@@ -479,7 +479,10 @@ static int tg_child(int slot, int *it)
 }
 
 /* WAIT_MOVED: velocity or avelocity non-zero, or (a map record's entity)
- * origin / angles differ from the record's keys. */
+ * origin / angles differ from the record's keys. Zero angles do not count:
+ * HLSDK SetMovedir turns a linear mover's `angle` / `angles` key into its
+ * move direction and zeroes pev->angles at spawn (doors, buttons), so a
+ * closed func_door with `angle 90` rests at angles 0 0 0. */
 static int moved(int e, gid_t16 gid)
 {
 	static const float zero[3];
@@ -492,7 +495,18 @@ static int moved(int e, gid_t16 gid)
 		return 0;
 	rec_origin(gid, o);
 	rec_angles(gid, a);
-	return differ3(cv->origin, o) || differ3(cv->angles, a);
+	return differ3(cv->origin, o) || (differ3(cv->angles, a) && differ3(cv->angles, zero));
+}
+
+/* the entity that satisfied a wait / LOOK_AT (diagnostics; not an op line) */
+static void tell(const char *what, int e)
+{
+	const col_ent_t *cv = ent_cv(e);
+
+	log_printf("route: %s entity %d cls %u org %.9g %.9g %.9g vel %.9g %.9g %.9g\n", what, e,
+		(unsigned)ent_idc(e)->cls, (double)cv->origin[0], (double)cv->origin[1],
+		(double)cv->origin[2], (double)ent_mot(e)->velocity[0],
+		(double)ent_mot(e)->velocity[1], (double)ent_mot(e)->velocity[2]);
 }
 
 static int wait_moved(void)
@@ -506,11 +520,17 @@ static int wait_moved(void)
 		gid_t16 g = GID_MAKE(slot, rt.tg.lump[i]);
 
 		if ((e = rec_entity(g)) >= 0 && alive(e) && moved(e, g))
+		{
+			tell("moved", e);
 			return 1;
+		}
 	}
 	while ((e = tg_child(slot, &it)) >= 0)
 		if (moved(e, GID_NONE))
+		{
+			tell("moved", e);
 			return 1;
+		}
 	return 0;
 }
 
@@ -552,7 +572,10 @@ static int wait_class(int map, cls_t cls, const float *w)
 		return 0;
 	while ((e = ent_next_class(e, cls, slot)) >= 0)
 		if (alive(e) && ent_cv(e)->solid != COL_SOLID_NOT && dist2(ent_cv(e)->origin, w) <= w[3] * w[3])
+		{
+			tell("class", e);
 			return 1;
+		}
 	return 0;
 }
 
@@ -611,6 +634,8 @@ static int look_at(int by_class, uint32_t id, int map)
 	ang[1] = (float)(atan2(d[1], d[0]) * 180 / M_PI);
 	ang[2] = 0;
 	in_set_angles(ang);
+	tell("look_at", best);
+	log_printf("route: look_at angles %.9g %.9g\n", (double)ang[0], (double)ang[1]);
 	return 0;
 }
 
@@ -627,6 +652,8 @@ static const char *drop(int map, cls_t cls, const float *org)
 		ent_set_origin(e, org);
 	ok = e >= 0 && game_spawn_class(cls, e) == 0;
 	eng_set_frame_layer(prev);
+	if (ok)
+		tell("drop", e);
 	return e < 0 ? "no free entity" : ok ? NULL : "the game refused the class";
 }
 
@@ -740,6 +767,11 @@ void rt_frame(double time)
 			push(DBG_STATS, rt.op);
 			break;
 		case OP_PASS:
+			/* the frame after it is reached: the debug commands queued
+			 * by the ops before it (STATS, SHOT) run at that frame's
+			 * boundary */
+			if (time == rt.t0)
+				return;
 			log_printf("route PASS\n");
 			log_flush();
 			rt.done = 1;
