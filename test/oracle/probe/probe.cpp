@@ -36,6 +36,7 @@ FILE *g_probeTouchLog;
 const char *g_probePhase = "";
 int g_probeCase;
 bool g_probeLive;
+bool g_probeFreezeMovers;
 ProbeTouchFn g_probeTouchFn;
 Vector g_probeWorldMins, g_probeWorldMaxs;
 int g_probeFrame;
@@ -216,6 +217,27 @@ void Probe_PrEnt( FILE *f, edict_t *e )
 		v->solid, v->movetype, v->flags, v->skin, v->rendermode, Probe_Idx( v->owner ) );
 }
 
+// Map pushers (doors, plats, buttons, trains, rotating brushes) stop where
+// they are and their touches are swallowed until the capture ends, so the
+// brush_ents line written after this stays their state.
+void Probe_FreezeMovers( FILE *f )
+{
+	g_probeFreezeMovers = true;
+	fprintf( f, "{\"frozen_movers\":[" );
+	bool first = true;
+	for ( int i = gpGlobals->maxClients + 1; i < gpGlobals->maxEntities; i++ )
+	{
+		edict_t *e = INDEXENT( i );
+		if ( !e || e->free || e->v.movetype != MOVETYPE_PUSH || FClassnameIs( e, "probe_ent" ) ) continue;
+		fprintf( f, "%s[%d,\"%s\",%d]", first ? "" : ",", i, STRING( e->v.classname ),
+			e->v.velocity != g_vecZero || e->v.avelocity != g_vecZero || e->v.nextthink > 0 );
+		first = false;
+		e->v.velocity = e->v.avelocity = g_vecZero;
+		e->v.nextthink = 0;
+	}
+	fprintf( f, "]}\n" );
+}
+
 void Probe_PrBrushEnts( FILE *f )
 {
 	fprintf( f, "{\"brush_ents\":[" );
@@ -317,9 +339,16 @@ void CProbeEnt::Use( CBaseEntity *pActivator, CBaseEntity *pCaller, USE_TYPE use
 
 // Live captures: a touch of a map entity is logged and swallowed, so no
 // map logic (level change, damage, teleport, item pickup) ever runs.
+// Frozen movers (Probe_FreezeMovers): touches of map MOVETYPE_PUSH entities
+// (doors, plats, buttons, trains, breakables) are swallowed, so they keep
+// the state written on the brush_ents line.
 bool Probe_Touch( edict_t *touched, edict_t *other )
 {
-	if ( !g_probeLive || !touched || FClassnameIs( touched, "probe_ent" ) )
+	if ( !touched || FClassnameIs( touched, "probe_ent" ) )
+		return false;
+	if ( g_probeFreezeMovers && touched->v.movetype == MOVETYPE_PUSH )
+		return true;
+	if ( !g_probeLive )
 		return false;
 	if ( g_probeTouchLog )
 		fprintf( g_probeTouchLog, "{\"ev\":\"touch\",\"case\":%d,\"phase\":\"%s\",\"frame\":%d,\"t\":%.9g,\"self\":%d,\"other\":%d,"
@@ -843,6 +872,7 @@ void Probe_Precache( void )
 	g_probeTouchLog = NULL;
 	g_probeTouchFn = NULL;
 	g_probeLive = false;
+	g_probeFreezeMovers = false;
 	s_earlyLen = 0;
 	s_earlyFrames = 0;
 	s_precacheTime = gpGlobals->time;
@@ -872,6 +902,7 @@ void Probe_StartFrame( void )
 		Probe_Log( "probe: %s done on %s after %d steps\n", c.name, Probe_Map(), s_step );
 		g_probeTouchLog = NULL;
 		g_probeTouchFn = NULL;
+		g_probeFreezeMovers = false;
 		g_probePmPre = g_probePmPost = NULL;
 		Probe_BotPark();
 		s_cur++;

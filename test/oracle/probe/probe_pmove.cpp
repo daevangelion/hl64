@@ -416,6 +416,7 @@ bool Cap_PMBot( int step )
 		s_rng.Seed( Probe_Map(), "PM-bot" );
 		s_f = Probe_Open( "pmove-host", "PM-bot", &s_rng );
 		if ( !s_f ) return true;
+		Probe_FreezeMovers( s_f );	// same instant as the brush_ents line: the replay's brush state holds for every run
 		if ( !Probe_Bot() )
 		{
 			fprintf( s_f, "{\"skipped\":\"no fake client\"}\n" );

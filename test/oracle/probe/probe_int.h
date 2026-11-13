@@ -92,6 +92,11 @@ extern FILE *g_probeTouchLog;		// touches are logged here when non-NULL
 extern const char *g_probePhase;	// phase label written with each touch
 extern int g_probeCase;				// case id written with each touch
 extern bool g_probeLive;			// live capture: map triggers stay enabled, map touches are logged, not dispatched
+extern bool g_probeFreezeMovers;	// touches of map MOVETYPE_PUSH entities are swallowed (Probe_FreezeMovers)
+// Stops every map pusher (velocity, avelocity, nextthink cleared) and
+// swallows their touches until the capture ends; writes {"frozen_movers":
+// [[index, class, was_moving]…]}.
+void Probe_FreezeMovers( FILE *f );
 // Called for every touch the probe sees (map touches in live captures and
 // touches of probe entities), after logging.
 typedef void ( *ProbeTouchFn )( edict_t *self, edict_t *other );

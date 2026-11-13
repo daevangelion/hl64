@@ -125,6 +125,11 @@ use the same keys with `pe` = physent index. Entities (`ent`) are
   differs when M3 captures share the server (hence separate batches).
 - PM-bot writes `{"run","ents":[ent…]}` before a frame whenever a non-brush
   physent (an item, a pushable box) first appears in the run or changed.
+  At its start (the instant of its `brush_ents` line) PM-bot freezes every
+  map pusher (doors, plats, buttons, trains, rotating brushes: velocity,
+  avelocity and nextthink cleared; `{"frozen_movers":[[i,class,was_moving]…]}`)
+  and the probe swallows their touches until it ends, so `brush_ents`
+  holds for every run (an earlier run can no longer open a door).
 - M3 scenarios that need a feature the map lacks are skipped and say so:
   water (only hldemo3, t0a0, t0a0b, t0a0b1, t0a0b2 have world water), map
   `func_pushable`s, a brush model whose rotation sweep fits a floor spot.
