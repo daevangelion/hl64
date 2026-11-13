@@ -48,7 +48,9 @@
  * the one it had right after its spawn is "pristine": the delta is the
  * single byte 0 and the record may simply go back to pending (rec.c).
  *
- * Quiescence (game_dehydrate returns 0 = not now):
+ * Quiescence, for the distance release only (game_dehydrate returns 0 = not
+ * now; a closing map's release, rec_slot_closing, stores any state -- the
+ * delta is then marked so that its references wake their records with it):
  *   - any live entity rides it (groundentity / aiment == it);
  *   - a pusher (MOVETYPE_PUSH) with velocity or avelocity (mid-travel),
  *     unless its class is a steady mover (func_rotating, func_pendulum:
@@ -68,7 +70,8 @@
 #include "game/hl/monster.h"
 #include "game/hl/player.h"
 
-#define SV_VERSION	1
+#define SV_VERSION		1
+#define SV_VERSION_CLOSED	2	/* written by a closing map: references wake */
 #define SV_SCRATCH	1536		/* largest delta (a monster is < 400 B) */
 
 /* ---- base tables (HLSDK cbase.cpp gEntvarsDescription remainder, subs.cpp,
@@ -611,16 +614,27 @@ static void ref_put(wbuf_t *w, int r)
 	put(w, &id, 2);
 }
 
-static int ref_get(rbuf_t *r)
+/* wake: the delta was written when its map closed (the whole level was
+ * saved, as GoldSrc saves a level it leaves): a referenced record of an
+ * open map that is not live comes back now with it, as HLSDK restores the
+ * whole level before the references are used (a monster's scripted_sequence,
+ * a sequence's monster). */
+static int ref_get(rbuf_t *r, int wake)
 {
 	uint8_t m;
 	uint16_t id;
+	int e;
+	wld_layer_t *L;
 
 	get(r, &m, 1);
 	get(r, &id, 2);
 	if (m == REF_SPECIAL)
 		return id == 0 ? ENT_WORLD : id == 1 && ent_is_live(ENT_PLAYER) ? ENT_PLAYER : -1;
-	return rec_ref_entity(m & 0x7F, id, (m & REF_RUNTIME) != 0);
+	e = rec_ref_entity(m & 0x7F, id, (m & REF_RUNTIME) != 0);
+	if (e < 0 && wake && !(m & REF_RUNTIME) && id < 1024 &&
+	    (L = wld_layer_of_map(m & 0x7F)) != NULL && rec_kind(GID_MAKE(L->slot, id)) == REC_KIND_ENTITY)
+		e = rec_wake(GID_MAKE(L->slot, id));
+	return e;
 }
 
 /* A name of another map held by an entity of slot `slot`: the same name in
@@ -638,6 +652,7 @@ typedef struct {
 	int		slot;		/* the entity's HLE slot */
 	float		now;
 	int		pusher;		/* nextthink in ltime units */
+	int		wake;		/* a closed map's delta: wake referenced records */
 } ctx_t;
 
 static void put_elem(wbuf_t *w, const ctx_t *c, int ty, const uint8_t *v, int raw_time)
@@ -739,17 +754,17 @@ static void get_elem(rbuf_t *r, const ctx_t *c, int ty, uint8_t *v, int raw_time
 		memcpy(v, &s, 2);
 		break;
 	case SV_EH:
-		e = ref_get(r);
+		e = ref_get(r, c->wake);
 		u = EHANDLE(e);
 		memcpy(v, &u, 4);
 		break;
 	case SV_IX16:
-		e = ref_get(r);
+		e = ref_get(r, c->wake);
 		s = e < 0 ? 0xFFFF : (uint16_t)e;
 		memcpy(v, &s, 2);
 		break;
 	case SV_IX32:
-		i = ref_get(r);
+		i = ref_get(r, c->wake);
 		memcpy(v, &i, 4);
 		break;
 	default:
@@ -856,6 +871,7 @@ static int encode(int e, uint8_t *buf, uint32_t max)
 	c.slot = ent_idc(e)->layer;
 	c.now = gtime();
 	c.pusher = ent_cv(e)->movetype == MOVETYPE_PUSH;
+	c.wake = 0;
 	put(&w, &ver, 1);
 	put(&w, &ent_idc(e)->cls, 2);
 	comps_get(e, &s);
@@ -953,20 +969,27 @@ int sv_quiet_default(int e)
 }
 
 /* Class hooks first (a refusal wins over a transient: a plat's trigger
- * stays while its plat lives), then the default rules. */
-static int quiet(int e, const sv_table_t *t)
+ * stays while its plat lives), then the default rules. A closing map
+ * (rec_slot_closing) refuses nothing: GoldSrc saves any state of a level it
+ * leaves (a monster mid-script, a door mid-travel); only transients go. */
+static int quiet(int e, const sv_table_t *t, int closing)
 {
 	const sv_table_t *ch[8];
-	int n, i, r, transient = 0;
+	int n, i, r, transient = 0, refuse = 0;
 
 	n = chain(t, ch);
 	for (i = 0; i < n; i++)
 		if (ch[i]->quiet && (r = ch[i]->quiet(e)) <= 0)
 		{
 			if (r == 0)
-				return 0;
-			transient = 1;
+				refuse = 1;
+			else
+				transient = 1;
 		}
+	if (closing)
+		return transient || sv_quiet_default(e) < 0 ? -1 : 1;
+	if (refuse)
+		return 0;
 	return transient ? -1 : sv_quiet_default(e);
 }
 
@@ -989,7 +1012,7 @@ uint32_t game_dehydrate(int e, void *buf, uint32_t max)
 		s->refused++;
 		return 0;
 	}
-	q = quiet(e, t);
+	q = quiet(e, t, rec_slot_closing(ent_idc(e)->layer));
 	if (q < 0)
 	{
 		s->transient++;
@@ -1015,6 +1038,8 @@ uint32_t game_dehydrate(int e, void *buf, uint32_t max)
 		scratch[0] = 0;
 		s->pristine++;
 	}
+	else if (rec_slot_closing(ent_idc(e)->layer))
+		scratch[0] = SV_VERSION_CLOSED;	/* references wake their records */
 	if ((uint32_t)n > max)
 	{
 		s->refused++;
@@ -1116,7 +1141,7 @@ void game_rehydrate(int e, const void *buf, uint32_t n)
 		return;		/* pristine: the spawn is the state */
 	get(&r, &cls, 2);
 	t = sv_table_of(e);
-	if (ver != SV_VERSION || cls != ent_idc(e)->cls || !t)
+	if ((ver != SV_VERSION && ver != SV_VERSION_CLOSED) || cls != ent_idc(e)->cls || !t)
 	{
 		log_printf("levelstate: delta of %s (v%u) does not fit %s (%d)\n",
 			game_class_name(cls), ver, game_class_name(ent_idc(e)->cls), e);
@@ -1126,6 +1151,7 @@ void game_rehydrate(int e, const void *buf, uint32_t n)
 	c.slot = ent_idc(e)->layer;
 	c.now = gtime();
 	c.pusher = 0;
+	c.wake = ver == SV_VERSION_CLOSED;
 	comps_get(e, &s);
 	flatten_comps(&s, &fl);
 	get_level(&r, &c, fl.nf, fl.ptr, fl.type, fl.count, COMP_NEXTTHINK, &s.cv.movetype);

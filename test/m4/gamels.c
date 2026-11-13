@@ -140,6 +140,14 @@ gid_t16 __wrap_rec_twin_of(gid_t16 g)
 	return GID_NONE;
 }
 
+/* rec_slot_closing: the closing pass sets the slot */
+static int closing_slot = -1;
+int __wrap_rec_slot_closing(int slot);
+int __wrap_rec_slot_closing(int slot)
+{
+	return slot >= 0 && slot == closing_slot;
+}
+
 static int changelevels;
 int __wrap_seam_changelevel(gid_t16 trigger, int use);
 int __wrap_seam_changelevel(gid_t16 trigger, int use)
@@ -376,6 +384,112 @@ static void close_pass(const char *map, int slot)
 	log_flush();
 }
 
+/* ---- closing pass: the whole map dehydrates as rec_map_close does (no
+ * refusals: monsters mid-script, idling headcrabs, movers mid-travel keep
+ * their state), every record respawns, then every delta rehydrates; the
+ * state must encode back to the same closed delta, and scripted monsters
+ * keep their scripted_sequence (and it its monster) --------------------------- */
+
+#define CLOSE_MAX	HL64_MAX_ENTITIES
+static uint8_t cl_delta[CLOSE_MAX][640];
+static uint16_t cl_len[CLOSE_MAX];
+static ident_t cl_id[CLOSE_MAX];
+static int8_t cl_script[CLOSE_MAX];	/* was in a script: its cine's lump */
+static int16_t cl_cine[CLOSE_MAX];
+
+static void closing_pass(const char *map, int slot)
+{
+	static uint16_t list[HL64_MAX_ENTITIES], neu[CLOSE_MAX];
+	int e, i, n = 0, k = 0, dropped = 0, scripted = 0, kept = 0;
+
+	for (e = ENT_PLAYER + 1; e < HL64_MAX_ENTITIES; e++)
+		if (ent_is_live(e) && ent_idc(e)->layer == slot && ent_idc(e)->gid != GID_NONE)
+			list[n++] = (uint16_t)e;
+	closing_slot = slot;
+	for (i = 0; i < n; i++)
+	{
+		const sv_table_t *t;
+		uint32_t len;
+		int cine;
+
+		e = list[i];
+		if (!ent_is_live(e))
+			continue;
+		cl_script[k] = 0;
+		for (t = sv_table_of(e); t && t != &sv_CBaseMonster; t = t->base)
+			;
+		if (t && (cine = EHGet(MON(e)->m_pCine)) >= 0 && ent_idc(cine)->gid != GID_NONE)
+		{
+			cl_script[k] = 1;
+			cl_cine[k] = (int16_t)GID_LUMP(ent_idc(cine)->gid);
+		}
+		ident_of(e, &cl_id[k]);
+		len = game_dehydrate(e, cl_delta[k], sizeof cl_delta[k]);
+		if (!ent_is_live(e))
+			continue;	/* a transient the game freed */
+		if (len == 0)
+		{
+			FAIL("closing %s (%d): refused at close\n", cname(ent_idc(e)->cls), e);
+			dropped++;
+			ent_destroy(e);
+			continue;
+		}
+		cl_len[k++] = (uint16_t)len;
+		ent_destroy(e);
+	}
+	/* the map reopens: every record first, then the deltas (HLSDK restores
+	 * the whole level before the references are used) */
+	for (i = 0; i < k; i++)
+		neu[i] = (uint16_t)respawn(&cl_id[i]);
+	sv_test_restore_hooks(0);
+	for (i = 0; i < k; i++)
+		if ((int16_t)neu[i] >= 0)
+			game_rehydrate(neu[i], cl_delta[i], cl_len[i]);
+	sv_test_restore_hooks(1);
+	for (i = 0; i < k; i++)
+	{
+		int m, d;
+
+		e = (int16_t)neu[i];
+		if (e < 0)
+		{
+			FAIL("closing %s: respawn refused\n", cname(cl_id[i].cls));
+			continue;
+		}
+		if (cl_len[i] == 1 && cl_delta[i][0] == 0)
+			continue;
+		m = sv_test_encode(e, d2, sizeof d2);
+		d2[0] = cl_delta[i][0];	/* the closed-delta marker */
+		if ((d = first_diff(cl_delta[i], cl_len[i], d2, m)) >= 0)
+		{
+			int lv = -1, of = -1, fi = sv_test_diff(e, cl_delta[i], cl_len[i], d2, m, &lv,
+				&of);
+
+			FAIL("closing %s lump %d: state differs after reopen at byte %d: level %d "
+				"field %d offset %d\n", cname(cl_id[i].cls), (int)GID_LUMP(cl_id[i].gid),
+				d, lv, fi, of);
+		}
+		if (cl_script[i])
+		{
+			int cine = EHGet(MON(e)->m_pCine);
+
+			scripted++;
+			if (cine >= 0 && (int)GID_LUMP(ent_idc(cine)->gid) == cl_cine[i] &&
+			    MON(e)->m_MonsterState == MONSTERSTATE_SCRIPT)
+				kept++;
+			else
+				FAIL("closing %s lump %d: its script (cine lump %d) was not kept\n",
+					cname(cl_id[i].cls), (int)GID_LUMP(cl_id[i].gid), cl_cine[i]);
+		}
+	}
+	for (i = 0; i < k; i++)
+		if ((int16_t)neu[i] >= 0)
+			sv_restored(neu[i]);
+	closing_slot = -1;
+	log_printf("gamels closing %s entities=%d dropped=%d scripted=%d kept=%d\n", map, k,
+		dropped, scripted, kept);
+	log_flush();
+}
 /* ---- mutation ----------------------------------------------------------------------- */
 
 static int other_entity(int e, int slot)
@@ -929,6 +1043,7 @@ static int map_mode(const char *root, const char *mapname, int frames)
 	carry_pass(slot);
 	log_flush();
 	sv_stats_reset();
+	closing_pass(mapname, slot);
 	close_pass(mapname, slot);
 	for (c = 0; c < NCLASS; c++)
 		if (cs[c].n || cs[c].refused || cs[c].transient)

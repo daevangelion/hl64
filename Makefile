@@ -430,7 +430,7 @@ seamtest: $(SEAM_BIN)
 # / rehydrate round trips, quiescence, twins, carry, cut refs). The record
 # layer's canonical-reference calls and seam_changelevel are the driver's.
 GAMELS_BIN := $(BUILD_DIR)/host/hl64-gamels
-GAMELS_WRAP := rec_runtime_id rec_ref_entity rec_twin_of seam_changelevel
+GAMELS_WRAP := rec_runtime_id rec_ref_entity rec_twin_of rec_slot_closing seam_changelevel
 GAMELS_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 	$(BUILD_DIR)/host/test/m4/gamels.o
 $(GAMELS_BIN): $(GAMELS_OBJS)
