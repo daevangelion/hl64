@@ -870,7 +870,6 @@ static void draw_layer(wld_layer_t *L)
 	for (i = 0; i < L->dir->ntex; i++)
 		tex_page0[i] = L->texs[ren_tex_anim(L->texs, L->dir->ntex, i, 0, r10)].page;
 
-	wld_want_open(L, (int)st.leaf);
 	list = wld_leaf_sectors(L, (int)st.leaf, &cnt);
 	for (i = 0; i < cnt; i++)
 	{
@@ -1068,6 +1067,7 @@ void ren_frame(double time)
 	studio_draw_view();
 	gpu_end();
 	last = st;
+	wld_stream_missing(st.missing);
 }
 
 const float (*ren_frustum(void))[3]

@@ -100,8 +100,8 @@ static void stats_fill(stats_t *s)
 		&s->heap_live_kb, &s->heap_peak_kb);
 	io_stats(&io, 0);
 	s->io_queued = io_queued();
-	s->io_blocked_max_us = io.frame_blocked_max_us;
-	s->io_budget_over = io.frames_budget_over;
+	s->io_blocked_max_us = io.life_blocked_max_us;
+	s->io_budget_over = io.life_frames_budget_over;
 	s->fpu_traps = sys_fpu_traps();
 	s->stack_peak = sys_stack_peak();
 }
@@ -327,6 +327,21 @@ static int cmd_stats(const dbg_cmd_t *c)
 				(unsigned long)ss.carried, (unsigned long)ss.continuity_bad,
 				(unsigned long)ss.closes);
 		}
+		{
+			wld_stream_stats_t ss;
+			io_stats_t io;
+
+			wld_stream_stats(&ss, 0);
+			io_stats(&io, 0);
+			log_printf("stats %lu stream: popin=%lu popin_tele=%lu blk1ms=%lu pins=%lu "
+				"prefetch=%lu recompute=%lu reassert=%lu over=%lu tele=%lu open_async=%lu "
+				"open_fail=%lu\n", (unsigned long)c->arg[0].u, (unsigned long)ss.popin,
+				(unsigned long)ss.popin_tele, (unsigned long)io.life_frames_blocked_1ms,
+				(unsigned long)ss.pins, (unsigned long)ss.prefetch,
+				(unsigned long)ss.recompute, (unsigned long)ss.reassert,
+				(unsigned long)io.life_frames_budget_over, (unsigned long)ss.teleports,
+				(unsigned long)ss.open_async, (unsigned long)ss.open_fail);
+		}
 	}
 	if (phy_player_active())
 	{
@@ -361,6 +376,17 @@ static int cmd_mem(const dbg_cmd_t *c)
 	if (eng.world)
 		seam_mem_line();
 	decal_mem_line();
+	if (eng.world)
+	{
+		wld_stats_t w;
+
+		wld_stats(&w);
+		log_printf("mem world: layerdirs=%lu peak=%lu size=%lu render_peak=%lu "
+			"texture_peak=%lu collision_peak=%lu\n", (unsigned long)w.dirs_used,
+			(unsigned long)w.dirs_peak, (unsigned long)w.dirs_size,
+			(unsigned long)w.pool_peak[0], (unsigned long)w.pool_peak[1],
+			(unsigned long)w.pool_peak[2]);
+	}
 	mem_heap_lifetime(&total_mal, &total_fr, &fails, &live_n, &live_kb, &peak_kb);
 	log_printf("mem: allocs %u frees %u fails %u live %u (%u KB) peak %u KB stack %d\n",
 		total_mal, total_fr, fails, live_n, live_kb, peak_kb, sys_stack_peak());
@@ -416,6 +442,8 @@ static void eng_new_game(int map)
 	if (phy_player_spawn(map, org, ang))
 		sys_error("new game: player spawn on %s", wld_map_name(map));
 	seam_new_game(map);
+	/* the models with interest so far: their infos now (load I/O) */
+	studio_preload();
 }
 
 void eng_boot(const char *platform)
@@ -541,6 +569,19 @@ static void rollup(void)
 			(unsigned long)eng.rollup_world_max, (unsigned long)eng.rollup_frames);
 	eng.rollup_world_us = 0;
 	eng.rollup_world_max = 0;
+	if (eng.world)
+	{
+		wld_stream_stats_t ss;
+		unsigned long n;
+
+		wld_stream_stats(&ss, 1);
+		n = ss.frames ? ss.frames : 1;
+		log_printf("prof stream_us avg=%lu max=%lu frames=%lu recompute=%lu reassert=%lu "
+			"blk1ms=%lu blkmax=%lu promoted=%lu\n", (unsigned long)ss.us_sum / n,
+			(unsigned long)ss.us_max, (unsigned long)ss.frames, (unsigned long)ss.recompute,
+			(unsigned long)ss.reassert, (unsigned long)io.life_frames_blocked_1ms,
+			(unsigned long)io.life_blocked_max_us, (unsigned long)ss.promoted);
+	}
 	if (eng.world)
 	{
 		studio_stats_t ss;
@@ -710,6 +751,27 @@ void eng_frame(void)
 			int n = seam_anchors(anchors, 2);
 
 			rec_frame(n ? (const float (*)[3])anchors : NULL, n);
+		}
+		/* 9 residency target set (engine/world/stream.c): the player's
+		 * eye and velocity in its home frame; the free camera's view */
+		if (phy_player_active())
+		{
+			const ent_player_t *pl = phy_player();
+			float eye[3];
+			int k;
+
+			for (k = 0; k < 3; k++)
+				eye[k] = pl->origin[k] + pl->view_ofs[k];
+			wld_stream_frame(phy_player_map(), eye, pl->velocity);
+		}
+		else if (ren_cam.map >= 0)
+		{
+			static const float still[3] = { 0, 0, 0 };
+			const float *gm = wld_map_origin(ren_cam.map);
+			float eye[3] = { ren_cam.org[0] - gm[0], ren_cam.org[1] - gm[1],
+				ren_cam.org[2] - gm[2] };
+
+			wld_stream_frame(ren_cam.map, eye, still);
 		}
 		wld_style_tick(eng.time);
 		ren_dlight_frame(eng.time, (double)dt * 1e-6);

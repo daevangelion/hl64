@@ -4,11 +4,13 @@
  * -> leaf, lightstyle values (docs/architecture.md 5.3-5.5,
  * docs/specs/lightstyles.md 2).
  *
- * M1 scope: maps open synchronously (header + directory in one read, the
- * pinned hull-0 COLL chunks after it); REND / MOVR / TEXP chunks are
- * streamed on demand at OPEN priority through engine/io and evicted LRU
- * behind a two-frame GPU fence. Prefetch / pin classes, seams and the
- * change-driven target set arrive with M4.
+ * Maps open synchronously at boot / New Game / setpos (wld_open, load
+ * I/O) or asynchronously for seams (wld_open_async: header, directory,
+ * tables, pinned hull 0 and the ENTS scan through engine/io, never
+ * blocking). Residency (engine/world/stream.c): one target set of chunks
+ * named per class (open > pin > prefetch), rebuilt only when an input
+ * changes, evicted LRU behind a two-frame GPU fence by stronger classes
+ * only.
  */
 #ifndef HL64_WLD_H
 #define HL64_WLD_H
@@ -47,17 +49,20 @@ typedef struct {
 	struct mem_blk_s *blk;
 	uint32_t	used;		/* frame of the last use */
 	uint8_t		state;		/* WLD_CH_* */
-	uint8_t		pad;
-	uint16_t	want;		/* layer want generation that last named it */
+	uint8_t		cls;		/* WLD_CLS_* of the target generation that named it */
+	uint16_t	want;		/* target generation that last named it */
 	uint16_t	style_base;	/* first styled-meshlet slot, W64_NONE unassigned */
 } wld_chunk_t;
 
 enum { WLD_CH_ABSENT, WLD_CH_LOADING, WLD_CH_RESIDENT, WLD_CH_PINNED };
+/* Residency classes, weakest first (architecture.md 5.3): a request
+ * evicts only chunks of weaker classes (unwanted = NONE). */
+enum { WLD_CLS_NONE, WLD_CLS_PREFETCH, WLD_CLS_PIN, WLD_CLS_OPEN };
 
 #define WLD_PATTERN_MAX	64
 
 typedef struct {
-	uint8_t			open;
+	uint8_t			open;		/* slot taken (async open may be in flight) */
 	uint8_t			slot;		/* 0 .. HL64_WORLD_LAYERS - 1 */
 	uint16_t		map;		/* campaign map index */
 	float			gofs[3];	/* g_M */
@@ -83,8 +88,8 @@ typedef struct {
 	const uint16_t		*mat_ent;
 	const w64_matmix_t	*mat_mix;
 	const w64_matface_t	*mat_face;
-	uint16_t		coll_gen;	/* COLL want generation (wld_want_coll) */
-	uint16_t		pad2;
+	int8_t			ready;		/* 1 ready, 0 async open in flight, -1 failed */
+	uint8_t			pad2[3];
 	wld_chunk_t		*ch;		/* per chunk */
 	uint32_t		*style_epoch;	/* per styled-meshlet slot: last colouring */
 	uint16_t		nstyle_slots, style_used;
@@ -93,9 +98,8 @@ typedef struct {
 	uint16_t		nmovers;
 	uint8_t			has_start;
 	uint8_t			reencode;	/* running tiny3d encodes strips differently */
-	uint8_t			want_pending;	/* a want could not be queued: retry */
-	uint16_t		want_gen;	/* OPEN want generation */
-	int32_t			want_leaf;	/* leaf the wants were built for */
+	uint8_t			high;		/* layer-region blocks at the high end */
+	int32_t			want_leaf;	/* OPEN leaf of the target set (-1 none) */
 	float			start_org[3], start_ang[3];	/* info_player_start, map-local */
 	struct mem_blk_s	*mem;		/* layer region: directory block */
 	struct mem_blk_s	*tables;	/* layer region: tables block */
@@ -110,8 +114,9 @@ typedef struct {
 /* Styled-meshlet slots per layer (the cooked maps have 0-482). */
 #define WLD_STYLE_SLOTS		1024
 
-/* Open map (synchronous; returns the open layer if it is already open);
- * sys_error on a bad package. Boot / New Game / setpos only (load I/O). */
+/* Open map (synchronous; returns the open layer if it is already open,
+ * finishing an async open of it); sys_error on a bad package or no room.
+ * Boot / New Game / setpos only (load I/O). */
 wld_layer_t	*wld_open(int map);
 /* Seam open (M4, architecture.md 5.4 req. 1): never blocks. Takes a free
  * layer slot and queues the header, directory, tables, pinned hull-0 COLL
@@ -131,6 +136,11 @@ void		wld_close(wld_layer_t *L);
 wld_layer_t	*wld_layer(int slot);
 /* Layer holding map, ready or still opening; NULL when not open. */
 wld_layer_t	*wld_layer_of_map(int map);
+/* Bytes a layer takes of the layer region: the directory block plus the
+ * tables block, 16-aligned (the cook proof tools/cook/layerdirs.py
+ * computes the same sum per CWG link pair). */
+uint32_t	wld_layer_bytes(uint32_t dir_size, uint32_t nchunks, uint32_t npages,
+			uint32_t nsub);
 
 /* BSP leaf of a map-local point (hull 0, grid start node). */
 int		wld_point_leaf(const wld_layer_t *L, const float p[3]);
@@ -139,26 +149,22 @@ const uint16_t	*wld_leaf_sectors(const wld_layer_t *L, int leaf, int *count);
 /* The decoded PVS row of BSP leaf `leaf` (bit i = visleaf i + 1) from the
  * layer's VISR chunk, cached one row per layer (architecture.md 5.5): the
  * offset pair and the row's compressed bytes are read synchronously on a
- * cache miss. *visleafs = the map's visleaf count (0: no vis). NULL when
- * everything is visible (no vis, leaf 0 or past visleafs, empty row). The
- * row stays valid until the next call for this layer. */
+ * cache miss (one 16-byte-line DMA each, < 0.3 ms: rows are <= 1 KB;
+ * counted as blocked I/O). *visleafs = the map's visleaf count (0: no
+ * vis). NULL when everything is visible (no vis, leaf 0 or past
+ * visleafs, empty row). The row stays valid until the next call for this
+ * layer. */
 const uint8_t	*wld_pvs_row(wld_layer_t *L, int leaf, int *visleafs);
 
 /* ---- residency ----------------------------------------------------------- */
 
 /* Resident bytes of chunk c (marks it used this frame), or NULL after
- * queuing its read at OPEN priority. */
+ * queuing its read at OPEN priority (the renderer's missing chunks). */
 uint8_t		*wld_chunk_use(wld_layer_t *L, int c);
-/* OPEN class wants (architecture.md 5.3): REND and every page of each
- * sector the leaf sees. Rebuilt only when the leaf changes (or while a
- * want could not be queued); otherwise the previous wants stand by
- * generation, and the LRU never evicts a chunk of the current set. */
+/* A standalone OPEN target set (harnesses without wld_stream_frame): REND
+ * and every page of each sector the leaf sees, named in a new target
+ * generation; nothing of it is evicted until the next one. */
 void		wld_want_open(wld_layer_t *L, int leaf);
-/* COLL wants (engine/coll, the collision window): the caller bumps
- * L->coll_gen (never 0) when its window changes and names each chunk;
- * an absent chunk is queued at OPEN priority, and no chunk named by the
- * current generation is evicted. */
-void		wld_want_coll(wld_layer_t *L, int c);
 /* Resident bytes of COLL chunk c, read synchronously when absent (a
  * chunk missing mid-trace: blocked I/O, architecture.md 5.2); a queued
  * read of it is finished first. */
@@ -166,7 +172,7 @@ uint8_t		*wld_chunk_sync(wld_layer_t *L, int c);
 /* Frame boundary: retire the GPU fences two frames old. */
 void		wld_frame(uint32_t frame);
 
-/* ---- M4 residency classes (architecture.md 5.3) -------------------------- */
+/* ---- M4 residency classes (architecture.md 5.3; engine/world/stream.c) --- */
 
 /* Pin class: a seam's B set (CWG sector-pool entries: sector < 0x8000,
  * 0x8000 | n = BSP model n's MOVR, each with its TEXP pages) at SEAM
@@ -197,12 +203,30 @@ void		wld_pin_point(int map, const float org[3]);
 void		wld_stream_frame(int home_map, const float eye[3], const float vel[3]);
 /* A seam crossing moved the player's global position by T (not a teleport). */
 void		wld_stream_rebase(const float T[3]);
+/* engine/coll col_want: this frame's collision window (global box, the
+ * player box + COL_WINDOW) and the brush models touching it (slot << 16 |
+ * BSP model); an input of the target set (OPEN COLL, and + v * 0.5 s for
+ * prefetch). */
+void		wld_stream_coll(const float lo[3], const float hi[3], const uint32_t *models, int n);
+/* The renderer, once per drawn frame: chunks of the visible set it wanted
+ * and found missing (pop-in, counted outside / inside teleport windows). */
+void		wld_stream_missing(uint32_t n);
 
 typedef struct {
 	uint32_t	loads, evictions, nofit, queued;
 	uint32_t	pool_used[3], pool_peak[3];	/* render, texture, collision */
+	uint32_t	dirs_used, dirs_peak, dirs_size;	/* layer region */
 } wld_stats_t;
 void		wld_stats(wld_stats_t *s);
+
+/* Stream counters since boot (stats record `stream:`); us / frames since
+ * the last reset (prof roll-up). */
+typedef struct {
+	uint32_t	popin, popin_tele, pins, prefetch, recompute, reassert;
+	uint32_t	teleports, promoted, evict_queued, open_async, open_fail;
+	uint32_t	frames, us_sum, us_max;
+} wld_stream_stats_t;
+void		wld_stream_stats(wld_stream_stats_t *s, int reset);
 
 /* Called by the residency when a REND / MOVR chunk lands (its vertex
  * colours are the cooked ones again). */

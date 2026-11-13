@@ -11,7 +11,10 @@
  * pin is outstanding).
  *
  * Synchronous reads (layer open, a collision chunk missing in the middle
- * of a trace, PVS rows) bypass the budget and are counted as blocked I/O.
+ * of a trace) bypass the budget and are counted as blocked I/O, except
+ * during boot (until the first io_frame_begin) and inside io_set_load
+ * (boot / New Game / setpos map loads), which count as load I/O. A frame
+ * blocked more than 1 ms logs `io: frame N blocked U us: ...`.
  *
  * Shared by the cart and the host build: the backend (sys.h sys_pi_*) is
  * a PI DMA (cart) or a pread with a modelled PI cost per KB (host), so
@@ -64,6 +67,14 @@ typedef struct
 	uint32_t	audio_calls;		/* AUDIO class reads (mixer wave data) */
 	uint64_t	audio_bytes;
 	uint64_t	audio_us;		/* their PI time (host: modelled) */
+	uint32_t	promoted;		/* io_promote moves */
+	/* since boot (io_stats never resets these): the stats record's
+	 * blkmax / over / blk1ms, comparable host = cart whatever the
+	 * roll-up resets */
+	uint32_t	life_frames;
+	uint32_t	life_blocked_max_us;
+	uint32_t	life_frames_blocked_1ms;
+	uint32_t	life_frames_budget_over;
 } io_stats_t;
 
 void	io_init(void);
@@ -71,6 +82,10 @@ void	io_init(void);
 void	io_frame_begin(uint32_t frame_us);
 void	io_set_seam(int on);
 void	io_submit(io_req_t *r);
+/* A stronger class needs a queued (or in-flight) request: move it to the
+ * tail of class prio's queue (architecture 5.2 promotion); no-op when r
+ * is idle / done or already at least that strong. */
+void	io_promote(io_req_t *r, int prio);
 /* Remove a request; an active one is waited for (counted as blocked). */
 void	io_cancel(io_req_t *r);
 /* Block until r is DONE (counted as blocked); r must be queued or active. */
@@ -90,8 +105,12 @@ int	io_busy(void);
 /* A piece is still in flight (a finished one is retired first): a sync read
  * now would wait for it. */
 int	io_in_flight(void);
-/* Map load: sync reads count as load I/O, not as blocked frame time. */
+/* Map load (boot / New Game / setpos): sync reads count as load I/O, not
+ * as blocked frame time. Nests: io_set_load(1) ... io_set_load(0). */
 void	io_set_load(int on);
+/* A test teleport (route SETPOS) is a map load: sync reads of this frame
+ * and the next `frames` (the destination's hydration) count as load I/O. */
+void	io_load_window(uint32_t frames);
 /* Bytes queued or in flight. */
 uint32_t io_queued(void);
 /* Bytes still allowed this frame; the frame's whole budget. */
@@ -102,5 +121,7 @@ void	io_stats(io_stats_t *out, int reset);
 uint32_t io_frame_kb_percentile(const io_stats_t *s, int pct);
 /* Last completed frame (route stats line). */
 void	io_last_frame(uint32_t *async_bytes, uint32_t *blocked_us, uint32_t *queued);
+/* Blocked us of the frame so far. */
+uint32_t io_frame_blocked_us(void);
 
 #endif
