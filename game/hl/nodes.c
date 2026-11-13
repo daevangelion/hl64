@@ -186,14 +186,46 @@ int Graph_LinkPassable(int e, int slot, int src, int linkidx, int afCapMask)
 	return HandleLinkEnt(slot, &g->links[g->nodes[src].first_link + linkidx], afCapMask, 0);
 }
 
+/* FindNearestNode's candidate heap: (distance, node) pairs, nearest first,
+ * the lower node on equal distances. It uses the Dijkstra queue's scratch:
+ * neither search runs inside the other. */
+#define nn_d	heapk
+#define nn_i	heap
+static int	nn_n;
+
+static int nn_less(int a, int b)
+{
+	return nn_d[a] < nn_d[b] || (nn_d[a] == nn_d[b] && nn_i[a] < nn_i[b]);
+}
+
+static void nn_down(int i)
+{
+	int	c;
+	float	td;
+	uint16_t ti;
+
+	for (;;)
+	{
+		c = 2 * i + 1;
+		if (c >= nn_n)
+			return;
+		if (c + 1 < nn_n && nn_less(c + 1, c))
+			c++;
+		if (!nn_less(c, i))
+			return;
+		td = nn_d[i]; nn_d[i] = nn_d[c]; nn_d[c] = td;
+		ti = nn_i[i]; nn_i[i] = nn_i[c]; nn_i[c] = ti;
+		i = c;
+	}
+}
+
 int Graph_FindNearestNode(int e, const float org[3], int afNodeTypes)
 {
-	int		slot = ent_idc(e)->layer, i, best, tries;
+	int		slot = ent_idc(e)->layer, i, best, k;
 	graph_t		*g = graph(slot);
 	uint32_t	hsh;
-	float		bestd, d, lastd;
+	float		d;
 	col_trace_t	tr;
-	static uint8_t	tried[HLN_MAX_NODES];
 
 	if (!g)
 		return NO_NODE;
@@ -209,29 +241,31 @@ int Graph_FindNearestNode(int e, const float org[3], int afNodeTypes)
 	if (g->cache[hsh].valid && VecEq(g->cache[hsh].v, org))
 		return g->cache[hsh].n;
 	mon_aiw.nn++;
-	memset(tried, 0, (size_t)g->n);
 	best = NO_NODE;
-	lastd = -1;
-	/* candidates nearest first; the first one a line trace reaches */
-	for (tries = 0; tries < g->n; tries++)
+	/* candidates nearest first (ties: the lower node); the first one a
+	 * line trace reaches. A heap of every candidate's distance gives the
+	 * order of repeated nearest-untried scans in O(n log n). */
+	nn_n = 0;
+	for (k = 0; k < g->n; k++)
 	{
-		bestd = 999999.0f;
-		i = -1;
-		for (int k = 0; k < g->n; k++)
-		{
-			if (tried[k] || !(g->nodes[k].info & afNodeTypes))
-				continue;
-			d = mv_dist(org, g->nodes[k].origin);
-			if (d < bestd && d >= lastd)
-			{
-				bestd = d;
-				i = k;
-			}
-		}
-		if (i < 0)
-			break;
-		tried[i] = 1;
-		lastd = bestd;
+		if (!(g->nodes[k].info & afNodeTypes))
+			continue;
+		d = mv_dist(org, g->nodes[k].origin);
+		if (!(d < 999999.0f))
+			continue;
+		nn_d[nn_n] = d;
+		nn_i[nn_n] = (uint16_t)k;
+		nn_n++;
+	}
+	for (k = nn_n / 2 - 1; k >= 0; k--)
+		nn_down(k);
+	while (nn_n > 0)
+	{
+		i = nn_i[0];
+		nn_n--;
+		nn_d[0] = nn_d[nn_n];
+		nn_i[0] = nn_i[nn_n];
+		nn_down(0);
 		mon_aiw.nnt++;
 		UTIL_TraceLine(org, g->nodes[i].origin, ignore_monsters, -1, &tr);
 		if (tr.frac == 1.0f)
