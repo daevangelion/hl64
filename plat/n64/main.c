@@ -21,6 +21,7 @@
 #include "engine/core/eng.h"
 #include "engine/core/sys.h"
 #include "engine/core/log.h"
+#include "engine/test/route.h"
 #include "plat/n64/n64.h"
 
 #define AUDIO_HZ	22050
