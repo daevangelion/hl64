@@ -308,5 +308,9 @@ look 0 177
 wait 0.5
 shot hldemo3-arrival
 stats hldemo3
-# end of the M4 route: the hldemo3 arrival (segment C is the M5 route)
+# end of the M4 route: the hldemo3 arrival (segment C is the M5 route).
+# The seam-window profiler (PROFILE builds) logs a crossing 2 s of frame
+# time after its switch frame: stand at the arrival until it has.
+wait 2.5
+stats m4-end
 pass
