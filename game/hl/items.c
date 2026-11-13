@@ -111,7 +111,9 @@ void CItem_ItemTouch(int e, int other)
 	if (MyTouch(e, it))
 	{
 		log_printf("item: %s picked up\n", game_class_name(ent_idc(e)->cls));
-		SUB_UseTargets(e, other, USE_TOGGLE, 0);
+		/* CItem is a CBaseEntity: CBaseEntity::SUB_UseTargets (no delay,
+		 * no killtarget in its private block) */
+		CBaseEntity_SUB_UseTargets(e, other, USE_TOGGLE, 0);
 		SetTouch(e, FN_NONE);
 		UTIL_Remove(e);
 	}
