@@ -68,6 +68,7 @@
 #define EW_REQUERY	30		/* frames between a window's model queries */
 #define GOAL_SPAN	1024.0f		/* a route span is prefetched this far at most */
 #define GOAL_MARGIN	40.0f		/* ... around the hull (a step up and down: 2 x 18 u) */
+#define TELE_PINS	4		/* teleport destinations pinned at once */
 #define SEEN_MODELS	64		/* brush entities' hulls named in the eye's sectors */
 
 typedef struct {
@@ -94,6 +95,11 @@ typedef struct {
 	uint32_t	m[EW_MODELS];
 } ewin_t;
 
+typedef struct {
+	int16_t		slot, pad;
+	float		org[3];		/* the player origin it gives (map-local) */
+} tele_pin_t;
+
 static struct {
 	/* inputs of the standing target set */
 	int		home_slot;
@@ -116,6 +122,9 @@ static struct {
 	/* moving entities' collision windows, in entity order (ent_scan) */
 	ewin_t		ew[ENT_WINDOWS];
 	int		nwin;
+	/* reachable teleport destinations (ent_scan) */
+	tele_pin_t	tele[TELE_PINS];
+	int		ntele;
 	/* hulls of the brush entities the home eye leaf sees (ent_scan) */
 	uint32_t	seen[SEEN_MODELS];
 	int		nseen;
@@ -478,16 +487,20 @@ static int ent_window(int e, wld_layer_t *L, const ewin_t *prev, ewin_t *w)
  * collision windows (ent_window); the hulls of the brush entities
  * (triggers, pushers) in the sectors the home eye leaf sees (a door used,
  * a gib shoved through a trigger: their first move reads them before a
- * window could name them). A change bumps coll_gen. */
+ * window could name them); the destinations of the trigger_teleports
+ * there (architecture.md 5.3 pin class: reachable teleport
+ * destinations). A change bumps coll_gen / pin_gen. */
 static void ent_scan(wld_layer_t *H, const float eye[3])
 {
 	static ewin_t nw[ENT_WINDOWS];
 	uint32_t ns[SEEN_MODELS];
+	tele_pin_t nt[TELE_PINS];
 	const uint16_t *list = NULL;
-	int e, n = 0, nsn = 0, p = 0, cnt = 0, leaf;
+	int e, n = 0, nsn = 0, ntl = 0, p = 0, cnt = 0, leaf;
 
 	if (H && (leaf = wld_point_leaf(H, eye)) > 0)
 		list = wld_leaf_sectors(H, leaf, &cnt);
+	memset(nt, 0, sizeof(nt));
 	for (e = ENT_PLAYER + 1; e < HL64_MAX_ENTITIES; e++)
 	{
 		const col_ent_t *cv;
@@ -498,8 +511,19 @@ static void ent_scan(wld_layer_t *H, const float eye[3])
 		cv = ent_cv(e);
 		if (L == H && list && cv->model != COL_NONE && COL_MODEL_SLOT(cv->model) == L->slot
 			&& (cv->solid == COL_SOLID_TRIGGER || cv->movetype == MOVETYPE_PUSH)
-			&& box_seen(H, cv->absmin, cv->absmax, list, cnt) && nsn < SEEN_MODELS)
-			ns[nsn++] = (uint32_t)L->slot << 16 | COL_MODEL_SUB(cv->model);
+			&& box_seen(H, cv->absmin, cv->absmax, list, cnt))
+		{
+			float org[3];
+
+			if (nsn < SEEN_MODELS)
+				ns[nsn++] = (uint32_t)L->slot << 16 | COL_MODEL_SUB(cv->model);
+			if (cv->solid == COL_SOLID_TRIGGER && ntl < TELE_PINS && game_teleport_dest(e, org))
+			{
+				nt[ntl].slot = (int16_t)L->slot;
+				memcpy(nt[ntl].org, org, sizeof(org));
+				ntl++;
+			}
+		}
 		if (cv->solid == COL_SOLID_TRIGGER || n >= ENT_WINDOWS)
 			continue;
 		/* S.ew is in entity order: the previous window of e */
@@ -519,6 +543,12 @@ static void ent_scan(wld_layer_t *H, const float eye[3])
 		memcpy(S.seen, ns, (size_t)nsn * sizeof(ns[0]));
 		S.nseen = nsn;
 		S.coll_gen++;
+	}
+	if (ntl != S.ntele || memcmp(nt, S.tele, sizeof(nt)))
+	{
+		memcpy(S.tele, nt, sizeof(nt));
+		S.ntele = ntl;
+		S.pin_gen++;
 	}
 }
 
@@ -748,6 +778,11 @@ static void name_all(void)
 			{
 				if (S.seam[s].on)
 					name_seam(L, &S.seam[s]);
+				/* reachable teleport destinations: a play need,
+				 * measured with the open set */
+				for (i = 0; i < S.ntele; i++)
+					if (S.tele[i].slot == s)
+						name_point(L, S.tele[i].org, cls);
 			}
 			else
 			{
@@ -928,7 +963,8 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 		vb[k] = vbucket(S.vel[k]);
 	if (S.pending == 0 && movr_landed())
 		S.pin_gen++;
-	/* moving entities' windows (a rebuild when one's cells changed) */
+	/* moving entities' windows (a rebuild when one's cells changed) and
+	 * reachable teleport destinations */
 	ent_scan(H, eye);
 	{
 		int hs = H ? H->slot : -1;
@@ -1138,6 +1174,13 @@ void wld_stream_closed(int slot)
 		if (n != S.nwin)
 			S.coll_gen++;
 		S.nwin = n;
+		for (i = n = 0; i < S.ntele; i++)
+			if (S.tele[i].slot != slot)
+				S.tele[n++] = S.tele[i];
+		if (n != S.ntele)
+			S.pin_gen++;
+		memset(S.tele + n, 0, sizeof(S.tele[0]) * (size_t)(TELE_PINS - n));
+		S.ntele = n;
 		for (i = n = 0; i < S.nseen; i++)
 			if ((int)(S.seen[i] >> 16) != slot)
 				S.seen[n++] = S.seen[i];

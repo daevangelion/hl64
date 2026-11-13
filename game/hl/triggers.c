@@ -465,6 +465,22 @@ void CBaseTrigger_TeleportTouch(int e, int other)
 	ent_set_basevelocity(other, g_vecZero);
 }
 
+/* include/hl64/game.h: where this teleport puts the player (the touch's
+ * origin; the master is not tested: a pin is only a residency hint) */
+int game_teleport_dest(int e, float org[3])
+{
+	CBaseTrigger *p;
+	float ang[3];
+
+	if (!ent_is_live(e) || ent_tm(e)->touch != FN_CBaseTrigger_TeleportTouch)
+		return 0;
+	p = PRIV(CBaseTrigger, e);
+	if ((p->spawnflags & SF_TRIGGER_NOCLIENTS) || !UTIL_NamedOrigin(p->target, org, ang))
+		return 0;
+	org[2] += 1 - (ent_is_live(ENT_PLAYER) ? ent_cv(ENT_PLAYER)->mins[2] : -36.0f);
+	return 1;
+}
+
 static int CTriggerTeleport_Spawn(int e, gid_t16 gid)
 {
 	CBaseTrigger_KeyValue(e, gid);

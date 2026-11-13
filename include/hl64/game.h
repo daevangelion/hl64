@@ -99,6 +99,10 @@ void	game_cut_refs(int slot);
  * goal: 1, else 0 (no route, not a monster). The stream prefetches the
  * collision cells between it and e (the route checks trace them). */
 int	game_move_goal(int e, float goal[3]);
+/* A trigger_teleport the player can take: the origin its touch gives the
+ * player (e's map-local frame) into org, 1; else 0. The stream pins the
+ * destinations of those in the eye's open set. */
+int	game_teleport_dest(int e, float org[3]);
 
 /* ---- client side: view, HUD, studio (D3) ------------------------------------ */
 
