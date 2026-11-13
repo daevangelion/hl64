@@ -924,7 +924,9 @@ void col_move(const float start[3], const float mins[3], const float maxs[3], co
 	float lo[3], hi[3], wend[3], wfrac;
 
 	col_trace_world(start, mins, maxs, end, tr);
-	if (tr->allsolid)
+	/* the world stops it at the start (or it is all-solid): no entity is
+	 * clipped (trace-and-hulls.md 4.4 step 1) [probe:measured P-push corpse] */
+	if (tr->allsolid || tr->frac == 0)
 		return;
 	for (k = 0; k < 3; k++)
 	{

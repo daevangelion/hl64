@@ -83,6 +83,73 @@ void phy_pm_sound(int channel, const char *sample, float volume, float attenuati
 	P.prof.sounds++;
 }
 
+/* Physics info string: GoldSrc info-string form, "\key\value" pairs. */
+
+/* the pair at s ("\key\value..."): key [*k, *ke), value [*ke + 1, return) */
+static const char *info_pair(const char *s, const char **k, const char **ke)
+{
+	const char *v;
+
+	if (*s != '\\' || !(*ke = strchr(s + 1, '\\')))
+		return NULL;
+	*k = s + 1;
+	v = strchr(*ke + 1, '\\');
+	return v ? v : *ke + 1 + strlen(*ke + 1);
+}
+
+const char *phy_pm_info_value(const char *s, const char *key)
+{
+	static char out[HL64_PM_PHYSINFO];
+	size_t kl = strlen(key), n;
+	const char *k, *ke, *ve;
+
+	for (; (ve = info_pair(s, &k, &ke)); s = ve)
+		if ((size_t)(ke - k) == kl && !memcmp(k, key, kl))
+		{
+			n = (size_t)(ve - ke - 1);
+			if (n >= sizeof(out))
+				n = sizeof(out) - 1;
+			memcpy(out, ke + 1, n);
+			out[n] = 0;
+			return out;
+		}
+	out[0] = 0;
+	return out;
+}
+
+void phy_player_set_physinfo(const char *key, const char *value)
+{
+	char *s = P.pl.physinfo, *p = s;
+	size_t kl = strlen(key), vl = strlen(value), len;
+	const char *k, *ke, *ve;
+
+	if (!kl || strchr(key, '\\') || strchr(value, '\\'))
+	{
+		log_printf("player: physinfo: bad key \"%s\"\n", key);
+		return;
+	}
+	/* drop the key's pair */
+	while ((ve = info_pair(p, &k, &ke)))
+	{
+		if ((size_t)(ke - k) == kl && !memcmp(k, key, kl))
+			memmove(p, ve, strlen(ve) + 1);
+		else
+			p += ve - p;
+	}
+	if (!vl)
+		return;
+	len = strlen(s);
+	if (len + kl + vl + 2 >= sizeof(P.pl.physinfo))
+	{
+		log_printf("player: physinfo: info string length exceeded (%s)\n", key);
+		return;
+	}
+	s[len] = '\\';
+	memcpy(s + len + 1, key, kl);
+	s[len + 1 + kl] = '\\';
+	memcpy(s + len + 2 + kl, value, vl + 1);
+}
+
 static int box_has(const col_ent_t *e, const float p[3])
 {
 	int k;

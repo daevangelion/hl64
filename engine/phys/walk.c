@@ -61,11 +61,12 @@ int phy_check_bottom(int e)
 		}
 	return 1;
 traced:
-	/* the centre line must reach ground within two steps, and no corner
-	 * may drop more than a step below the centre's ground */
+	/* the centre line, from a step above the bottom to a step below it,
+	 * must reach ground, and no corner's line may end more than a step
+	 * below the centre's ground [probe:measured P-walkmove world_stairs] */
 	p[0] = (lo[0] + hi[0]) * 0.5f;
 	p[1] = (lo[1] + hi[1]) * 0.5f;
-	p[2] = lo[2];
+	p[2] = lo[2] + settings.stepsize;
 	q[0] = p[0];
 	q[1] = p[1];
 	q[2] = p[2] - 2 * settings.stepsize;
@@ -83,37 +84,6 @@ traced:
 				return 0;
 		}
 	return 1;
-}
-
-/* e's box at p intersects a SOLID_BSP entity (not the world). */
-static int meets_brush(int e, const float p[3])
-{
-	const col_ent_t *v = &ent_c.cv[e];
-	uint16_t list[32];
-	float lo[3], hi[3];
-	int n, i, k;
-
-	for (k = 0; k < 3; k++)
-	{
-		lo[k] = p[k] + v->mins[k] - 1;
-		hi[k] = p[k] + v->maxs[k] + 1;
-	}
-	n = ent_query_in(eng_frame_layer(), lo, hi, ENT_Q_SOLID, list, 32);
-	for (i = 0; i < n; i++)
-	{
-		const col_ent_t *b = &ent_c.cv[list[i]];
-		col_trace_t tr;
-
-		if (list[i] == e || b->solid != COL_SOLID_BSP || b->owner == e || v->owner == list[i])
-			continue;
-		if ((b->flags & COL_FL_MONSTERCLIP) && !(v->flags & COL_FL_MONSTERCLIP))
-			continue;
-		phy_trace_count++;
-		col_clip(b, p, v->mins, v->maxs, p, &tr);
-		if (tr.startsolid)
-			return 1;
-	}
-	return 0;
 }
 
 /* The fly / swim branch: with an enemy, first try bending toward its
@@ -172,10 +142,6 @@ static int move_step(int e, const float d[3], int mode)
 	memcpy(old, v->origin, sizeof(old));
 	for (k = 0; k < 3; k++)
 		from[k] = to[k] = v->origin[k] + d[k];
-	/* a step whose level destination meets a brush entity fails at
-	 * contact; world steps are climbed [probe:measured P-walkmove] */
-	if (meets_brush(e, from))
-		return 0;
 	from[2] += settings.stepsize;
 	to[2] -= settings.stepsize;
 	move_trace(v, from, to, mode, &tr);
