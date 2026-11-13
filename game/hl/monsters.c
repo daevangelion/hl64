@@ -674,6 +674,20 @@ int Mon_FRouteClear(int e)
 	return m->m_Route[m->m_iRouteIndex].iType == 0 || m->m_movementGoal == MOVEGOAL_NONE;
 }
 
+/* include/hl64/game.h: the waypoint the monster is moving to */
+int game_move_goal(int e, float goal[3])
+{
+	CBaseMonster *m;
+
+	if (e == ENT_PLAYER || !mon_is_monster(e))
+		return 0;
+	m = MON(e);
+	if (m->m_iRouteIndex < 0 || m->m_iRouteIndex >= ROUTE_SIZE || Mon_FRouteClear(e))
+		return 0;
+	VecCopy(m->m_Route[m->m_iRouteIndex].vecLocation, goal);
+	return 1;
+}
+
 int Mon_FRefreshRoute(int e)
 {
 	CBaseMonster	*m = MON(e);

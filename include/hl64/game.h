@@ -93,6 +93,13 @@ int	game_carry(int e);
  * (enemy, target ent, cine links) as if out of range. */
 void	game_cut_refs(int slot);
 
+/* ---- residency inputs (architecture.md 5.3) ---------------------------------- */
+
+/* A moving monster's current route waypoint (e's map-local frame) into
+ * goal: 1, else 0 (no route, not a monster). The stream prefetches the
+ * collision cells between it and e (the route checks trace them). */
+int	game_move_goal(int e, float goal[3]);
+
 /* ---- client side: view, HUD, studio (D3) ------------------------------------ */
 
 /* Per rendered frame, after the view: HUD logic and 2D draw. */
