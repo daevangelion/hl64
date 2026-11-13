@@ -133,6 +133,7 @@ static struct {
 	int		nretry;
 	uint8_t		retry_over, pref_short;
 	uint32_t	named_frame;	/* wld_frame_no of the last whole naming */
+	uint32_t	measured_gen;	/* wld_tgen whose want was measured */
 	/* this frame's inputs */
 	float		eye[3], vel[3];
 	/* collision window (wld_stream_coll) */
@@ -884,7 +885,14 @@ static void name_all(void)
 	{
 		if (cls == WLD_CLS_PREFETCH)
 		{
-			wld_want_measure();
+			/* once per generation: a whole naming again in the
+			 * standing generation (retry_over / pref_short) would
+			 * count the point pins the last pass named below */
+			if (S.measured_gen != wld_tgen)
+			{
+				wld_want_measure();
+				S.measured_gen = wld_tgen;
+			}
 			for (s = 0; s < HL64_WORLD_LAYERS; s++)
 				for (i = 0; wld_layer(s) && i < POINT_PINS; i++)
 					if (S.point[i].live && S.point[i].map == wld_layer(s)->map)
