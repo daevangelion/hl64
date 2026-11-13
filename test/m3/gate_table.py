@@ -11,9 +11,13 @@ roll-ups carry no per-frame samples), max = the worst single frame.
 
 Memory: peak bytes per carved region (the `carve:` table: the
 include/hl64/limits.h sizes) from the reporting lines: `mem:` / `mem rec:`
-/ `mem res:` / `mem fx:` (the `mem` command, run at the route's last stats
-frame), the roll-ups' pool / region peaks (studio, sound), and the stats
-records' world pools. A region nothing reports is listed as such.
+/ `mem res:` / `mem fx:` / `mem world:` (the `mem` command, run at the
+route's last stats frame), the roll-ups' pool / region peaks (studio,
+sound). The world pools render / texture / collision are LRU caches that
+fill to their size: their peak is the run's WANT peak (`mem world:
+<pool>_want_peak=`: the open + pin class chunks wanted at once); the
+stats records' resident high-water is printed beside it as information. A
+region nothing reports is listed as such.
 
 Region rule (docs/architecture.md 4.1): a reported region whose peak is
 above 90% of its carve, or whose peak x 1.25 exceeds its carve, fails the
@@ -36,6 +40,8 @@ HEADROOM = 1.25
 # HL64_MAX_ENTITIES cap whatever the map, so it always reads ~100% and is
 # sized by the slot cap, not by peak x 1.25.
 EXEMPT = {"components"}
+# LRU caches: ruled on the want peak, resident peak informational
+LRU = ("render", "texture", "collision")
 
 
 def kv(line):
@@ -94,6 +100,7 @@ def main():
         if m:
             carve[m.group(1)] = int(m.group(3)) * 1024
     peak = {}                         # region -> (bytes, source)
+    resident = {}                     # LRU region -> resident peak B (information)
 
     def note(region, b, src):
         if region not in peak or b > peak[region][0]:
@@ -127,8 +134,12 @@ def main():
             note("sound", kv(l)["mem_peak"], "prof snd_us mem_peak")
         m = re.search(r"^stats \d+ world: .*render=\d+/(\d+)KB texture=\d+/(\d+)KB coll=\d+/(\d+)KB", l)
         if m:
-            for r, v in zip(("render", "texture", "collision"), m.groups()):
-                note(r, int(v) * 1024, "stats world (KB)")
+            for r, v in zip(LRU, m.groups()):
+                resident[r] = max(resident.get(r, 0), int(v) * 1024)
+        if l.startswith("mem world: "):
+            d = kv(l)
+            for r in LRU:
+                note(r, d["%s_want_peak" % r], "mem world: %s_want_peak" % r)
     broken = []                       # (region, reason)
     out += ["", "### M3 gate: memory per region (peak over the run vs the carved limits.h size; "
             "rule: use <= %d%% and peak x %.2f <= size, %s exempt)" % (
@@ -150,6 +161,8 @@ def main():
                 broken.append((r, "; ".join(why)))
             else:
                 verdict = "ok"
+            if r in resident:
+                src += "; resident peak %d B (info)" % resident[r]
             out.append("| %s | %d | %d | %.0f%% | %.0f | %s | %s |" % (
                 r, b, size, 100.0 * b / size, b * HEADROOM, verdict, src))
         else:

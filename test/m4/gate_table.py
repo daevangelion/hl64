@@ -10,7 +10,11 @@ Memory: per carve region, the peak bytes in use in the window against
 the carved size (the `seamprof: region` size), with the region rule of
 docs/architecture.md 4.1: a peak above 90% of the region, or whose peak x
 1.25 exceeds it, fails (components exempt: fixed-size by design, as in
-test/m3/gate_table.py).
+test/m3/gate_table.py). The world pools render / texture / collision are
+LRU caches that fill to their size: the rule takes the run's WANT peak
+(`mem world: <pool>_want_peak=`, the open + pin class chunks wanted at
+once; the `mem` command at the route's last stats frame, so it covers
+every window), the window's resident peak is shown as information.
 
 Old-tree baseline (doc only, not measured here): the old tree's cart
 Uplink route (n64/docs/stream-arch-v2.md 6.8 "Cart Uplink route (ares,
@@ -23,6 +27,7 @@ Usage: gate_table.py LOG --switch A:B:KIND [--switch ...]
        breaks the rule; the last line names what failed)
 """
 import argparse
+import re
 import sys
 
 import gate_parse as gp
@@ -30,6 +35,7 @@ import gate_parse as gp
 USE_MAX = 0.90
 HEADROOM = 1.25
 EXEMPT = {"components"}
+LRU = ("render", "texture", "collision")
 # n64/docs/stream-arch-v2.md 6.8, by crossing: (crossing work ms, switch frame ms)
 BASELINE = {("hldemo1", "hldemo2"): (12.8, 44), ("hldemo2", "hldemo3"): (35.5, 322)}
 
@@ -74,6 +80,12 @@ def main():
         out.append("no seam-window lines (`seamprof: switch`) for the route's crossings")
 
     broken = []
+    want_run = {}                     # LRU pool -> the run's want peak B
+    for l in lines:
+        if l.startswith("mem world: "):
+            d = {k: int(v) for k, v in re.findall(r"(\w+)=(\d+)", l)}
+            for r in LRU:
+                want_run[r] = max(want_run.get(r, 0), d.get(r + "_want_peak", 0))
     out += ["", "### M4 gate: memory per region at each crossing (peak in the +-2 s window vs the "
             "carved size; rule: use <= %d%% and peak x %.2f <= size, %s exempt)" % (
                 USE_MAX * 100, HEADROOM, ", ".join(sorted(EXEMPT))), ""]
@@ -86,11 +98,12 @@ def main():
             row = []
             for t, w in got:
                 peak, fr, _ = w["regions"].get(r, (0, 0, size))
+                ruled = want_run[r] if r in want_run else peak
                 why = []
-                if peak > USE_MAX * size:
-                    why.append("use %.0f%% > %d%%" % (100.0 * peak / size, USE_MAX * 100))
-                if peak * HEADROOM > size:
-                    why.append("peak x %.2f = %d B > %d B" % (HEADROOM, peak * HEADROOM, size))
+                if ruled > USE_MAX * size:
+                    why.append("use %.0f%% > %d%%" % (100.0 * ruled / size, USE_MAX * 100))
+                if ruled * HEADROOM > size:
+                    why.append("peak x %.2f = %d B > %d B" % (HEADROOM, ruled * HEADROOM, size))
                 if r in EXEMPT:
                     verdict = "exempt"
                 elif why:
@@ -98,7 +111,11 @@ def main():
                     broken.append("%s at %s (%s)" % (r, t, "; ".join(why)))
                 else:
                     verdict = "ok"
-                row.append("%d (%d) | %.0f%% | %s" % (peak, fr, 100.0 * peak / size, verdict))
+                if r in want_run:
+                    row.append("want %d (run); resident %d (%d) | %.0f%% | %s" % (
+                        ruled, peak, fr, 100.0 * ruled / size, verdict))
+                else:
+                    row.append("%d (%d) | %.0f%% | %s" % (peak, fr, 100.0 * peak / size, verdict))
             out.append("| %s | %d | %s |" % (r, size, " | ".join(row)))
 
     out += ["", "### Old tree (doc only: n64/docs/stream-arch-v2.md 6.8, cart Uplink route, ares "
