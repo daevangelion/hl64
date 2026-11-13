@@ -66,7 +66,10 @@ GAME_SRC_MON := game/hl/monsters.c game/hl/schedule.c game/hl/defaultai.c game/h
 	game/hl/talkmonster.c game/hl/scientist.c game/hl/monstermaker.c \
 	game/hl/barney.c game/hl/generic.c game/hl/headcrab.c \
 	game/hl/aisquad.c game/hl/houndeye.c
-GAME_SRC_ITEMS :=
+GAME_SRC_ITEMS := game/hl/weapons.c game/hl/weapon_crowbar.c game/hl/weapon_glock.c \
+	game/hl/weapon_python.c game/hl/weapon_mp5.c game/hl/weapon_shotgun.c \
+	game/hl/weapon_handgrenade.c game/hl/items.c game/hl/chargers.c game/hl/grenade.c \
+	game/hl/tripmine.c game/hud/hud.c
 GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
 	$(ENGINE_SRC_SND) $(ENGINE_SRC_FX) $(ENGINE_SRC_D2)
