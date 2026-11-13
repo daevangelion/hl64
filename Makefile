@@ -54,7 +54,8 @@ ENGINE_SRC_PHYS := engine/phys/move.c engine/phys/push.c engine/phys/walk.c
 ENGINE_SRC_REC := engine/ent/rec.c engine/ent/rec_hle.c engine/res/res.c engine/res/rtb.c
 ENGINE_SRC_STUDIO := engine/render/studio.c
 ENGINE_SRC_SND := engine/snd/snd.c
-ENGINE_SRC_FX :=
+ENGINE_SRC_FX := engine/render/fx.c engine/render/tent.c engine/render/part.c \
+	engine/render/beam.c engine/render/decal.c engine/render/sprite.c engine/render/trans.c
 ENGINE_SRC_D2 :=
 GAME_SRC_CORE :=
 GAME_SRC_MON :=
@@ -77,6 +78,9 @@ HOST_SRC := plat/host/gpu.c plat/host/gpu_studio.c plat/host/heap_host.c plat/ho
 # the Snd slice's audio backends (engine/snd/snd_hw.h)
 N64_SRC += plat/n64/audio.c
 HOST_SRC += plat/host/audio_host.c
+# the FX slice's effects GPU seam (engine/render/gpu_fx.h)
+N64_SRC += plat/n64/gpu_fx.c
+HOST_SRC += plat/host/gpu_fx.c
 
 # Directories built without -ffast-math on the cart (18.2): host and cart
 # must agree bit for bit on collision and physics, on the world draw list

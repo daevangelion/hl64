@@ -38,6 +38,9 @@
 #include "engine/render/gpu.h"
 #include "engine/render/gpu_studio.h"
 #include "hl64/studio.h"
+#include "hl64/fx.h"
+#include "engine/render/gpu_fx.h"
+#include "engine/render/trans.h"
 #include "engine/render/ren.h"
 #include "engine/world/wld.h"
 #include "engine/in/in.h"
@@ -164,6 +167,25 @@ static void log_draw(const char *what, uint32_t label)
 			"mats=%lu hash=%08lx\n", what, (unsigned long)label, (unsigned long)sg.ents,
 			(unsigned long)sg.runs, (unsigned long)sg.meshlets, (unsigned long)sg.verts,
 			(unsigned long)sg.tris, (unsigned long)sg.mats, (unsigned long)sg.hash);
+	}
+	{
+		gpu_fx_stats_t gf;
+		fx_draw_stats_t fd;
+		int m;
+		unsigned long calls = 0;
+
+		gpu_fx_stats(&gf);
+		fx_draw_stats(&fd);
+		for (m = 0; m < GPU_FX_MODES; m++)
+			calls += gf.calls[m];
+		log_printf("%s %lu fx: items=%lu cutouts=%lu dropped=%lu sprites=%lu studio=%lu "
+			"brushes=%lu temps=%lu beams=%lu occluded=%lu calls=%lu tris=%lu points=%lu "
+			"tex=%lu hash=%08lx\n", what, (unsigned long)label, (unsigned long)fd.items,
+			(unsigned long)fd.cutouts, (unsigned long)fd.dropped, (unsigned long)fd.sprites,
+			(unsigned long)fd.studio, (unsigned long)fd.brushes, (unsigned long)fd.temps,
+			(unsigned long)fd.beams, (unsigned long)fd.glow_occluded, calls,
+			(unsigned long)gf.tris, (unsigned long)gf.points, (unsigned long)gf.texloads,
+			(unsigned long)gf.hash);
 	}
 }
 
@@ -321,6 +343,7 @@ void eng_boot(const char *platform)
 		studio_init();
 		ren_cam_init();
 	}
+	fx_init();
 	in_init();
 	phy_player_init();
 	if (eng.world)
@@ -441,6 +464,19 @@ static void rollup(void)
 	}
 	rec_prof_line();
 	{
+		fx_stats_t f;
+		unsigned long n;
+
+		fx_stats(&f, 1);
+		n = f.frames ? f.frames : 1;
+		log_printf("prof fx_us avg=%lu max=%lu trans=%lu temps_peak=%lu parts_peak=%lu "
+			"beams_peak=%lu decals=%lu drops=%lu dlights=%lu\n", (unsigned long)f.us / n,
+			(unsigned long)f.us_max, (unsigned long)f.trans_drawn / n,
+			(unsigned long)f.temps_peak, (unsigned long)f.particles_peak,
+			(unsigned long)f.beams_peak, (unsigned long)f.decals,
+			(unsigned long)(f.decal_drops + f.trans_dropped), (unsigned long)f.dlights);
+	}
+	{
 		snd_stats_t s;
 
 		snd_stats(&s, 1);
@@ -516,8 +552,12 @@ void eng_frame(void)
 			rec_frame(NULL, 0);
 		wld_style_tick(eng.time);
 		ren_dlight_frame(eng.time, (double)dt * 1e-6);
+		ren_dlight_sources(eng.time);
 		studio_frame();
 	}
+	/* effects on the game clock: temp entities, particles, beams, decal
+	 * placements, persistent render fades, shake */
+	fx_frame(eng.time, gdt);
 	/* 10 sound: listener = the view (global eye, right vector) of the last
 	 * drawn frame */
 	{
