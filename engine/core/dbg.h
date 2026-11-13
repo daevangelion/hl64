@@ -37,7 +37,8 @@
 	X(LOG_FLUSH, "flush", "", 0) \
 	X(QUIT, "quit", "u", 0)			/* exit code */ \
 	X(BENCH, "bench", "u", 1)		/* 1 = spatial grid (engine/ent) */ \
-	X(COLBENCH, "colbench", "u", 1)		/* map: traces of coll/bench.bin (engine/coll) */
+	X(COLBENCH, "colbench", "u", 1)		/* map: traces of coll/bench.bin (engine/coll) */ \
+	X(SOUND, "sound", "uu", 1)		/* res_t (SOUND / SENTENCE), entity (0 = the listener) */
 
 enum {
 #define DBG_ENUM(id, name, args, test) DBG_##id,

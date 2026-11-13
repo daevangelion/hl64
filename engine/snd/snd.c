@@ -34,6 +34,7 @@
 #include "hl64/settings.h"
 #include "hl64/snd.h"
 #include "engine/core/log.h"
+#include "engine/core/dbg.h"
 #include "engine/core/sys.h"
 #include "engine/mem/carve.h"
 #include "engine/snd/snd_hw.h"
@@ -868,6 +869,22 @@ void snd_entity_freed(int e)
 			S->l[i].follow = 0;
 }
 
+/* DBG_SOUND (test builds): play a sound (AUTO) or a sentence (VOICE) from
+ * entity e, 0 = the listener's own */
+static int cmd_sound(const dbg_cmd_t *c)
+{
+	res_t r = (res_t)c->arg[0].u;
+	int e = c->arg[1].u ? (int)c->arg[1].u : SND_SELF;
+
+	if (RES_KIND(r) == RES_K_SENTENCE)
+		snd_sentence(e, CHAN_VOICE, (uint16_t)RES_INDEX(r), 1.0f, ATTN_NORM, 0, PITCH_NORM);
+	else if (RES_KIND(r) == RES_K_SOUND)
+		snd_emit(e, CHAN_AUTO, r, 1.0f, ATTN_NORM, 0, PITCH_NORM);
+	else
+		return 1;
+	return 0;
+}
+
 void snd_init(void)
 {
 	uint8_t *m = mem_region(MEM_SOUND);
@@ -892,6 +909,7 @@ void snd_init(void)
 		S->v[v].sent = SENT_NONE;
 	}
 	snd_hw_init(m + t, n - t);
+	dbg_handler_set(DBG_SOUND, cmd_sound);
 	log_printf("snd: %d voices @ %d Hz, %d loops, %d waves; tables %lu B of %lu B\n",
 		SND_VOICES, SND_HZ, SND_LOOPS, SND_WAVES, (unsigned long)t, (unsigned long)n);
 }
