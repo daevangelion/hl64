@@ -185,3 +185,4 @@ from the probe runs.
 | PM11 | ground entity unchanged while airborne (jump, fall), FL_ONGROUND cleared; updated on landing | **[probe:measured PM-bot]** jump runs |
 | PM12 | FL_INWATER appears one frame after the move that raised waterlevel above 0 and clears one frame after it returned to 0 | **[probe:measured PM-bot]** water runs |
 | PM13 | a `func_monsterclip` brush is never in the player's physent list; the player walks through it | **[probe:measured PM-bot]** |
+| PM14 | a monster box (SOLID_SLIDEBOX) flagged FL_MONSTERCLIP (`SF_MONSTER_HITMONSTERCLIP`: stopped by monster clips) is a player physent and blocks the player; only brushes with the flag are clips | self-contained (HLSDK `monsters.cpp` sets the flag on such monsters) |
