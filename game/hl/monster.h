@@ -1100,7 +1100,7 @@ int	Script_IdleIsPlay(int script);
 /* ---- per-frame accounting (PROFILE roll-up "prof mon_us") ------------------------------------ */
 
 typedef struct {
-	uint32_t	thinks, routes, local_moves, us, us_max, monsters, scripts;
+	uint32_t	frames, thinks, routes, local_moves, us, us_max, monsters, scripts;
 } mon_stats_t;
 void	mon_stats(mon_stats_t *s, int reset);
 void	mon_stats_frame(void);
