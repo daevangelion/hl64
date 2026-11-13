@@ -776,16 +776,71 @@ def cook(content_dir: str, defs_dir: str, map_names: Optional[List[str]] = None)
     return t
 
 
+# --------------------------------------------------------------------------
+# the cart's fixed regions (architecture.md 4.3: cook-proved)
+
+DEFAULT_LIMITS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "include", "hl64", "limits.h")
+
+
+def read_limit(path: str, name: str) -> int:
+    """A `#define NAME <int>` of include/hl64/limits.h."""
+    with open(path, "r", encoding="utf-8") as f:
+        m = re.search(r"^#define\s+" + re.escape(name) + r"\s+(\d+)\b", f.read(), re.M)
+    if not m:
+        raise CookError(f"{path}: no #define {name}")
+    return int(m.group(1))
+
+
+def engine_table_bytes(t: rtb.Table) -> int:
+    """Bytes engine/res/res.c res_install takes in the RESTAB region for this
+    table: the same allocations in the same order, each rounded up to 4."""
+    def a4(n: int) -> int:
+        return (n + 3) & ~3
+    nppol = sum(len(p) for p in t.patterns)
+    nttxt = sum(len(x.text) + 1 for x in t.titles)
+    return sum(a4(n) for n in (
+        8 * len(t.files), 2 * len(t.map_files), 12 * len(t.res), 4 * len(t.sentences),
+        8 * len(t.words), 4 * len(t.groups), 4 * len(t.patterns), nppol, 2 * len(t.defs),
+        40 * len(t.titles), nttxt, (len(t.res) + len(t.sentences) + len(t.groups) + 7) // 8,
+        2 * t.kind_count(rtb.KIND_SPRITE)))
+
+
+def cart_part_bytes(data: bytes) -> int:
+    """Bytes res_init reads into the scratch region at boot: the file up to
+    the first test section (TARG)."""
+    i = rtb.SECTION_INDEX["TARG"]
+    return struct.unpack_from(">I", data, rtb.HEADER_SIZE + rtb.DIRENT_SIZE * i + 4)[0]
+
+
+def check_limits(t: rtb.Table, data: bytes, limits: str) -> Tuple[int, int]:
+    """Fail the cook when the engine's tables exceed HL64_RESTAB_KB or the
+    cart part exceeds HL64_SCRATCH_KB; returns (tables, cart part) bytes."""
+    tables, cart = engine_table_bytes(t), cart_part_bytes(data)
+    restab_kb = read_limit(limits, "HL64_RESTAB_KB")
+    scratch_kb = read_limit(limits, "HL64_SCRATCH_KB")
+    if tables > restab_kb * 1024:
+        raise CookError(f"engine tables {tables} B exceed HL64_RESTAB_KB {restab_kb} "
+                        f"({restab_kb * 1024} B): raise it in {limits}")
+    if cart > scratch_kb * 1024:
+        raise CookError(f"cart part {cart} B exceeds HL64_SCRATCH_KB {scratch_kb} "
+                        f"({scratch_kb * 1024} B, read there at boot): raise it in {limits}")
+    return tables, cart
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--content", required=True, help="staged content directory")
     ap.add_argument("--defs", required=True, help="game/defs directory")
     ap.add_argument("-o", "--out", required=True, help="output campaign.rtb")
+    ap.add_argument("--limits", default=DEFAULT_LIMITS,
+                    help="include/hl64/limits.h (HL64_RESTAB_KB, HL64_SCRATCH_KB)")
     a = ap.parse_args(argv)
     try:
         t = cook(a.content, a.defs)
         data = rtb.write(t)
         build_id = rtb.read(data).build_id     # the writer's output must validate
+        tables, cart = check_limits(t, data, a.limits)
     except (CookError, ValueError, OSError, rtb.RtbError) as e:
         print(f"restab: {e}", file=sys.stderr)
         return 1
@@ -797,7 +852,8 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"maps {len(t.map_names)} files {len(t.files)} models {t.kind_count(rtb.KIND_MODEL)} "
           f"sprites {t.kind_count(rtb.KIND_SPRITE)} sounds {t.kind_count(rtb.KIND_SOUND)} "
           f"sentences {len(t.sentences)} groups {len(t.groups)} patterns {len(t.patterns)} "
-          f"targets {len(t.targets)} classes {len(t.class_names)} globals {len(t.global_names)}")
+          f"targets {len(t.targets)} classes {len(t.class_names)} globals {len(t.global_names)}; "
+          f"engine tables {tables} B, cart part {cart} B")
     return 0
 
 
