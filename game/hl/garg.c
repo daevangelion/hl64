@@ -138,7 +138,7 @@ void CStomp_Think(int e)
 	VecMA(start, s->speed * dt, s->movedir, end);
 	UTIL_TraceHull(start, end, dont_ignore_monsters, head_hull, e, &tr);
 	hit = tr.ent;
-	if (hit >= 0 && hit != owner)
+	if (hit > 0 && hit != owner)
 		TakeDamage(hit, e, owner >= 0 ? owner : e, mon_skill(sk_gargantuaDmgStomp), DMG_SONIC);
 	/* accelerate the effect */
 	s->speed += dt * s->framerate;
@@ -669,8 +669,8 @@ static int Ga_CheckTraceHullAttack(int e, float flDist, int iDamage, int iDmgTyp
 	VecMA(start, flDist, gpGlobals.v_forward, end);
 	VecMA(end, -flDist * 0.3f, gpGlobals.v_up, end);
 	UTIL_TraceHull(start, end, dont_ignore_monsters, head_hull, e, &tr);
-	if (tr.ent < 0)
-		return -1;
+	if (tr.ent < 0 || (tr.ent == 0 && tr.frac == 1.0f))
+		return -1;	/* nothing hit (pHit NULL) */
 	if (iDamage > 0)
 		TakeDamage(tr.ent, e, e, (float)iDamage, iDmgType);
 	return tr.ent;
