@@ -62,6 +62,10 @@ int	game_master_state(name_t master, int activator);
 int	game_global_state(int id);
 /* trigger_endsection fires since New Game (route WAIT_END). */
 int	game_end_section(void);
+/* A spawner logic record (monstermaker) will spawn nothing more: HLSDK
+ * CMonsterMaker::MakeMonster clears its think and use when its count runs
+ * out (route WAIT_GONE of a spawned name). 0 for any other record. */
+int	game_spawner_done(gid_t16 gid);
 
 /* ---- frame (architecture.md 3.2) ------------------------------------------- */
 

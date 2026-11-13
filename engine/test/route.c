@@ -600,15 +600,18 @@ static int wait_moved(void)
 	return 0;
 }
 
-/* A monstermaker has spawned all it will: its record is killed, or its
- * entity has neither think nor use left (HLSDK CMonsterMaker::MakeMonster
- * clears both when its count runs out). */
+/* A monstermaker has spawned all it will: its record is killed, or it has
+ * neither think nor use left (HLSDK CMonsterMaker::MakeMonster clears both
+ * when its count runs out): a logic record asks the game, an entity
+ * spawner its own think / use. */
 static int spawner_done(gid_t16 g)
 {
 	int e;
 
 	if (rec_state(g) == REC_KILLED)
 		return 1;
+	if (rec_kind(g) == REC_KIND_LOGIC)
+		return game_spawner_done(g);
 	if ((e = rec_entity(g)) < 0)
 		return 0;
 	return !ent_tm(e)->think && !ent_tm(e)->use;

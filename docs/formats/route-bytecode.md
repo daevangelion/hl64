@@ -87,9 +87,10 @@ satisfied when more than `timeout` µs have passed since it started;
 - Entity and record ops never hydrate a pending record: a name's entities
   are its records' live entities (and, for a spawned name, the runtime
   holders once no record of the name is pending). A monstermaker "has
-  spawned" (`WAIT_GONE`) when its record is killed or its entity has
-  neither think nor use left (HLSDK `CMonsterMaker::MakeMonster` clears
-  both when its count runs out). `WAIT_CLASS` and `LOOK_AT` measure from
+  spawned" (`WAIT_GONE`) when its record is killed or it has neither
+  think nor use left (HLSDK `CMonsterMaker::MakeMonster` clears both when
+  its count runs out; the maker is a logic record, `game_spawner_done`
+  reads its state). `WAIT_CLASS` and `LOOK_AT` measure from
   the entity's origin / box centre; `DROP` spawns at angles 0.
 - Logs `route: <op#> <mnemonic> [label]` per op; a failure logs
   `route FAIL <op#> <source>:<line> <mnemonic> <reason>` (line from the
