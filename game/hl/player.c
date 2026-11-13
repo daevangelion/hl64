@@ -254,6 +254,8 @@ static void FlashlightTurnOn(void)
 		ent_rnd(ENT_PLAYER)->effects |= EF_DIMLIGHT;
 		hud_flashlight(1, p->m_iFlashBattery);
 		p->m_flFlashLightTime = FLASH_DRAIN_TIME + gtime();
+		log_printf("flashlight: on, battery %d, t=%.9g\n", p->m_iFlashBattery,
+			(double)gtime());
 	}
 }
 
@@ -265,6 +267,7 @@ static void FlashlightTurnOff(void)
 	ent_rnd(ENT_PLAYER)->effects &= ~EF_DIMLIGHT;
 	hud_flashlight(0, p->m_iFlashBattery);
 	p->m_flFlashLightTime = FLASH_CHARGE_TIME + gtime();
+	log_printf("flashlight: off, battery %d, t=%.9g\n", p->m_iFlashBattery, (double)gtime());
 }
 
 /* ---- damage --------------------------------------------------------------- */
@@ -898,7 +901,11 @@ static void UpdateClientData(void)
 				p->m_iFlashBattery++;
 			}
 			else
+			{
 				p->m_flFlashLightTime = 0;
+				log_printf("flashlight: charged, battery %d, t=%.9g\n",
+					p->m_iFlashBattery, (double)gtime());
+			}
 		}
 		hud_flashlight(FlashlightIsOn(), p->m_iFlashBattery);
 	}

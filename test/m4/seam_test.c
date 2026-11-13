@@ -540,8 +540,9 @@ static void test_approach(void)
 		__wrap_wld_layer_of_map(s.to) != NULL, st.closes, D.map_close);
 
 	/* both layers in use by home + another neighbour holding entities near
-	 * the player: open_fail once, retried; the rest far and refused (live,
-	 * not held): that neighbour closes (closing release), B opens */
+	 * the player: with no switch pending a wait (open_wait once, no
+	 * open_fail), retried; the rest far and refused (live, not held): that
+	 * neighbour closes (closing release), B opens */
 	{
 		int other = wld_map_find("hldemo1");
 		seam_info_t r;
@@ -566,9 +567,20 @@ static void test_approach(void)
 		step();
 		step();
 		st = stats();
-		CHECK(st.open_fail == st0.open_fail + 1, "open_fail %u (want %u)", st.open_fail,
-			st0.open_fail + 1);
+		CHECK(st.open_fail == st0.open_fail && st.open_wait == st0.open_wait + 1,
+			"held neighbour, no switch pending: open_fail +%u open_wait +%u (want +0 +1)",
+			st.open_fail - st0.open_fail, st.open_wait - st0.open_wait);
 		CHECK(!__wrap_wld_layer_of_map(s.to), "B opened over a held neighbour");
+		/* B's changelevel touched while the neighbour holds: a failure,
+		 * once per approach */
+		CHECK(seam_changelevel(GID_MAKE(slot_of(wld_map_find("hldemo2")), s.trigger), 1) == 1,
+			"changelevel refused");
+		step();
+		step();
+		st = stats();
+		CHECK(st.open_fail == st0.open_fail + 1 && st.open_wait == st0.open_wait + 1,
+			"held neighbour, switch pending: open_fail +%u open_wait +%u (want +1 +1)",
+			st.open_fail - st0.open_fail, st.open_wait - st0.open_wait);
 		D.held[slot_of(other)] = 0;
 		step();
 		st = stats();

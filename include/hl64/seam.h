@@ -45,7 +45,10 @@ typedef struct {
 	uint32_t	approaches;	/* approach boxes entered */
 	uint32_t	switches;
 	uint32_t	forced;		/* cwg-format.md "forced" switches */
-	uint32_t	open_fail;	/* B could not open (no layer / HLE room) */
+	uint32_t	open_fail;	/* B could not open (no layer / HLE room; a held
+					 * neighbour once B's switch is pending) */
+	uint32_t	open_wait;	/* B's open waited on a neighbour holding
+					 * entities near the player, no switch pending */
 	uint32_t	late;		/* switch frames deferred until B was ready */
 	uint32_t	twins;		/* twin handoffs */
 	uint32_t	carried;	/* entities re-homed with the player */

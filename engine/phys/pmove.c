@@ -472,20 +472,15 @@ static const wld_layer_t *find_home(void)
 	return NULL;
 }
 
-static void build_physents(uint32_t dt_us)
+/* the physents and ladders whose linked boxes meet the home-frame box
+ * mins..maxs (the nearest to the player's origin when over the caps) */
+static void build_physents_box(const float mins[3], const float maxs[3])
 {
 	ent_player_t *pl = &P.pl;
-	float mins[3], maxs[3], gmins[3], gmaxs[3], gorg[3], dt = (float)dt_us * 1e-6f;
+	float gmins[3], gmaxs[3], gorg[3];
 	uint16_t idx[2 * HL64_PM_PHYSENTS], lad[2 * HL64_PM_MOVEENTS];
 	int n, nl = 0, i, k, over = 0;
 
-	for (k = 0; k < 3; k++)
-	{
-		float r = fabsf(pl->velocity[k] + pl->basevelocity[k]) * dt + 18 + 1;
-
-		mins[k] = pl->origin[k] + pl->mins[k] - r;
-		maxs[k] = pl->origin[k] + pl->maxs[k] + r;
-	}
 	to_global(gmins, mins);
 	to_global(gmaxs, maxs);
 	to_global(gorg, pl->origin);
@@ -553,6 +548,22 @@ static void build_physents(uint32_t dt_us)
 	}
 	if ((uint32_t)phy_pm.npe > P.prof.physents_max)
 		P.prof.physents_max = (uint32_t)phy_pm.npe;
+}
+
+static void build_physents(uint32_t dt_us)
+{
+	ent_player_t *pl = &P.pl;
+	float mins[3], maxs[3], dt = (float)dt_us * 1e-6f;
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		float r = fabsf(pl->velocity[k] + pl->basevelocity[k]) * dt + 18 + 1;
+
+		mins[k] = pl->origin[k] + pl->mins[k] - r;
+		maxs[k] = pl->origin[k] + pl->maxs[k] + r;
+	}
+	build_physents_box(mins, maxs);
 }
 
 /* ---- the player entity ----------------------------------------------------- */
@@ -773,6 +784,18 @@ void phy_player_frame(const in_cmd_t *cmd, double time)
 	}
 	/* HLSDK PlayerPostThink: weapons, use, impulses, fall damage */
 	game_player_postthink(pl);
+	if (dbg_trace())
+	{
+		int st = test_pos(pl->origin, pl->usehull, NULL);
+
+		log_printf("trace %lu player org=%.9g,%.9g,%.9g vel=%.9g,%.9g,%.9g flags=%x hull=%d "
+			"ground=%d duck=%d btn=%x stuck=%d\n", (unsigned long)dbg_trace_frame(),
+			(double)pl->origin[0], (double)pl->origin[1], (double)pl->origin[2],
+			(double)pl->velocity[0], (double)pl->velocity[1], (double)pl->velocity[2],
+			(unsigned)pl->flags, (int)pl->usehull, (int)pl->groundentity,
+			(int)pl->in_duck, (unsigned)cmd->buttons,
+			st < 0 ? -1 : (int)phy_pm.pe[st].index);
+	}
 	eng_set_frame_layer(layer);
 
 	us = (uint32_t)(sys_time_us() - t0);
@@ -791,6 +814,47 @@ void phy_player_prof(phy_player_prof_t *p, int reset)
 
 /* ---- debug commands (architecture.md 12) ------------------------------------ */
 
+/* The debug teleport (route-bytecode.md SETPOS): phy_player_spawn there,
+ * then lifted in 1 u steps (at most SETPOS_LIFT) to the first z where the
+ * box of the player's hull is free; none free: the given z. */
+#define SETPOS_LIFT	64
+
+int phy_player_setpos(int map, const float org[3], const float ang[3])
+{
+	ent_player_t *pl = &P.pl;
+	float mins[3], maxs[3];
+	int k, d, layer;
+
+	if (phy_player_spawn(map, org, ang))
+		return -1;
+	for (k = 0; k < 3; k++)
+	{
+		mins[k] = org[k] + pl->mins[k] - 1;
+		maxs[k] = org[k] + pl->maxs[k] + 1;
+	}
+	maxs[2] += SETPOS_LIFT;
+	layer = eng_frame_layer();
+	eng_set_frame_layer(P.home->slot);
+	build_physents_box(mins, maxs);
+	for (d = 0; d <= SETPOS_LIFT; d++)
+	{
+		pl->origin[2] = org[2] + (float)d;
+		if (test_pos(pl->origin, pl->usehull, NULL) < 0)
+			break;
+	}
+	eng_set_frame_layer(layer);
+	if (d > SETPOS_LIFT)
+		d = 0;
+	pl->origin[2] = org[2] + (float)d;
+	if (d)
+	{
+		sync_view();
+		ent_link(P.e);
+		log_printf("player: setpos lifted %d to z %.9g\n", d, (double)pl->origin[2]);
+	}
+	return 0;
+}
+
 /* setpos map x y z pitch yaw roll: the player's origin, map-local */
 static int cmd_setpos(const dbg_cmd_t *c)
 {
@@ -802,7 +866,7 @@ static int cmd_setpos(const dbg_cmd_t *c)
 		org[k] = c->arg[1 + k].f;
 		ang[k] = c->arg[4 + k].f;
 	}
-	return phy_player_spawn((int)c->arg[0].u, org, ang);
+	return phy_player_setpos((int)c->arg[0].u, org, ang);
 }
 
 static int cmd_look(const dbg_cmd_t *c)

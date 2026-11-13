@@ -225,7 +225,8 @@ void		wld_stream_coll(const float lo[3], const float hi[3], const uint32_t *mode
  * target set; n 0 clears). */
 void		wld_stream_spawns(int slot, const float (*box)[6], const int *sub, int n);
 /* 1 when every COLL chunk of a spawn window (as wld_stream_spawns names
- * it) is resident (rec's map-open hold). */
+ * it; a brush record's: its submodel's alone) is resident (rec's map-open
+ * hold). */
 int		wld_spawn_resident(int slot, const float box[6], int sub);
 /* The renderer, once per drawn frame: chunks of the visible set it wanted
  * and found missing (pop-in, counted outside / inside teleport windows). */

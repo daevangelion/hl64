@@ -53,13 +53,13 @@ map (the VM adds the map's CWG placement `g_M`; architecture.md 5.4).
 | 0x02 | `WAIT_MAP` | 0 | map | `timeout` | the player's home map is `map` |
 | 0x03 | `WAIT_NEAR` | 0 | map | x, y, z *f*, r *f* (≥ 0), `timeout` | home map is `map` and the player origin is within `r` (3D distance) of the point |
 | 0x04 | `WAIT_MOVED` | 0 | name id | `timeout` | an entity with the name (`TARG`) is moving (velocity or avelocity non-zero) or its origin / angles differ from its record's spawn values; zero angles never count (HLSDK `SetMovedir` zeroes a linear mover's angles at spawn: a closed `func_door` with `angle 90` rests at 0 0 0) |
-| 0x05 | `WAIT_GONE` | 0 | name id | `timeout` | every record carrying the name is killed or removed, or its live entity is not solid (`SOLID_NOT`: GoldSrc keeps body-less entities sharing a breakable's name — `ambient_generic`, `env_sprite`, a toggled-off trigger — for good; a pending record is not gone), and for a spawned name every spawner has spawned and none of its children with the name is alive |
+| 0x05 | `WAIT_GONE` | 0 | name id | `timeout` | every record carrying the name is killed or removed, or its live entity is not solid (`SOLID_NOT`: GoldSrc keeps body-less entities sharing a breakable's name — `ambient_generic`, `env_sprite`, `env_shake`, a toggled-off trigger — for good; a live logic or point record has no body and counts likewise; a pending record is not gone), and for a spawned name every spawner has spawned and none of its children with the name is alive |
 | 0x06 | `WAIT_CLASS` | 0 | map | class id, x, y, z *f*, r *f*, `timeout` | a live, solid entity of the class lies within `r` of the point in `map` |
 | 0x07 | `WAIT_GLOBAL` | state (0 off, 1 on, 2 dead) | global id | `timeout` | the global state (HLSDK `GLOBALESTATE`) has that value |
 | 0x08 | `WAIT_END` | 0 | 0 | `timeout` | the campaign's end section has fired (`trigger_endsection` / end of demo) |
 | 0x09 | `LOOK` | 0 | 0 | pitch *f*, yaw *f* | set the view angles (roll 0) |
 | 0x0A | `LOOK_AT` | 0 name, 1 class | name or class id | map | aim the view at the centre of the nearest live entity of the name / class in `map`; fails if there is none |
-| 0x0B | `SETPOS` | 1 = angles given | map | x, y, z, pitch, yaw *f* | test builds only (a debug teleport; a build without `HL64_TEST` rejects the route): move the player there with zero velocity (and set the view angles when `a` = 1); fails unless the home map is `map` |
+| 0x0B | `SETPOS` | 1 = angles given | map | x, y, z, pitch, yaw *f* | test builds only (a debug teleport; a build without `HL64_TEST` rejects the route): move the player there with zero velocity (and set the view angles when `a` = 1), lifted in 1 u steps (at most 64 u, as the old setpos: `setpos -280 150 260 (in solid)`) to the first z where the box of the player's current hull (ducked stays ducked) is free of the world and solid entities — the old routes' waypoints rest on what stands there (the old engine's setpos lifted the same way; its log printed the lifted z, e.g. `setpos -266 282 226` on the fallen soda machine); none free: the given z; logs `player: setpos lifted N to z Z`; fails unless the home map is `map` |
 | 0x0C | `BUTTONS` | 0 | down mask | up mask | held route buttons = (held \| down) & ~up; masks are HLSDK `IN_*` bits, disjoint, bit 6 unused |
 | 0x0D | `IMPULSE` | impulse | 0 | — | the next usercmd carries the impulse |
 | 0x0E | `DROP` | 0 | map | class id, x, y, z *f* | the game creates a runtime entity of the class there (HLSDK `CBaseEntity::Create` path) |
@@ -87,9 +87,10 @@ satisfied when more than `timeout` µs have passed since it started;
 - Entity and record ops never hydrate a pending record: a name's entities
   are its records' live entities (and, for a spawned name, the runtime
   holders once no record of the name is pending). A monstermaker "has
-  spawned" (`WAIT_GONE`) when its record is killed or its entity has
-  neither think nor use left (HLSDK `CMonsterMaker::MakeMonster` clears
-  both when its count runs out). `WAIT_CLASS` and `LOOK_AT` measure from
+  spawned" (`WAIT_GONE`) when its record is killed or it has neither
+  think nor use left (HLSDK `CMonsterMaker::MakeMonster` clears both when
+  its count runs out; the maker is a logic record, `game_spawner_done`
+  reads its state). `WAIT_CLASS` and `LOOK_AT` measure from
   the entity's origin / box centre; `DROP` spawns at angles 0.
 - Logs `route: <op#> <mnemonic> [label]` per op; a failure logs
   `route FAIL <op#> <source>:<line> <mnemonic> <reason>` (line from the

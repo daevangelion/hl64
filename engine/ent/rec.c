@@ -2376,7 +2376,7 @@ static void defer_retarget(uint16_t map, uint16_t id, int runtime, uint16_t nmap
 void rec_twin_alias(gid_t16 a, gid_t16 b)
 {
 	rmap_t *ma, *mb;
-	int ra = rec_index(a, &ma), rb = rec_index(b, &mb);
+	int ra = rec_index(a, &ma), rb = rec_index(b, &mb), ea, eb;
 	rtwin_t *tw;
 
 	if (ra < 0 || rb < 0 || ma == mb)
@@ -2389,8 +2389,19 @@ void rec_twin_alias(gid_t16 a, gid_t16 b)
 	}
 	tw->a = a;
 	tw->b = b;
-	/* the live copy; b (the copy taking over) unless only a is live */
-	tw->cur = !(rt_entity(&ma->rt[ra]) >= 0 && rt_entity(&mb->rt[rb]) < 0);
+	/* the live copy. a is the home copy (seam.c aliases the approached seam
+	 * home -> B): live, it stays the one names reach, and a B copy the
+	 * reopened map's pump hydrated before the alias (its stale state from
+	 * its own close) retires silently, as the crossing retires A's copy;
+	 * GoldSrc carries the transition volume's (global) entities over the
+	 * copies the level file holds (HLSDK CGlobalState / globalname). Else
+	 * b, the copy taking over. */
+	ea = rt_entity(&ma->rt[ra]);
+	eb = rt_entity(&mb->rt[rb]);
+	tw->cur = ea < 0;
+	if (ea >= 0 && eb >= 0 && !rec_release(eb))
+		log_printf("rec: twin %u:%u: stale B copy not released (game refused)\n",
+			(unsigned)GID_SLOT(b), (unsigned)GID_LUMP(b));
 }
 
 void rec_twin_clear(int slot)
@@ -2739,6 +2750,21 @@ static void pump(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, uint32_t 
 	}
 }
 
+/* e stands on a pusher that is moving: the pusher carries it this frame
+ * and wakes it again if released (push.c gather), so it stays (hldemo3's
+ * func_pushable on the dish momentary_doors, 1300 u from the player). */
+static int rides_moving_pusher(int e)
+{
+	int g = ent_phys(e)->groundentity;
+	const ent_mot_t *mo;
+
+	if (!(ent_cv(e)->flags & FL_ONGROUND) || g == ENT_NONE || !ent_is_live(g)
+		|| ent_cv(g)->movetype != MOVETYPE_PUSH)
+		return 0;
+	mo = ent_mot(g);
+	return memcmp(mo->velocity, zero3, sizeof(zero3)) || memcmp(mo->avelocity, zero3, sizeof(zero3));
+}
+
 /* One release batch of a slot every 0.1 s: live entities whose box is
  * beyond 1024 u of every anchor dehydrate, at least REC_RELEASE_BATCH
  * tries, more while the budget lasts; a refusal waits 0.5 s. 1 when a
@@ -2772,6 +2798,8 @@ static int release_pass(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, ui
 		if (a < n)
 			continue;
 		if ((double)R.retry[e] > now && (double)R.retry[e] <= now + REC_RELEASE_RETRY)
+			continue;
+		if (rides_moving_pusher(e))
 			continue;
 		if (tried >= REC_RELEASE_BATCH && !budget_left(t0, *done))
 			break;

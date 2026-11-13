@@ -179,6 +179,15 @@ void Monstermaker_DeathNotice(gid_t16 gid, int child)
 		MON(child)->m_makerGid = GID_NONE;
 }
 
+int game_spawner_done(gid_t16 gid)
+{
+	const rec_logic_t *l;
+
+	if (rec_class(gid) != CLS_MONSTERMAKER || !(l = rec_logic(gid)))
+		return 0;
+	return !(l->flags & (MM_THINK | MM_USE));
+}
+
 const game_class_t gc_MONSTERMAKER = {
 	.LogicSpawn = CMonsterMaker_LogicSpawn,
 	.LogicUse = CMonsterMaker_LogicUse,

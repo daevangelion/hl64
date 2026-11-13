@@ -600,15 +600,18 @@ static int wait_moved(void)
 	return 0;
 }
 
-/* A monstermaker has spawned all it will: its record is killed, or its
- * entity has neither think nor use left (HLSDK CMonsterMaker::MakeMonster
- * clears both when its count runs out). */
+/* A monstermaker has spawned all it will: its record is killed, or it has
+ * neither think nor use left (HLSDK CMonsterMaker::MakeMonster clears both
+ * when its count runs out): a logic record asks the game, an entity
+ * spawner its own think / use. */
 static int spawner_done(gid_t16 g)
 {
 	int e;
 
 	if (rec_state(g) == REC_KILLED)
 		return 1;
+	if (rec_kind(g) == REC_KIND_LOGIC)
+		return game_spawner_done(g);
 	if ((e = rec_entity(g)) < 0)
 		return 0;
 	return !ent_tm(e)->think && !ent_tm(e)->use;
@@ -616,15 +619,18 @@ static int spawner_done(gid_t16 g)
 
 /* A record of the name is gone: killed, or its live entity is no longer
  * there physically (SOLID_NOT). GoldSrc keeps entities that share a
- * breakable's name but have no body (ambient_generic, env_sprite, a
- * toggled-off trigger) in the map for good; a pending or dry record is
- * not gone (the route never hydrates). */
+ * breakable's name but have no body (ambient_generic, env_sprite,
+ * env_shake, a toggled-off trigger) in the map for good, SOLID_NOT: a
+ * logic or point record (no entity, no body) is gone in the same way. A
+ * pending or dry record is not gone (the route never hydrates). */
 static int rec_gone(gid_t16 g)
 {
-	int e;
+	int e, st = rec_state(g);
 
-	if (rec_state(g) == REC_KILLED)
+	if (st == REC_KILLED)
 		return 1;
+	if (rec_kind(g) != REC_KIND_ENTITY)
+		return st == REC_LIVE;
 	if ((e = rec_entity(g)) < 0)
 		return 0;
 	return !alive(e) || ent_cv(e)->solid == COL_SOLID_NOT;
@@ -860,7 +866,7 @@ void rt_frame(double time)
 
 			if (!home)
 				fail("home map differs");
-			if (phy_player_spawn((int)b, org, ang))
+			if (phy_player_setpos((int)b, org, ang))
 				fail("setpos refused");
 			/* a test-only teleport: the destination's records hydrate
 			 * in the next frames; their blocked frames count apart

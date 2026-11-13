@@ -1,0 +1,36 @@
+# hl64 M5 checkpoint oracle: hazard (test/m5/checkpoints.py oracle; old tree, black box)
+# cfg: ~/src/ports/quakegeneric/n64/port/test/out/hl-walk-t0a0_.cfg sha256 a94d56d7225badcc947c234c16419da87aa901f6f64aabdae79871186923aa8e
+# log: ~/src/ports/quakegeneric/n64/port/test/out/hl-walk-t0a0_.log (route PASS (74.8 s))
+# run: n64/port/test/run_hl_walk_host.sh MAPS='t0a0*' 2026-10-16 (the walk test/routes/hazard.route was converted from)
+cp waitmap t0a0
+cp stats t0a0
+cp stats t0a0-walked
+cp waitmap t0a0a
+switch t0a0 t0a0a
+cp stats t0a0a
+cp stats t0a0a-walked
+cp waitmap t0a0b1
+switch t0a0a t0a0b1
+cp stats t0a0b1
+cp stats t0a0b1-walked
+cp waitmap t0a0b2
+switch t0a0b1 t0a0b2
+cp stats t0a0b2
+cp stats t0a0b2-walked
+cp waitmap t0a0c
+switch t0a0b2 t0a0c
+cp stats t0a0c
+cp stats t0a0c-walked
+cp waitmap t0a0b
+switch t0a0c t0a0b
+cp stats t0a0b
+cp stats t0a0b-walked
+cp waitmap t0a0c
+switch t0a0b t0a0c
+cp stats t0a0c
+cp stats t0a0c-walked
+cp waitmap t0a0d
+switch t0a0c t0a0d
+cp stats t0a0d
+cp stats t0a0d-walked
+cp pass
