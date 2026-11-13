@@ -345,6 +345,33 @@ int ent_sets_next(int from, int all)
 	return -1;
 }
 
+int ent_next_live(int after)
+{
+	int from = after < 0 ? 0 : after + 1, w;
+
+	if (from >= HL64_MAX_ENTITIES)
+		return -1;
+	for (w = from >> 5; w < ENT_WORDS; w++)
+	{
+		uint32_t b = H.live[w];
+
+		if (w == from >> 5)
+			b &= ~0u << (from & 31);
+		if (b)
+		{
+			int i = w << 5;
+
+			while (!(b & 1))
+			{
+				b >>= 1;
+				i++;
+			}
+			return i < HL64_MAX_ENTITIES ? i : -1;
+		}
+	}
+	return -1;
+}
+
 int ent_movers_count(void)
 {
 	int w, n = 0;
