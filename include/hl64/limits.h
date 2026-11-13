@@ -25,13 +25,15 @@
  * Host heap arena (plat/host/heap_host.c): the cart's free heap after the
  * carve, measured from the HL64_TEST ROM's "mem: heap free" boot line in
  * ares, so post-boot allocations fit or fail as on the cart. The host
- * runs with cooked content, so it mirrors a ROM carrying it: image 1462
- * KB, carve 3118 KB, and libdragon's DFS lookup table (malloc'd at mount,
- * ~16 B per file: 20 KB for the 1228-file Uplink + Hazard cook) give 2791
- * KB, PROFILE or not. The M0 ROM has no DFS: 2811 KB there (m0.sh's drift
- * note). test/run/m3.sh --ares fails when host and cart differ.
+ * runs with cooked content, so it mirrors a ROM carrying it: image, carve
+ * and libdragon's DFS lookup table (malloc'd at mount, ~16 B per file: 20
+ * KB for the ~1230-file Uplink + Hazard cook). main 9b3b5a0, m3-a PROFILE
+ * ROM: image 1475 KB, carve 3118 KB -> 2778 KB (at a7c1783's image 1462
+ * KB it was 2791, PROFILE or not). The M0 ROM has no DFS: 20 KB more
+ * there (m0.sh's drift note). Code growth moves it: test/run/m3.sh --ares
+ * fails when host and cart differ, naming the cart's value.
  */
-#define HL64_HOST_HEAP_KB		2791
+#define HL64_HOST_HEAP_KB		2778
 
 /* Image (code + data + bss) budget, 4.1 first row; boot logs the size. */
 #define HL64_IMAGE_BUDGET_KB		900
@@ -140,7 +142,11 @@
  * + 10 open wav64 (state, codebook); x 1.25 = 97680 B. */
 #define HL64_SOUND_KB			96
 #define HL64_SPRITE_CACHE_KB		64
-#define HL64_DECAL_TEXELS_KB		68	/* measured (ares, m3-a): 51.7 KB peak (sheet + 96 x 24 piece vertices) x 1.25 = 64.6 KB */
+/* Decal region: HLSDK sheet (29856 B) + 96 x 24 piece vertices (23040 B)
+ * + 2 per-map placed-decal (infodecal) sheet slots of the largest map's
+ * size; cook-proved (hleids --check). Retail need 86528 B (largest map
+ * c2a1 16816 B) x 1.25 = 108160 B; Uplink need 76672 B. */
+#define HL64_DECAL_TEXELS_KB		106
 #define HL64_PARTICLES_KB		12
 #define HL64_DLIGHT_KB			48	/* dlight scratch + flashlight pool */
 #define HL64_HUD_KB			128	/* [EST] HUD sheets + font */

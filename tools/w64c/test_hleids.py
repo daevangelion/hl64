@@ -15,13 +15,15 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import struct
 import subprocess
 import tempfile
 import unittest
 
-from tools.restab import rtb
+from tools.cook import decals
+from tools.restab import restab, rtb
 from tools.w64c import hleids
 from tools.w64c.test_hlecook import CFLAGS, HERE, bsp
 
@@ -43,7 +45,15 @@ ENTS = (b'{\n"classname" "worldspawn"\n"chaptertitle" "T0A0TITLE"\n}\n'
         b'{\n"classname" "monstermaker"\n"monstertype" "monster_barney"\n'
         b'"targetname" "mk"\n}\n'
         b'{\n"classname" "scripted_sequence"\n"m_iszEntity" "monster_barney"\n'
-        b'"targetname" "seq"\n}\n\0')
+        b'"targetname" "seq"\n}\n'
+        b'{\n"classname" "infodecal"\n"texture" "{BIGSHOT2"\n"origin" "1 2 3"\n}\n'
+        b'{\n"classname" "infodecal"\n"texture" "{oil1"\n"targetname" "d"\n'
+        b'"origin" "4 5 6"\n}\n'
+        b'{\n"classname" "infodecal"\n"texture" "{capsa"\n"origin" "7 8 9"\n}\n'
+        b'{\n"classname" "infodecal"\n"texture" "{nosuch"\n"origin" "0 0 1"\n}\n'
+        b'{\n"classname" "env_glow"\n"model" "sprites/glow01.spr"\n"origin" "0 8 0"\n'
+        b'"rendermode" "3"\n"renderamt" "128"\n"rendercolor" "255 200 100"\n'
+        b'"renderfx" "14"\n"scale" "0.5"\n"framerate" "10"\n}\n\0')
 
 
 def table() -> rtb.Table:
@@ -51,10 +61,11 @@ def table() -> rtb.Table:
     t.class_names = ["worldspawn", "info_player_start", "func_door", "monster_scientist",
                      "ambient_generic", "speaker", "scripted_sentence", "light",
                      "env_global", "env_message", "monstermaker", "scripted_sequence",
-                     "monster_barney"]
-    t.res = [rtb.ResEntry(rtb.KIND_MODEL, 0, 0, 0, 1), rtb.ResEntry(rtb.KIND_SOUND, 0, 1, 0, 1),
-             rtb.ResEntry(rtb.KIND_SOUND, 0, 2, 0, 1)]
-    t.res_names = ["models/scientist.mdl", "ambience/hum.wav", "vox/hello.wav"]
+                     "infodecal", "env_glow", "monster_barney"]
+    t.res = [rtb.ResEntry(rtb.KIND_MODEL, 0, 0, 0, 1), rtb.ResEntry(rtb.KIND_SPRITE, 0, 3, 0, 1),
+             rtb.ResEntry(rtb.KIND_SOUND, 0, 1, 0, 1), rtb.ResEntry(rtb.KIND_SOUND, 0, 2, 0, 1)]
+    t.res_names = ["models/scientist.mdl", "sprites/glow01.spr", "ambience/hum.wav",
+                   "vox/hello.wav"]
     t.sentences = [(0, 1), (0, 1), (0, 1)]
     t.sentence_names = ["FAR_WAR0", "FAR_WAR1", "SC_HELLO"]
     t.groups = [(0, 2), (2, 1)]
@@ -135,9 +146,42 @@ class HleIds(unittest.TestCase):
         self.assertEqual(keys[(8, "globalstate")], 0)
         self.assertEqual(keys[(9, "message")], 0)        # title DEMOTXT1
         self.assertEqual(keys[(0, "chaptertitle")], 1)   # title T0A0TITLE
-        self.assertEqual(keys[(10, "monstertype")], 12)  # monster_barney
-        self.assertEqual(keys[(11, "m_iszEntity")], 12)
+        self.assertEqual(keys[(10, "monstertype")], 14)  # monster_barney
+        self.assertEqual(keys[(11, "m_iszEntity")], 14)
         self.assertEqual(keys[(1, "origin")], hleids.NONE)
+        # the env_glow keeps HLSDK CGlow's keys; its sprite gets its res_t
+        self.assertEqual(keys[(16, "model")], rtb.res_t(rtb.KIND_SPRITE, 0))
+        for k in ("origin", "rendermode", "renderamt", "rendercolor", "renderfx", "scale",
+                  "framerate"):
+            self.assertEqual(keys[(16, k)], hleids.NONE)
+        # infodecal textures without the map's DECL names: global ones only
+        self.assertEqual(keys[(12, "texture")], decals.DECAL_NAMES.index("{bigshot2"))
+        self.assertEqual(keys[(13, "texture")], hleids.NONE)
+        self.assertEqual(keys[(12, "origin")], hleids.NONE)
+
+    def test_decal_ids(self) -> None:
+        """infodecal `texture`: the global sheet's entry, else 42 + the
+        entry of the map's DECL sheet (sorted textures decals.wad has);
+        a texture decals.wad lacks gets no id (HLSDK CDecal removes it)"""
+        tex = hleids.decal_textures(self.blob, "m")
+        self.assertEqual(tex, ["{bigshot2", "{oil1", "{capsa", "{nosuch"])
+        local, absent = hleids.map_decals(tex, {"{bigshot2", "{oil1", "{capsa", "{shot1"})
+        self.assertEqual((local, absent), (["{capsa", "{oil1"], ["{nosuch"]))
+        keys, _c, _kn, _f = self.parse(hleids.apply(self.blob, self.ids.for_map(local), "m"))
+        self.assertEqual(keys[(12, "texture")], decals.DECAL_NAMES.index("{bigshot2"))
+        self.assertEqual(keys[(13, "texture")], decals.GLOBAL_COUNT + 1)
+        self.assertEqual(keys[(14, "texture")], decals.GLOBAL_COUNT + 0)
+        self.assertEqual(keys[(15, "texture")], hleids.NONE)
+        # infodecal with and without targetname are both kept (HLSDK CDecal)
+        self.assertIn((13, "texture"), keys)
+        # the engine's constants (engine/ent/rec_int.h) match the cook's
+        rec_int = hleids.DEFAULT_REC_INT
+        self.assertEqual(restab.read_limit(rec_int, "REC_DECALS_GLOBAL"), decals.GLOBAL_COUNT)
+        self.assertEqual(restab.read_limit(rec_int, "REC_DECALS_MAP_MAX"), decals.SHEET_MAX)
+        with open(rec_int) as f:
+            src = f.read()
+        self.assertIn(f"REC_DECL_FOURCC\t\t0x{int.from_bytes(decals.DECL, 'big'):08X}u", src)
+        self.assertIn(f"REC_DECL_MAGIC\t\t0x{decals.SHEET_MAGIC:08X}u", src)
 
     def test_only_id_fields_change_and_idempotent(self) -> None:
         out = hleids.apply(self.blob, self.ids, "m")
@@ -168,19 +212,22 @@ class HleIds(unittest.TestCase):
         with self.assertRaises(hleids.IdError):
             hleids.apply(self.blob, ids, "m")
 
-    def test_missing_title_class_sentence_are_none(self) -> None:
+    def test_missing_title_class_sentence_sound_are_none(self) -> None:
         """titles.txt lacks it / the game lacks the class / restab dropped
-        a sentence or group whose sounds are all missing: no id"""
+        a sentence or group whose sounds are all missing / the player's data
+        lacks a keyed sound (restab tables it absent): no id"""
         t = table()
         t.group_names[0] = "X"
         t.sentence_names[2] = "X"
         t.titles, t.title_names = [], []
         t.class_names = t.class_names[:-1]
+        t.res_names[2] = "ambience/x.wav"
         keys, cls, _kn, _f = self.parse(hleids.apply(self.blob, hleids.Ids.from_table(t, keys_def()), "m"))
         self.assertEqual(keys[(9, "message")], hleids.NONE)
         self.assertEqual(keys[(10, "monstertype")], hleids.NONE)
         self.assertEqual(keys[(5, "message")], hleids.NONE)
         self.assertEqual(keys[(6, "sentence")], hleids.NONE)
+        self.assertEqual(keys[(4, "message")], hleids.NONE)
 
     def test_malformed_chunks(self) -> None:
         for bad in (b"", self.blob[:50], b"HLX1" + self.blob[4:],
@@ -207,10 +254,16 @@ class HleIds(unittest.TestCase):
         self.assertEqual(names, keys_def()[:len(names)])
         self.assertEqual(len(names), len(keys_def()))
 
-    def limits(self, kb: int) -> str:
-        path = os.path.join(self.tmp, f"limits{kb}.h")
+    def limits(self, name: str, kb: int) -> str:
+        """include/hl64/limits.h with one KB define changed"""
+        with open(os.path.join(ROOT, "include", "hl64", "limits.h")) as f:
+            text = f.read()
+        text, n = re.subn(r"^(#define\s+" + name + r"\s+)\d+", lambda m: m.group(1) + str(kb),
+                          text, flags=re.M)
+        self.assertEqual(n, 1)
+        path = os.path.join(self.tmp, f"limits-{name}-{kb}.h")
         with open(path, "w") as f:
-            f.write(f"#define HL64_HLE_BLOBS_KB\t{kb}\t/* test */\n")
+            f.write(text)
         return path
 
     def test_hle_region_accounting(self) -> None:
@@ -244,29 +297,34 @@ class HleIds(unittest.TestCase):
         rt, logic, tables = hleids.accounting(hleids.DEFAULT_REC_INT)
         r = hleids.hle_region([hleids.slot_bytes("m", self.blob, rt, logic)], tables)
         with self.assertRaisesRegex(hleids.IdError, r"HLE region need \d+ B .* exceeds HL64_HLE_BLOBS_KB"):
-            hleids.check_region(r, self.limits((r.total - 1) // 1024))
-        self.assertEqual(hleids.check_region(r, self.limits((r.total + 1023) // 1024)),
+            hleids.check_region(r, self.limits("HL64_HLE_BLOBS_KB", (r.total - 1) // 1024))
+        self.assertEqual(hleids.check_region(r, self.limits("HL64_HLE_BLOBS_KB",
+                                                            (r.total + 1023) // 1024)),
                          (r.total + 1023) // 1024 * 1024)
         hleids.check_region(r, os.path.join(ROOT, "include", "hl64", "limits.h"))
 
     def test_hle_region_real_cook(self) -> None:
-        """the cooked campaign (HL64_CONTENT) fits limits.h's carve, and the
-        largest whole-KB carve below its need fails --check"""
+        """the cooked campaign (HL64_CONTENT) fits limits.h's HLE and decal
+        carves, and the largest whole-KB carve below either need fails
+        --check"""
         content = os.environ.get("HL64_CONTENT")
         if not content:
             self.skipTest("HL64_CONTENT not set")
         defs = os.path.join(ROOT, "game", "defs")
-        fails, r = hleids.check(content, defs)
+        fails, r, d = hleids.check(content, defs)
         self.assertEqual(fails, [])
-        self.assertIsNotNone(r)
-        assert r is not None
-        tight = self.limits((r.total - 1) // 1024)
-        fails, _ = hleids.check(content, defs, tight)
-        self.assertEqual(len(fails), 1)
-        self.assertIn("exceeds HL64_HLE_BLOBS_KB", fails[0])
-        with open(os.devnull, "w") as null, contextlib.redirect_stderr(null), \
-                contextlib.redirect_stdout(null):
-            self.assertEqual(hleids.main(["--check", content, "--defs", defs, "--limits", tight]), 1)
+        assert r is not None and d is not None
+        for name, need, what in (("HL64_HLE_BLOBS_KB", r.total, "HLE region"),
+                                 ("HL64_DECAL_TEXELS_KB", d.total, "decal region")):
+            tight = self.limits(name, (need - 1) // 1024)
+            fails, _r, _d = hleids.check(content, defs, tight)
+            self.assertEqual(len(fails), 1)
+            self.assertIn(f"{what} need {need} B", fails[0])
+            self.assertIn(f"exceeds {name}", fails[0])
+            with open(os.devnull, "w") as null, contextlib.redirect_stderr(null), \
+                    contextlib.redirect_stdout(null):
+                self.assertEqual(hleids.main(["--check", content, "--defs", defs,
+                                              "--limits", tight]), 1)
 
 
 if __name__ == "__main__":

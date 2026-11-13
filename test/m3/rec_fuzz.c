@@ -99,8 +99,8 @@ static int hle_once(const uint8_t *src, uint32_t n, const rec_limits_t *lim)
 }
 
 /* the limits rec.c hands rec_hle_check, as res_install takes them from the
- * campaign.rtb (KIND counts, PATN / GLOB / CLAS / TITL); nsub: the format's
- * bound (the ENTS chunk alone has no layer) */
+ * campaign.rtb (KIND counts, PATN / GLOB / CLAS / TITL); nsub and the
+ * decal ids: the format's bounds (the ENTS chunk alone has no layer) */
 static int rtb_limits(const uint8_t *src, uint32_t n, rec_limits_t *lim)
 {
 	rtb_dir_t d;
@@ -119,6 +119,7 @@ static int rtb_limits(const uint8_t *src, uint32_t n, rec_limits_t *lim)
 	for (k = 0; k < 8; k++)
 		lim->kcount[k] = (uint32_t)kind[4 * k] << 8 | kind[4 * k + 1];
 	lim->nsub = 1024;
+	lim->ndecals = REC_DECALS_GLOBAL + REC_DECALS_MAP_MAX;
 	return 0;
 }
 

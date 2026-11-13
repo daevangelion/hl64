@@ -187,7 +187,7 @@ Peaks are one-map values; M4 re-measures every region with two layers.
 
 | region | hl64 KB (carve) | M3 peak (use) | old tree | basis |
 |---|---:|---:|---:|---|
-| code + data + bss | ≤ 900 | not reported | 1428 **measured** (HL cart ELF) | [EST] the old ELF carries the Quake engine and the QuakeC translations |
+| code + data + bss (cart image) | ≤ 900 **OVER** | 1475 KB cart image **measured** (M3Lead2) | 1428 **measured** (HL cart ELF) | flagged OVER until M3Lead2 reports the top contributors. `HL64_HOST_HEAP_KB` is now derived at build time from the cart image size, so the host heap tracks the cart's |
 | framebuffers ×2 + Z | 450 | — | 450 | measured |
 | rspq / tiny3d / matrices | 96 | not reported | (in heap) | [EST] |
 | render / texture / collision pools | 240 / 128 / 208 | 117 KB (49%) / 99 KB (77%) / 55 KB (26%) | 240 / 128 / 208 | cook-proved worst sets (SA2 §8); **measured** one layer |
@@ -196,7 +196,7 @@ Peaks are one-map values; M4 re-measures every region with two layers.
 | studio skinned-mesh tables, view model scratch | 192 | not reported | 256 heap reserve | [EST] |
 | entity components | 134 | 137168 of 137216 B (100%) | edicts 495 × 884 = 427 | **measured**, exact by construction: 495 × 228 B + 24308 B grid nodes, membership pool, touch rank, free times |
 | game private data | 160 | 30.6 KB (19%), 98 live entities | (inside the edicts) | **measured** ≈ 320 B per live entity; at the 495 cap ≈ 155 KB, so 160 stays |
-| HLE slots | 160 | 77.9 KB (49%) for **one** map | 72 KB text + 13–19 KB keys per map | **measured**: hldemo1 chunk 48912 + runtime 14278 B = one 63190 B slot block, plus 16592 B shared tables. 160 KB holds **2** such slots, not 4; M4 sizing below |
+| HLE slots | 192 | 77.9 KB for **one** map (m3-a) | 72 KB text + 13–19 KB keys per map | **measured**: hldemo1 chunk 48912 + runtime 14278 B = one 63190 B resident slot, 67702 B while opening, plus ≈ 16.3 KB shared tables; 160 KB held 2 slots, not 4; cook-checked need below |
 | dehydrate store | 64 | 0 (no crossing in m3-a) | similar | M4 measures |
 | resource table + pattern table | 56 | 43.5 KB (78%) | precache name tables, sfx names | **measured** (the earlier 12 KB counted the 12 B entries only) |
 | sentence table (cooked) | 24 | not reported | parsed text | [EST] |
@@ -217,10 +217,8 @@ peak × 1.25 (M4 for two layers, M6 for the full route). Region use above
 90% (decals) or a peak × 1.25 over the carve is a gate failure.
 
 **HLE slots for M4** (2 geometry layers + up to 4 HLE slots, 5.3). Four
-full slots need 4 × (largest chunk + runtime) + tables: the largest cooked
-HLE1 of the 106 retail maps is 50728 B (c2a5f; hldemo1 48516 B is second),
-so ≈ 4 × 65 KB + 16 KB ≈ 276 KB. hl64 instead defines what a closing map
-keeps:
+full slots would need ≈ 4 × 65 KB + 16 KB ≈ 276 KB. hl64 instead defines
+what a closing map keeps:
 
 - **Open** map (geometry layer resident): full slot, chunk + runtime.
 - **Frozen** map (closed with frozen timers or logic still referenced):
@@ -228,13 +226,18 @@ keeps:
   name→record index a cross-map fire or timer callback can reach (the
   cook puts those in the runtime part). The chunk (immutable cooked
   records and keys) is dropped and re-read from the cart when the map
-  reopens: ≤ 50 KB on the OPEN DMA priority in the approach window, before
+  reopens: ≈ 50 KB on the OPEN DMA priority in the approach window, before
   any of its records can hydrate (no record of a closed map can).
-- Carve = 2 × (max chunk + max runtime) + 2 × max runtime + tables
-  ≈ 2 × (49.5 + 14.6) + 2 × 14.6 + 16.2 ≈ **174 KB → 192 KB** (+32 KB;
-  limits.h change owed for M4), with runtime ≈ 32 B per record (hldemo1:
-  14278 B / 447 records); the cook computes the formula for its campaign
-  and fails if it exceeds the carve.
+- **Cook check** (`hleids`, measured by M3Lead2): need = shared tables +
+  the **opening** map at its open-time need (the heap must hold it while
+  it opens: hldemo1 67702 B, not its resident 63190 B) + one open map's
+  resident slot + 2 × frozen runtime, each 16-aligned, over the worst maps
+  of the campaign. Measured need: Uplink + Hazard **176176 B** (tables
+  16688 + opening hldemo1 67702 + open hldemo1 63190 + 2 × 14278); 83
+  retail campaign maps **185184 B**; worst single map c2a5f **182944 B**
+  (its chunk is 51472 B). All fit the **192 KB** carve (196608 B,
+  `HL64_HLE_BLOBS_KB`); the cook fails any campaign over it. Evidence:
+  `/scratch/hl64/tmp/M3Lead2/cook4.log`, `/scratch/hl64/tmp/Rec/retail/`.
 
 ### 4.2 CPU per frame (33.3 ms at 30 fps)
 

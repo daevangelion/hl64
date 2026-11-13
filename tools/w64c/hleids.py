@@ -10,7 +10,8 @@ of the layout:
   keyname table  id = keys.def line order of the key name (exact; a key
                  name the cook keeps and keys.def lacks is an error)
   key values     HLE_KS: res_t of a resource value (a model / sprite /
-                 sound name as restab tables it, `*N` -> RES_K_SUBMODEL
+                 sound name as restab tables it; 0xFFFF for a sound the
+                 player's data lacks, `*N` -> RES_K_SUBMODEL
                  index N, `!NAME` in a sentence key -> RES_K_SENTENCE, a
                  speaker's `message` or a talk monster's UseSentence /
                  UnUseSentence group name -> RES_K_GROUP), the lightstyle
@@ -43,10 +44,11 @@ import os
 import re
 import struct
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Container, Dict, List, Optional, Sequence, Tuple
 
+from tools.cook import decals
 from tools.restab import restab, rtb
 
 HLE_MAGIC = 0x31454C48
@@ -95,6 +97,7 @@ class Ids:
     patterns: Dict[bytes, int] = field(default_factory=dict)  # letters a-z -> id
     globals_: Dict[str, int] = field(default_factory=dict)
     titles: Dict[str, int] = field(default_factory=dict)      # upper-case
+    decals: Dict[str, int] = field(default_factory=dict)      # lower-case -> decal id (one map)
 
     @classmethod
     def from_table(cls, t: rtb.Table, keys: Sequence[str]) -> "Ids":
@@ -115,7 +118,58 @@ class Ids:
         ids.globals_ = {n: i for i, n in enumerate(t.global_names)}
         for i, n in enumerate(t.title_names):
             ids.titles.setdefault(n.upper(), i)
+        ids.decals = {n: i for i, n in reversed(list(enumerate(decals.DECAL_NAMES)))}
         return ids
+
+    def for_map(self, local: Sequence[str]) -> "Ids":
+        """These ids with one map's decal ids: the global sheet's names
+        (decals.DECAL_NAMES, from_table) and the map's DECL sheet names
+        `local` (id = len(DECAL_NAMES) + index)."""
+        d = dict(self.decals)
+        for i, n in enumerate(local):
+            d.setdefault(n, decals.GLOBAL_COUNT + i)
+        return replace(self, decals=d)
+
+
+def decal_textures(blob: bytes, where: str = "") -> List[str]:
+    """The `texture` values (lower case) of the chunk's infodecal records,
+    in record order."""
+    if len(blob) < HLE_HDR or struct.unpack_from("<I", blob)[0] != HLE_MAGIC:
+        raise IdError(f"{where}: not a little-endian HLE1 chunk")
+    (_m, _v, _f, size, _s, _nl, numrecs, numclasses, numkeynames, _nn, _hs, numkeys,
+     _nll, _nfire, _nfl, strsize, _nse) = struct.unpack_from("<IHHIIHHHHHHIIIIII", blob)
+    (o_recs, _l2r, o_cls, o_kn, _o_names, _o_hash, o_keys, _o_ll, _o_fire,
+     _o_fl, o_str) = struct.unpack_from("<11I", blob, 52)
+    if size > len(blob):
+        raise IdError(f"{where}: HLE1 size outside the chunk")
+    for ofs, n, elt, what in ((o_recs, numrecs, HLE_REC, "records"), (o_cls, numclasses, 8, "classes"),
+                              (o_kn, numkeynames, 8, "keynames"), (o_keys, numkeys, 8, "keys"),
+                              (o_str, strsize, 1, "strings")):
+        _section(size, ofs, n, elt, what)
+
+    def s_at(ofs: int, what: str) -> str:
+        return _cstr(blob, o_str, strsize, ofs, f"{where}: {what}")
+    cls = {i for i in range(numclasses)
+           if s_at(struct.unpack_from("<I", blob, o_cls + 8 * i)[0], f"class {i}").lower() == "infodecal"}
+    tex = {i for i in range(numkeynames)
+           if s_at(struct.unpack_from("<I", blob, o_kn + 8 * i)[0], f"keyname {i}") == "texture"}
+    out = []
+    for r in range(numrecs):
+        _lump, c, _tn, _fl, kf, kc = struct.unpack_from("<6H", blob, o_recs + HLE_REC * r)
+        if c not in cls or kf + kc > numkeys:
+            continue
+        for k in range(kf, kf + kc):
+            kn, _id, v = struct.unpack_from("<HHI", blob, o_keys + 8 * k)
+            if kn in tex:
+                out.append(s_at(v, f"record {r} texture").lower())
+    return out
+
+
+def map_decals(textures: Sequence[str], in_wad: Container[str]) -> Tuple[List[str], List[str]]:
+    """(the map's DECL sheet names: the textures outside the global sheet
+    that decals.wad has, sorted; the textures decals.wad lacks, sorted)."""
+    rest = {t for t in textures if decals.global_id(t) < 0}
+    return sorted(t for t in rest if t in in_wad), sorted(t for t in rest if t not in in_wad)
 
 
 def _cstr(blob: bytes, base: int, size: int, ofs: int, what: str) -> str:
@@ -210,7 +264,11 @@ def apply_typed(blob: bytes, ids: Ids, where: str = "") -> Tuple[bytes, List[Tup
 
 def typed(key: str, v: str, cname: str, preset: bool, ids: Ids, at: str) -> Tuple[str, int]:
     """(type, id) of one string value (restab's naming rules); type "res",
-    "pattern", "global" or "title"."""
+    "pattern", "global", "title" or "decal"."""
+    if key == "texture" and cname == "infodecal":
+        # global sheet entry or the map's DECL entry; none: decals.wad lacks
+        # it (HLSDK CDecal::Spawn removes the entity)
+        return "decal", ids.decals.get(v.lower(), NONE)
     if key == "pattern":
         if v.encode("latin-1") not in ids.patterns:
             raise IdError(f"{at}: pattern {v!r} not in the pattern table")
@@ -222,8 +280,8 @@ def typed(key: str, v: str, cname: str, preset: bool, ids: Ids, at: str) -> Tupl
     if (key, cname) in (("message", "env_message"), ("chaptertitle", "worldspawn")):
         return "title", ids.titles.get(v.upper(), NONE)
     if key in restab.SENTENCE_KEYS and v.startswith("!") and len(v) > 1:
-        # restab stops on names sentences.txt lacks; one missing here lost
-        # every word to missing sounds (GoldSrc plays nothing)
+        # one missing here is absent from the player's sentences.txt or
+        # lost every word to missing sounds (GoldSrc plays nothing)
         return "res", ids.sentences.get(v[1:].upper(), NONE)
     if key == "monstertype":
         return "cls", ids.classes.get(v.lower(), NONE)
@@ -237,12 +295,36 @@ def typed(key: str, v: str, cname: str, preset: bool, ids: Ids, at: str) -> Tupl
     rk = restab.res_kind_of_value(v)
     if rk is not None:
         if rk not in ids.res:
+            # restab tables every keyed sound the content holds: one it lacks
+            # is missing from the player's data (absent, no id)
+            if rk[0] == rtb.KIND_SOUND:
+                return "res", NONE
             raise IdError(f"{at}: {rtb.KIND_NAMES[rk[0]]} {rk[1]!r} not in the table")
         return "res", ids.res[rk]
     return "res", NONE
 
 
 # ---- check (after restab) -----------------------------------------------------
+
+def w64_chunk(b: bytes, fourcc: bytes, where: str) -> Optional[bytes]:
+    """The first chunk of that kind in a .w64 (DECL: found by fourcc), or None."""
+    if len(b) < 16 or b[:4] != b"W64L":
+        raise IdError(f"{where}: not a W64L package")
+    dofs = struct.unpack_from(">I", b, 12)[0]
+    if dofs > len(b) - 56:
+        raise IdError(f"{where}: directory outside the file")
+    nchunks = struct.unpack_from(">H", b, dofs + 10)[0]
+    cd = dofs + struct.unpack_from(">I", b, dofs + 16)[0]
+    if cd > len(b) - 16 * nchunks:
+        raise IdError(f"{where}: chunk directory outside the file")
+    for i in range(nchunks):
+        fcc, o, sz, _crc = struct.unpack_from(">4sIII", b, cd + 16 * i)
+        if fcc == fourcc:
+            if o > len(b) or sz > len(b) - o:
+                raise IdError(f"{where}: {fourcc.decode()} chunk outside the file")
+            return b[o:o + sz]
+    return None
+
 
 def w64_ents(b: bytes, where: str) -> bytes:
     if len(b) < 16 or b[:4] != b"W64L":
@@ -346,18 +428,31 @@ def accounting(rec_int: str) -> Tuple[int, int, int]:
 
 
 def check(content: str, defs: str, limits: str = restab.DEFAULT_LIMITS,
-          rec_int: str = DEFAULT_REC_INT) -> Tuple[List[str], Optional[Region]]:
+          rec_int: str = DEFAULT_REC_INT
+          ) -> Tuple[List[str], Optional[Region], Optional[decals.Region]]:
     """Every map chunk of content/campaign.rtb carries exactly the ids the
     final table gives (the prepass agreed), and every res_t resolves to an
     entry whose byte range lies inside its cart file (R2); the DEFS ids
-    too; the HLE region need of the campaign's chunks fits
-    HL64_HLE_BLOBS_KB. Returns failures and the region need."""
+    too; every infodecal texture id names its texture in the global sheet
+    or the map's DECL sheet, which holds only those textures; the HLE region
+    need of the campaign's chunks fits HL64_HLE_BLOBS_KB and the decal
+    region need HL64_DECAL_TEXELS_KB. Returns failures and both needs."""
     with open(os.path.join(content, "campaign.rtb"), "rb") as f:
         t = rtb.read(f.read())
     ids = Ids.from_table(t, read_keys_def(defs))
     rt_bytes, logic_bytes, tables = accounting(rec_int)
     fails: List[str] = []
     slots: List[Slot] = []
+    decl_sizes: Dict[str, int] = {}
+    gpath = os.path.join(content, "gsfx", "decals.i4")
+    try:
+        with open(gpath, "rb") as f:
+            gsheet = f.read()
+        if decals.sheet_names(gsheet, gpath) != list(decals.DECAL_NAMES):
+            fails.append(f"{gpath}: entries are not the HLSDK decals.h order")
+    except (OSError, decals.DecalError) as e:
+        fails.append(str(e))
+        gsheet = b""
     counts = {k: t.kind_count(k) for k in range(8)}
 
     def res_ok(r: int, at: str) -> None:
@@ -381,10 +476,19 @@ def check(content: str, defs: str, limits: str = restab.DEFAULT_LIMITS,
         path = os.path.join(content, fe.path)
         try:
             with open(path, "rb") as f:
-                blob = w64_ents(f.read(), path)
-            again, written = apply_typed(blob, ids, name)
+                pkg = f.read()
+            blob = w64_ents(pkg, path)
+            decl = w64_chunk(pkg, decals.DECL, path)
+            local = decals.sheet_names(decl, f"{name} DECL") if decl is not None else []
+            want = sorted({x for x in decal_textures(blob, name) if decals.global_id(x) < 0})
+            if local != sorted(set(local)) or not set(local) <= set(want):
+                fails.append(f"{name}: DECL entries {local} are not the map's own "
+                             f"textures outside the global sheet {want}, sorted")
+            if decl is not None:
+                decl_sizes[name] = len(decl)
+            again, written = apply_typed(blob, ids.for_map(local), name)
             slots.append(slot_bytes(name, blob, rt_bytes, logic_bytes))
-        except (IdError, OSError, struct.error) as e:
+        except (IdError, decals.DecalError, OSError, struct.error) as e:
             fails.append(f"{name}: {e}")
             continue
         size = struct.unpack_from("<I", blob, 8)[0]
@@ -404,13 +508,22 @@ def check(content: str, defs: str, limits: str = restab.DEFAULT_LIMITS,
                 fails.append(f"{at}: class id {tid}")
             elif ty == "res":
                 res_ok(tid, at)
+            elif ty == "decal" and tid >= decals.GLOBAL_COUNT + len(local):
+                fails.append(f"{at}: decal id {tid}")
     region = hle_region(slots, tables) if slots else None
     if region:
         try:
             check_region(region, limits)
         except IdError as e:
             fails.append(str(e))
-    return fails, region
+    dregion = None
+    if gsheet:
+        dregion = decals.region_need(len(gsheet), decl_sizes, limits)
+        try:
+            decals.check_region(dregion, limits)
+        except decals.DecalError as e:
+            fails.append(str(e))
+    return fails, region, dregion
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -424,25 +537,38 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="include/hl64/limits.h (HL64_HLE_BLOBS_KB)")
     ap.add_argument("--rec-int", default=DEFAULT_REC_INT,
                     help="engine/ent/rec_int.h (REC_RT_BYTES, REC_LOGIC_BYTES, REC_TABLE_BYTES)")
+    ap.add_argument("--decals-wad", type=Path, default=None,
+                    help="decals.wad: map-sheet textures it lacks get no decal id "
+                         "(default: every texture counts as present)")
     a = ap.parse_args(argv)
     try:
         if a.check:
-            fails, region = check(a.check, a.defs, a.limits, a.rec_int)
+            fails, region, dregion = check(a.check, a.defs, a.limits, a.rec_int)
             for f in fails:
                 print(f"hleids: FAIL {f}", file=sys.stderr)
             if region and not fails:
                 kb = restab.read_limit(a.limits, "HL64_HLE_BLOBS_KB")
                 print(f"hleids: HLE region need {region.total} B of HL64_HLE_BLOBS_KB {kb} "
                       f"({kb * 1024} B): {describe(region)}")
+            if dregion and not fails:
+                kb = restab.read_limit(a.limits, "HL64_DECAL_TEXELS_KB")
+                print(f"hleids: decal region need {dregion.total} B of HL64_DECAL_TEXELS_KB {kb} "
+                      f"({kb * 1024} B): {decals.describe(dregion)}")
             print(f"hleids: check {a.check}: {'FAIL' if fails else 'ok'}")
             return 1 if fails else 0
         if not a.content or a.maps is None:
             ap.error("rewriting needs --content and --maps")
         ids = Ids.from_table(restab.cook(a.content, a.defs, a.maps), read_keys_def(a.defs))
+        in_wad = None
+        if a.decals_wad:
+            in_wad = decals.wad_lumps(a.decals_wad.read_bytes(), str(a.decals_wad))
         for p in a.hle:
-            p.write_bytes(apply(p.read_bytes(), ids, p.stem))
+            blob = p.read_bytes()
+            tex = decal_textures(blob, p.stem)
+            local, _absent = map_decals(tex, in_wad if in_wad is not None else set(tex))
+            p.write_bytes(apply(blob, ids.for_map(local), p.stem))
             print(f"hleids: {p}: ids written")
-    except (IdError, restab.CookError, rtb.RtbError, OSError, ValueError) as e:
+    except (IdError, decals.DecalError, restab.CookError, rtb.RtbError, OSError, ValueError) as e:
         print(f"hleids: {e}", file=sys.stderr)
         return 1
     return 0

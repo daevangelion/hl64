@@ -278,6 +278,7 @@ static void test_records(int slot)
 	/* typed keys across hldemo1 */
 	{
 		int models = 0, sounds = 0, sent = 0, pats = 0, glob = 0, sub = 0, cls = 0;
+		int decals = 0, glows = 0, sprites = 0;
 
 		for (i = 0; i < 1024; i++)
 		{
@@ -286,6 +287,11 @@ static void test_records(int slot)
 			g = GID_MAKE(slot, i);
 			if (rec_kind(g) < 0)
 				continue;
+			if (rec_class(g) == RC_ENV_GLOW)
+			{
+				glows++;
+				sprites += RES_KIND(rec_key_res(g, RK_MODEL)) == RES_K_SPRITE;
+			}
 			nk = rec_key_count(g);
 			for (k = 0; k < nk; k++)
 			{
@@ -315,11 +321,20 @@ static void test_records(int slot)
 				pats += rec_key_pattern(g, kid) >= 0;
 				glob += rec_key_global(g, kid) >= 0;
 				cls += rec_key_cls(g, kid) != CLS_NONE;
+				if (rec_key_decal(g, kid) >= 0)
+				{
+					decals++;
+					CHECK(rec_class(g) == RC_INFODECAL && kid == RK_TEXTURE
+						&& rec_key_decal(g, kid) < REC_DECALS_GLOBAL + REC_DECALS_MAP_MAX,
+						"decal id %d", rec_key_decal(g, kid));
+				}
 			}
 		}
 		printf("hldemo1 keys: models=%d sounds=%d sentences=%d submodels=%d patterns=%d "
-			"globals=%d classrefs=%d\n", models, sounds, sent, sub, pats, glob, cls);
+			"globals=%d classrefs=%d decals=%d glows=%d (sprites %d)\n", models, sounds, sent,
+			sub, pats, glob, cls, decals, glows, sprites);
 		CHECK(models && sounds && sent && sub > 50 && pats && glob, "typed keys present");
+		CHECK(decals && glows && sprites == glows, "infodecal / env_glow kept");
 	}
 	/* names: the holder list and cross-slot lookups */
 	CHECK(rec_name_find(slot, "no_such_name_xyz") == NAME_NONE, "missing name");

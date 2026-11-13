@@ -367,4 +367,6 @@ so they take the trapped toss step 4 of 3: velocity 0, no FL_ONGROUND,
 sinking by gravity·dt² per frame — 8 u/s at dt 0.01, 26.7 u/s at 1/30 s
 (the reported −248 → −303 in about 2 s). GoldSrc does the same on the
 same hull: P-toss t0a0b1 scenario 6, entity 85: −164 → −164.08 →
-−164.16 …, velocity 0, flags 0.
+−164.16 …, velocity 0, flags 0. Decision (Main, via M3Lead2): keep the
+HLSDK / GoldSrc behaviour; neither engine nor game compensates for
+entities placed in solid.

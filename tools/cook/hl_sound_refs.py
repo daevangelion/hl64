@@ -270,20 +270,37 @@ def studio_event_refs(data: bytes) -> Tuple[Set[str], Set[str]]:
 class Refs:
     def __init__(self) -> None:
         self.samples: Set[str] = set()          # as requested at runtime
+        self.why: Dict[str, str] = {}           # lower-case sample -> first referrer
         self.sentence_names: Set[str] = set()   # UPPER exact names
         self.sentence_groups: Set[str] = set()  # UPPER group names
         self.titles: Set[str] = set()           # UPPER
         self.models: Set[str] = set()           # models/x.mdl lower-case
+        # "sentence X" / "sentence group X" the player's sentences.txt lacks
+        # -> first referrer (studio events; map keys: tools/cook/stage.py)
+        self.missing_sentences: Dict[str, str] = {}
+
+    def add_sample(self, s: str, who: str) -> None:
+        self.samples.add(s)
+        self.why.setdefault(sample_key(s), who)
+
+
+def sample_key(s: str) -> str:
+    """A sample name as the stage compares it (tools/cook/stage.py lower_rel)."""
+    return s.replace("\\", "/").lstrip("/").lower()
 
 
 def add_sentence_ref(refs: Refs, value: str, table: Dict[str, Tuple[str, str]],
-                     groups: Set[str]) -> None:
+                     groups: Set[str], who: str = "") -> None:
     v = value.strip()
     if v.startswith("!"):
         if v[1:].upper() in table:
             refs.sentence_names.add(v[1:].upper())
+        elif who and len(v) > 1:
+            refs.missing_sentences.setdefault(f"sentence {v[1:].upper()}", who)
     elif v.upper() in groups:
         refs.sentence_groups.add(v.upper())
+    elif who and v:
+        refs.missing_sentences.setdefault(f"sentence group {v.upper()}", who)
 
 
 def collect(data: Data, maps: Iterable[str], models: Dict[str, bytes],
@@ -300,11 +317,12 @@ def collect(data: Data, maps: Iterable[str], models: Dict[str, bytes],
     refs = Refs()
 
     for m in maps:
-        for e in map_entities(data.root / "maps" / f"{m}.bsp"):
+        for lump, e in enumerate(map_entities(data.root / "maps" / f"{m}.bsp")):
             cn = e.get("classname", "")
             for k, v in e.items():
                 if SAMPLE_RE.match(v):
-                    refs.samples.add(v[6:] if v.lower().startswith("sound/") else v)
+                    refs.add_sample(v[6:] if v.lower().startswith("sound/") else v,
+                                    entity_ref(m, lump, e, k))
                 elif v.startswith("!"):
                     add_sentence_ref(refs, v, sent_table, groups)
             if cn == "scripted_sentence":
@@ -324,8 +342,10 @@ def collect(data: Data, maps: Iterable[str], models: Dict[str, bytes],
                 if e.get(k):
                     add_sentence_ref(refs, e[k], sent_table, groups)
 
-    refs.samples.update(ESSENTIAL)
-    refs.samples.update(samples)
+    for s in ESSENTIAL:
+        refs.add_sample(s, "game (hl_sound_refs.ESSENTIAL)")
+    for s in samples:
+        refs.add_sample(s, "game/defs/res.def")
     for n in sentences:
         add_sentence_ref(refs, "!" + n, sent_table, groups)
     for g in groups_in:
@@ -333,9 +353,10 @@ def collect(data: Data, maps: Iterable[str], models: Dict[str, bytes],
 
     for name in sorted(models):
         s, sn = studio_event_refs(models[name])
-        refs.samples |= s
-        for n in sn:
-            add_sentence_ref(refs, n, sent_table, groups)
+        for x in sorted(s):
+            refs.add_sample(x, f"{name} studio event")
+        for n in sorted(sn):
+            add_sentence_ref(refs, n, sent_table, groups, f"{name} studio event")
 
     return refs, sent_table, titles
 
@@ -367,8 +388,18 @@ def titles_txt(refs: Refs, titles: Dict[str, Tuple[str, Dict[str, str], str]]) -
     return "\n".join(out) + "\n"
 
 
+def entity_ref(m: str, lump: int, e: Dict[str, str], key: str) -> str:
+    """Who names a value: `maps/<m>.bsp entity <lump> (<classname> <targetname>) key <k>`."""
+    tn = e.get("targetname", "")
+    return (f"maps/{m}.bsp entity {lump} ({e.get('classname', '?')}"
+            f"{' ' + tn if tn else ''}) key {key}")
+
+
 def sentence_samples(refs: Refs, table: Dict[str, Tuple[str, str]]) -> Set[str]:
     out: Set[str] = set()
     for n in selected_sentences(refs, table):
-        out.update(vox_words(*table[n]))
+        name, body = table[n]
+        for w in vox_words(name, body):
+            out.add(w)
+            refs.why.setdefault(sample_key(w), f"sound/sentences.txt {name}")
     return out

@@ -216,6 +216,29 @@ static void s1(void)
 	frames(10);
 	snd_voice_info(v2, &o2);
 	CHECK(o2.pos > o.pos, "still advancing after the changes");
+
+	/* absent sound: a key naming a file the player's data lacks gets no id
+	 * from the cook (RES_NONE); every API path plays nothing and counts it */
+	reset();
+	e = ent_at(100, 0, 0);
+	snd_stats(&st, 0);
+	started = st.dropped;
+	snd_emit(e, CHAN_BODY, RES_NONE, 1, ATTN_NORM, 0, 100);
+	snd_emit(e, CHAN_STATIC, RES_NONE, 1, ATTN_NORM, 0, 100);
+	snd_ambient(lis, RES_NONE, 1, ATTN_NORM, 0, 100);
+	snd_emit(e, CHAN_BODY, RES_NONE, 1, ATTN_NORM, SND_CHANGE_VOL, 50);
+	snd_emit(e, CHAN_STATIC, RES_NONE, 1, ATTN_NORM, SND_STOP, 100);
+	frames(2);
+	snd_stats(&st, 0);
+	for (i = 0; i < SND_LOOPS; i++)
+	{
+		snd_loop_info(i, &l);
+		if (l.used)
+			break;
+	}
+	CHECK(busy() == 0 && i == SND_LOOPS, "absent sound: no voice, no loop");
+	CHECK(st.dropped == started + 3, "absent sound: 3 starts dropped (%lu)",
+		(unsigned long)(st.dropped - started));
 }
 
 /* ---- S2: stealing order with 17 one-shots and with 16 loops -------------- */

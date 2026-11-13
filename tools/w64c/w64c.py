@@ -23,6 +23,8 @@ Output: maps/<map>.w64: header + layer directory + chunks:
         each node stored once, ~2 KB chunks; world hull 0 pinned
   ENTS  the HLE1 entity blob
   VISR  the BSP's compressed PVS rows
+  DECL  (--decl) the map's placed-decal sheet (tools/cook/decals.py), found
+        by fourcc
 The directory adds the model table, leaf contents and the collision grid
 (256 u cells: hull 1-3 chunk lists + hull-0 point->leaf start nodes). The
 old zone-system companions (ZONE / DRYS / STRM) are not emitted.
@@ -41,7 +43,8 @@ the cook with `w64c: error: <file>: <what>` and exit status 1.
 
 Usage (from the repository root):
   python3 -m tools.w64c.w64c <map.bsp> <map.wci4> <out.w64> --hle <map.hle>
-          [--materials sound/materials.txt] [--json report.json] [--no-budget]
+          [--decl map.decl] [--materials sound/materials.txt] [--json report.json]
+          [--no-budget]
 """
 from __future__ import annotations
 
@@ -57,6 +60,7 @@ from pathlib import Path
 
 import numpy as np
 
+from tools.cook import decals
 from tools.hlsdk.materials import Materials, MaterialsError
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -101,7 +105,7 @@ SKIP_TEX = {"clip", "origin", "null", "bevel", "skip", "hint", "aaatrigger"}
 FOLD_CLASSES = {"func_wall", "func_illusionary"}
 
 CHUNK_REND, CHUNK_MOVR, CHUNK_TEXP = b"REND", b"MOVR", b"TEXP"
-CHUNK_COLL, CHUNK_ENTS, CHUNK_VISR = b"COLL", b"ENTS", b"VISR"
+CHUNK_COLL, CHUNK_ENTS, CHUNK_VISR, CHUNK_DECL = b"COLL", b"ENTS", b"VISR", decals.DECL
 NO_CHUNK = 0xFFFF
 W64_MAT_MIXED = 15        # material code of a node with mixed faces
 
@@ -1675,9 +1679,23 @@ def load_hle(path: Path) -> bytes:
     return b
 
 
+def load_decl(path: Path) -> bytes:
+    """A map's placed-decal sheet (tools/cook/decals.py, DI4 2), checked
+    with the engine's sheet rules."""
+    try:
+        b = path.read_bytes()
+        decals.sheet_names(b, str(path))
+    except OSError as e:
+        raise InputError(f"{path}: {e.strerror}") from None
+    except decals.DecalError as e:
+        raise InputError(str(e)) from None
+    return b
+
+
 def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
-         mats: "Materials | None" = None):
-    """Cook one map; hle = the ENTS blob bytes or None."""
+         mats: "Materials | None" = None, decl: "bytes | None" = None):
+    """Cook one map; hle = the ENTS blob bytes or None; decl = the DECL
+    chunk (the map's placed-decal sheet) or None."""
     bsp = Bsp(bsp_path)
     pack = TexPack(wci4_path)
     tex, missing = build_textures(bsp, pack)
@@ -1881,6 +1899,9 @@ def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
     if visr is not None:
         visr_chunk = len(chunks)
         chunks.append((CHUNK_VISR, visr))
+    if decl is not None:
+        # found by fourcc (w64-format.md DECL): no directory index
+        chunks.append((CHUNK_DECL, decl + bytes(align(len(decl), 16) - len(decl))))
     if len(chunks) >= NO_CHUNK:
         die(f"{len(chunks)} chunks > u16 chunk index")
 
@@ -2056,6 +2077,7 @@ def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
         "pools": {k: v for k, v in limits.items()},
         "ents_bytes": len(hle) if hle is not None else 0,
         "visr_bytes": len(visr) if visr is not None else 0,
+        "decl_bytes": len(decl) if decl is not None else 0,
         "missing_textures": missing,
         "mat_bytes": (24 + sum(len(mat[k]) for k in ("start", "ents", "mix", "faces"))
                       if mat is not None else 0),
@@ -2091,6 +2113,8 @@ def main(argv=None) -> int:
     ap.add_argument("--hle", type=Path, default=None,
                     help="HLE1 entity blob (hlecook) for the ENTS chunk")
     ap.add_argument("--json", type=Path, default=None, help="write a size/budget report")
+    ap.add_argument("--decl", type=Path, default=None,
+                    help="the map's placed-decal sheet (DI4) for the DECL chunk")
     ap.add_argument("--no-budget", action="store_true",
                     help="report pool overruns instead of failing (sizing runs only)")
     ap.add_argument("--materials", type=Path, default=None,
@@ -2099,9 +2123,10 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     try:
         hle = load_hle(a.hle) if a.hle else None
+        decl = load_decl(a.decl) if a.decl else None
         mats = Materials.load(a.materials) if a.materials else None
         with np.errstate(all="ignore"):
-            rep = cook(a.bsp, a.wci4, a.out, hle, mats)
+            rep = cook(a.bsp, a.wci4, a.out, hle, mats, decl)
     except (InputError, MaterialsError) as e:
         error(str(e))
     except CookError as e:
