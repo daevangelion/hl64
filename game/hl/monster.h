@@ -881,6 +881,9 @@ void	CBaseMonster_MonsterThink(int e);
 void	CBaseMonster_CallMonsterThink(int e);
 void	CBaseMonster_MonsterInitThink(int e);
 void	CBaseMonster_CorpseFallThink(int e);
+/* a monster about to be picked by a script or a sentence: run its pending
+ * MonsterInitThink now (monsters.c) */
+void	Mon_SettleSpawn(int e);
 void	CBaseMonster_MonsterUse(int e, int activator, int caller, int useType, float value);
 
 /* animation helpers over game/studio/anim.h */

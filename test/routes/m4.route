@@ -85,9 +85,15 @@ setpos -416 210 196 0 90
 waitgone busted_pipes_cover 15
 wait 1
 # steam valve func_rot_button #634 -> steam_off_mm turns busted_pipes_smoke off
-# (stand on the fallen machine shell at y 270: the hull stays clear of the
-# steam's trigger_hurt #141, y 296..328, which scalds 10 per 0.5 s)
-setpos -262 270 196 0 75
+# (stand on the fallen machine shell at y 278: the hull stays clear of the
+# steam's trigger_hurt #141, y 296..328, which scalds 10 per 0.5 s). The
+# shell lies rolled 91 degrees (y ~180..280, z ~158..208) and collides as a
+# rotated brush model: GoldSrc clips the player's hull in the model's own
+# axes (docs/specs/trace-and-hulls.md, rotated), so its top is at origin z
+# ~224 for both hulls and a z 196 spot is inside it (PM_CheckStuck holds
+# the player there). The valve's box is within PLAYER_SEARCH_RADIUS 64 of
+# this spot; pitch 30 keeps it inside CBasePlayer::PlayerUse's view cone.
+setpos -262 278 226 30 72
 wait 0.5
 +use
 wait 0.2
@@ -101,10 +107,15 @@ wait 2
 # ducked into the ceiling vent, crawl east along it
 +duck
 wait 0.5
-setpos -266 282 196 0 90
+setpos -266 282 226 0 90
 +forward
-waitnear -266 384 178 6 10
+# the duct turns east at y 370..399 (duck-hull centres). The ducked crawl
+# (106.6 u/s) slides ~16 u after -forward (HLSDK PM_Friction: friction 4,
+# stopspeed 100, the release acting the next frame), so release on the
+# way in and let the player stop in the turn (~y 382) before strafing east
+waitnear -266 370 178 6 10
 -forward
+wait 0.5
 +moveright
 waitnear -240 384 178 6 10
 -moveright
@@ -240,8 +251,13 @@ waitnear 2352 1170 196 40 5
 -forward
 # catwalk south to trailer_door_2 (trigger_multiple #310), through the door and down into the trailer yard
 # (the drop slides down the trailer deck's east face: at 72 fps the player reaches the
-# yard floor (z -60), at 17 fps it landed on the z 60 ledge beside the deck;
-# either is off the catwalk, the next waypoint is on the yard floor)
+# yard floor (z -60), at 17 fps it landed on the z 60 ledge beside the deck
+# (y 730..750); at 30 fps (fixed_dt 33333) the 320 u/s run off the catwalk
+# end (y ~870) clears that ledge by ~12 u and, airborne (HLSDK PM_AirMove:
+# no friction), flies on to the yard's south wall, landing on the yard floor
+# at y ~680. All three are off the catwalk (z 196); the point and radius
+# take the yard floor y 680..820 and the ledge, never the catwalk; the next
+# waypoint is on the yard floor)
 setpos 2466 1000 196 0 270
 wait 0.3
 setpos 2466 915 196 0 270
@@ -249,7 +265,7 @@ wait 1.5
 +forward
 wait 0.6
 -forward
-waitnear 2466 780 0 90 4
+waitnear 2466 730 -20 100 4
 # MP5 + clip on the radio table under the trailer deck
 setpos 2246 716 -60 0 270
 wait 0.5

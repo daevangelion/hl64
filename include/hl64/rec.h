@@ -169,6 +169,12 @@ int		rec_map_ready(int slot);
 void		rec_map_close(int slot);
 /* Live entities and runtime name holders of a slot (0: it may close). */
 int		rec_slot_live(int slot);
+/* Of those, the ones that keep the slot open now: live entities within
+ * the release radius of the last frame's anchors, and runtime name
+ * holders. The release has offered everything else and it refused
+ * (quiescence: a monster idling in a script for good); the closing
+ * release takes those (0: it may close when its layer is needed). */
+int		rec_slot_held(int slot);
 /* Release one live entity now (dehydrate into the store, record DRY;
  * runtime entities by (map, runtime id)); 0 when the game refused it. */
 int		rec_release(int e);

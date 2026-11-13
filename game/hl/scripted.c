@@ -159,6 +159,7 @@ static int FindEntity(int e)
 	{
 		while ((t = rec_next_named(c->m_iszEntity, &it)) >= 0)
 		{
+			Mon_SettleSpawn(t);
 			if (monster_ok(t) &&
 				Mon_CanPlaySequence(t, Script_FCanOverrideState(e), SS_INTERRUPT_BY_NAME))
 			{
