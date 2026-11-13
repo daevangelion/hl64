@@ -318,7 +318,6 @@ int CBaseEntity_Create(cls_t cls, const float org[3], const float ang[3], int ow
 		log_printf("game: create %u: no free slot\n", (unsigned)cls);
 		return -1;
 	}
-	ent_idc(e)->layer = (int8_t)eng_frame_layer();
 	ent_set_origin(e, org);
 	VecCopy(ang, ent_cv(e)->angles);
 	ent_cv(e)->owner = owner >= 0 ? (uint16_t)owner : COL_NONE;
@@ -651,39 +650,18 @@ float AxisDelta(int flags, const float a1[3], const float a2[3])
 
 /* ---- traces --------------------------------------------------------------- */
 
-static void to_global(const float in[3], float out[3])
-{
-	const float *g = eng_layer_origin(eng_frame_layer());
-
-	out[0] = in[0] + g[0];
-	out[1] = in[1] + g[1];
-	out[2] = in[2] + g[2];
-}
-
-static void tr_to_local(col_trace_t *tr)
-{
-	const float *g = eng_layer_origin(eng_frame_layer());
-
-	tr->end[0] -= g[0];
-	tr->end[1] -= g[1];
-	tr->end[2] -= g[2];
-	if (tr->ent <= 0)
-		tr->dist -= VecDot(tr->normal, g);
-}
+/* engine/coll takes and returns the frame of eng_frame_layer() (coll.h):
+ * the game's map-local coordinates pass straight through. */
 
 void UTIL_TraceLineGlass(const float start[3], const float end[3], int igmon, int ignglass,
 	int ignore, col_trace_t *tr)
 {
-	float s[3], t[3];
 	int type = igmon == ignore_monsters ? COL_MOVE_NOMONSTERS :
 		igmon == missile ? COL_MOVE_MISSILE : COL_MOVE_NORMAL;
 
 	if (ignglass)
 		type |= COL_MOVE_NOGLASS;
-	to_global(start, s);
-	to_global(end, t);
-	col_trace_line(s, t, type, ignore >= 0 ? ent_cv(ignore) : 0, tr);
-	tr_to_local(tr);
+	col_trace_line(start, end, type, ignore >= 0 ? ent_cv(ignore) : 0, tr);
 }
 
 void UTIL_TraceLine(const float start[3], const float end[3], int igmon, int ignore,
@@ -695,14 +673,10 @@ void UTIL_TraceLine(const float start[3], const float end[3], int igmon, int ign
 static void trace_box(const float start[3], const float mins[3], const float maxs[3],
 	const float end[3], int igmon, int ignore, col_trace_t *tr)
 {
-	float s[3], t[3];
 	int type = igmon == ignore_monsters ? COL_MOVE_NOMONSTERS :
 		igmon == missile ? COL_MOVE_MISSILE : COL_MOVE_NORMAL;
 
-	to_global(start, s);
-	to_global(end, t);
-	col_move(s, mins, maxs, t, type, ignore >= 0 ? ent_cv(ignore) : 0, tr);
-	tr_to_local(tr);
+	col_move(start, mins, maxs, end, type, ignore >= 0 ? ent_cv(ignore) : 0, tr);
 }
 
 void UTIL_TraceHull(const float start[3], const float end[3], int igmon, int hull, int ignore,
@@ -722,43 +696,30 @@ void UTIL_TraceMonsterHull(int e, const float start[3], const float end[3], int 
 void UTIL_TraceModel(const float start[3], const float end[3], int hull, int model_e,
 	col_trace_t *tr)
 {
-	float s[3], t[3];
-
 	if (hull < 0 || hull >= COL_HULLS)
 		hull = 0;
-	to_global(start, s);
-	to_global(end, t);
-	col_clip(ent_cv(model_e), s, col_hull_mins[hull], col_hull_maxs[hull], t, tr);
-	tr_to_local(tr);
+	col_clip(ent_cv(model_e), start, col_hull_mins[hull], col_hull_maxs[hull], end, tr);
 }
 
 int UTIL_PointContents(const float p[3])
 {
-	float g[3];
-
-	to_global(p, g);
-	return col_contents(g);
+	return col_contents(p);
 }
 
 int UTIL_TraceTexture(int hit, const float start[3], const float end[3])
 {
-	float s[3], t[3], org[3];
+	static const float zero[3] = { 0, 0, 0 };
 	const col_ent_t *c;
-	int layer = eng_frame_layer();
+	float org[3], d[3];
 
-	to_global(start, s);
-	to_global(end, t);
 	if (hit <= 0)
-	{
-		const float *g = eng_layer_origin(layer);
-		float zero[3] = { 0, 0, 0 };
-		return col_material(COL_MODEL(layer, 0), g, zero, s, t);
-	}
+		return col_material(COL_MODEL(eng_frame_layer(), 0), zero, zero, start, end);
 	c = ent_cv(hit);
 	if (c->model == COL_NONE)
 		return 0;
-	to_global(c->origin, org);
-	return col_material(c->model, org, c->angles, s, t);
+	ent_frame_delta(hit, d);
+	VecAdd(c->origin, d, org);
+	return col_material(c->model, org, c->angles, start, end);
 }
 
 void EyePosition(int e, float out[3])
@@ -1114,7 +1075,7 @@ void Killed(int e, int attacker, int gib)
 }
 
 /* CBaseEntity::TraceBleed */
-static void TraceBleed(int e, float damage, const float dir[3], const col_trace_t *ptr, int bits)
+void TraceBleed(int e, float damage, const float dir[3], const col_trace_t *ptr, int bits)
 {
 	col_trace_t btr;
 	float tdir[3], to[3], noise;
@@ -1152,6 +1113,12 @@ static void TraceBleed(int e, float damage, const float dir[3], const col_trace_
 	}
 }
 
+/* combat.cpp SpawnBlood */
+void SpawnBlood(const float org[3], int color, float damage)
+{
+	UTIL_BloodDrips(org, g_vecAttackDir, color, (int)damage);
+}
+
 void CBaseEntity_TraceAttack(int e, int attacker, float damage, const float dir[3],
 	const col_trace_t *tr, int bits)
 {
@@ -1165,7 +1132,7 @@ void CBaseEntity_TraceAttack(int e, int attacker, float damage, const float dir[
 		blood = BloodColor(e);
 		if (blood != DONT_BLEED)
 		{
-			UTIL_BloodDrips(org, g_vecAttackDir, blood, (int)damage);	/* SpawnBlood */
+			SpawnBlood(org, blood, damage);	/* a little surface blood */
 			TraceBleed(e, damage, dir, tr, bits);
 		}
 	}
@@ -1279,23 +1246,40 @@ void RadiusDamage(const float src_in[3], int inflictor, int attacker, float dama
 /* ---- global states ------------------------------------------------------------ */
 
 #define GAME_MAX_GLOBALS	64
+/* 0: not in the table, else GLOBAL_* + 1 */
 static uint8_t	global_state[GAME_MAX_GLOBALS];
+
+static int global_ok(int id)
+{
+	if (id >= 0 && id < GAME_MAX_GLOBALS && id < res_globals())
+		return 1;
+	if (id >= 0)
+		log_printf("game: global state id %d out of range\n", id);
+	return 0;
+}
 
 int GlobalState(int id)
 {
-	if (id < 0 || id >= GAME_MAX_GLOBALS)
+	if (!global_ok(id) || !global_state[id])
 		return GLOBAL_OFF;
-	return global_state[id];
+	return global_state[id] - 1;
+}
+
+int GlobalInTable(int id)
+{
+	return global_ok(id) && global_state[id] != 0;
 }
 
 void GlobalSetState(int id, int state)
 {
-	if (id < 0 || id >= GAME_MAX_GLOBALS)
-	{
-		log_printf("game: global state id %d out of range\n", id);
-		return;
-	}
-	global_state[id] = (uint8_t)state;
+	if (GlobalInTable(id))
+		global_state[id] = (uint8_t)(state + 1);
+}
+
+void GlobalAdd(int id, int state)
+{
+	if (global_ok(id))
+		global_state[id] = (uint8_t)(state + 1);
 }
 
 void GlobalReset(void)

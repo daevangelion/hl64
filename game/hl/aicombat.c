@@ -616,49 +616,6 @@ int CBaseMonster_DeadTakeDamage(int e, int inflictor, int attacker, float flDama
 	return 1;
 }
 
-static void SpawnBlood(const float spot[3], int color, float damage)
-{
-	UTIL_BloodDrips(spot, g_vecAttackDir, color, (int)damage);
-}
-
-static void TraceBleed(int e, float flDamage, const float dir[3], const col_trace_t *ptr, int bits)
-{
-	col_trace_t	btr;
-	float		noise, td[3], end[3];
-	int		count, i, color = BloodColor(e);
-
-	if (color == DONT_BLEED || flDamage == 0)
-		return;
-	if (!(bits & (DMG_CRUSH | DMG_BULLET | DMG_SLASH | DMG_BLAST | DMG_CLUB | DMG_MORTAR)))
-		return;
-	if (flDamage < 10)
-	{
-		noise = 0.1f;
-		count = 1;
-	}
-	else if (flDamage < 25)
-	{
-		noise = 0.2f;
-		count = 2;
-	}
-	else
-	{
-		noise = 0.3f;
-		count = 4;
-	}
-	for (i = 0; i < count; i++)
-	{
-		VecScale(dir, -1, td);
-		td[0] += RANDOM_FLOAT(-noise, noise);
-		td[1] += RANDOM_FLOAT(-noise, noise);
-		td[2] += RANDOM_FLOAT(-noise, noise);
-		VecMA(ptr->end, -172, td, end);
-		UTIL_TraceLine(ptr->end, end, ignore_monsters, e, &btr);
-		if (btr.frac != 1.0f)
-			UTIL_BloodDecalTrace(&btr, color);
-	}
-}
-
 void Mon_MakeDamageBloodDecal(int e, int cCount, float flNoise, const col_trace_t *ptr, const float dir[3])
 {
 	CBaseMonster	*m = MON(e);
