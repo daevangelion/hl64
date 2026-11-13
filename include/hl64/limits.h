@@ -86,6 +86,22 @@
 #define HL64_STUDIO_DRAWN		64
 /* Dynamic lights (docs/specs/dlights.md 1). */
 #define HL64_DLIGHTS			32
+/* Effects (docs/specs/render-fx.md 2-5): temp entities and the studio
+ * temps drawn per frame, particles (the particles region holds them),
+ * beams and their segments, decals, the decal placement queue, the
+ * translucent list per frame and the additive blend cap (RDP wrap guard),
+ * the sprite models the sprite cache tracks. */
+#define HL64_FX_TEMPS			48
+#define HL64_FX_TEMPS_STUDIO		6
+#define HL64_FX_PARTICLES		512
+#define HL64_FX_BEAMS			16
+#define HL64_FX_BEAM_SEGS		16
+#define HL64_FX_DECALS			96
+#define HL64_FX_DECAL_VERTS		24
+#define HL64_FX_DECAL_QUEUE		16
+#define HL64_FX_TRANS_MAX		64
+#define HL64_FX_ADD_CAP			128
+#define HL64_FX_SPRITE_MODELS		16
 
 /* ---- boot carve regions, KB (4.1) ------------------------------------ */
 
