@@ -34,6 +34,7 @@
 #include "hl64/settings.h"
 #include "hl64/snd.h"
 #include "engine/core/log.h"
+#include "engine/core/dbg.h"
 #include "engine/core/sys.h"
 #include "engine/mem/carve.h"
 #include "engine/snd/snd_hw.h"
@@ -70,6 +71,7 @@ typedef struct {
 	uint8_t		wvol;
 	uint8_t		pad;
 	uint32_t	end_pos;	/* word end (sample), 0 = the wave's end */
+	float		gap;		/* s between the last word's end and this one, -1 */
 } voice_t;
 
 typedef struct {
@@ -99,7 +101,7 @@ typedef struct {
 	uint32_t	tables;		/* region bytes used by this file */
 	snd_stats_t	st;
 	uint32_t	frames;
-	uint64_t	us_sum;
+	uint64_t	us_sum, pump_sum;
 } snd_state_t;
 
 static snd_state_t	*S;
@@ -444,6 +446,7 @@ static void voice_init(int v, int e, int chan, float vol, float attn, int pitch,
 	p->attn = attn > 0.0f ? attn : 0.0f;
 	p->wvol = 100;
 	p->wpitch = 100;
+	p->gap = -1.0f;
 	memcpy(p->org, org, sizeof(p->org));
 	p->seq = ++S->seq;
 }
@@ -471,8 +474,12 @@ static void sentence_next(int v, double gap)
 			? (uint32_t)((uint64_t)S->w[w].inf.len * wd->end / 100) : 0;
 		voice_start(v, w, 0, "word");
 		if (gap >= 0.0)
+		{
+			p->gap = (float)gap;
 			snd_logf("snd %lu gap v%d sent%u word%u gap_us=%lu\n", (unsigned long)S->frame,
-				v, (unsigned)p->sent, (unsigned)(p->word - 1), (unsigned long)(gap * 1e6 + 0.5));
+				v, (unsigned)p->sent, (unsigned)(p->word - 1),
+				(unsigned long)(gap * 1e6 + 0.5));
+		}
 		S->keep = -1;
 		return;
 	}
@@ -810,6 +817,44 @@ void snd_stop(int e, int chan)
 		stop_match(e, chan, 0, "stop");
 }
 
+void snd_voice_info(int v, snd_voice_info_t *o)
+{
+	const voice_t *p = &S->v[v];
+
+	memset(o, 0, sizeof(*o));
+	o->busy = p->busy;
+	o->loop = p->loop;
+	o->sent = p->sent;
+	o->gap = p->gap;
+	if (!p->busy)
+		return;
+	o->ent = p->ent == ENT_NONE ? -1 : p->ent;
+	o->chan = p->chan;
+	o->res = p->res;
+	o->seq = p->seq;
+	if (p->wave >= 0)
+	{
+		o->pos = snd_hw_pos(v);
+		o->rate = snd_pitch_rate(S->w[p->wave].inf.freq, p->pitch * p->wpitch / 100);
+		snd_gains(p->org, p->vol * p->wvol * 0.01f, p->attn, p->ent == SND_SELF, &o->left,
+			&o->right);
+	}
+}
+
+void snd_loop_info(int i, snd_loop_info_t *o)
+{
+	const loop_t *lp = &S->l[i];
+
+	memset(o, 0, sizeof(*o));
+	o->used = lp->used;
+	o->voice = lp->voice;
+	o->ent = lp->ent == ENT_NONE ? -1 : lp->ent;
+	o->chan = lp->chan;
+	o->res = lp->res;
+	o->vol = lp->vol;
+	o->pitch = lp->pitch;
+}
+
 void snd_entity_freed(int e)
 {
 	int i;
@@ -822,6 +867,23 @@ void snd_entity_freed(int e)
 	for (i = 0; i < SND_LOOPS; i++)
 		if (S->l[i].used && S->l[i].ent == (uint16_t)e)
 			S->l[i].follow = 0;
+}
+
+/* DBG_SOUND (test builds): play a sound (AUTO) or a sentence (VOICE) from
+ * entity e, 0 = the listener's own */
+static int cmd_sound(const dbg_cmd_t *c)
+{
+	res_t r = (res_t)c->arg[0].u;
+	int e = c->arg[1].u ? (int)c->arg[1].u : SND_SELF;
+	int pitch = c->arg[2].u ? (int)c->arg[2].u : PITCH_NORM;
+
+	if (RES_KIND(r) == RES_K_SENTENCE)
+		snd_sentence(e, CHAN_VOICE, (uint16_t)RES_INDEX(r), 1.0f, ATTN_NORM, 0, pitch);
+	else if (RES_KIND(r) == RES_K_SOUND)
+		snd_emit(e, CHAN_AUTO, r, 1.0f, ATTN_NORM, 0, pitch);
+	else
+		return 1;
+	return 0;
 }
 
 void snd_init(void)
@@ -848,6 +910,7 @@ void snd_init(void)
 		S->v[v].sent = SENT_NONE;
 	}
 	snd_hw_init(m + t, n - t);
+	dbg_handler_set(DBG_SOUND, cmd_sound);
 	log_printf("snd: %d voices @ %d Hz, %d loops, %d waves; tables %lu B of %lu B\n",
 		SND_VOICES, SND_HZ, SND_LOOPS, SND_WAVES, (unsigned long)t, (unsigned long)n);
 }
@@ -904,7 +967,12 @@ void snd_frame(const float listener[3], const float right[3], double dt)
 			if (had && S->l[i].voice < 0)
 				snd_logf("snd %lu virtual L%d\n", (unsigned long)S->frame, i);
 		}
-	snd_hw_pump(dt);
+	{
+		uint64_t p0 = sys_time_us();
+
+		snd_hw_pump(dt);
+		S->pump_sum += sys_time_us() - p0;
+	}
 	S->last_dt = dt;
 	S->frame++;
 	S->st.voices = voices_busy();
@@ -932,6 +1000,7 @@ void snd_stats(snd_stats_t *s, int reset)
 	s->waves_open = (uint32_t)snd_waves_open();
 	s->frames = S->frames;
 	s->us = S->frames ? (uint32_t)(S->us_sum / S->frames) : 0;
+	s->pump_us = S->frames ? (uint32_t)(S->pump_sum / S->frames) : 0;
 	snd_hw_mem(&now, &peak);
 	s->mem = S->tables + now;
 	s->mem_peak = S->tables + peak;
@@ -944,6 +1013,7 @@ void snd_stats(snd_stats_t *s, int reset)
 		S->st.waves_peak = s->waves_open;
 		S->st.us_max = 0;
 		S->us_sum = 0;
+		S->pump_sum = 0;
 		S->frames = 0;
 	}
 }

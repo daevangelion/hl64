@@ -56,6 +56,7 @@ typedef struct {
 	uint32_t	emits, started, stolen, dropped;	/* in the window */
 	uint32_t	voices, voices_peak, loops, loops_peak, waves_open, waves_peak;
 	uint32_t	us, us_max, frames;
+	uint32_t	pump_us;	/* mean backend pump (cart: mixer_try_play) per frame */
 	uint32_t	mem, mem_peak, mem_region;
 } snd_stats_t;
 void	snd_stats(snd_stats_t *s, int reset);

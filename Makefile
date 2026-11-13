@@ -106,7 +106,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest rectest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -299,6 +299,14 @@ REC_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(REC_BIN): $(REC_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 rectest: $(REC_BIN)
+
+# Sound driver (test/m3/snd.c, run by test/m3/snd.sh: S1-S8 host parts).
+SND_BIN := $(BUILD_DIR)/host/hl64-snd
+SND_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/snd.o
+$(SND_BIN): $(SND_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+sndtest: $(SND_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 

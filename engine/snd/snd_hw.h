@@ -15,6 +15,8 @@
 
 #include <stdint.h>
 
+#include "hl64/types.h"
+
 #define SND_VOICES		16	/* mixer voices */
 #define SND_LOOPS		32	/* loop slots (sound.md 3) */
 #define SND_WAVES		10	/* open wav64 streams */
@@ -70,7 +72,25 @@ float		snd_pitch_rate(uint32_t freq, int pitch);
 void		snd_log_set(int on);
 /* Open waves now (S8). */
 int		snd_waves_open(void);
-/* A voice holding an open wave's slot (S8 invariant check): -1 none. */
+/* S8 invariant: a busy voice whose wave slot is closed or holds another
+ * sound (-1 when there is none). */
 int		snd_wave_voice_check(void);
+
+typedef struct {
+	int		busy, ent, chan, loop;	/* ent -1 = fixed point */
+	res_t		res;
+	uint16_t	sent;			/* 0xFFFF = not a sentence */
+	uint32_t	seq, pos;
+	float		left, right;		/* ear gains before master volume */
+	float		rate;			/* Hz */
+	float		gap;			/* s before the current word, -1 first */
+} snd_voice_info_t;
+typedef struct {
+	int		used, voice, ent, chan, pitch;
+	res_t		res;
+	float		vol;
+} snd_loop_info_t;
+void		snd_voice_info(int v, snd_voice_info_t *o);
+void		snd_loop_info(int i, snd_loop_info_t *o);
 
 #endif
