@@ -16,6 +16,20 @@ Settings (HL defaults; `settings.h`, typed): gravity 800, maxvelocity
 
 Constants: floor = plane normal.z > 0.7; wall = normal.z = 0; clip stop
 epsilon 0.1; slide iterations 4; clip planes 5; step height 18.
+Calibrated on the probe captures (hl64 `test/m3/phys.py`, 10 maps): BOUNCE
+rest speed 30 u/s (a vertical bounce at 16 u/s rests, 80 u/s flies on;
+any value in (16, 60] fits), BOUNCE vertical stop below gravity·dt (8 u/s
+at dt 0.01: 2.24 / 5.22 stop, 8.88 / 12.4 / 12.8 bounce on; the entity
+gravity scale is not separated by the capture, hl64 uses sv_gravity),
+BOUNCE creep 0.9, STEP water drag 0.8 per water level per second
+**[probe:measured P-bounce, P-step]**.
+
+The entity `friction` is literal (HLSDK entvars start at 0): BOUNCE
+overbounce is `2 − friction`, and the STEP / PUSHSTEP ground friction
+scales by it once and then sets it to 1 — a pushable or monster with
+friction 0 keeps its speed on the first frame it moves, then slows by
+`sv_friction` **[probe:measured P-pushable pushstep_f0 / _f1, every map
+`func_pushable`, P-step pushed]**.
 
 ## 2. Dispatch and common operations
 
@@ -45,7 +59,16 @@ rejects map records whose cooked keys would produce it.
 - **push(e, d)**: one move query from origin to origin + d with e's box,
   pass e, type `missile` for FLYMISSILE and BOUNCEMISSILE,
   `ignore_monsters` for SOLID_TRIGGER/SOLID_NOT movers, else normal;
-  origin := end; link with touch; impact touch if something was hit.
+  origin := end; link with touch; impact touch if something was hit (the
+  world included: A.touch(world)). An all-solid push still moves to the
+  end (trace-and-hulls.md 3).
+- **conveyor and base velocity**, before the step of the toss family,
+  STEP and PUSHSTEP: an entity on the ground of an FL_CONVEYOR pusher gets
+  basevelocity = the conveyor's speed·movedir (added when FL_BASEVELOCITY
+  is already set) and the flag; without the flag a non-zero base velocity
+  is folded in; the flag is then cleared. hl64: the game registers the
+  conveyor velocity with `phy_set_conveyor` (no speed / movedir in the
+  engine). A freed ground clears FL_ONGROUND and groundentity.
 - **clip(v, n, k)**: `v − n·(v·n)·k`, components with |c| < 0.1 → 0.
 - **slide(e, t)** (collide and slide): up to 4 iterations, each a move query
   over the remaining time; all-solid → velocity 0, stop; progress → move
@@ -70,14 +93,22 @@ touch.
 
 ### Toss family: TOSS, BOUNCE, FLY, FLYMISSILE, BOUNCEMISSILE
 1. Think; stop if freed.
-2. On ground (FL_ONGROUND) with no velocity: nothing more. A resting toss
-   entity ignores its base velocity: an item resting on an FL_CONVEYOR
-   pusher (speed 100) never moves, although its basevelocity is set to 100
-   **[probe:measured P-toss]** (9/9). It leaves the active set until
-   something moves it or removes its ground.
+2. velocity.z > 0 clears FL_ONGROUND. A ground entity with FL_MONSTER or
+   FL_CLIENT does not hold it: FL_ONGROUND is cleared and it lands on the
+   monster again every frame (impact touches each frame; 106 per
+   capture, 10/10) **[probe:measured P-toss]**; on the world or a
+   SOLID_BSP entity it rests (one touch). On ground with no velocity and
+   no base velocity: avelocity 0, water level, nothing more. With a base
+   velocity it moves as below: an item resting on an FL_CONVEYOR pusher
+   (speed 100) never moves, although its basevelocity is 100, because its
+   push (v + bv)·dt starts on the floor's stand-off and stops at fraction
+   0 **[probe:measured P-toss]** (9/9, 274 touches). It leaves the active
+   set until something moves it or removes its ground.
 3. Check velocity; add gravity unless FLY, FLYMISSILE, BOUNCEMISSILE.
 4. `angles += avelocity·dt`; push(e, (velocity + basevelocity)·dt); stop if
-   no impact or e freed.
+   no impact or e freed. An all-solid push (trapped in solid): velocity
+   and avelocity 0, no FL_ONGROUND; it sinks by each frame's gravity move
+   **[probe:measured P-toss t0a0b1, P-step hldemo3 water_toss]**.
 5. Clip velocity on the hit plane with overbounce: BOUNCE `2 − friction`,
    BOUNCEMISSILE 2, others 1. Measured rebound ratios (vertical speed after
    / before a floor bounce): friction 0.8 → 0.205, 0.55 → ≈ 0.47, 0 →
@@ -90,30 +121,48 @@ touch.
    once a floor bounce no longer lifts it (FL_ONGROUND, velocity.z 0) and
    keeps its horizontal velocity: there is no engine ground friction and no
    rest speed — a grenade sliding at 60 u/s keeps 60 u/s until a wall stops
-   it **[probe:measured P-bounce]**. The vertical stop threshold is
-   calibrated from the same capture.
+   it **[probe:measured P-bounce]**. BOUNCE / BOUNCEMISSILE on a floor:
+   velocity.z after the clip below gravity·dt → FL_ONGROUND, groundentity,
+   velocity.z 0; then speed (velocity + basevelocity) below 30 u/s → full
+   stop as TOSS; else the entity moves on for the rest of the frame,
+   slowed: push(e, velocity·(1 − fraction)·dt·0.9). Sliding on the floor
+   it therefore advances 0.9·v·dt per frame (0.54 u at 60 u/s, dt 0.01)
+   **[probe:measured P-bounce]** (8 scenarios × 10 maps).
 7. Water level (5).
 
 ### STEP (monsters)
-1. Not on ground and not FL_FLY/FL_SWIM: add gravity, check velocity,
-   slide(e, dt), link with touch. No landing sound
+1. In liquid (water level of the last frame > 0): FL_INWATER, velocity ×
+   (1 − 0.8·waterlevel·dt) (a sinking monster: v' = 0.992 v − 8 at level
+   1, v' = 0.976 v at level 3, dt 0.01); else FL_INWATER cleared
+   **[probe:measured P-step]** (5 maps).
+2. Not on ground at the frame start, not FL_FLY, not FL_SWIM in liquid,
+   water level < 2: add gravity (no gravity at level 3; level 2 is not
+   captured).
+3. Velocity non-zero: the ground move of PUSHSTEP below. No landing sound
    **[probe:measured P-step]**.
-2. On ground with horizontal velocity (pushed by an explosion or a door):
-   ground friction as for PUSHSTEP below, then slide
-   **[probe:measured P-step]**.
-3. Think. 4. Water level (5).
+4. Think. 5. Water level (5).
 Ordinary monster walking is done by the game through walk moves (6).
 
 ### PUSHSTEP (func_pushable)
-1. On ground: horizontal friction — s = |velocity.xy|; if s > 0:
-   control = max(s, stopspeed), s' = max(0, s − dt·control·friction),
-   velocity.xy ×= s'/s (200 → 192 → 184.32 … at dt 0.01). Then a 1 u
-   downward probe with its own box; no hit clears FL_ONGROUND.
-2. Not on ground: add gravity (no friction in the air: a pushable shoved
-   off a ledge keeps 150 u/s until it lands).
-3. Velocity non-zero: check velocity, slide, link with touch.
-4. Think. 5. Water level.
-**[probe:measured P-pushable]**
+1. Not on ground at the frame start: add gravity (no friction in the air:
+   a pushable shoved off a ledge keeps 150 u/s until it lands).
+2. Velocity non-zero, the **ground move** (STEP too):
+   - a 1 u downward probe with its own box against the **world only**
+     (brush entities are not seen); horizontal speed s > 0 consumes the
+     entity friction scale (then 1); if the probe hit (not start-solid):
+     control = max(s, stopspeed), s' = max(0, s − dt·control·
+     sv_friction·scale), velocity.xy ×= s'/s (200 → 192 → 184.32 … at dt
+     0.01);
+   - FL_ONGROUND cleared; check velocity; slide; a slide onto a floor of
+     the world or a SOLID_BSP entity sets FL_ONGROUND and groundentity;
+     else the world-only probe from the new origin sets FL_ONGROUND
+     (groundentity unchanged); link with touch.
+   On a brush-entity platform FL_ONGROUND therefore alternates frame by
+   frame and there is no ground friction; landing on the world brakes on
+   the landing frame **[probe:measured P-step ledge48, P-pushable
+   pushstep_ledge]**.
+3. Think. 4. Water level.
+**[probe:measured P-pushable, P-step]**
 
 ### PUSH
 Section 4.
@@ -147,26 +196,39 @@ stalls and its think does not run **[probe:measured K-pusher]**.
 3. SOLID_NOT pushers stop here (passable doors and toggled walls push
    nothing).
 4. Candidates, ascending index, excluding movetypes PUSH, NONE, NOCLIP,
-   FOLLOW: riders (FL_ONGROUND on this pusher), and entities whose box
-   intersects the pusher's own hull **at its new position** (a test against
-   the pusher alone). An entity in the pusher's path is therefore pushed
+   FOLLOW: riders (FL_ONGROUND on this pusher), and entities whose linked
+   box **strictly** overlaps the pusher's new linked box (faces in contact
+   do not count: a pusher coming down on a crate starts pushing when its
+   linked box overlaps the crate's by 1 u, 1 u short of the real boxes
+   **[probe:measured P-push down_onto_crate]**) and whose box intersects
+   the pusher's own hull **at its new position** (a test against the
+   pusher alone). An entity in the pusher's path is therefore pushed
    only from the frame the pusher has moved into it, by that frame's whole
-   move, so it keeps the overlap of that first frame: a door with a 4 u gap
-   to a crate and 100 u of travel moves the crate 95 u, and the crate ends
-   overlapping the door by 1 u **[probe:measured P-push]**.
+   move: a door whose padded bounds leave a 4 u gap to a crate (5 u
+   between the real faces) and 100 u of travel moves the crate 95 u, faces
+   in contact at the end **[probe:measured P-push]**.
 5. Non-player candidates lose FL_ONGROUND; each is pushed by `move` with the
    pusher temporarily non-solid (its own traces may stop it short; impact
    touches run).
-6. Blocked: when a pushed candidate could not follow the move (its traces
-   stopped it short) and is left inside the pusher — zero-width candidates
+6. Blocked: after its push the candidate is **stuck** — the position test
+   (trace-and-hulls.md 4.6) against everything with its own move type is
+   start-solid. The move query only clips entities whose linked boxes its
+   ±1 u box meets, so a crate whose hull (24 u box → hull 3, +8 u on one
+   side) already reaches into a blocker is not stuck until its linked box
+   meets the blocker's: a door pushing a 24 u crate toward a brush 8 u
+   away moves it 4 u and then blocks **[probe:measured P-push
+   door_block_rider, K-pusher blocked]** (10 maps). Zero-width candidates
    are ignored; SOLID_NOT / SOLID_TRIGGER candidates (corpses, gibs)
-   collapse to zero size and are ignored **[probe:measured P-push]** —
-   the candidate returns (link with touch), the pusher returns (ltime −=
-   movetime), the pusher's `blocked` runs once per blocked frame with other
-   = candidate, and every candidate already moved returns
-   **[probe:measured P-push]**. The residual first-frame overlap of step 4
-   is not a block (the crate case); the exact block criterion is taken from
-   the P-push records.
+   collapse to zero size where they are and are ignored
+   **[probe:measured P-push corpse]**; otherwise the candidate returns
+   (link with touch), the pusher returns (ltime unchanged), the pusher's
+   `blocked` runs once per blocked frame with other = candidate, and every
+   candidate already moved returns; FL_ONGROUND they lost is not restored
+   **[probe:measured P-push]**.
+7. hl64 finds candidates in the spatial grid (solids and triggers over the
+   old ∪ new linked boxes): SOLID_NOT entities are not in the grid, so a
+   SOLID_NOT entity resting on a pusher is not carried (GoldSrc carries
+   it) — a known deviation, no capture.
 
 ### 4.3 Rotation
 As 4.2 with: amove = avelocity·movetime added to angles; swept box = the
@@ -182,16 +244,25 @@ moved by the push, not by pmove.
 
 ## 5. Water level (non-player)
 
-After toss-family, STEP and PUSHSTEP steps, a non-player entity gets a
-water level 0–3 like the player's (feet, waist, eyes): toss, bounce and
-step entities fully under water reach **waterlevel 3**, not 1
-**[probe:measured W-water]** (the sample points are taken from the capture;
-expected: bottom + 1, box centre, origin + view_ofs). watertype = the
-contents at the lowest submerged point. Liquid = WATER, SLIME, LAVA, and
-also SKY (−6) **[probe:measured W-water]**. **Entering liquid halves the
-vertical velocity** (37/37 entries) **[probe:measured W-water]**. No splash
-sound from the engine. Contents brushes (`func_water`, SOLID_NOT with a
-contents skin) count as liquid (trace-and-hulls.md 1).
+After toss-family, STEP and PUSHSTEP steps (resting toss entities too), a
+non-player entity gets a water level 0–3 like the player's (feet, waist,
+eyes): toss, bounce and step entities fully under water reach
+**waterlevel 3**, not 1 **[probe:measured W-water]**. Sample points
+**[probe:measured P-step]**: feet = (linked box centre x, y; absmin.z + 1,
+the bottom of the real box: a monster whose feet are 0.68 u under the
+surface is at level 1), waist = linked box centre, eyes = origin +
+view_ofs (`ent_phys.view_ofs_z`; level 3 only once the waist is in: a
+probe monster with view_ofs 0 goes 1 → 3). watertype = the feet contents
+when liquid, else EMPTY (−1, also when the feet are in solid)
+**[probe:measured P-bounce bounce_box]**. GoldSrc gives every entity it
+steps watertype EMPTY on its first frame; hl64 sets it when a motion
+movetype is set (slice Ent). Liquid = WATER, SLIME, LAVA, the currents,
+and also SKY (−6) **[probe:measured W-water]**. **Entering liquid
+(level 0 → > 0) halves the vertical velocity** (37/37 entries)
+**[probe:measured W-water]**; the move of that frame used the full
+velocity. No splash sound from the engine. Contents brushes
+(`func_water`, SOLID_NOT with a contents skin) count as liquid
+(trace-and-hulls.md 1).
 
 ## 6. Monster step moves (engine services)
 
@@ -207,16 +278,25 @@ contents skin) count as liquid (trace-and-hulls.md 1).
   down to −18; all-solid fails; start-solid retries from the unraised
   position; no ground hit fails unless FL_PARTIALGROUND (then fall); after a
   hit, check_bottom must pass unless FL_PARTIALGROUND; success clears
-  FL_PARTIALGROUND, sets groundentity, links with touch (CHECKONLY never
-  moves). Measured: world stairs (8 u risers) are climbed; an 18 u step
-  made of a **brush entity** (SOLID_BSP) is never stepped onto — the move
-  fails at contact **[probe:measured P-walkmove]** (7 maps). 18 u world
-  steps are expected to be climbed **[probe]**.
-- **move_to_origin(e, goal, dist, mode)** (`pfnMoveToOrigin`): turn toward
-  the goal and walk_move along it; if blocked, try compass directions
-  (45° steps) reducing the larger axis gap first, random order on ties
-  (engine random stream), not the direct reverse until all else failed.
-  **[probe P-walkmove: success/failure pattern, not the random choice]**
+  FL_PARTIALGROUND, sets groundentity, links with touch. Not on ground,
+  FL_FLY or FL_SWIM: fails at once (a FL_PARTIALGROUND walker that walked
+  off fails its next move) **[probe:measured P-walkmove partial48]**.
+  CHECKONLY moves the origin like NORMAL but does not link, touch or
+  change flags / ground (HLSDK CheckLocalMove restores the origin)
+  **[probe:measured P-walkmove flat]** (mode 2 results equal mode 0).
+  Measured: world stairs (8 u risers) are climbed; an 18 u step made of a
+  **brush entity** (SOLID_BSP) is never stepped onto — the move fails at
+  contact **[probe:measured P-walkmove]** (7 maps); hl64: the walker's
+  box at the level destination intersecting a SOLID_BSP entity (not the
+  world) fails the move. Known residual: on t0a0b, t0a0b1 and t0a0d the
+  probe stops at one stair (top steps against brush-entity landings)
+  where hl64 climbs (64 of 2006 walk results).
+- **move_to_origin(e, goal, dist, mode)** (`pfnMoveToOrigin`): walk_move
+  straight at the goal; if blocked, the eight compass directions ordered
+  by how much nearer each brings the goal (ties in a random order from
+  the engine stream), the reverse of the straight direction last. Angles
+  and ideal_yaw are not changed **[probe:measured P-walkmove]** (the
+  straight moves exactly, the detours as compass steps of `dist`).
 - **drop_to_floor(e)**: box trace down 256 u: all-solid → −1, no hit → 0,
   else move there, link without touch, FL_ONGROUND, groundentity → 1.
 - **change_yaw(e)**: move yaw toward ideal_yaw by at most yaw_speed (the
@@ -249,3 +329,21 @@ state. (Client-side: awaits the retail-client capture plan.)
 | P13 | active set: a resting crate, a resting gib and an idle func_wall are not stepped (zone counters 0) yet react on the frame something moves them | host counters |
 | P14 | water: toss/bounce/step entities reach waterlevel 3; entering liquid halves vz; SKY (−6) counts as liquid | **[probe:measured W-water]** |
 | P15 | SOLID_BSP with a movetype other than PUSH is a fatal error naming the class | **[probe:measured]** (Oracle2 run logs) + host spawn-all test |
+
+hl64 host results (`test/m3/phys.py`, every capture scenario rebuilt on
+the cooked maps and replayed frame by frame; origin / velocity ±0.001,
+flags, ground, water level and type, size, ltime / nextthink, thinks and
+blocks exact; 56 070 frames, 10 maps): P1 50/50, P2 80/80, P3 20/20
+(10 landings + 10 slide self-tests), P4 39/39, P5 = K4 52/52, P6 35/35,
+P7 3/3 (the bot rides by the pmove host), P9 38/39, P10 1942/2006 walk
+results, P11 181/181, P12 19/19, P13 10/10, P14 31/32, P15 10/10, P8 0/7.
+Residuals: P8 — every frame up to and including the corpse's collapse
+matches; from the frame the door passes the collapsed point (stuck at the
+blocker) GoldSrc lands it on the world each frame (FL_ONGROUND) while
+hl64's move query reports it all-solid inside the door, so it keeps
+falling in place without FL_ONGROUND (a start-held brush candidate on a
+zero-length world segment, trace-and-hulls.md 4.4 step 5, needs a
+capture); P9 hldemo3 `func_pushable` resting on two `momentary_door`s
+brakes every other frame in GoldSrc (none in hl64); P10 the top stair on
+t0a0b, t0a0b1, t0a0d (6 above); P14 t0a0b1: a monster sinking in deep
+water gets FL_ONGROUND 17 u above the floor in GoldSrc.

@@ -460,7 +460,7 @@ static int world_below(const col_ent_t *v)
 	down[2] = v->origin[2] - 1;
 	phy_trace_count++;
 	col_trace_world(v->origin, v->mins, v->maxs, down, &tr);
-	return tr.frac < 1 || tr.startsolid;
+	return tr.frac < 1 && !tr.startsolid;
 }
 
 /* The moving part of STEP / PUSHSTEP: ground friction when the world
