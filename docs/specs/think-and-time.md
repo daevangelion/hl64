@@ -1,107 +1,112 @@
-# Game clock, think timing, entity lifetime
+# Game clock, think timing, active sets, entity lifetime
 
-Conventions: [README.md](README.md). Frame order: architecture.md 3.2.
+Behaviour: when thinks run and what time they see, as in GoldSrc.
+Mechanism: integer clock, think heap and active sets instead of a
+per-frame scan of every entity. Conventions and oracles:
+[README.md](README.md); frame order: architecture.md 3.2.
 
 ## 1. Clock
 
-- `time` (game seconds, f32 visible to the game; the engine accumulates in
-  f64 and converts once per frame) starts at **1.0** at New Game.
-- `dt` per frame: VI-derived and clamped to [1/60, 0.1] s on the cart
-  (frames below 10 fps slow the game, as the oracle does; GoldSrc clamps at
-  0.25), or fixed (`host_fixed_dt`, default 1/30 in test builds) so host
-  and cart routes advance identically.
-- During a frame every engine→game call sees `time` = the frame's time,
-  except inside a think or timer callback, which sees its own due time
-  (2, 4). `time` advances by `dt` after the entity loop (architecture.md 3.2
-  step 6), before streaming, sound and rendering.
-- The clock never jumps at seams (one world, no level loads) and is part
-  of a saved game.
+- `now`: u64 microseconds of game time, starting at 1 000 000 (1.0 s) at New
+  Game **[probe K-settle]**. The game's float `time` = now · 10⁻⁶; float
+  delays convert once to µs (round to nearest).
+- `dt`: elapsed vblanks × VI period, clamped to [1/60, 0.1] s on the cart
+  (D6 i; GoldSrc allows 0.25 s — only frames under 10 fps differ);
+  `host_fixed_dt` (default 1/30 s) in test builds so host and cart routes
+  advance identically.
+- Every engine→game call during a frame sees the frame's `now`, except a
+  think or timer callback, which sees its own due time (2, 5). `now`
+  advances by `dt` after the active-set pass.
+- No clock jump at seams; the clock is saved.
 
-## 2. Think (every movetype except PUSH)
+## 2. Think rule (every movetype except PUSH)
 
-An entity's think runs at most once per frame, at the point of its
-movetype step given in physics-movetypes.md (before motion for the toss
-family, after the fall for STEP/PUSHSTEP, alone for NONE/NOCLIP):
+An entity thinks at most once per frame, at the point of its movetype step
+(physics-movetypes.md):
 
-- not due if `nextthink ≤ 0` or `nextthink > time + dt`;
-- due otherwise: `nextthink := 0`, then the think function runs with the
-  game's time = max(nextthink, time) — so a think due in the middle of this
-  frame's interval runs this frame and sees its scheduled time, and a
-  think whose time is in the past (scheduled before a long frame) sees the
-  frame time;
-- a think that sets `nextthink ≤ time + dt` again runs next frame, not
-  again this frame;
-- if the think frees the entity, its movetype step ends.
+- not due if nextthink is unset (0) or `nextthink > now + dt`;
+- due otherwise: nextthink := unset, then the think runs with time =
+  max(nextthink, now) — so it can run in the frame *before* the clock
+  passes its due time and see that (future) scheduled time; a think
+  scheduled in the past sees the frame time;
+- a think that schedules itself due again by `now + dt` runs next frame;
+- freeing the entity ends its step.
 
-Consequence: a think runs in the first frame whose interval
-`[time, time + dt]` reaches its due time, which can be the frame *before*
-the clock passes it; inside the think the game sees the scheduled time
-(which may be ahead of the frame time). Scheduled times are kept, not
-rounded to frames: a think that reschedules itself at `time + 0.12` with
-dt = 1/30 from frame 0 runs at frames 0, 3, 7, 10, … and sees times
-t0, t0 + 0.12, t0 + 0.24, t0 + 0.36 (f32 sums of the scheduled values).
+Scheduled times are kept, not rounded to frames: a think rescheduling
+itself at +0.12 s from frame 0 with dt = 1/30 runs at frames 0, 3, 7, 10,
+14 … and sees t0 + 0.12 k. **[probe K-think]** (GoldSrc's float
+`nextthink ≤ time + frametime` rule, reproduced in integers.)
 
-## 3. Pusher think
+## 3. Active sets (mechanism)
 
-MOVETYPE_PUSH entities think on their local clock (physics-movetypes.md
-4.1): due when `nextthink` lies in `(ltime before the move, ltime after
-the move]`; the think sees the frame's `time`. A blocked pusher's `ltime`
-does not advance, so its think is postponed while blocked. Doors, plats
-and trains schedule `nextthink = ltime + travel time` (HLSDK
-`CBaseToggle::LinearMove`).
+- **Think heap**: 4-ary min-heap of (nextthink µs, entity index), ≤ 512
+  entries; setting or clearing nextthink updates the entry.
+- **Movers bitset** (512 bits): set while the entity's movetype has motion
+  to do (velocity or avelocity non-zero, falling types not on ground,
+  pushers with velocity/avelocity, FOLLOW, PUSHSTEP not at rest); engine
+  setters for velocity, flags, origin, groundentity and movetype keep it
+  current; an entity leaves the set when its step ends at rest.
+- Per frame: pop every heap entry due by `now + dt` into a **due** bitset;
+  walk `due | movers` word by word in ascending index and run each
+  entity's movetype step. An entity created during the walk joins if its
+  index is above the walk position, as GoldSrc's ascending-index loop
+  would visit it.
+- Observable equivalence with GoldSrc's "visit every entity" loop: an
+  entity that is neither due nor moving would do nothing in its step;
+  skipping it changes nothing.
 
-## 4. Logic timers
+## 4. Pusher think
+Pushers think on their local clock (physics-movetypes.md 4.1): due when
+nextthink lies in (ltime before the move, ltime after]; the think sees the
+frame time; a blocked pusher's think waits. Doors, plats and trains
+schedule `ltime + travel time` (HLSDK `CBaseToggle::LinearMove`).
+**[probe K-pusher]**
 
-Edict-less records (multi_manager steps, delayed fires of CBaseDelay
-`delay` keys, logic thinks: architecture.md 6.3) live in one timer queue of
-128 entries.
+## 5. Logic timers
+Edict-less records (multi_manager steps, delayed fires, logic thinks;
+architecture.md 6.4) use one timer heap of 128 entries:
 
-- At `game_start_frame` the queue runs every timer whose due time is
-  ≤ time + dt, in increasing due time (ties: the earlier inserted first),
-  each seeing game time = max(due, time). Timers scheduled by a callback
-  that are themselves due run in the same pass (bounded to 1024 callbacks
-  per frame; reaching the bound is logged).
-- Timers of a map that closes are frozen with their remaining time
-  (due − time) and their activator dropped; when the map reopens they are
-  re-queued at time + remaining (logic thinks and multi_manager steps only
-  when their record rehydrates).
-- A full queue is a fatal error naming the map and record (the cap was
-  sized from measured peaks; GoldSrc has no cap).
+- at `game_start_frame` every timer due by `now + dt` runs in due order
+  (ties: insertion order), seeing max(due, now); timers scheduled by a
+  callback that are already due run in the same pass (≤ 1024 callbacks per
+  frame, logged if reached);
+- a closing map's timers freeze by remaining time (activator dropped) and
+  are re-queued at now + remaining when it reopens (logic thinks and
+  multi_manager steps when their record rehydrates);
+- a full heap is fatal, naming map and record.
 
-## 5. Entity lifetime
+In GoldSrc these are entity thinks of `multi_manager` / `DelayedUse`
+entities; the observable timing is the same as rule 2 **[probe K-think]**.
 
-- Slot 0 is the world; slot 1 the player; game entities from slot 2.
-- **Allocate**: the lowest-index free slot ≥ 2 whose free time is either
-  < 2.0 (freed during the first second of the game) or at least 0.5 s
-  before the current time; otherwise a new slot at the end of the used
-  range. A new slot's record is zeroed (all fields 0, handles none,
-  `gravity` 0 meaning 1), serial incremented.
-- Reserves: optional hydration allocates only while ≥ 48 slots are free;
-  transient effects (gibs, debris, shells) only while ≥ 32 are free and
-  otherwise get none (the effect is skipped); game allocations may use
-  every slot; exhausting the table is a fatal error with a census
-  (classes and counts) on the log.
-- **Free**: unlink; clear the record (keeping serial and free time);
-  free time := time; serial += 1; owner, enemy and other references held
-  by other entities are left for the game to validate (handles carry the
-  serial). A map record's state becomes killed or dry as the game says
-  (architecture.md 6.3).
-- A free entity is never touched, thought, drawn or traced.
-- **New Game settle**: after the start map's records are spawned, two
-  simulation frames with dt = 0.1 run before the first presented frame
-  (so items and monsters drop to the floor and triggers initialise).
-  Hydration later in the game gets no settle frames.
+## 6. Entity lifetime
 
-## 6. Tests
+- Slot 0 world, slot 1 player, game entities from slot 2; cap 495.
+- **Allocate**: lowest free slot ≥ 2 that was freed before time 2.0 s or at
+  least 0.5 s ago; else the next never-used slot **[probe K-alloc]**. The
+  new entity's components are zeroed, serial incremented.
+- Reserves: optional hydration only while ≥ 48 slots are free; transient
+  effects (gibs, debris, shells) only while ≥ 32 are free (otherwise
+  skipped); game allocations may use every slot; exhaustion is fatal with a
+  class census.
+- **Free**: unlink, remove from the heap and active sets, zero components
+  (keep serial and free time), serial += 1. References held elsewhere are
+  validated through handles.
+- **New Game settle**: after the start map's records spawn, two 0.1 s
+  simulation frames run before the first presented frame (items and
+  monsters drop to the floor) **[probe K-settle]**. Hydration later gets
+  none.
+
+## 7. Tests
 
 | # | property | data |
 |---|---|---|
-| K1 | a think rescheduling itself at +0.12 s from frame 0 with dt = 1/30 runs at frames 0, 3, 7, 10, 14 … and sees times t0 + 0.12k (f32 sums) | synthetic |
-| K2 | `nextthink = time` set inside the entity's own think runs next frame (one think per frame); set earlier in the frame by a lower-index entity it runs this frame; `nextthink ≤ 0` never runs; `nextthink = time + dt` is due this frame (boundary inclusive) | synthetic |
-| K3 | a think whose due time passed during a 0.1 s frame sees the frame time, not the due time | synthetic with a 0.1 s frame |
-| K4 | pusher: think fires on the frame `ltime` passes nextthink; a blocked pusher's think is postponed until unblocked | synthetic |
-| K5 | timers: due-time order, same-frame cascade, time seen = max(due, time); freeze on close and thaw on reopen preserve remaining time to the frame | synthetic + fixture K-think: the oracle's multi_manager fire times along the Uplink route (map, record, fire time) |
-| K6 | allocation: freed slot not reused for 0.5 s (except slots freed before time 2.0); lowest index wins; serial increments | synthetic |
-| K7 | reserves: hydration stops at 48 free, transients at 32, game allocations succeed to the cap | synthetic |
-| K8 | New Game settle: two 0.1 s frames run before frame 1; an item spawned 10 u above a floor is on the floor at frame 1 | synthetic + fixture (hldemo1 item origins after settle) |
-| K9 | clock: `time` = 1.0 + Σdt; identical on host and cart for a fixed-dt route (stats `time=` field compared) | route |
+| K1 | +0.12 s self-rescheduling think at dt 1/30: frames 0, 3, 7, 10, 14; times t0 + 0.12 k | probe K-think + host |
+| K2 | `nextthink = time` from its own think → next frame; set by a lower-index entity → this frame; unset → never; `now + dt` boundary inclusive | probe K-think |
+| K3 | a think whose due time passed during a 0.1 s frame sees the frame time | probe K-think |
+| K4 | pusher thinks on ltime; blocked pusher postpones | probe K-pusher |
+| K5 | timers: order, cascade, time seen, freeze/thaw keep remaining time | probe K-think (multi_manager entities) + synthetic |
+| K6 | allocation: reuse delay, lowest index, serial increments | probe K-alloc |
+| K7 | reserves: hydration stops at 48 free, transients at 32 | synthetic |
+| K8 | settle: start time 1.0 s; items dropped 10 u above a floor rest on it at frame 1 | probe K-settle |
+| K9 | active set: identical results with a debug mode that steps every live entity every frame (route checksum of all components at each stats step) | host route |
+| K10 | host and cart clocks identical on a fixed-dt route | route stats |

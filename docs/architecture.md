@@ -1,49 +1,70 @@
 # hl64 engine architecture
 
-Status: design (EngineSpec, 2026-11-13). Binding rules: [PROVENANCE.md](PROVENANCE.md).
-Behaviour specs: [specs/](specs/README.md). Reuse verdicts: [provenance-audit.md](provenance-audit.md) (ProvAudit).
+Status: design, revision 2 (EngineSpec, 2026-11-13). Binding rules:
+[PROVENANCE.md](PROVENANCE.md). Behaviour specs: [specs/](specs/README.md).
+Reuse verdicts: [provenance-audit.md](provenance-audit.md) (ProvAudit).
 
-hl64 is a single-player Nintendo 64 engine for Half-Life content. It runs one
-continuous streamed world built from the cooked formats the quakegeneric N64
-work already produces (`.w64`, CWG3, HLE1, STB2 v4, wav64, ui8), within the
-budgets measured there (`n64/docs/stream-arch-v2.md` in the old tree, "SA2"
-below). Game logic is our C reimplementation of the HLSDK game (`game/`,
-HLSDK licence), re-targeted from the Quake hooks it uses today onto the
-engine API in this document.
+hl64 is a single-player Nintendo 64 engine for Half-Life content. Two rules
+shape every module:
 
-The old tree (`~/src/ports/quakegeneric`, branch `n64-port`) is the reference
-implementation and test oracle only. Implementing agents read this document,
-`docs/specs/`, `docs/formats/` and the allowed sources; they never open the
-old tree's forbidden files (PROVENANCE.md). Where this document names an old
-tree file, it is to tell a dirty-side agent where to capture oracle data, not
-to tell an implementer where to look.
+1. **Behaviour target = GoldSrc as observed.** What the player sees, hears
+   and plays must match Half-Life (HLSDK semantics, retail look and feel).
+   The old quakegeneric tree is an oracle only where it matches GoldSrc;
+   its Quake-derived quirks are not preserved (specs/README.md, "Oracles").
+2. **Internals owe nothing to Quake's shape.** No string cvars, no command
+   buffer, no float-typed entvars blob, no edict array scanned every frame,
+   no client/server split, no precache-by-name string tables, no lightstyle
+   strings at run time. Each module uses the cheapest N64 design that keeps
+   rule 1: typed fixed-size records, integer time and ids, cooked indices
+   instead of runtime strings, data-oriented loops over active sets, spatial
+   structures sized to our sectors and cells, DMA-friendly layouts.
 
-Evidence labels: **measured** (number from an old-tree run log or cook
-report, source cited), **[INFERENCE]** (reasoned estimate, to be measured by
-the milestone that owns it).
+Where GoldSrc's data *is* its behaviour, we keep the data: collision uses
+the compiler's clip hulls (cooked into our COLL format) because the hull
+expansion, bevels and the 1/32 u stand-off are what players feel.
+
+Game logic is our C reimplementation of the HLSDK game (`game/`, HLSDK
+licence), retargeted from the Quake hooks it uses today onto the engine API
+below. It runs one continuous streamed world over the existing cooked
+formats (`.w64`, CWG3, HLE1, STB2 v4, wav64, ui8) plus new cooked tables
+(resources, sentences, lightstyle patterns, compiled routes), within the
+stream-arch-v2 budgets (old tree `n64/docs/stream-arch-v2.md`, "SA2").
+
+Evidence labels: **measured** (old-tree log or cook report, cited),
+**[EST]** (estimate with its reasoning; the milestone named replaces it with
+a measurement).
+
+Old-tree CPU baseline used throughout (**measured**): cart Uplink route,
+`PROFILE=1`, ares, `/scratch/quakegeneric/tmp/Anim/final-prof/ares-uplink-playthrough.log`,
+µs per frame over 170 one-second windows, p50 / p90 (zones nest: `trace`
+is inside `phys`, `phys` inside `sv`):
+
+| zone | p50 | p90 | | zone | p50 | p90 |
+|---|---:|---:|---|---|---:|---:|
+| `sv` server frame | 14538 | 18806 | | `smsg` send to client | 1851 | 2941 |
+| `phys` entity physics | 8681 | 11955 | | `went` entity delta write (in smsg) | 1337 | 1531 |
+| `pcl` player | 1122 | 1527 | | `cl` client read + relink | 1772 | 2666 |
+| `step` monsters | 2339 | 6253 | | `wsf` stream frame | 3286 | 4094 |
+| `toss` / `push` / `none` | 1111 / 959 / 720 | 1433 / 1360 / 1081 | | `wake` record wakes | 750 | 1432 |
+| `think` | 1364 | 3807 | | `rview` render CPU | 7102 | 15536 |
+| `trace` | 2131 | 4773 | | `r2d` 2D/HUD | 604 | 1517 |
+| `link` / `leafs` | 974 / 529 | 1749 / 716 | | | | |
 
 ---
 
-## 1. Scope and non-goals
+## 1. Scope
 
-In scope:
+In scope: one process, one thread plus interrupt callbacks; renderer and
+sound read entity components directly after the simulation step. One
+continuous world per campaign component (every map at its CWG3 offset
+`g_M`; seams are portals; nothing loads a level after New Game). N64 with
+Expansion Pak; a host build (Linux, `-m32` and LP64) enforcing the same
+limits. Content: Half-Life: Uplink and the Hazard Course as cooked from the
+player's data; nothing may assume a map count or names (the full campaign is
+the long-term aim).
 
-- Single player, one process, one thread (plus interrupt callbacks). No
-  client/server split, no loopback, no network protocol, no demo format,
-  no entity_state delta encoding. The renderer and sound read entity
-  records directly after the simulation step of the same frame.
-- One continuous world per campaign component: every map of the CWG3 graph
-  sits at its cooked global offset `g_M`; seams are portals (translation
-  `T`); nothing ever "loads a level" after New Game.
-- N64 with the Expansion Pak (8 MB). A host build (Linux, `-m32` and LP64)
-  enforces the same limits for tests.
-- Content: Half-Life: Uplink (hldemo1→2→3→2→1) and the Hazard Course
-  (`t0a0*`) as cooked by the existing tools. Full HL1 campaign is the
-  long-term aim; nothing here may assume a map count or map names.
-
-Not in scope: multiplayer, mods/plugins loading DLLs, the GoldSrc client
-DLL boundary, raw BSP loading on the console, software rendering, Android/
-SDL builds (the old tree keeps those), 4 MB consoles.
+Not in scope: multiplayer, network protocol, demos, mods/DLLs, raw BSP on
+the console, software rendering, Android/SDL, 4 MB consoles.
 
 ---
 
@@ -52,184 +73,178 @@ SDL builds (the old tree keeps those), 4 MB consoles.
 ```
 hl64/
   LICENSE                 MIT (everything except game/ and tools/hlsdk/)
-  Makefile                ROM (libdragon n64.mk) and host targets
-  include/hl64/           MIT public headers: the engine API the game sees
-    limits.h              every cap and pool size (one file, cart = host)
-    types.h               vec3, handles (ent_h, str_h, mdl_h, snd_h), fixed ints
-    eng.h                 engine services for game/ (section 7)
-    game.h                game exports the engine calls (section 7)
-    ent.h                 the entity core record (section 6)
-    pmove.h               the player-move host contract (specs/pmove-host.md)
+  Makefile                rom (libdragon n64.mk + t3d.mk), host, cook, tests
+  include/hl64/           MIT public headers (engine API seen by game/)
+    limits.h              every cap and pool size (cart = host)
+    types.h               vec3, ent_h, name_t, res_t, time_us, fixed types
+    ent.h                 entity component layout (6)
+    eng.h  game.h         engine services / game exports (7)
+    pmove.h               player-move host contract (specs/pmove-host.md)
+    settings.h            typed settings record (12)
   engine/                 MIT
-    core/                 boot, frame loop, clock, log, cvar, cmd, console, rng
-    mem/                  boot carve, arenas, first-fit pools, slabs
-    io/                   cart file table, async DMA scheduler
-    world/                layers (.w64), campaign (CWG3), portals, vis, stream
-    coll/                 hull walks, traces, area tree, entity clipping
-    phys/                 movetypes, pushers, step moves, pmove host
-    ent/                  entity table, records (HLE1), hydration, strings,
-                          precache tables, dehydrate store, timers
-    snd/                  channels, spatialisation, sentences, wav64 voices
-    render/               frame, sectors, movers, studio, translucent, sprites,
-                          particles, decals, beams, lights, 2D
-    ui/                   menu, console overlay, text messages
-    save/                 save/load (decision D4)
-    test/                 route runner, profiler zones, stats lines
-  plat/                   MIT; the only code that includes libdragon
-    n64/                  main, VI pacing, PI DMA, pad, audio out, ares harness
-    host/                 main, pread backend + PI cost model, scripted pad,
-                          null audio, draw-list recorder
+    core/   boot, frame loop, clock, rng, log, settings, debug commands
+    mem/    boot carve, arenas, first-fit pools, slabs
+    io/     cart file table, async DMA scheduler
+    world/  layers (.w64), campaign (CWG3), portals, vis, residency
+    coll/   hull walks, traces, hitboxes, spatial grid
+    phys/   active sets, movetypes, pushers, step moves, pmove host
+    ent/    components, handles, think heap, records (HLE1), hydration,
+            dehydrate store, timers, name index
+    res/    cooked resource table, residency interest
+    snd/    voices, spatialisation, sentences, wav64
+    render/ frame, sectors, movers, studio, particles, translucent,
+            sprites, beams, decals, lights, 2D
+    ui/     menu, debug overlay
+    save/   save/load (D4)
+    test/   route VM, profiler zones, stats records
+  plat/n64/  plat/host/   the only code that includes libdragon / tiny3d
   game/                   HLSDK licence (game/LICENSE-HLSDK + Valve notice)
-    hl/                   the C reimplementation (from old source/hl, re-targeted)
-    pm/                   HLSDK pm_shared (decision D2)
-    hud/                  HUD, view (client-DLL side logic)
-    studio/               bone setup / animation from HLSDK StudioModelRenderer (D3)
-  tools/                  MIT cook tools (imported per audit)
-    hlsdk/                HLSDK-licensed tool code that needs SDK headers (studio)
-  test/
-    routes/               uplink.cfg, hazard-*.cfg, milestone routes
-    fixtures/             oracle captures (data only, see specs/README.md)
-    run/                  host + ares runner scripts
-  docs/
+    hl/                   the C reimplementation (retargeted)
+    pm/                   HLSDK pm_shared (D2)
+    studio/               pose maths from HLSDK StudioModelRenderer (D3)
+    hud/                  HUD, view
+    defs/                 classes.def, funcs.def, res.def (read by the cook)
+  tools/                  MIT cook tools; tools/hlsdk/ HLSDK-licensed parts
+  test/  routes/ (text sources) fixtures/ goldsrc-probe/ (HLSDK, 15) run/
+  docs/  architecture.md PROVENANCE.md provenance-audit.md specs/ formats/
 ```
 
-Dependency rule: `game/` includes only `include/hl64/*.h` and its own
-headers. `engine/` never includes `game/` headers; it calls the game through
-`include/hl64/game.h`. `plat/` is the only directory that includes
-`libdragon.h`/`t3d.h`; `engine/render` reaches tiny3d/rdpq through a thin
-`plat/n64/gpu.h` so the host can link a recorder instead.
+`game/` includes only `include/hl64/*.h` and its own headers; `engine/`
+never includes `game/` headers except the generated tables from
+`game/defs/*.def` (plain X-macro data: class ids, function ids, resource
+ids), which the cook reads too.
 
 ---
 
-## 3. Platform, boot and frame loop
+## 3. Platform and frame loop
 
 ### 3.1 Boot (N64)
 
-1. libdragon init: debug (ISViewer), DFS (`rom:/`), timer, controller,
-   audio (22050 Hz), RSP queue, tiny3d.
-2. Display: 320×240, 16 bpp, two framebuffers, 16 bpp Z, banked libdragon
-   (FB/Z in separate RDRAM banks, as the old tree's
-   `libdragon-banked-bc24d3d5a7d2`).
-3. `mem_boot_carve`: every fixed pool of section 4 allocated once, in a fixed
-   order, before any other allocation. The remaining heap is measured and
-   printed (`mem: carve … heap_free=…`); boot fails if it is below
-   `HL64_HEAP_MIN_KB`.
-4. tiny3d self-check of the cooked strip index encoding (one probe index
-   converted with the running tiny3d and compared to the `.w64` header's
-   `idx_stride/idx_base`; mismatch → in-place re-encode path, SA2 §3.2).
-5. Content check: `campaign.cwg` present and valid, every `.w64` named by
-   it present with matching header size and directory CRC. Missing player
-   content → a text screen explaining how to cook it; never a crash.
-6. Console, cvars, commands registered; `autoexec` (ROM-packed text) run.
-7. Menu (or `+map`/route boot from the test config).
+1. libdragon: ISViewer debug, DFS, timer, controllers, audio 22050 Hz,
+   rspq, tiny3d; display 320×240×16, two framebuffers, 16-bit Z; banked
+   libdragon (`~/sdks/libdragon-banked-bc24d3d5a7d2`, FB/Z in separate
+   RDRAM banks).
+2. `mem_boot_carve`: every fixed region of 4.1 in a fixed order; the
+   remaining heap is measured and checked against `HL64_HEAP_MIN_KB`.
+3. tiny3d strip-index self-check against the `.w64` header encoding
+   (mismatch → in-place re-encode, SA2 §3.2).
+4. Content check: `campaign.cwg`, `campaign.rtb` (resource table) and every
+   `.w64` it names present with matching sizes and directory CRCs; missing
+   player content → a text screen explaining how to cook it.
+5. Menu, or a compiled route (test builds).
 
 ### 3.2 Frame loop
 
-One iteration per presented frame. Order is fixed (the specs assume it):
-
-| step | module | notes |
+| step | module | work |
 |---|---|---|
-| 1 | `plat` | read VI count; `dt` = elapsed VIs / VI rate (60 NTSC, 50 PAL), clamped to `[1/60, 0.1]` s; fixed `1/30` when `host_fixed_dt` is set (tests) |
-| 2 | `in` | poll pads → `usercmd` (buttons, view angle deltas, move axes) |
-| 3 | `io` | pump: retire finished DMA piece, launch next |
-| 4 | `game` | `game_start_frame` (globals, timer queue: delayed fires, multi_manager steps) |
-| 5 | `phys` | player: `game_player_prethink` → pmove → touch triggers → `game_player_postthink` |
-| 6 | `phys` | every other live entity in index order: think + movetype step (specs/physics-movetypes.md, specs/think-and-time.md) |
-| 7 | `world` | campaign: approach/arm/switch tests, portal crossing, layer open/close |
-| 8 | `ent` | hydration pump / release under the entity budget (2 ms cart) |
-| 9 | `world` | residency targets → DMA queue (open, pin, prefetch) |
-| 10 | `snd` | listener, channel volumes, sentence words, loops, mixer pump |
-| 11 | `render` | view (game `game_calc_view`), world, movers, studio, particles, translucent, decals, view model, HUD, console/menu |
-| 12 | `plat` | submit; present gated on VI (3.3) |
-| 13 | `test` | route runner step, PROFILE zone roll-up, stats lines |
+| 1 | plat | VI counter → `dt_us` = elapsed vblanks × VI period, clamped to [1/60, 0.1] s (D6 iii); `host_fixed_dt` in test builds |
+| 2 | in | pad → `usercmd` |
+| 3 | io | pump (also between steps 6/7, 9/10 and after the world draw) |
+| 4 | game | `game_start_frame`; logic timers due by `now + dt` (think-and-time.md 4) |
+| 5 | phys | player: prethink → think if due → pmove → link + touches → postthink |
+| 6 | phys | **active set** in ascending entity index: each entity's GoldSrc movetype step (think + motion) — only entities that are due to think, moving, falling, or pushers in motion (6.3) |
+| 7 | world | campaign: approach / arm / switch, portal crossing, layer open/close |
+| 8 | ent | hydration pump / release under the entity budget (2 ms) |
+| 9 | world | residency targets (recomputed only when the eye leaf, the player cell or a pin changes) → DMA queue |
+| 10 | snd | listener, voices, sentence words, loops |
+| 11 | render | view (`game_calc_view`), world, movers, studio, particles, translucent, decals, view model, HUD, debug overlay |
+| 12 | plat | submit; present gated on VI (3.3) |
+| 13 | test | route VM step, PROFILE zone roll-up, stats record |
 
-`io` is also pumped between steps 6/7, 9/10 and after the world draw (five
-points per frame as in the old tree; any piece landing is retired at the next
-pump).
+`now` advances by `dt` after step 6.
 
 ### 3.3 Present pacing (30 fps VI cap)
 
 A finished frame is shown no earlier than `HL64_PRESENT_VBL` (2) vblanks
-after the previous show, and otherwise on the first vblank after the RDP
-finishes it; frame times therefore sit on 33/50/67 ms tiers (NTSC). The RDP
-done callback shows the frame when the gate is open, else parks it; the
-vblank handler shows a parked frame when the gate opens. With two
-framebuffers the next frame's simulation runs while a finished frame waits.
-libdragon's `display_set_fps_limit` is not used (it turns any frame over
-33 ms into 67 ms). The pacing histogram (shows per interval in vblanks) is
-part of every `stats` line. In the old `r64_vid.c` the pacing, palette and
-TLUT code is ours and the `VID_Init` setup is Quake-derived (audit), so the
-file is split (16.1); this paragraph is the spec for the pacing.
+after the previous show, otherwise on the first vblank after the RDP
+finishes it: frame times sit on 33/50/67 ms tiers (NTSC). The RDP-done
+callback shows the frame if the gate is open, else parks it; the vblank
+handler shows a parked frame when the gate opens. With two framebuffers the
+next frame's simulation overlaps a finished frame's wait. libdragon's
+`display_set_fps_limit` is not used (any frame over 33 ms would become
+67 ms). A pacing histogram is part of every stats record.
 
 ### 3.4 Host build
 
-`make host` builds `build-host/hl64-host` from the same `engine/` and `game/`
-sources with `plat/host`: files read with `pread` and a modelled PI cost
-(195 µs/KB = 5.25 MB/s, counted against the frame's budget), a scripted pad
-(route runner and `ARES_TEST_INPUT`-style files), null audio that still runs
-channel allocation and spatialisation, and a draw-list recorder in place of
-the GPU (meshlets, binds, triangles, studio draws per frame; optional PPM of
-a flat-shaded raster is decision D5). The host carves the same pools with the
-same sizes from one arena whose size is the cart's post-carve heap; any
-allocation failure, table overflow or "not found" that would fail on the
-cart fails on the host. `-m32` is the parity default; LP64 builds use the
-same caps (records hold handles, not pointers, so their sizes match —
-section 6).
+`make host` → `hl64-host`: same `engine/` and `game/`, `plat/host`: `pread`
+with modelled PI cost (195 µs/KB = 5.25 MB/s, counted against the frame
+budget), scripted pad, null audio that runs voice allocation and
+spatialisation, draw-list recorder instead of the GPU (D5). Same carve, same
+caps, one arena the size of the cart's post-carve heap: anything that fails
+on the cart fails on the host. Components hold handles and ids, not
+pointers, so `-m32` and LP64 sizes are identical.
 
 ---
 
-## 4. Memory
+## 4. Budgets
 
-### 4.1 Rules
+### 4.1 Memory (8 MB)
 
-- No allocation can fail on the steady path. Everything sized by
-  `include/hl64/limits.h`, carved at boot, and proved by the cook where it
-  depends on content (SA2 principle 2: the cook fails when a leaf's or
-  seam's open set exceeds a pool).
-- Three allocator kinds only: **arena** (bump, reset as a whole: per-frame
-  scratch, boot tables), **first-fit pool** (16 B granularity, compaction
-  that rewrites one owner pointer per block, frame fences for GPU-visible
-  blocks; SA2 §4.3 as built in the old `q64_pool.c`), **slab** (fixed-size
-  slots with a free list: entity records, game private data size classes,
-  channels, decals, particles).
-- `malloc` is not used by `engine/` or `game/` after boot. libdragon's own
-  allocations (rspq, display) happen during boot.
-- GPU-visible memory (vertex/index data, TLUT/texels, matrices) is freed
-  only behind an rspq syncpoint two frames old.
-- DMA destinations own whole 16 B cache lines while a piece is in flight
-  (start 16-aligned, length padded to 16). A CPU access to a shared line
-  during DMA corrupts data (measured on the old cart: `file_size 0` at the
-  hldemo1 elevator until the header buffer was 16-aligned).
+| region | hl64 KB | old tree | basis |
+|---|---:|---:|---|
+| code + data + bss | ≤ 900 | 1428 **measured** (HL cart ELF) | [EST] the old ELF carries the Quake engine (client, server, protocol, console, QuakeC field tables, alias models, v1 world) and the QuakeC translations; hl64's engine is sector/record based and its game drops the `g_*` layer |
+| framebuffers ×2 + Z | 450 | 450 | measured |
+| rspq / tiny3d / matrices | 96 | (in heap) | [EST] |
+| render / texture / collision pools | 240 / 128 / 208 | 240 / 128 / 208 | cook-proved worst sets (SA2 §8, `q64_limits.h`) |
+| layer directories (2 open) | 168 | 2 × 38–84 | measured |
+| studio pool | 1536 → 1024 with D3(b) | 1536 | old route fits; D3(b) per-sequence animation chunks: ≈ 60 KB per NPC model instead of 93–142 KB (SA2 §3.6) [EST] |
+| studio skinned-mesh tables, view model scratch | 192 | 256 heap reserve | [EST] 4–10 KB per drawn NPC (old `sk_build`) |
+| entity components | 113 | edicts 495 × 884 = 427 + client `entity_t` copies, baselines | 6.2: 228 B × 495 |
+| game private data | 160 | (inside the 884 B edicts) | [EST] ~60 monsters × ≤ 1 KB + movers + items, slab size classes |
+| HLE1 blobs (4 slots) | 160 | 72 KB text + 13–19 KB keys per map before HLE1 | [EST] 40 KB per map; names/classes are ids, keys typed |
+| dehydrate store | 64 | similar | 64 runtime pickups + per-map deltas |
+| resource table (cooked) | 12 (Uplink + Hazard ≈ 800 entries × 12 B; full HL ≈ 40) | precache name tables, sfx names, string interning | 6.5 |
+| sentence table (cooked) | 24 | parsed text in RAM | [EST] word ids, no strings |
+| lightstyle patterns + state | 4 | strings + 96 × value | lightstyles.md |
+| think heap, active bitsets, spatial grids | 12 | area tree + leaf lists in edicts | 6.3, 8 |
+| sound (16 voice buffers, 10 wav64, loops) | 96 | not measured | [EST] |
+| sprite cache / decal texels / particles | 64 / 48 / 12 | 64 / 8 / 512 Quake particles | render-fx.md |
+| dlight scratch + flashlight pool | 48 | same | |
+| HUD sheets + font (ui8) | 128 | similar | [EST] |
+| debug log ring (cart) | 8 | 16 KB console text + notify + command buffer | 12 |
+| per-frame scratch arena | 64 | — | |
+| stack + libdragon slack | 256 | — | |
+| **total** | **≈ 5.1 MB** (≈ 4.6 with D3(b)) | old cart route low point: 259 KB heap free (PROFILE) **measured** | headroom ≈ 3 MB |
 
-### 4.2 Budget (8 MB)
+Every [EST] row prints a `mem` line at boot and a high-water mark in every
+stats record; M3/M4/M6 replace it with peak × 1.25.
 
-| region | KB | basis |
-|---|---:|---|
-| code + data + bss | ≤ 1000 target | old HL cart ELF 1428 KB **measured** (text 1009944 + data 184688 + bss 268360) includes the Quake engine, protocol and QC translations hl64 does not have [INFERENCE: 900–1000] |
-| framebuffers ×2 + Z (320×240×16) | 450 | measured |
-| rspq/tiny3d/display lists, matrices (double-buffered) | 96 | [INFERENCE] |
-| render pool | 240 | measured route peak 240; worst cooked t0a0b leaf 726 = 223904 B |
-| texture pool | 128 | route peak 127; worst t0a0d leaf 127 = 112864 B |
-| collision pool | 208 | worst seam hldemo3→hldemo2 206592 B (`w64seam.py`) |
-| layer directories (2 open) | 2 × 84 | measured 38–84 KB per map |
-| studio pool (MDL/IDSQ/STB2 or own anim format) | 1536 | old cart route fits with ≥ 259 KB heap left; garg no-fit after hldemo1-return still open (SA2 §8.1) |
-| entity core records | 495 × 256 B = 124 | section 6.2; cap 495 = ceil(1.25 × host peak 396) |
-| game private arena | 192 | [INFERENCE: ~60 monsters × ≤ 1 KB + 150 movers × ≤ 256 B + items]; overflow refuses spawns like the spatial reserve |
-| HLE1 blobs (4 slots) | 4 × 48 | [INFERENCE until measured per map; old: 72 KB text + 13–19 KB keys per map before HLE1] |
-| dehydrate store | 64 | per-map records + 64 runtime pickups (old: 168 B each + names) |
-| strings (interned) | 32 | [INFERENCE] |
-| precache tables (455 models, 347 sounds, 96 styles) | 24 | names as offsets into layer precache tables |
-| sound (16 voice buffers, 10 open wav64, sentence table) | 96 | [INFERENCE: old not measured] |
-| sprite frame cache / decal texel cache / particles (512) | 64 / 48 / 16 | [INFERENCE] |
-| dlight scratch (512 vertex pairs ×2) + flashlight pool | 48 | as old renderer |
-| HUD sheets + font (ui8) | 128 | [INFERENCE] |
-| per-frame scratch arena | 64 | [INFERENCE] |
-| stack + libdragon heap slack | 256 | |
-| **total** | ≈ 5.0 MB | leaves ≈ 3 MB; M6 decides whether studio pool grows (fixes the garg no-fit) |
+### 4.2 CPU per frame (33.3 ms at 30 fps)
 
-Every number in `[INFERENCE]` gets a `mem:` line at boot and a high-water
-mark in every route `stats` line; M3/M4/M6 gates replace the estimate with
-the measured peak × 1.25, as the old tree did for its caps.
+| work | old p50 / p90 µs (measured, table above) | hl64 budget µs | reasoning |
+|---|---|---:|---|
+| client/server message path | `smsg` 1851 / 2941 + `cl` 1772 / 2666 | 0 | no protocol: the renderer reads components; the per-frame render list build is counted under render |
+| non-moving entities visited every frame | `none` 720 / 1081 + resting part of `toss` | ≈ 50 | [EST] active sets (6.3): resting and idle entities cost nothing |
+| linking, PVS leaf lists | `link` 974 / 1749 + `leafs` 529 / 716 | 600 | [EST] grid cell insert (O(cells)), leaf lookup memoised per origin change, sector overlap instead of 48-leaf lists |
+| record wakes | `wake` 750 / 1432 | 400 | [EST] same pending grid, but woken from the entity grid walk already done by the trace/link |
+| residency recompute | `wsf` 3286 / 4094 | 1000 | [EST] recompute only on eye-leaf / player-cell / pin change; most frames reuse the target set |
+| traces | `trace` 2131 / 4773 | 2000 / 4500 | [EST] same COLL data and per-node cost; entity candidates from the grid instead of the tree; hitbox traces add ≈ 0.1 ms on firing frames |
+| monster/toss/push motion | `step` 2339 / 6253, `toss` 1111, `push` 959 (incl. their traces) | 3500 | [EST] traces dominate; integer think scheduling and active sets remove the per-entity visits |
+| player | `pcl` 1122 / 1527 | 1500 | [EST] pm_shared does more float work than the old movement but runs once |
+| thinks (game AI) | `think` 1364 / 3807 | 4000 / 8000 | game-owned; unchanged by the engine; AI think budgets are a game/ task |
+| hydration | 2000 cap | 2000 cap | unchanged rule |
+| render CPU | `rview` 7102 / 15536, `r2d` 604 / 1517 | 8000 / 12000 | world ≈ 1–2 ms (SA2 spike: 806 µs submit for the dome set), studio ≈ 3 ms, translucent/decals ≈ 1 ms, HUD ≈ 0.6 ms, flashlight ≈ 0.5 ms |
+| sound | ≈ 0 (`snd`) | 500 | |
+| **sum, p50** | ≈ 27 ms | ≈ 19 ms | **[EST] saving ≈ 7–8 ms p50 per frame**, of which ≈ 3.6 ms protocol, ≈ 2.3 ms residency recompute, ≈ 1.5 ms entity visits/linking |
+
+RSP/RDP time runs in parallel (SA2 spike: ≤ 4.1 ms for a full dome
+visible set); `disp` waits are not CPU budget. M6 measures every row with
+the zones of 15.
+
+### 4.3 Allocation rules
+
+- No allocation can fail on the steady path; everything is sized by
+  `limits.h`, carved at boot, and proved by the cook where it depends on
+  content (SA2 principle 2).
+- Allocators: arena (per-frame scratch, boot tables), first-fit pool (16 B
+  granularity, owner-pointer compaction, frame fences for GPU-visible
+  blocks; SA2 §4.3), slab (fixed-size slots: components, game private
+  size classes, voices, decals, particles, timers).
+- No `malloc` after boot in `engine/` or `game/`.
+- GPU-visible memory is freed only behind an rspq syncpoint two frames old.
+- DMA destinations own whole 16 B cache lines while in flight (start
+  16-aligned, length padded to 16): a shared line corrupted the old cart's
+  layer header (SA2 §4.4).
 
 ---
 
@@ -237,431 +252,403 @@ the measured peak × 1.25, as the old tree did for its caps.
 
 ### 5.1 File table
 
-Cooked content is packed into the ROM's DFS by the build (`HL64_CONTENT=<dir
-of player-cooked files>`); the ROM itself never contains Valve data in the
-repository. At boot `io` resolves each needed file once to (cart offset,
-size); afterwards no path lookups happen. Small config/text files may use
-DFS reads at boot only.
+Player-cooked content is packed into the ROM's DFS by the build
+(`HL64_CONTENT`); Valve data never enters the repository. At boot `io`
+resolves each file once to (cart offset, size) and the resource table (6.5)
+refers to files by index; no path lookups happen afterwards.
 
 ### 5.2 Async DMA scheduler
 
-- Caller-owned requests (file, offset, length, destination, priority,
-  completion flag). Priorities: `IO_AUDIO` > `IO_OPEN` > `IO_SEAM` (pins) >
-  `IO_PREFETCH`. A queued request a stronger class now needs is promoted.
-- One piece in flight, ≤ 16 KB; per-frame budget 64 KB (seam budget 128 KB
-  while a seam is approached); audio never waits behind more than one piece.
-- Synchronous reads exist only for boot, New Game, and a collision chunk
-  missing mid-trace (counted as blocked I/O; target 0 frames > 1 ms).
-- Cache-line ownership as 4.1.
-- Stats per route segment: per-frame KB histogram p50/p90/p99,
-  `budget_over` (must be 0), blocked µs per frame, host `pi_over`.
+Caller-owned requests (file, offset, length, destination, priority, done
+flag); priorities AUDIO > OPEN > SEAM (pins) > PREFETCH; promotion when a
+stronger class needs a queued request; one piece in flight ≤ 16 KB;
+per-frame budget 64 KB (128 KB while a seam is approached); synchronous
+reads only at boot/New Game and for a collision chunk missing mid-trace
+(counted as blocked I/O, target 0 frames > 1 ms). Stats per route segment:
+KB/frame p50/p90/p99, `budget_over` (must be 0), blocked µs, host
+`pi_over`. ares models PI at a fixed 5.25 MB/s without bus contention;
+real hardware is checked per milestone when a flashcart is available.
 
-ares models PI DMA at a fixed 5.25 MB/s without bus contention (measured);
-real hardware is checked once per milestone on a flashcart when available.
+### 5.3 Layers and residency
 
-### 5.3 World layers and residency
+A **layer** is an open map: its `.w64` directory (resident while open),
+pinned hull-0 COLL chunks, HLE1 blob, placement `g_M`. At most 2 geometry
+layers and 4 HLE slots (closing maps with frozen timers keep their logic
+slot).
 
-A **layer** is one open map: its `.w64` directory (resident while open),
-its pinned COLL hull-0 chunks, its HLE1 blob (logic records), and its
-global offset `g_M`. At most `HL64_LAYERS_OPEN` = 2 geometry layers and
-`HL64_MAP_SLOTS` = 4 HLE slots (logic of closing maps with frozen timers).
+Residency classes (strongest first; a request evicts only weaker classes;
+SA2 §4.2 as built):
 
-Residency classes per frame (strongest first; a request evicts only weaker
-classes; SA2 §4.2 as built):
-
-- **open**: REND + TEXP of the eye leaf's cooked visible-sector list; MOVR
-  (+ animated texture pages) of visible brush entities; COLL lists of grid
-  cells within ±128 u of the player box; COLL of every SOLID_BSP / contents
-  brush touching that window. Anything the renderer finds missing while
-  drawing is requested at open priority and skipped (counted as pop-in).
-- **pin**: announced destinations (route `setpos` look-ahead, reachable
-  `trigger_teleport` destinations, approached seam's B set, cook-generated
-  script pins), lapse after 90 frames or on arrival.
+- **open**: REND + TEXP of the eye leaf's visible sectors; MOVR of visible
+  brush entities; COLL of grid cells within ±128 u of the player box and of
+  solid/contents brushes touching that window; anything the renderer finds
+  missing is requested at open priority and skipped (pop-in counted).
+- **pin**: route look-ahead destinations (test builds), reachable
+  teleport destinations, approached seam's B set, cook-generated script pins;
+  lapse after 3 s or on arrival.
 - **prefetch**: eye-leaf sets at eye + v·{0.25, 0.5, 1} s; collision window
-  + v·0.5 s; cells of moving monsters/projectiles; hulls of brush entities in
-  the box spanned by thinking monsters and projectiles.
+  + v·0.5 s; cells of moving monsters/projectiles; hulls of brush entities
+  in the box spanned by thinking monsters and projectiles.
 - **pinned**: world hull-0 COLL while the layer is open.
 
-Eviction: queued-not-started loads first, then LRU among chunks not wanted
-this frame; prefetch never evicts a chunk used in the last 30 frames.
-Pop-in accounting, teleport charging (eye jump > 128 u charges 16 frames),
-`missing/popf/popmax` and blocked-I/O lines are kept from SA2 §4.2 because
-the old-tree route logs report them and the M4/M5 gates compare them.
+Eviction: queued-not-started first, then LRU among chunks not wanted this
+frame; prefetch never evicts a chunk used in the last 30 frames. The target
+set is recomputed only when one of its inputs changed (eye leaf, player
+cell, velocity bucket, pins, layer set); otherwise the previous frame's
+wants are re-asserted by generation number (no rebuild).
 
 ### 5.4 Campaign, portals, seams
 
-From `campaign.cwg` (CWG3, `docs/formats/cwg-format.md`): map placement
-`g_M`, links, seams (switch eye box, carry box, approach box, twins, B
-sector set, OPEN draw set, portal translation `T`). Runtime rules (old
-`cwg-format.md` "Runtime" and SA2 §6.8, restated as requirements):
+CWG3 (`docs/formats/cwg-format.md`): placements, links, seams (switch eye
+box, carry box, approach box, twins, B sector set, OPEN draw set, portal
+translation `T`). Requirements:
 
-1. Approach: the player origin enters a seam's approach box (in A-local
-   coordinates) → open B's layer and HLE slot, pin B's seam set at seam
-   priority. Nothing blocks.
-2. Arming/switch: a touch seam switches when the eye enters the switch box,
-   or (fallback) when an armed changelevel trigger stops being touched or
-   has been touched for 1 s outside the box (counted as `forced`). A
-   USEONLY seam switches when its changelevel is used.
-3. Crossing: home := B; every position-bearing record of the player (and
-   riders) gets `+T`; velocity, angles, punch, inventory and the entity
-   itself are kept; twins copy A's state to B (origin + T, mover phase, think
-   time, velocity), A's copy retires silently; `changetarget` fires in B.
-   After a switch, changelevel touches are ignored until a frame with none.
-4. Leave: A's sectors drop by LRU; A's physical records dehydrate by
-   distance (release radius 1024 u, batches every 0.1 s); `layer_close(A)`
-   when no A chunk is needed and no A record is live; A's timers freeze by
-   remaining time and thaw when A reopens.
-5. OPEN seams draw B's draw set translated by `−T`, scaled about the eye by
-   1 + 1/256, clipped to meshlets touching the carry box.
+1. Approach box entered (A-local test) → open B's layer and HLE slot, pin
+   B's seam set; nothing blocks.
+2. Switch: a touch seam switches when the eye enters the switch box, or
+   when an armed changelevel stops being touched / has been touched 1 s
+   outside the box (`forced`); USEONLY seams switch when used.
+3. Crossing: home := B; positions of the player and riders `+T`; velocity,
+   angles, punch, inventory and the entity itself kept; twins copy A's state
+   to B (origin + T, mover phase, think time, velocity) and A's copy retires
+   silently; `changetarget` fires in B; changelevel touches ignored until a
+   frame with none.
+4. Leave: A's chunks drop by LRU; A's records dehydrate by distance
+   (release radius 1024 u, batches every 0.1 s); A closes when nothing of
+   it is resident or live; its timers freeze by remaining time and thaw on
+   reopen.
+5. OPEN seams draw B's draw set translated by −T, scaled about the eye by
+   1 + 1/256, limited to meshlets touching the carry box.
+
+GoldSrc shows a loading pause and a level transition at these points; the
+continuous world is a deliberate improvement, and every state rule above
+reproduces what GoldSrc's transition would leave the player with
+(entities in the transition volume carried over, others frozen).
 
 ### 5.5 Visibility
 
-Point → leaf: the layer's 256 u grid gives a start node per cell, then a
-short walk of the pinned hull-0 tree (O(1)-ish; memoised per entity, recomputed
-only when its origin moves). Leaf → visible sectors: the cooked `vis[leaf]`
-u16 list (PVS collapsed at cook). Eye in solid keeps the last valid leaf.
-Entity PVS tests (sight checks, "is this entity drawable") use the cooked
-`VISR` rows of the entity's layer, decompressed on demand into a one-row
-cache per layer (BSP run-length format, `docs/formats/w64-format.md`).
+Point → leaf: the layer's 256 u grid start node + a short walk of the
+pinned hull-0 tree, memoised per entity until its origin moves. Leaf →
+visible sectors: cooked u16 list, turned into a per-frame **sector
+bitset** (one bit per sector of each open layer; the cooked maps have 36–172
+sectors, measured from the old `.w64` directories, so ≤ 2 × 32 B). Rendering
+tests an entity by its ≤ 4 overlapped sectors against the bitset (one AND
+each). Game PVS queries (find client in PVS, check visibility) use the exact
+leaf PVS row from `VISR`, decompressed into a one-row cache per layer, as
+GoldSrc does.
 
 ---
 
 ## 6. Entity system
 
-### 6.1 Options considered
+### 6.1 Choice
 
-| | A: HLSDK `edict_t` + `entvars_t` verbatim | B: compact core record + game private data (chosen) |
-|---|---|---|
-| size | `entvars_t` ≈ 676 B (ILP32) + edict header (area link, 48 leaf numbers, free/serial, private pointer) ≈ 800 B | core ≈ 256 B + per-class private (0–1 KB, only for classes that need it) |
-| 495 slots | ≈ 390 KB, all resident | ≈ 124 KB core + ≤ 192 KB private arena |
-| old tree for comparison | 884 B × 495 ≈ 427 KB (Quake progs entvars + HL extras) **measured** sizing | — |
-| licence | headers are HLSDK: the layout would live only in `game/`, so the engine could not use it without an MIT re-declaration | MIT header owned by us; game names fields after HLSDK so ported code reads the same |
-| LP64 host parity | pointers in entvars grow → host sizes diverge | handles (u16) and function ids (u16) → identical sizes on cart, `-m32` and LP64 |
-| serialisation (dehydrate/save) | pointers and function pointers need fix-up tables | records are position-independent; core copies as bytes |
+GoldSrc's `edict_t` + `entvars_t` (≈ 800 B ILP32) and the old tree's 884 B
+Quake edicts are one float-heavy blob per slot, scanned every frame. hl64
+stores entities as **typed components in parallel arrays** (structure of
+arrays) indexed by slot, with per-class game data in slabs, and runs every
+per-frame loop over **active sets** only. The game sees HLSDK names and
+semantics through accessors and component pointers. (D1.)
 
-Option A buys literal source compatibility with HLSDK C++ code we do not
-use (our game is C); option B saves ≈ 270 KB of RDRAM at the 495 cap and
-makes dehydration and host parity exact. **Chosen: B.** (Decision D1 lets the
-user overrule.)
+### 6.2 Components (`include/hl64/ent.h`)
 
-### 6.2 Core record (`include/hl64/ent.h`, engine-owned)
+Slot index u16, cap 495 (ceil(1.25 × measured host peak 396)). A handle
+`ent_h` = index | serial << 16 (u32); `ent_valid(h)` checks the serial.
 
-Field groups, ≈ 256 B, 16-aligned, hot fields first (link + box in the first
-two D-cache lines, as the old tree measured for area scans):
+| component | fields (HLSDK names) | bytes | loops that touch it |
+|---|---|---:|---|
+| `xf` | origin f32[3], angles f32[3] | 24 | physics, render, sound, traces |
+| `mot` | velocity, avelocity, basevelocity f32[3] | 36 | physics |
+| `box` | mins, maxs, absmin, absmax f32[3] | 48 | traces, grid, touches |
+| `phys` | movetype u8, solid u8, waterlevel s8, watertype s8, flags u32, groundentity / owner / aiment u16, gravity f32 (0 = 1), friction f32, grid cell u16 + next u16 | 32 | physics, traces |
+| `tm` | nextthink u64 µs (0 = none), ltime u64 µs (pushers), think / touch / use / blocked u16 function ids | 24 | think heap, pushers, dispatch |
+| `rnd` | modelindex `res_t` u16, sequence u16, frame f32, animtime u64 µs, framerate f32, scale u16 (8.8), skin s16, body u8, effects u16, controller u8[4], blending u8[2], rendermode, renderfx, renderamt u8, rendercolor u8[3], sectors u16[4] | 48 | render, studio |
+| `id` | serial u16, state u8, layer s8, class u16 (from `classes.def`), private handle u16, record gid u16, runtime id u16, targetname `name_t` u16 | 16 | names, hydration, save |
+| **total** | | **228 × 495 ≈ 113 KB** | |
 
-| group | fields (HLSDK names where one exists) |
-|---|---|
-| link | area list prev/next (u16 slot indices), absmin/absmax (the linked box: already includes the 1 u / item expansion, specs/area-links-and-touch.md) |
-| identity | serial (u16, bumped on free), state (free/live/dying), layer (s8: owning map slot), class id (u16, game-defined), private handle (u16), source record gid (u16, 0xFFFF runtime) + runtime id (u16) |
-| motion | origin, oldorigin, velocity, basevelocity, angles, avelocity, mins, maxs, view_ofs (vec3 each) |
-| physics | movetype (u8), solid (u8), flags (u32 `FL_*`), gravity, friction (f32), groundentity, owner, aiment (ent_h), waterlevel, watertype (s8) |
-| timing | nextthink, ltime (f32); think, touch, use, blocked (u16 function ids into the game's tables; 0 = none) |
-| model | modelindex (u16 global precache index), skin (s16; brush contents when < −1), body (u8), sequence (u16), frame, animtime, framerate, scale (f32), controller[4], blending[2] (u8), effects (u16 `EF_*`) |
-| render | rendermode, renderfx, renderamt (u8), rendercolor[3] (u8) |
-| names | targetname, classname (str_h) — the engine resolves names for wakes and fires |
-| vis | leaf set: up to 8 leaf numbers, or "large" (test by box) |
+- **Integer time**: all times are u64 microseconds of game clock; the game's
+  HLSDK-style float `time` is derived (`now_us · 1e−6`) and its delays are
+  converted once (`ent_think_in(e, 0.1f)` → +100000 µs). Think ordering and
+  due tests are integer compares.
+- **Ids instead of strings**: targetnames are cooked `name_t` (per-map name
+  index from HLE1; global form = slot << 12 | index); classnames are
+  `classes.def` ids; models and sounds are `res_t` (6.5). There is no string
+  comparison on the cart's steady path. Debug builds keep a name table for
+  printing only.
+- Floats stay where GoldSrc semantics live (positions, velocities, angles,
+  frame, gravity, friction): collision and movement must match GoldSrc to the
+  1/32 u, which fixed point cannot do without changing results.
+- Game-only state (health, takedamage, enemy, target, noise ids, dmg,
+  armor, items…) lives in the game's per-class private structs (HLSDK
+  `CBaseEntity`/`CBaseMonster`/`CBaseToggle`/`CBasePlayer` member layout),
+  allocated from game slabs (sizes 32–1024 B, budget 160 KB); a full slab
+  refuses optional spawns like the spatial reserve.
+- The player block (`ent_player_t`: pmove state, punchangle, view_ofs,
+  v_angle, buttons, fall velocity, duck state) is one engine record shared
+  with pmove.
 
-Everything else the HLSDK keeps in `entvars_t` (health, takedamage,
-deadflag, enemy, target, noise*, dmg*, armor, items, message, netname,
-`iuser*`…) belongs to the game: the generic ones in a game "base" private
-struct, the rest in per-class private structs (the HLSDK class member
-layout: `CBaseMonster`, `CBaseToggle`, `CBasePlayer` …). The player's
-movement state (`bInDuck`, `flDuckTime`, `flTimeStepSound`, punchangle,
-fallvelocity, oldbuttons, maxspeed …) lives in the engine's single player
-block (`ent_player_t`), shared with pmove.
+### 6.3 Active sets and the think heap
 
-Handles: `ent_h` = slot index (u16); a game that keeps a reference across
-frames stores (index, serial) and validates with `ent_valid`. Freed slots
-are not reused until `HL64_ENT_REUSE_DELAY` (0.5 s of game time) has passed,
-except during the first 2 s of a new game (specs/think-and-time.md).
+- **Think heap**: 4-ary min-heap of (nextthink µs, index), ≤ 512 entries.
+  Setting `nextthink` updates the entity's heap entry.
+- **Movers set** (bitset, 512 bits): an entity enters when its movetype
+  needs a step — velocity or avelocity non-zero, or a falling type not on
+  ground, or a pusher with motion, or FOLLOW — and leaves when it comes to
+  rest (velocity zeroed and on ground). Setting velocity / origin / flags
+  through the API updates membership.
+- Each frame: pop every heap entry due by `now + dt` into a **due** bitset;
+  active = due ∪ movers; walk the bitset words in index order (16 words) and
+  run each entity's movetype step (specs/physics-movetypes.md). Entities
+  created during the walk at a higher index join this frame, as in
+  GoldSrc's ascending-index physics loop.
+- Cost is O(active), typically 30–80 of ≈ 400 live entities [EST from the
+  route's monster/mover counts], with no per-entity visit for static props,
+  resting items or idle logic.
 
-Function ids: the game declares its think/touch/use/blocked functions in one
-X-macro list (`game/funcs.def`) that generates the dispatch tables and
-stable ids; ids are what records, the dehydrate store and saves hold.
+### 6.4 Records, hydration, dehydration
 
-### 6.3 Records, hydration, dehydration
-
-Map entities exist first as HLE1 **records** in the map's blob (24 B each,
-`docs/formats/hle-format-v1.md`): logic (no entity: relays, multi_managers,
-multisources, lights…), point (landmarks, path corners: queried by name),
-and physical (become core entities when hydrated). The `ent/` module owns
-the blob residency, record state (pending/live/killed/dry), the name index
-(targetname → records, scoped to the caller's source map, plus twin
-aliasing), the spatial pending grid (512 cells of 512 u per map) and the
-budgeted pump. The game owns what a record means: `game_spawn_record(gid,
-e)` interprets the cooked keys into the entity and its private data;
-`game_dehydrate(e, w)` / `game_rehydrate(e, r)` write/read the per-class
-delta the level state keeps (origin, health, mover state, flags, think
+Map entities exist first as HLE1 records (24 B; `docs/formats/hle-format-v1.md`):
+logic (no entity), point (queried by name), physical (become entities when
+hydrated). `ent/` owns blob residency, record state (pending / live /
+killed / dry), the name index (name id → records of the caller's source
+map, plus twin aliasing), the pending grid (512 cells of 512 u per map) and
+the budgeted pump. The game owns meaning: `game_spawn_record(gid, e)`
+reads typed keys (string-valued keys arrive as `name_t` / `res_t` /
+sentence ids, cooked); `game_dehydrate(e, w)` / `game_rehydrate(e, r)`
+write the per-class delta (origin, health, mover state, flags, think
 time, names, references as (map, lump) or runtime id).
 
-Requirements carried from the old tree (SA2 §6.8 "as built"; each is a
-test in specs/think-and-time.md or the M4 gate):
+Requirements kept from the old tree (they reproduce GoldSrc's level
+semantics in one world; each is an M4 test): spawn radius 768 + 192 u
+around anchors (player; player mapped through approached portals), release
+1024 u, 256 u prefetch ring requesting the 6 nearest pending records'
+models; optional hydration only while 48 slots stay free, transient
+effects keep their own 32-slot reserve; named fires and class searches
+wake pending records synchronously (≤ 2 hydrate in the frame, the rest
+queue first); moves and traces wake pending records in their box via the
+pending grid; deferred uses into a closed map as a canonical (map, lump) /
+runtime-id FIFO, never entity pointers; closing a map freezes its timers
+(128) by remaining time and cuts cross-boundary references; runtime
+pickups and monstermaker children persist by (map, runtime id), ≤ 64
+pickups; entity budget 2 ms cart / 8 records host, shared in the order
+neighbour release, arrival pump, home pump, closing release.
 
-- Spawn radius 768 + 192 u margin around anchors (player; player mapped
-  through each approached portal); release 1024 u; a 256 u prefetch ring
-  requests studio models of the 6 nearest pending records.
-- Spatial reserve: optional hydration only while 48 slots stay free;
-  transient effects (gibs, debris) keep their own 32-slot reserve.
-- Named fires and class searches wake pending records synchronously
-  (at most two hydrate in the frame; the rest queue ahead of the pump).
-- Every trace wakes pending records in its move box (via the pending grid;
-  the box test is O(1) when no counted cell meets the box).
-- Deferred physical uses into a closed map: canonical (map, lump) /
-  runtime-id FIFO replayed in order on rehydration; never edict pointers.
-- Closing a map freezes its timers by remaining time (128 entries);
-  cross-boundary references are cut as if out of range; riders pin.
-- Runtime-created pickups and monstermaker children persist by (map,
-  runtime id), up to 64 pickups.
-- Entity budget per frame: 2 ms cart / 8 records host, shared in order:
-  neighbour release, arrival pump, home pump, closing release; each pump
-  still spawns one record a frame when the budget is gone.
+### 6.5 Resources
 
-### 6.4 Precache and resources
-
-Global tables (models 455, sounds 347, backend sfx 359, lightstyles 96)
-whose entries are owned by maps and by the common/player set; a slot is
-reused when its owner maps are closed and nothing live references it.
-Indices are 16-bit. Carried-weapon assets are owned by the player (the old
-tree died with `v_crowbar.mdl not precached` before this rule). See
-specs/precache-and-resources.md.
+The cook builds one **resource table** (`campaign.rtb`) for the whole
+campaign: every model, sprite and sound any map or the game can use, with
+a stable `res_t` (u16), its file index, size and kind; plus the sentence
+table and the lightstyle pattern table. Names come from the maps' entity
+lumps and from `game/defs/res.def` (the game's own precache lists). Map
+keys holding resource names are cooked to `res_t`. At run time there are no
+name tables, no precache slots and no slot reuse: `precache` only declares
+residency interest (prefetch), and the index cap problem of the old tree
+(455 / 347 slots shared by two open maps) disappears. Brush submodels are
+(map, submodel) pairs, not table entries; an entity's `modelindex` names
+one with the `res_t` kind SUBMODEL, index = map slot << 10 | submodel.
+Specs: precache-and-resources.md.
 
 ---
 
 ## 7. Engine ↔ game interface
 
-A slim C API in our own names, statically linked (no function-pointer
-table, no DLL boundary). It covers the HLSDK `enginefuncs_t` /
-`DLL_FUNCTIONS` subset the Uplink + Hazard game uses (inventory of the old
-game's engine calls: `g_*` QuakeC-style builtins 437 call sites, `SV_*` 78,
-`ED_*` 29, `MSG_*` 40, `Cvar/Cmd/Con` ≈ 250, `Mod_*` 14, `GSFX_*` 78, `HLE_*`
-API). Table of contents; exact prototypes are written in M0 in
-`include/hl64/eng.h` and `game.h`.
+A slim, statically linked C API in our own names covering the HLSDK
+`enginefuncs_t` / `DLL_FUNCTIONS` subset the Uplink and Hazard game uses
+(old game's engine calls: `g_*` QuakeC-style builtins 437 sites, `SV_*`
+78, `ED_*` 29, `MSG_*` 40, Cvar/Cmd/Con ≈ 250, `Mod_*` 14, `GSFX_*` 78,
+`HLE_*`). Prototypes are written in M0.
 
 ### 7.1 Engine services (`eng.h`)
 
 | area | services | HLSDK counterpart |
 |---|---|---|
-| entities | alloc, free (deferred reuse), num↔handle, valid, set_origin (relink), set_size, set_model (index, bounds from model), link (with/without trigger touch), unlink | pfnCreateEntity, pfnRemoveEntity, pfnSetOrigin, pfnSetSize, pfnSetModel |
-| search | next by targetname / classname in a map slot (with wakes), in sphere, in box, client in PVS | pfnFindEntityByString, pfnFindEntityInSphere, UTIL_EntitiesInBox, pfnFindClientInPVS |
-| traces | line, hull (0–3), box, single entity, point contents, texture/material at hit | pfnTraceLine, pfnTraceHull, pfnTraceModel, pfnPointContents, pfnTraceTexture |
-| movement | walk_move, move_to_origin (step toward goal), drop_to_floor, change_yaw/pitch, monster step | pfnWalkMove, pfnMoveToOrigin, pfnDropToFloor, pfnChangeYaw |
-| vis | entity/point in PVS of another point, leaf of point | pfnCheckVisibility, pfnSetView (no) |
-| resources | precache model/sound (index), model index by name, model type/bounds/frames, studio: sequence lookup/info (frames, fps, flags, linear movement, events list), bone/attachment positions | pfnPrecacheModel/Sound, pfnModelIndex, pfnGetModelPtr (as query functions), pfnGetAttachment, pfnGetBonePosition |
-| sound | emit (entity, channel, sound index, volume, attenuation, flags, pitch), ambient at point, stop, sentence by index/group name | pfnEmitSound, pfnEmitAmbientSound |
-| light | set lightstyle pattern | pfnLightStyle |
-| effects | direct calls, no messages: sparks, ricochet, blood stream/sprite, bullet decal, decal trace, explosion, smoke, beam ent↔point/ent↔ent, tracer, gibs/model shower (break model), dlight, elight, muzzle flash, screen shake, screen fade, text message (titles) | the `TE_*` / `SVC_*` user-message set HLSDK sends |
-| HUD/2D | draw sub-rect of a ui8 sheet (colour, mode), fill, character/string, screen size | client-DLL SPR_* and FillRGBA |
-| time & rng | game time, frametime, random long/float (one engine stream, reseeded by New Game; tests can fix the seed) | gpGlobals->time, pfnRandomLong |
-| console | cvar register/get/set, command add + argc/argv, print/dprint | pfnCVarRegister, pfnAddServerCommand, pfnAlertMessage |
-| records | record keys (str/float/vec/name), origin/angles/bounds of a record, fire name in slot, fire later, use-targets, master state, timers, map slot of entity, dehydrate/rehydrate hooks | (no counterpart: replaces keyvalue parsing and level transitions) |
-| campaign | current home map, map name of slot, global offset of slot | — |
+| entities | alloc, free, handle valid, component access, set_origin, set_size, set_model(`res_t` or submodel), link (with/without touch), set velocity/flags (keeps active sets), think_at/think_in | pfnCreateEntity, pfnRemoveEntity, pfnSetOrigin, pfnSetSize, pfnSetModel |
+| search | next by `name_t` / class id in a map slot (with wakes), in sphere, in box, client in PVS | pfnFindEntityByString, pfnFindEntityInSphere, UTIL_EntitiesInBox, pfnFindClientInPVS |
+| traces | line (with hitboxes, hitgroup), hull 0–3, box, single entity, point contents, material at hit | pfnTraceLine, pfnTraceHull, pfnTraceModel, pfnPointContents, pfnTraceTexture |
+| movement | walk_move, move_to_origin, drop_to_floor, change_yaw/pitch | pfnWalkMove, pfnMoveToOrigin, pfnDropToFloor, pfnChangeYaw |
+| vis | point/entity in PVS, leaf of point | pfnCheckVisibility |
+| resources | precache (interest), model kind/bounds/frames, studio sequence lookup by cooked id or name hash (spawn only), sequence info, attachments, bone positions | pfnPrecacheModel/Sound, pfnModelIndex, pfnGetAttachment, pfnGetBonePosition |
+| sound | emit(entity, channel, `res_t`, volume, attenuation, flags, pitch), ambient, stop, sentence by id / group id | pfnEmitSound, pfnEmitAmbientSound |
+| light | lightstyle(style, pattern id) | pfnLightStyle |
+| effects | direct calls: sparks, ricochet, blood stream/sprite, bullet decal, decal trace, explosion, smoke, beams, tracer, break model, gibs, dlight, elight, muzzle flash, shake, fade, text message (cooked titles ids) | `TE_*` / user messages |
+| HUD/2D | ui8 sub-rect with colour/mode, fill, glyphs, screen size | client SPR_*, FillRGBA |
+| time, rng | `now_us`, `dt_us`, float `time`; random long/float (one stream, seeded at New Game) | gpGlobals->time, pfnRandomLong |
+| settings | typed `settings.h` record (skill, movevars, volume…) | cvars |
+| records | typed record keys, record origin/angles/bounds, fire name in slot, fire later, use-targets, master state, timers, map slot of entity, dehydrate/rehydrate | (replaces keyvalue parsing and level transitions) |
+| campaign | home map, map slot ids, global offsets | — |
 
 ### 7.2 Game exports (`game.h`)
 
-`game_init`, `game_new_campaign(start_map)`, `game_map_opened(slot)`,
-`game_map_closing(slot)`, `game_spawn_record(gid, e)` → kept/removed,
-`game_spawn_logic(gid)`, dispatch of think/touch/use/blocked by function
-id, `game_start_frame`, `game_player_spawn`, `game_player_prethink`,
-`game_player_postthink`, `game_player_command(usercmd)` (impulses, weapon
-select, `+use`), `game_pm_move(player block, physents)` (pmove, decision
-D2), `game_dehydrate`/`game_rehydrate`, `game_save_globals`/
-`game_load_globals` (env_global states, squads), `game_calc_view` (bob,
-punch, view model placement; client-DLL V_CalcRefdef), `game_hud_draw`,
-`game_hud_frame`, `game_studio_event(e, event, options)` (client-side anim
-events: muzzle flashes, shells), `game_studio_setup_bones(e, out)` (pose →
-bone matrices for the renderer, D3).
+`game_init`, `game_new_campaign`, `game_map_opened/closing(slot)`,
+`game_spawn_record(gid, e)`, `game_spawn_logic(gid)`, dispatch of
+think/touch/use/blocked by function id (`funcs.def`), `game_start_frame`,
+`game_player_spawn/prethink/postthink`, `game_player_command(usercmd)`,
+`game_pm_move` (D2), `game_dehydrate/rehydrate`, `game_save/load_globals`,
+`game_calc_view`, `game_hud_frame/draw`, `game_studio_event(e, event,
+options)`, `game_studio_setup_bones(e, out)` (D3).
 
-### 7.3 Re-targeting `game/`
+### 7.3 Retargeting `game/`
 
 The old `source/hl` (21 files, ≈ 32k lines) runs on Quake's progs entvars
-(fields repurposed: `lip`, `cnt`, `walkframe`, `state`, `lefty`…), the
-`g_*` QuakeC-builtin layer and QuakeC function handles (`G_Func/G_Call`).
-Those layers are forbidden. Re-targeting follows the audit's §1.5 per file
-(ranges in 16.2; the Quake-interface glue in these files falls under D9):
+(repurposed fields `lip`, `cnt`, `walkframe`, `state`, `lefty`…), the `g_*`
+QuakeC-builtin layer, QuakeC function handles and string names. Per file,
+following the audit's §1.5 ranges (16.2; the Quake-interface glue is D9):
 
-1. Replace `edict_t->v.<quake field>` by core fields (HLSDK names) or by the
-   class's private struct member; repurposed Quake fields become named
-   members (`lip` "behaviour class" → `mon.ai_class`, etc.).
-2. Replace `g_*` builtins and `SV_*/ED_*/MSG_*` calls by `eng.h` services.
-3. Replace QuakeC-style `G_Func` think handles by `funcs.def` ids.
-4. Replace protocol writes (`svc_hltent`, `MSG_Write*`) by the effects API.
-5. Delete the workarounds for engine gaps the new engine fills (e.g. the
-   grenade integrating its own gravity 0.5 / backoff 1.2 because Quake's
-   MOVETYPE_BOUNCE had neither: hl64 implements `gravity` and `friction`;
-   keep the old behaviour until M5 parity passes, then switch).
-6. Each file keeps its HLSDK-derived names and comments citing HLSDK
-   classes; nothing from `source/g_*.c` is carried over (rewrite any helper
-   that came from there from HLSDK `util.cpp`/`subs.cpp` instead).
+1. Quake fields → components (HLSDK names) or the class's private member
+   (`lip` "behaviour class" → `mon.ai_class`, …).
+2. `g_*`, `SV_*`, `ED_*`, `MSG_*` → `eng.h`; QuakeC helpers rewritten in
+   `game/util.c` from HLSDK `util.cpp`, `subs.cpp`, `cbase.cpp`,
+   `monsters.cpp`.
+3. QuakeC think handles → `funcs.def` ids; float times → `think_in`.
+4. String names, classnames, model and sound paths → cooked ids.
+5. Protocol writes → effects API.
+6. Engine-gap workarounds removed now (the target is GoldSrc, not the old
+   engine): grenades become MOVETYPE_BOUNCE with gravity 0.5 / friction 0.8
+   as HLSDK sets them, conveyors use basevelocity, etc.
 
 ---
 
 ## 8. Collision, traces, physics
 
-- `coll/`: hull point contents and segment traces over COLL chunks (8 B
-  nodes, axial classes by index range, non-axial planes per chunk, extern
-  gids) — format `docs/formats/w64-format.md`, semantics
-  [specs/trace-and-hulls.md](specs/trace-and-hulls.md). Box traces against
-  non-BSP entities use a box hull built on the fly. Brush entities trace in
-  their local space (translation by origin, rotation by angles: the
-  rotated-brush rules are in the spec). Traces against a map layer are made
-  in that map's local frame (global − `g_M`) and translated back.
-- Area tree: one tree over the home component's global box, splitting the
-  longest of the three axes down to ≤ 1024 u cells (depth ≤ 7, ≤ 256
-  nodes) — the old tree measured Quake's x/y depth-4 tree putting every
-  stacked map's entities in the same leaves. Solid and trigger lists per
-  node. [specs/area-links-and-touch.md](specs/area-links-and-touch.md).
-- `phys/`: per-movetype stepping in the order of 3.2,
-  [specs/physics-movetypes.md](specs/physics-movetypes.md); think timing in
-  [specs/think-and-time.md](specs/think-and-time.md).
-- Player movement: the engine builds the physent list (world layers near the
-  player, SOLID_BSP and SOLID_BBOX/SLIDEBOX entities within the move box,
-  ladders and contents brushes as move-ents) and calls `game_pm_move`;
-  [specs/pmove-host.md](specs/pmove-host.md). With decision D2 = HLSDK
-  `pm_shared` that code is in `game/pm/` unchanged except for its array caps.
-- Surface materials for footsteps and impact sounds come from the cooked
-  material table (`w64-format.md` "Surface materials"): no faces or texinfo
-  on the cart.
+- **Clip hulls are the collision model** (GoldSrc's compiler output; specs
+  in trace-and-hulls.md). COLL chunks: 8 B nodes, axial node classes by
+  index range (no plane fetch for axial nodes), non-axial planes per chunk,
+  extern gids, grid start nodes. Walks are iterative with an explicit stack
+  (≤ 64), in map-local coordinates (global − `g_M`), leaf contents from the
+  layer table.
+- **Hitboxes**: line traces against studio-model monsters test the bounding
+  box, then the current pose's hitboxes (GoldSrc hitgroups for damage);
+  poses are computed on demand and cached per frame (trace-and-hulls.md 4.5).
+- **Spatial grid instead of an area tree**: each open layer has a uniform
+  grid over its global box with 256 u cells (the COLL grid's cells), a u16
+  head per cell and a u16 next per entity; entities whose box spans more
+  than 8 cells go to a per-layer "large" list. Queries walk the cells the
+  swept box touches; candidates are deduplicated by a per-query stamp and
+  ordered by entity index. Size: hldemo2's 16×15×5 = 1200 cells × 2 B ≈
+  2.4 KB per layer. specs/area-links-and-touch.md.
+- **Physics**: per-movetype GoldSrc semantics over the active set
+  (physics-movetypes.md, think-and-time.md); the player is pmove
+  (pmove-host.md, D2).
+- Surface materials come from the cooked material table (no faces or
+  texinfo on the cart).
 
 ---
 
 ## 9. Renderer
 
-All drawing goes through tiny3d/rdpq in `plat/n64/gpu.c`; `engine/render`
-builds per-frame lists. Order:
+All GPU work through tiny3d/rdpq in `plat/n64/gpu.c`; `engine/render`
+builds per-frame lists straight from components (no client entity copies).
 
-1. **View**: `game_calc_view` gives origin, angles, FOV, view model state;
-   the renderer sets one camera; each open layer gets a camera-relative
-   `T3DMat4FP` (`g_M − eye`, so s16 map-local verts stay in range).
-2. **World** (`render/sector.c`): eye leaf → visible sectors → sector bbox
-   and meshlet bbox frustum cull → counting sort by texture page → per page
-   one TLUT+CI4 bind, per meshlet one `t3d_vert_load` + one
-   `t3d_tri_draw_strip` of the pre-encoded strip. Styled meshlets recoloured
-   when a style value changes ([specs/lightstyles.md](specs/lightstyles.md));
-   dynamic lights add into a scratch copy of touched meshlets and the
-   flashlight is drawn as a decal-Z pool pass
-   ([specs/dlights.md](specs/dlights.md)). OPEN-seam cross-layer draw as 5.4.
-   Spike numbers (measured): 806 µs CPU submit and ≤ 4.1 ms RSP+RDP for a
-   full dome PVS set of 142 meshlets.
-3. **Movers**: visible brush entities (MOVR chunks) with the entity matrix,
-   same page submit; static submodels are baked into sectors.
-4. **Studio** (`render/studio.c`): STB2 v4 bone-local meshlets recorded once
-   per model into an rspq block (packing budget 2 ms/frame), per entity per
-   frame only the bone matrices (one `T3DMat4FP` per used bone,
-   double-buffered) and a block replay. Sequence/frame come from the
-   entity's `sequence`, `frame`, `animtime`, `framerate`; bone controllers
-   and blending from the core record. Lighting: per-sector ambient probes
-   (64 u lattice, trilinear) + dlights. View model: CPU skinned (chrome
-   needs bone-space normals) into one of two buffers. STEP-movetype
-   entities are interpolated between their last two think positions
-   (specs/physics-movetypes.md "Render interpolation"). Bone matrices come
-   from `game_studio_setup_bones(e, out)` in `game/studio/` (HLSDK
-   `StudioModelRenderer`-derived, D3 option a): the engine owns meshes,
-   pools and drawing; the game owns pose maths, as in GoldSrc where the
-   client DLL does studio rendering.
-5. **Particles**: one pool (512), drawn with the TinyPX particle ucode in
-   one call (s16 view-relative).
-6. **Translucent pass**: entities whose render mode is not Normal (or
-   TransAlpha brushes, which stay opaque with alpha compare), sprites
-   (SPR v2 converted to CI4 frames by the cook), beams; sorted back to
-   front, depth test without depth write; additive via the RDP adder with
-   the wrap guard. Semantics in [specs/render-fx.md](specs/render-fx.md).
-7. **Decals**: placed on cooked faces of resident sectors/movers, drawn
-   after the opaque world with decal Z; I4 texels from the cooked decal
-   sheet, LRU texel cache ([specs/render-fx.md](specs/render-fx.md)).
-8. **HUD and 2D**: ui8 sheets (CI8 or brightness), copy/blend modes,
-   numbers, crosshair, pain arrows, text messages, centerprint, fades.
-9. **Console/menu overlay**, then present (3.3).
+1. **View**: `game_calc_view` → camera; each open layer gets a
+   camera-relative `T3DMat4FP` (`g_M − eye`, s16 map-local verts in range).
+2. **World**: eye leaf → sector bitset → sector bbox and meshlet bbox
+   frustum cull → counting sort by texture page → per page one TLUT+CI4
+   bind, per meshlet one `t3d_vert_load` + one `t3d_tri_draw_strip` of the
+   pre-encoded strip. Styled meshlets recoloured only when a style's value
+   changes (≤ 10 Hz). Dynamic lights on a scratch copy of touched meshlets;
+   flashlight as a decal-Z pool pass. OPEN-seam cross-layer draw per 5.4.
+   Texture animation from the cooked sequence fields (world-surfaces.md).
+3. **Movers**: visible brush entities with their MOVR meshlets under the
+   entity matrix; static submodels are baked into sectors.
+4. **Studio**: STB2 v4 bone-local meshlets recorded once per model into an
+   rspq block (packing budget 2 ms/frame); per entity per frame the bone
+   matrices from `game_studio_setup_bones` (D3) into a double-buffered
+   pool and one block replay. Lighting: probe (base + one style term,
+   lightstyles.md 4) + dlights. View model CPU-skinned (chrome needs
+   bone-space normals). STEP entities interpolated between think steps
+   (physics-movetypes.md 7), as GoldSrc's client does.
+5. **Particles**: one pool, TinyPX ucode, one call, s16 view-relative.
+6. **Translucent**: render modes/fx per render-fx.md; back to front; depth
+   test without write; additive through the RDP adder with the wrap guard.
+7. **Decals**: on cooked faces of resident sectors/movers, decal Z, I4
+   texels from the cooked decal sheet (render-fx.md 4).
+8. **HUD/2D**: ui8 sheets, numbers, crosshair, damage indicators, text
+   messages, fades; pause menu and debug overlay last.
+
+Vertex lighting replaces GoldSrc's lightmaps (SA2 decision 1, accepted
+there): the closest the cart can afford to Half-Life's look; recorded as
+D6 (iv).
 
 ---
 
 ## 10. Audio
 
-- libdragon mixer, 16 voices at 22050 Hz; samples are wav64 (VADPCM)
-  streamed from the cart with `WAV64_STREAMING_FULL` (never expanded to
-  RAM); ≤ 10 open wav64 streams with LRU close (never close a wave a voice
-  owns: stop voices, `rspq_wait`, then close). Wave reads go through the
-  `IO_AUDIO` class so world streaming can never starve audio [design;
-  the old tree kept libdragon's blocking DFS reads for audio].
-- Channels and attenuation: [specs/sound.md](specs/sound.md) (entity
-  channel replacement, CHAN_AUTO stealing, ATTN_* → distance, stereo pan,
-  pitch 1..255 % → mixer frequency, loops virtualised to 32 slots).
-- Sentences: `sound/sentences.txt` cooked to a table (group, index, words,
-  VOX pitch/volume/end); words play in sequence on one voice; up to 24
-  word slots outside the precache table.
-- Spatialisation uses global coordinates (both open layers are already in
-  one space after CWG placement).
-- `audioconv64` VADPCM Huffman bug: the cook keeps the old tree's
-  workaround (`n64/docs/bug-audioconv64-vadpcm-huffman-silence.md`) until
-  libdragon fixes it.
-
----
+libdragon mixer, 16 voices, 22050 Hz; wav64 (VADPCM) streamed from the
+cart (`WAV64_STREAMING_FULL`); ≤ 10 open waves with LRU close (never under a
+voice); wave reads in the `AUDIO` I/O class. GoldSrc channel semantics,
+attenuation and stereo model, loops, sentences: specs/sound.md. Sounds are
+`res_t`; sentences are cooked (word `res_t` lists with VOX modifiers),
+nothing is parsed at run time. Positions are global, so both open layers
+spatialise without conversion.
 
 ## 11. Input
 
-Pad → `usercmd`: stick = move or look (configurable), C-buttons strafe/look,
-Z = attack, R = attack2/jump (layout table in `engine/in/bind.c`, cvars for
-sensitivity, invert, deadzone). Absolute stick turning scales by `dt`. The
-route runner and `ARES_TEST_INPUT` inject at the same point (raw pad
-state), so scripted and real input share code.
+Pad → `usercmd` (stick move/look per settings, C-buttons strafe/look, Z
+attack, R attack2/jump; table in `engine/core/bind.c`); absolute stick
+turning scales by `dt`. The route VM and `ARES_TEST_INPUT` inject at the
+same point.
 
-## 12. Console, cvars, commands
+## 12. Settings and debug commands
 
-Our own small implementation: cvar table (name, string, float, flags:
-archive/cheat), command table, line buffer executed once per frame,
-`exec` of ROM text files. The console overlay prints the last N lines
-(cost-bounded: the old tree measured 4–15 ms/frame of notify drawing near
-seams with diagnostic spam → on the cart, diagnostics go to ISViewer only;
-the overlay shows only `con_notify`-class lines). Test-only commands
-(`setpos`, `god`, `noclip`, `impulse`, `hl_drop`, `stats`, `shot`,
-`ent_dump`) compile into every build but `setpos/god/noclip` require
-`sv_cheats 1` outside test builds.
+- **Settings** are one typed record (`settings.h`): physics movevars
+  (gravity, friction, maxspeed…, HL defaults), skill, audio volumes,
+  controls, render toggles. The game and engine read fields directly; the
+  menu edits the persistent subset; saves store it. A static descriptor
+  table (field id, type, offset, range) exists for the debug channel only.
+- **Debug commands**: a fixed enum of ≈ 20 commands with binary arguments
+  (setpos, look, god, noclip, give, impulse, use-name, set-setting, shot,
+  stats, timescale, dump-entity, mem, prof) executed at a frame boundary.
+  Sources: the route VM, the host CLI (text parsed on the host only), and
+  on the cart an optional flashcart USB channel (later). There is no console
+  text buffer, no command buffer and no notify overlay on the cart (the old
+  cart spent 4–15 ms/frame drawing notify lines near seams); log output goes
+  to an 8 KB ring flushed to ISViewer, shown by the debug overlay on demand.
+- `setpos`, `god`, `noclip`, `give` exist only in test builds.
 
 ## 13. Menu
 
-Minimal, our own art-free design: text menu in the player's HL font (cooked
-from their `gfx.wad`/fonts) over a dark fill. Items: New Game (Uplink /
-Hazard Course, from the CWG start and training map fields), Load/Save
-(decision D4), Options (volume, music, look sensitivity, invert, stick
-mode), Quit to title. Pause on Start.
+Text menu in the player's HL font (cooked from their data) over a dark
+fill; a built-in 8×8 MIT bitmap font for the boot/error screen. Items: New
+Game (Uplink / Hazard Course from the CWG start and training fields),
+Load/Save (D4), Options (settings subset), Quit to title.
 
 ## 14. Save and level state
 
-- Level state is the dehydrate store (6.3): per map, keyed by BSP lump or
-  durable runtime id. No per-seam save/teardown exists.
-- A saved game (D4) = engine globals (time, rng, home map, layer set),
-  every live core record, every game private block (by class, versioned),
-  the dehydrate stores, HLE record states, frozen and live timers,
-  precache owner sets, lightstyle patterns, player block. Load = New Game
-  shell + replay: open the saved layers, restore records without running
-  spawn functions, relink, then resume. Size estimate 40–90 KB [INFERENCE],
-  which fixes the media choice.
+Level state is the dehydrate store (6.4). A saved game (D4) = clock and
+rng, home map and layer set, every live entity's components, game private
+blocks (by class, versioned), dehydrate stores, record states, timers,
+lightstyle patterns, player block, settings. Load = New Game shell, open the
+saved layers, restore without spawn functions, relink, resume. Size
+40–90 KB [EST]; components and ids are position-independent, so saving is
+mostly block copies.
 
 ## 15. Test and profiling
 
-- **Route runner** (`engine/test/route.c`): the old route language is kept
-  verbatim so `uplink_route.cfg` and the Hazard walk routes run unmodified:
-  `wait`, `waitmap`, `waitnear`, `waitglobal`, `waitmoved`, `waitgone`,
-  `waitclass`, `look`, `lookat`, `shot`, `stats`, `pass`, anything else =
-  console command (`setpos x y z pitch yaw`, `+use`, `impulse N`, `god`,
-  `hl_drop class x y z`). Positions are map-local to the player's home
-  layer. `waitmap <map>` means "home map is <map>". Failures print
-  `route FAIL …`; exit code 0/1 on host, ares harness exit register on cart.
-- **Stats line** (one line per `stats` step): edicts live/peak, records
-  pending, pools used/peak per pool, heap free/largest, fps and pace
-  histogram, DMA p50/p99, pop-in, blocked I/O, precache peaks, position.
-  Field names follow the old tree's `stats` lines where the same quantity
-  exists, so `tools/prof_compare`-style comparisons work.
-- **PROFILE zones**: compile-time `PROFILE=1`; per-zone µs/frame and counts
-  rolled up once per second (`hl64: prof …`): frame, upd, phys, think,
-  trace, touch, pmove, stream, io, hydrate, rnd, world, movers, studio,
-  sbuild, trans, decal, hud, snd. Zone names map 1:1 onto the old tree's
-  `quake64:` zones where comparable (table in `engine/test/prof.c`).
-- **ares harness**: test-harness PI peripheral at `0x13fe0000`
-  (framebuffer PPM dump, exit code) and input file injection, from our ares
-  patch (`test/ares-testharness.patch`, imported if CLEAN). ISViewer log.
-- **Oracle**: the old tree's `hl_parity` host build and cart ROM produce
-  reference logs, screenshots and fixtures (specs/README.md describes the
-  fixture capture process, which only dirty-side agents run).
+- **Compiled routes**: route sources stay text (`test/routes/*.route`; the
+  old `uplink_route.cfg` converts mechanically), compiled by
+  `tools/routec` against the cooked HLE tables into `.rbc` bytecode: ops
+  `WAIT us`, `WAIT_MAP map`, `WAIT_NEAR map pos r timeout`, `WAIT_MOVED
+  map lump timeout`, `WAIT_GONE map lump timeout`, `WAIT_CLASS class pos r
+  timeout`, `WAIT_GLOBAL id timeout`, `LOOK pitch yaw`, `LOOK_AT map lump`,
+  `SETPOS map pos angles`, `BUTTONS down up`, `IMPULSE n`, `DROP class pos`,
+  `GOD on`, `SHOT label`, `STATS label`, `PASS`. Names are resolved at
+  compile time, so a renamed entity fails the compile, not the run. The VM
+  executes ops at frame boundaries, logs `route: <op#> <label>` and
+  reports `route FAIL` with the op's source line (kept in a debug table).
+- **Stats records**: fixed struct (entities live/peak, records pending,
+  pools used/peak, heap free/largest, fps + pacing histogram, DMA
+  p50/p99, pop-in, blocked I/O, position, time) printed as one text line
+  per `STATS` op; field names follow the old tree's where comparable so
+  old/new logs compare.
+- **PROFILE zones**: enum of ≈ 40 zones (frame, upd, phys, think, trace,
+  hitbox, touch, link, pmove, stream, io, hydrate, wake, rnd, world,
+  movers, studio, sbuild, bones, trans, decal, hud, snd …), µs and counts,
+  rolled up once per second; names map onto the old `quake64:` zones where
+  comparable (table in `engine/test/prof.c`) so 4.2 can be re-measured.
+- **ares harness**: our PI test peripheral (PPM dump, exit code) and
+  input-file injection (`test/ares-testharness.patch`); ISViewer log.
+- **Oracles**: GoldSrc probe (HLDS + HLSDK probe DLL), retail captures,
+  old tree where it matches GoldSrc: specs/README.md.
 
 ---
 
@@ -669,132 +656,122 @@ mode), Quit to title. Pause on Start.
 
 Verdicts from ProvAudit's final audit (2026-11-13; the binding text is
 [provenance-audit.md](provenance-audit.md) — where this table differs, the
-audit wins). Labels: **CLEAN** (ours, importable), **CLEAN+QI** (the
-audit's QUAKE-INTERFACE: our own code, written against Quake engine
-interfaces — `edict_t`/`v.*`, `sv.`/`cl.`, `model_t`, Cvar/Cmd/Con, Hunk),
-**QUAKE** / **XASH** (contains code derived from them), **HLSDK** (derived
-from the SDK: lives in `game/` or `tools/hlsdk/`), **FORBIDDEN** (present
-in `9fd3580`, or QuakeC translations).
+audit wins). Labels: **CLEAN**; **CLEAN+QI** (audit QUAKE-INTERFACE: our
+code, written against Quake engine interfaces); **QUAKE** / **XASH**
+(contains code derived from them); **HLSDK** (→ `game/` or
+`tools/hlsdk/`); **FORBIDDEN** (in `9fd3580`, or QuakeC translations).
+Actions: **import** (copy, audit entry named in the commit, licence header);
+**retarget** (import, replace Quake-interface glue); **split** (import the
+audit's "ours" parts, rewrite the flagged ranges from the named spec in the
+same commit); **rewrite** (from `docs/specs`, `docs/formats`, allowed
+sources); **drop**.
 
-Actions: **import** = copy, history note naming the audit entry, licence
-header; **retarget** = import, then replace the Quake-interface glue by
-hl64 APIs; **split** = import only what the audit entry marks as ours and
-rewrite the listed ranges from the named spec in the same commit;
-**rewrite** = new code from `docs/specs`, `docs/formats` and allowed
-sources only; **drop** = not needed in hl64.
+**Policy gate:** PROVENANCE.md admits only CLEAN files today; every
+retarget/split row needs D9.
 
-**Policy gate:** PROVENANCE.md today admits only files marked CLEAN.
-Every *retarget* and *split* row below needs the owner of PROVENANCE.md to
-admit QUAKE-INTERFACE files (decision D9). If D9 says no, those rows
-become *rewrite*, and the streaming scheduler, campaign seams, HLE record
-runtime, level state, sound backend, studio residency, sector and studio
-renderers and route runner each need a behaviour spec first (none exists
-for them yet; the formats and SA2 cover most of their observable rules).
+Revision 2 changes the plan: modules whose value was their algorithm keep
+it; modules whose shape was Quake's (edict loops, string tables, console,
+area tree, protocol) are rewritten even where the audit would allow a
+retarget.
 
 ### 16.1 Engine
 
-| hl64 module | old-tree source | verdict | action | rewrite source / note |
+| hl64 module | old-tree source | verdict | action | note |
 |---|---|---|---|---|
-| plat/n64 boot, carve order | `n64/port/quakegeneric_n64.c` | CLEAN+QI | retarget | 3.1 |
-| plat/n64 VI pacing, palette/TLUT, frame bracket | `n64/port/r64_vid.c` | CLEAN+QI except 162–172 (Quake `VID_Init`) and 252–258 stubs | split | pacing per 3.3; own vid struct replaces `VID_Init` |
-| plat/n64 sys (error, clock, log, RSP-crash wrap) | `n64/port/sys_n64.c` | QUAKE (≈ 185 lines) | rewrite | the RSP-crash `--wrap` and on-screen error painter (ours, 169–250) re-typed from their description |
-| FPU exception shim | `n64/port/fpu_shim.c` | CLEAN | import | |
-| core console, cvars, commands, keys, menu, host loop | `source/{console,cvar,cmd,keys,menu,host,host_cmd}.c` | FORBIDDEN | rewrite | 3.2, 12, 13 |
-| input | `source/in_*.c`, `sdl_input.c` | FORBIDDEN / n/a | rewrite | 11 |
-| mem pools | `n64/port/q64_pool.c`, `source/q64_pool.h` | CLEAN | import | |
-| limits | `source/q64_limits.h` | CLEAN | retarget | → `include/hl64/limits.h`, Quake zone/hunk constants removed |
-| heap probes | `n64/port/r64_malloc.c` | CLEAN | import | |
-| hunk/zone shims, zone budget | `n64/port/r64_mem.c`, `r64_hunk.c`, `q64_budget.c` | CLEAN+QI | drop | hl64 has no hunk/zone |
-| io DMA scheduler | `n64/port/q64_io.c`, `source/q64_io.h` | CLEAN | import | 5.2 |
-| cart file table, io stats | `n64/port/r64_cart.c`, `r64_iostat.c` | CLEAN | import | |
-| host io, heap, libdragon shim | `n64/port/host/q64_io_host.c`, `q64_heap_host.c` (dlmalloc, public domain), `host/libdragon.h` | CLEAN | import | |
-| host render mirror | `n64/port/host/q64_host_render.c` | QUAKE | drop | replaced by the draw-list recorder |
-| world format headers | `source/w64_format.h`, `w64_node.h`, `w64_world.h` | CLEAN+QI | retarget | |
-| world layer load, hull walk, PVS, point→leaf | `n64/port/w64_world.c` | CLEAN+QI except 9 QUAKE regions (≈ 286 lines: 443–458, 706–721, 797–799, 859–996, 1077–1099, 1115–1144, 1157–1182, 1233–1267) | split | regions from trace-and-hulls.md, area-links-and-touch.md 2, 5.5 and the BSP vis row format |
-| world residency / stream pump | `n64/port/w64_stream.c` | CLEAN+QI | retarget | 5.3 |
-| campaign, seams, portals | `n64/port/q64_world.c/.h` | CLEAN+QI | retarget | 5.4 |
-| v1 world (q64, page caches, atlases, v1 renderer) | `q64_map.c`, `q64_brush.c`, `r64_world.c`, `r64_world_atlas.c`, `r64_world_tex.c`, `r64_light.c` | mixed | drop | |
-| collision, traces, area tree | `source/world.c` | FORBIDDEN | rewrite | trace-and-hulls.md, area-links-and-touch.md |
-| physics movetypes, step moves | `source/sv_phys.c`, `sv_move.c` | FORBIDDEN | rewrite | physics-movetypes.md, think-and-time.md |
-| player movement | `source/sv_user.c` | FORBIDDEN | replace | HLSDK `pm_shared` in `game/pm/` + pmove-host.md (D2) |
-| entity table, alloc/free | `source/pr_edict.c`, `progs.h` | FORBIDDEN | rewrite | 6.2, think-and-time.md 5 |
-| precache tables | `source/sv_main.c` | FORBIDDEN | rewrite | precache-and-resources.md |
-| HLE records, hydration, wakes, timers | `source/hl/hl_ents.c/.h`, `hl_entcook.h` | CLEAN+QI (hl_ents.c 2486–2524 HLSDK) | retarget | 2486–2524 (multi_manager shape) → `game/`; entcook field table retargeted to the core record |
-| level state / dehydrate store | `source/hl/hl_levelstate.c/.h` | CLEAN+QI | retarget | game hooks 7.2 |
-| node graph cook + runtime | `source/hl/hl_nodecook.h` | CLEAN+QI except 280–578 (QUAKE/XASH tracing) | split | 280–578 rewritten on the hl64 trace API |
-| mixer, wav64 voices | `n64/port/snd_n64.c` (VADPCM decoding is libdragon's) | CLEAN+QI | retarget | sound.md; `S_*` API → `snd_` API, rename the two cvars at 105–106 and the Quake channel field vocabulary |
-| host audio | `n64/port/host/q64_host_audio.c` | CLEAN | import | |
-| HL sound names | `source/hl/hl_sounds.c/.h` | CLEAN+QI | retarget | |
-| sentences | `source/hl/hl_sentences.c` 1–505 (parser), `hl_sentences.h` | CLEAN | retarget | entity part of the file is HLSDK → `game/` |
-| sector renderer | `n64/port/r64_sector.c` | CLEAN+QI except 431–453 (texture animation) and 634–649 (dlight falloff) | split | world-surfaces.md 4, dlights.md 3 |
-| studio draw (STB2) | `n64/port/r64_studio_bake.c` | CLEAN+QI except 828–879 `chrome_axes` (XASH) and 2036–2048 (HLSDK frame wrap) | split | chrome and frame wrap from `game/studio` (D3) |
-| studio entity draw | `n64/port/r64_studio.c` | CLEAN+QI except 599–609 (HLSDK frame wrap idiom) | split | frame wrap from `game/studio` |
-| studio bone setup, animation | `source/studio_geom.c` | XASH/HLSDK 425 lines (77–188, 229–391, 399–517, 586–623); ours 36–75, 519–584, 627–1010 (Cephes constants need attribution) | rewrite (bones) + split (ours) | D3 |
-| studio residency pool | `source/mod_studio.c` | CLEAN+QI | retarget | SA2 §8.1 |
-| studio format structs | `source/studio.h` | HLSDK 8–207, ours 209–285 | split | HLSDK part → `game/` / `tools/hlsdk/` |
-| software studio paths | `studio_soft.c`, `r64_studio_sw.c`, `r64_studio_stubs.c` | QUAKE / CLEAN+QI | drop | |
-| translucent pass, sprites | `n64/port/r64_trans.c` | CLEAN+QI except 87–150 (fx blend) and 592–644 (sprite orientation) (XASH) | split | render-fx.md 1–3; SC4 cache, RDP modes, sort are ours |
-| decals | `n64/port/r64_decal.c` | CLEAN+QI except 403–421, 701–764, 944–945 (XASH) and 592–619 (Quake texture-axis table) | split | render-fx.md 4 (own overlap policy, axes from the cooked face's texel coordinates) |
-| sprite file parse | `n64/port/gsfx/gsfx_spr.c` | CLEAN except 12-line group-frame selection and 4-line origin→bounds (QUAKE) | split | render-fx.md 3 |
-| particles (TinyPX submit) | `n64/port/r64_part.c` | CLEAN+QI | retarget | particle simulation itself: render-fx.md 5 |
-| 2D draw (ui8 sheets, fades) | `n64/port/r64_draw.c` | CLEAN+QI except ≈ 48 Quake lines (`Draw_Character`, `Draw_String`, `Draw_CachePic`, copied comments) | split | 9 step 8 |
-| texture upload / TMEM bind | `n64/port/r64_tex.c` | CLEAN+QI except 725–762 (texture animation) | split | world-surfaces.md 4 |
-| render main (view setup) | `n64/port/r64_main.c` | QUAKE 45–54, 87–129; rest Quake-API-shaped | rewrite | 9 |
-| renderer internals header | `r64_local.h` | CLEAN+QI | retarget | |
-| Quake alias models | `r64_alias.c`, `r64_alias_bake.c` | QUAKE / CLEAN+QI | drop | |
-| client effects (temp ents, beams, blood…) | `n64/port/gsfx/gsfx_cart.c`, `gsfx_cl.c` | XASH (501 + 721 lines) + HLSDK; our names/objects/attachments/draw lists/palette code is CLEAN | rewrite (effect builders), split (ours) | render-fx.md 5; HLSDK temp-entity physics → `game/` |
+| plat/n64 boot, carve | `n64/port/quakegeneric_n64.c` | CLEAN+QI | retarget | 3.1 |
+| VI pacing, TLUT | `n64/port/r64_vid.c` | CLEAN+QI except 162–172 (`VID_Init`), 252–258 | split | 3.3 |
+| sys (error, clock, RSP-crash wrap) | `n64/port/sys_n64.c` | QUAKE (≈ 185 lines) | rewrite | ours (169–250) re-typed from description |
+| FPU shim | `n64/port/fpu_shim.c` | CLEAN | import | |
+| settings, debug commands, menu, frame loop | `source/{console,cvar,cmd,keys,menu,host,host_cmd}.c` | FORBIDDEN | rewrite | 3.2, 12, 13 (typed design) |
+| input | `source/in_*.c` | FORBIDDEN | rewrite | 11 |
+| pools | `q64_pool.c`, `q64_pool.h` | CLEAN | import | |
+| limits | `q64_limits.h` | CLEAN | retarget | → `limits.h`; slot-table caps (models/sounds/sfx/styles) removed by 6.5 |
+| heap probes, cart DMA, io stats | `r64_malloc.c`, `r64_cart.c`, `r64_iostat.c` | CLEAN | import | |
+| hunk/zone shims, zone budget | `r64_mem.c`, `r64_hunk.c`, `q64_budget.c` | CLEAN+QI | drop | |
+| DMA scheduler | `q64_io.c/.h` | CLEAN | import | 5.2 |
+| host io, heap, libdragon shim, audio | `host/q64_io_host.c`, `q64_heap_host.c` (dlmalloc, PD), `host/libdragon.h`, `q64_host_audio.c` | CLEAN | import | |
+| host render mirror | `host/q64_host_render.c` | QUAKE | drop | recorder |
+| world format headers | `w64_format.h`, `w64_node.h`, `w64_world.h` | CLEAN / CLEAN+QI | retarget | |
+| layer load, hull walk, PVS, point→leaf | `n64/port/w64_world.c` | CLEAN+QI except 9 QUAKE regions (≈ 286 lines) | split | regions from trace-and-hulls.md, 5.5 |
+| residency scheduler | `n64/port/w64_stream.c` | CLEAN+QI | retarget | + change-driven recompute (5.3) |
+| campaign, seams, portals | `n64/port/q64_world.c/.h` | CLEAN+QI | retarget | |
+| v1 world | `q64_map.c`, `q64_brush.c`, `r64_world*.c`, `r64_light.c` | mixed | drop | |
+| collision, traces | `source/world.c` | FORBIDDEN | rewrite | trace-and-hulls.md |
+| spatial grid, links, touches | `source/world.c` (area tree) | FORBIDDEN | rewrite | area-links-and-touch.md (grid) |
+| physics, step moves, think | `source/sv_phys.c`, `sv_move.c` | FORBIDDEN | rewrite | physics-movetypes.md, think-and-time.md |
+| player movement | `source/sv_user.c` | FORBIDDEN | replace | HLSDK pm_shared (D2) |
+| entity components, handles, heap | `source/pr_edict.c`, `progs.h` | FORBIDDEN | rewrite | 6 |
+| resources | `source/sv_main.c` precache, `snd_n64.c` name table | FORBIDDEN / CLEAN+QI | rewrite | cooked table (6.5), precache-and-resources.md |
+| HLE records, hydration, wakes, timers | `source/hl/hl_ents.c/.h`, `hl_entcook.h` | CLEAN+QI (2486–2524 HLSDK) | retarget | heavier: names/keys become ids, timers in µs; 2486–2524 → `game/` |
+| level state | `source/hl/hl_levelstate.c/.h` | CLEAN+QI | retarget | |
+| node graph | `source/hl/hl_nodecook.h` | CLEAN+QI except 280–578 | split | tracing on the hl64 API |
+| mixer, voices | `n64/port/snd_n64.c` | CLEAN+QI | retarget | spatialisation and channel rules per sound.md (GoldSrc), names → `res_t` |
+| sentences | `source/hl/hl_sentences.c` 1–505 | CLEAN | retarget → tool | parser moves into the cook (`tools/sentc`), runtime reads ids |
+| sector renderer | `n64/port/r64_sector.c` | CLEAN+QI except 431–453, 634–649 | split | world-surfaces.md 4, dlights.md 3 |
+| studio draw | `r64_studio_bake.c`, `r64_studio.c` | CLEAN+QI except 828–879 (XASH), 2036–2048 / 599–609 (HLSDK) | split | chrome and frame wrap from `game/studio` |
+| studio bones | `source/studio_geom.c` | XASH/HLSDK 425 lines; ours 36–75, 519–584, 627–1010 | rewrite + split | D3 |
+| studio residency | `source/mod_studio.c` | CLEAN+QI | retarget | D3(b) chunks change its units |
+| studio structs | `source/studio.h` | HLSDK 8–207, ours 209–285 | split | HLSDK part → `tools/hlsdk/`, `game/studio` |
+| software studio, alias models | `studio_soft.c`, `r64_studio_sw.c`, `r64_studio_stubs.c`, `r64_alias*.c` | mixed | drop | |
+| translucent, sprites | `n64/port/r64_trans.c` | CLEAN+QI except 87–150, 592–644 (XASH) | split | render-fx.md 1–3 |
+| decals | `n64/port/r64_decal.c` | CLEAN+QI except 403–421, 701–764, 944–945 (XASH), 592–619 (QUAKE) | split | render-fx.md 4 |
+| sprite parse | `gsfx/gsfx_spr.c` | CLEAN except 16 QUAKE lines | split | moves into the cook (`hl_sprite_cook.py` already converts) |
+| particles | `n64/port/r64_part.c` | CLEAN+QI | retarget | |
+| 2D | `n64/port/r64_draw.c` | CLEAN+QI except ≈ 48 QUAKE lines | split | 9.8 |
+| textures | `n64/port/r64_tex.c` | CLEAN+QI except 725–762 | split | world-surfaces.md 4 |
+| render main | `n64/port/r64_main.c` | QUAKE | rewrite | 9 |
+| client effects | `gsfx_cart.c`, `gsfx_cl.c` | XASH + HLSDK; our object/draw-list parts CLEAN | rewrite + split | render-fx.md 5 |
 | effect helpers | `gsfx_util.c` | CLEAN | import | |
-| profiler | `r64_prof.c` / `source/q64_prof.h` | CLEAN+QI / CLEAN | retarget / import | 15 |
-| route runner | `n64/port/q64_route.c` | CLEAN+QI | retarget | 15 |
+| profiler | `r64_prof.c`, `q64_prof.h` | CLEAN+QI / CLEAN | retarget / import | 15 |
+| route runner | `n64/port/q64_route.c` | CLEAN+QI | rewrite | compiled VM (15); the old text syntax is the compiler's input |
 | frame stats, selftest | `frame_stats.c`, `q64_selftest.c` | CLEAN+QI | retarget | `engine/test` |
-| ares harness | `n64/port/test_harness.h`, `test/ares-testharness.patch`, `ares-large-rom-isviewer.patch` | CLEAN | import | |
-| SDL / Android / GLES | `n64/port/gles/`, `sdl/` | — | drop | N64 only |
+| ares harness, patches | `test_harness.h`, `test/ares-*.patch`, `libdragon-patches/` | CLEAN | import | |
+| SDL / Android / GLES | `gles/`, `sdl/`, `android/` | — | drop | N64 only |
 
 ### 16.2 Game (`game/`, HLSDK licence)
 
 | files | verdict | action |
 |---|---|---|
-| `hl_grunt`, `hl_monsters`, `hl_monstermaker`, `hl_ambient`, `hl_scripted`, `hl_sentences` (entities), `hl_nodes`, `hl_movers`, `hl_breakable`, `hl_items`, `hl_weapons(.h)`, `hl_logic`, `hl_env` (372–1166), `hl_hud`, `hl_use(.h)`, `hl_material(.h)`, `hl_ai` | HLSDK translations, built on forbidden QuakeC-translation helpers | retarget per 7.3; rewrite inside: `hl_ai.c` 746–917 (QuakeC walkmonster thinkers) and every call into `g_*`/`FoundTarget`/`M_Visible`/`ai_run`/`walkmonster_start`; `hl_material.c` 236–290, 554–568; `hl_use.c` 120–176 (delete) and 369–386; `hl_monsters.c` 255–269 (→ `ent_alloc`); `hl_nodes.c` 228–243 and `hl_scripted.c` 239–256 (→ engine `drop_to_floor`); `hl_weapons.c` 303–306 (`crandom`); `hl_ents.c` 2486–2524 |
-| `hl_view.c` | HLSDK-side view code; 62–93 (shake) Valve algorithm | retarget into `game/hud`, rewrite 62–93 from HLSDK |
+| `hl_grunt`, `hl_monsters`, `hl_monstermaker`, `hl_ambient`, `hl_scripted`, `hl_sentences` (entities), `hl_nodes`, `hl_movers`, `hl_breakable`, `hl_items`, `hl_weapons(.h)`, `hl_logic`, `hl_env` (372–1166), `hl_hud`, `hl_use(.h)`, `hl_material(.h)`, `hl_ai` | HLSDK translations on forbidden helpers | retarget per 7.3; rewrite inside: `hl_ai.c` 746–917 and every `g_*`/`FoundTarget`/`M_Visible`/`ai_run`/`walkmonster_start` call; `hl_material.c` 236–290, 554–568; `hl_use.c` 120–176 (delete), 369–386; `hl_monsters.c` 255–269; `hl_nodes.c` 228–243 and `hl_scripted.c` 239–256 (→ `drop_to_floor`); `hl_weapons.c` 303–306 |
+| `hl_view.c` | HLSDK-side; 62–93 Valve shake | retarget into `game/hud`, rewrite 62–93 from HLSDK |
 | `hl_input.h`, `hl_view.h`, `hl_hud_rects.h` | CLEAN | import |
-| `gsfx_sv.c`, `gsfx_te.c` | HLSDK (effects.cpp, util.cpp…); `te_trace` QUAKE | retarget onto the effects API (7.1), rewrite `te_trace` with `eng` traces |
-| `source/g_*.c`, `game.c`, `game_weapons.c`, `g_entvars.h`, `g_fielddefs.c`, `g_api.c` | FORBIDDEN | not used; helpers they provided are rewritten in `game/util.c` from HLSDK `util.cpp`, `subs.cpp`, `cbase.cpp`, `monsters.cpp` |
-| HLSDK `pm_shared.c`, `pm_defs.h`, `pm_math.c`, `pm_movevars.h`, `pm_materials.h` | HLSDK | import into `game/pm/`, caps per pmove-host.md 2 (D2) |
+| `gsfx_sv.c`, `gsfx_te.c` | HLSDK; 479–518 QUAKE | retarget onto the effects API, rewrite 479–518 |
+| `source/g_*.c`, `game.c`, `game_weapons.c`, `g_entvars.h`, `g_fielddefs.c`, `g_api.c` | FORBIDDEN | not used; `game/util.c` from HLSDK |
+| HLSDK `pm_shared` files | HLSDK | `game/pm/`, caps per pmove-host.md (D2) |
+| HLSDK `StudioModelRenderer` pose maths | HLSDK | `game/studio/` (D3) |
 
 ### 16.3 Tools and docs
 
 | item | verdict | action |
 |---|---|---|
-| `tools/w64c/w64c.py` | CLEAN except QUAKE 344–373 (texture animation), 424–431, 838–850, 861–944 (light-point walk), 1524–1534 (vis row scan), 121–128 (stock style strings); HLSDK 1349–1446 (materials.txt); `cook_face` 405–519 replicates the old v1 renderer's surface bake, so its verdict follows that file | split: rewrite those ranges (and `cook_face`) from world-surfaces.md 1–4 and the BSP vis row format, proven by W1 (byte-identical packages); style strings come from game/'s HLSDK table; 1349–1446 → `tools/hlsdk/` |
-| `tools/w64c/w64check.py` | CLEAN except 296–368 (tracer) | split: tracer from trace-and-hulls.md |
-| `tools/w64c/w64seam.py` | CLEAN except 77–83 (AngleVectors) | split: specs/README.md conventions |
-| `tools/w64c/hlecook.c` (+ `hl_entcook.h`) | CLEAN | import |
-| `tools/studio_bake` (`bake_studio.c`, `bake_meshopt.cpp`) | CLEAN, links `studio_geom.c` (XASH) | retarget onto the D3 bone code |
-| `hl_campaign.py`, `ui_bake/`, `hlhud_bake/`, `world_tex_bake/`, `hl_stage_content.py`, `hl_sprite_cook.py`, `hl_gsfx.py`, `convert_hl_sounds.sh`, `extract_hl_sounds.sh` | CLEAN | import (`hl_stage_content.py` retargeted to the hl64 content layout) |
-| `q64mapc`, `q64zone`, `hl_world/{stream_plan,zone_pack,stitch_and_carve}.py` | — | drop (v1 and zone system; `.w64` keeps no ZONE/DRYS/STRM chunks in hl64) |
-| `n64/docs/w64-format.md`, `cwg-format.md`, `hle-format-v1.md` | CLEAN | import into `docs/formats/`, scrubbing the 7 + 4 lines that name Quake/old-engine functions (restate as prose) |
-| `n64/docs/stream-arch-v2.md` | CLEAN | cite as history (measurements); not imported |
-| `q64-format-v1.md`, `q64-map-streaming.md` | — | drop (obsolete; the latter quotes Quake source) |
-| route files `test/uplink_route.cfg`, Hazard walk routes | CLEAN data | import as `test/routes/`; their console commands exist in hl64 with the same names |
+| `tools/w64c/w64c.py` | CLEAN except QUAKE 121–128, 344–373, 424–431, 838–850, 861–944, 1524–1534; HLSDK 1349–1446; `cook_face` 405–519 follows the v1 renderer | split: rewrite from world-surfaces.md and the BSP vis row format, prove with W1; 1349–1446 → `tools/hlsdk/`; probe format v3 (lightstyles.md 4) |
+| `tools/w64c/w64check.py`, `w64seam.py` | CLEAN except 296–368 / 77–83 | split |
+| `tools/w64c/hlecook.c` + `hl_entcook.h` | CLEAN | import; extended to cook names/classes/resources to ids |
+| `tools/studio_bake` | CLEAN, links `studio_geom.c` | retarget onto `game/studio`; D3(b) adds per-sequence animation chunks |
+| `hl_campaign.py`, `ui_bake`, `hlhud_bake`, `world_tex_bake`, `hl_stage_content.py`, `hl_sprite_cook.py`, `hl_gsfx.py`, sound scripts | CLEAN | import (staging retargeted to the hl64 layout) |
+| new tools | — | `restab` (campaign resource table + pattern table), `sentc` (sentences), `routec` (routes), all MIT |
+| `q64mapc`, `q64zone`, `hl_world/*` | — | drop |
+| `w64-format.md`, `cwg-format.md`, `hle-format-v1.md` | CLEAN | import into `docs/formats/` with the audit's scrub; add `rtb-format.md`, `route-bytecode.md` in M0 |
+| `stream-arch-v2.md` | CLEAN | cite as history |
+| `uplink_route.cfg`, Hazard walk routes | CLEAN data | convert to `.route` sources, compile with `routec` |
 
 ---
 
 ## 17. Milestones and gates
 
-Every gate runs on the host (`make host && test/run/<gate>.sh`) and on ares
-(`make rom && test/run/<gate>.sh --ares`); a gate passes only when both
-pass. Oracle numbers come from the old tree's logs captured once per
-milestone by a dirty-side agent into `test/fixtures/oracle/`.
+Every gate passes on host (`make host && test/run/<gate>.sh`) and ares
+(`--ares`). GoldSrc probe fixtures are captured before the milestone that
+uses them (specs/README.md).
 
-| M | deliverable | gate (host + ares) |
+| M | deliverable | gate |
 |---|---|---|
-| M0 | Makefile (rom on `n64.mk` + tiny3d, host), plat layers, boot carve, console/cvars, DFS pack of player-cooked content, ares harness, provenance lint | ROM boots in ares to a `boot ok` line with the memory carve table and exits 0 via the harness; host prints the identical carve table; `tools/provcheck` passes (no file from the forbidden list, no line-level match against `git -C quakegeneric show 9fd3580:` files above a threshold, all headers carry the right licence) |
-| M1 | io scheduler, layer open (eager is acceptable), sector renderer, movers static, textures + texture animation, lightstyles, free camera; cook ranges rewritten (16.3) | 3 fixed poses in hldemo1 (start room, dome, elevator): ares screenshots SSIM ≥ 0.95 vs the old cart's at the same pose and `r_drawentities 0`; host recorder meshlet/bind counts equal the cook's visible-set prediction; world CPU ≤ 3 ms on the dome pose; world-surfaces.md W1–W5 (rewritten cook byte-identical) |
-| M2 | COLL residency, traces, area tree, pmove host + game pmove, input, view | trace fixture parity (specs/trace-and-hulls.md T1–T11) on all 10 maps; specs/pmove-host.md PM1–PM7; area-links-and-touch.md A1–A6; route `m2-walk-hldemo1.cfg` (stairs, duck crawl, ladder, drop) passes its `waitnear` checks (PM8) |
-| M3 | entity system, HLE records, hydration (single layer), physics movetypes, think timing, precache, sound, studio, translucent/decals/sprites, HUD, game/ re-targeted | uplink route segment A from `waitmap hldemo1` to the elevator button `+use` with `waitmoved startele1` and the changelevel fire observed (`route: changelevel fired changetohldemo2`) — no crossing yet; specs tests for area/think/physics/precache/lightstyles/dlights/sound pass |
-| M4 | streaming crossings: CWG3, approach/arm/switch, portals, twins, dehydrate/rehydrate, timers freeze/thaw, async residency classes | route through hldemo1→2→3 seams: PASS with 0 forced switches on host, `budget_over=0`, `open_fail=0`, 0 frames > 1 ms blocked I/O, pop-in only inside teleport windows; edicts continuous across seams (stats before/after) |
-| M5 | full Uplink route parity (old `uplink_route.cfg` unmodified) + Hazard Course routes | PASS on host and ares, same checkpoints, same `waitnear` tolerances; Hazard `t0a0*` walk routes PASS; precache/edict peaks ≤ caps |
-| M6 | performance parity | per route checkpoint, ares median fps ≥ the old cart's (same pacing build) at every `stats` step; frame-time target: no frame > 50 ms within ±2 s of any seam switch (report each miss with zones); memory: every `[INFERENCE]` row of 4.2 replaced by measured peak; real-hardware run if a flashcart is available |
+| M0 | Makefile (rom + host), plat, boot carve, settings, debug commands, log ring, ares harness, resource-table and route compilers (stubs of the formats), provcheck | ROM boots in ares to `boot ok` with the carve table and exits 0 via the harness; host prints the identical table; `tools/provcheck`: no forbidden file, no line-level match against `9fd3580` files above threshold, licence headers right, no Quake engine identifiers in `engine/` |
+| M1 | io scheduler, layer open, sector renderer, movers static, textures + animation, lightstyles, free camera; cook ranges rewritten | 3 hldemo1 poses: ares SSIM ≥ 0.95 vs the old cart (world only; both are the same cooked world, so the old tree is a valid oracle here); recorder counts = cook prediction; world CPU ≤ 2 ms on the dome pose; W1–W5 |
+| M2 | COLL residency, traces + hitboxes, spatial grid, pmove host + pm_shared, input, view | trace-and-hulls.md tests on GoldSrc probe fixtures; area-links A1–A6; pmove PM1–PM7 against probe bot runs; route `m2-walk` PASS |
+| M3 | components, active sets, think heap, records, hydration (one layer), movetypes, resources, sound, studio, translucent/decals/sprites, HUD, game/ retargeted | compiled Uplink route segment A to the elevator `+use`, `WAIT_MOVED startele1`, changelevel fire logged; physics/think/sound/lightstyle/dlight/render-fx tests pass on their fixtures |
+| M4 | streaming crossings: CWG3, seams, twins, dehydrate/rehydrate, timers, async residency with change-driven recompute | route through hldemo1→2→3: PASS, 0 forced switches on host, `budget_over=0`, `open_fail=0`, 0 frames > 1 ms blocked I/O, pop-in only in teleport windows, entities continuous across seams |
+| M5 | full Uplink route (converted `uplink_route.cfg`) + Hazard routes | PASS on host and ares at the same checkpoints; any `WAIT_NEAR` radius widened versus the old route is listed with its GoldSrc-behaviour reason |
+| M6 | performance | ares median fps ≥ the old cart's at every stats step (same pacing); no frame > 50 ms within ±2 s of a seam switch (misses reported with zones); 4.1 and 4.2 [EST] rows replaced by measurements; flashcart run if available |
 
 ---
 
@@ -802,68 +779,58 @@ milestone by a dirty-side agent into `test/fixtures/oracle/`.
 
 ### 18.1 Build
 
-- `Makefile` includes `$(N64_INST)/include/n64.mk` and `t3d.mk`;
-  `N64_INST` = `~/sdks/n64-sdk`, libdragon replaced by the banked prefix
-  `~/sdks/libdragon-banked-bc24d3d5a7d2` (its MANIFEST rev must equal the
-  SDK's `libdragon_rev`; the build refuses otherwise), toolchain
-  `~/sdks/mips64-toolchain`. Out-of-tree `BUILD_DIR` supported (scratch on
-  `/scratch`).
-- Targets: `rom` (`hl64.z64`), `host` (`hl64-host`, `HOST_M32=1` default),
-  `cook` (runs `tools/` over `HL64_DATA=<player's HL install>` into
-  `HL64_CONTENT`), `test-host`, `test-ares`, `provcheck`.
-- Flags: `-std=c99 -O2 -Wall -Wextra -Werror` for `engine/` and `plat/`;
-  `game/` may relax warnings it inherits from HLSDK style. `PROFILE=1`,
-  `HL64_TEST=1` (harness, route runner, fixed dt) are the only variant
-  switches; no per-feature `#ifdef` forests.
-- ROM pack: `n64.mk` DFS of `HL64_CONTENT` filtered by `DFS_MAPS` globs
-  (campaign graph always included); ROM size ≤ 64 MiB (flashcart limit;
-  Uplink + Hazard measured ~58 MiB in the old tree).
+`Makefile` includes `$(N64_INST)/include/n64.mk` and `t3d.mk`; `N64_INST`
+= `~/sdks/n64-sdk`, libdragon replaced by the banked prefix (its MANIFEST
+rev must equal the SDK's `libdragon_rev`), toolchain
+`~/sdks/mips64-toolchain`, out-of-tree `BUILD_DIR` (scratch on
+`/scratch`). Targets: `rom`, `host` (`HOST_M32=1` default), `cook`
+(`HL64_DATA` → `HL64_CONTENT`), `routes`, `test-host`, `test-ares`,
+`provcheck`. `-std=c99 -O2 -Wall -Wextra -Werror` for `engine/` and
+`plat/`. Variants: `PROFILE=1`, `HL64_TEST=1` only. ROM ≤ 64 MiB
+(flashcart limit; Uplink + Hazard ≈ 58 MiB in the old tree).
 
 ### 18.2 Code conventions
 
-- C99, no VLAs, no recursion deeper than the BSP depth bound (hull walks
-  iterate with an explicit stack of ≤ 64 entries).
-- djb-style minimalism: small modules, one obvious data path, no
-  speculative abstraction, no allocation on the steady path, no
-  unbounded loops over untrusted counts.
-- Hostile input: every cooked file is untrusted. Loaders check magic,
-  version, header size, every count against `limits.h` and against the
-  bytes present, every offset + length inside its chunk, alignment, CRC
-  (directory at open; chunk CRCs on the host always, on the cart in debug
-  builds), string termination inside the string table, node children
-  inside the node range (or a valid extern/leaf encoding), tree depth.
-  Failure → `sys_error` with the file, offset and rule; never read out of
-  range. The host runs the loaders under a fuzz harness (M0+).
-- Big-endian cooked data is read in place on the cart; the host swaps once
-  at load into the same layout.
-- Floats: single precision everywhere except the clock accumulator; no
-  `-ffast-math` in `coll/` and `phys/` (results must match on host and
-  cart bit for bit; the host builds with `-ffp-contract=off` and SSE2, the
-  cart has no FMA).
-- Names: module prefix per directory (`io_`, `wld_`, `col_`, `phy_`, `ent_`,
-  `snd_`, `ren_`, `in_`, `con_`, `ui_`, `sav_`, `rt_`, `prof_`, `sys_`).
-  Engine code does not use Quake/GoldSrc engine identifiers (`SV_*`,
-  `CL_*`, `R_*`, `edict_t`, `progs`) — provcheck flags them.
-- Every file starts with its licence line (MIT; HLSDK files carry the SDK
-  notice) and a one-paragraph purpose comment.
+- C99, no VLAs; recursion only where the depth is bounded by data limits
+  (hull walks use explicit stacks).
+- djb-style minimalism: small modules, one data path, no speculative
+  abstraction, no allocation on the steady path.
+- Data-oriented: per-frame loops iterate arrays of one component over an
+  active set; no per-frame walk over all entities; ids (u16) instead of
+  pointers in anything stored, saved or cooked.
+- Integer where it saves cycles or bytes without changing GoldSrc-visible
+  results: time (u64 µs), ids, colours, light values, quantised render
+  data (s16 verts, 8.8 scale). Floats for positions, velocities, angles and
+  collision; no `-ffast-math` in `coll/`, `phys/`; host builds with
+  `-ffp-contract=off` and SSE2 so host and cart agree bit for bit.
+- Hostile input: every cooked file is untrusted — magic, version, counts
+  against `limits.h` and against bytes present, offsets inside their chunk,
+  alignment, CRC (directory at open; chunks on the host always, on the
+  cart in debug builds), ids inside their tables, node children valid,
+  depth bounded. Failure → `sys_error(file, offset, rule)`. Host fuzz
+  harness for every loader from M0.
+- Big-endian cooked data read in place on the cart; the host swaps once.
+- Module prefixes per directory (`io_`, `wld_`, `col_`, `phy_`, `ent_`,
+  `res_`, `snd_`, `ren_`, `in_`, `dbg_`, `ui_`, `sav_`, `rt_`, `prof_`,
+  `sys_`); no Quake/GoldSrc engine identifiers in `engine/` (provcheck).
+- Every file starts with its licence line and a purpose paragraph.
 
 ---
 
 ## 19. Decisions for the user
 
-Each has a recommendation; work proceeds on the recommendation unless the
-user overrules. D9 blocks the M0 imports; D1, D2 and D3 block M2/M3
-design work; the rest can wait until the milestone named.
+Work proceeds on the recommendation unless the user overrules. D9 and D10
+block M0; D1–D3 block M2/M3; the rest wait for the milestone named.
 
 | # | decision | options | recommendation |
 |---|---|---|---|
-| D1 | Entity representation (M0 headers) | (a) compact engine core record ≈ 256 B + per-class game private data, handles and function ids, HLSDK field names (6.1); (b) HLSDK `edict_t` + `entvars_t` layout verbatim (≈ 800 B per slot, layout confined to `game/`, engine re-declares what it reads) | (a): ≈ 270 KB less RDRAM at the 495 cap, exact host/cart sizes, trivially serialisable; the game is C, so (b)'s source compatibility buys little |
-| D2 | Player movement (M2) | (a) HLSDK `pm_shared` in `game/pm/` (HLSDK licence), caps cut to 64 physents / 8 move-ents / 32 touches; (b) engine movement rewritten from a new behaviour spec of the oracle (Quake movement + GoldSrc patches), MIT | (a): it *is* GoldSrc player movement, allowed by PROVENANCE, no spec/rewrite risk; route radii absorb the differences from the oracle (pmove-host.md 6). Cost: walked route legs may need radius review |
-| D3 | Studio animation runtime (M3) | (a) bone setup from HLSDK `StudioModelRenderer` in `game/studio/` (HLSDK licence), reading MDL animation data from the studio pool as the old tree does; (b) cook animations into our own per-sequence format (SA2 §3.6 per-sequence chunks) and write MIT bone code from that format; ≈ 60 KB per NPC model vs 93–142 KB | (a) for M3 (fast, allowed, removes the Xash-derived `studio_geom.c`), (b) as an M6 memory option if the studio pool is the bottleneck. Either way the old `studio_geom.c` bone code is not used |
-| D4 | Saved games (after M5) | (a) none — campaign state lives only in the session; (b) FlashRAM 128 KB (flashcarts and ares support it): 1 slot + quick save; (c) SRAM 32 KB; (d) Controller Pak 32 KB | (b): the estimated 40–90 KB save (14) does not fit (c)/(d); defer the format until M5 fixes the record layouts |
-| D5 | Host renderer output (M1) | (a) draw-list recorder only (counts, hashes); pixels only from ares; (b) also a small software rasteriser on the host for PPM screenshots | (a); add (b) only if ares turnaround blocks M1/M3 iteration |
-| D6 | Where the oracle differs from documented GoldSrc | (a) oracle-exact through M5 (route parity), then GoldSrc-faithful changes behind cvars one by one; (b) GoldSrc-faithful from the start | (a). Known differences: allsolid trace fraction, box-only trigger shapes, bbox (not hitbox) bullet traces, BOUNCE without friction/gravity, model light not following animated styles, sentence `(s)`/`(t)` modifiers, conveyors handled in game |
-| D7 | Console requirement | (a) Expansion Pak (8 MB) required; (b) also 4 MB | (a): the studio pool alone is 1.5 MB; the old tree required 8 MB for HL content too |
-| D8 | Imported file history | (a) copy CLEAN files with a commit note naming the audit entry (PROVENANCE.md); (b) subtree-import with filtered history | (a): history of those files is interleaved with Quake-derived commits |
-| D9 | Admit QUAKE-INTERFACE files (our code written against Quake engine interfaces) — blocks M0 imports | (a) amend PROVENANCE.md: such files may be imported when the same commit retargets every Quake binding the audit lists and rewrites the audit's flagged ranges from specs; provcheck verifies no Quake identifier survives; (b) keep CLEAN-only: rewrite all of them from new behaviour specs | (a): the audit found no copied Quake logic in them (similarity and comment-overlap scans), only interface use; (b) adds ≈ 8 more specs and ≈ 20k lines of rewrite (w64_stream 2.3k, q64_world 1.5k, hl_ents 4.3k, hl_levelstate 2.4k, snd_n64 1.9k, mod_studio 2.2k, r64_sector 2.1k, r64_studio + r64_studio_bake 3k, q64_route 0.5k …) for no provenance gain the audit can measure |
-
+| D1 | Entity representation (M0) | (a) typed components in parallel arrays (228 B per slot), active sets, think heap, ids, HLSDK field names via accessors (6); (b) HLSDK `edict_t` + `entvars_t` verbatim (≈ 800 B per slot, scanned per frame) | (a): ≈ 314 KB less than the old edicts at the 495 cap, O(active) frame loops, exact host/cart sizes, saves by block copy |
+| D2 | Player movement (M2) | (a) HLSDK `pm_shared` in `game/pm/` (HLSDK licence), caps 64 physents / 8 ladders / 32 touches; (b) a new clean engine movement from a GoldSrc behaviour spec | (a): it is GoldSrc's movement, allowed by PROVENANCE; probe bots verify the adapter |
+| D3 | Studio animation (M3) | (a) HLSDK `StudioModelRenderer` pose maths in `game/studio/` over whole MDL animation data resident in the studio pool (as the old tree does); (b) the same pose maths over cooked per-sequence animation chunks (the MDL's run-length values regrouped per sequence, 16-aligned, streamed individually) so only the sequences in use are resident | (b): identical poses (same values), ≈ 60 KB instead of 93–142 KB per NPC model, so ≈ 500 KB less studio pool [EST, SA2 §3.6]; costs one cook tool and a format doc in M3 |
+| D4 | Saved games (after M5) | none; FlashRAM 128 KB; SRAM 32 KB; Controller Pak 32 KB | FlashRAM: 40–90 KB [EST] does not fit 32 KB |
+| D5 | Host renderer output (M1) | draw-list recorder only; plus a host software rasteriser | recorder; rasteriser only if ares turnaround blocks iteration |
+| D6 | Behaviour target | **settled by the user: GoldSrc as observed.** Remaining sub-decisions: (i) frame-time clamp 0.1 s (stability on the cart) vs GoldSrc's 0.25 s; (ii) hitbox traces for line traces vs bbox only (cost ≈ 0.1 ms on firing frames); (iii) model lighting following animated lightstyles via the probe style term (cook format v3) vs static; (iv) vertex lighting instead of lightmaps (SA2 decision 1) | (i) 0.1 s; (ii) hitboxes; (iii) style term; (iv) keep vertex lighting |
+| D7 | Console requirement | Expansion Pak required; also 4 MB | Expansion Pak |
+| D8 | Imported file history | copy with a commit note naming the audit entry; subtree import | copy with note |
+| D9 | Admit QUAKE-INTERFACE files (blocks M0 imports) | (a) amend PROVENANCE.md: importable when the same commit replaces every Quake binding the audit lists and rewrites its flagged ranges; provcheck verifies; (b) CLEAN-only | (a), now for fewer files: revision 2 already rewrites the route runner, console, area links and resource tables; (a) still saves ≈ 15k lines of streaming, seam, record, level-state, sound, studio-residency and sector/studio renderer code whose algorithms are ours |
+| D10 | GoldSrc oracle (blocks M2 fixtures) | (a) run Valve's Linux dedicated server (steamcmd app 90, anonymous) with a HLSDK-built probe game DLL and the player's Uplink maps on this machine, plus retail client captures when the user's Steam login is available; (b) no GoldSrc runs: specs from HLSDK and documentation only, old tree as fallback oracle | (a): server-side behaviour (traces, touches, physics, think timing, pmove via bots) becomes measured ground truth; black-box observation is allowed by PROVENANCE |

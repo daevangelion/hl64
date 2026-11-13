@@ -3,8 +3,8 @@
 The old tree's code for these areas follows Xash3D sources (audit: r64_trans.c,
 r64_decal.c, gsfx_cl.c, gsfx_cart.c), so hl64 rewrites them from this spec,
 HLSDK's `const.h`/`effects.cpp`/`util.cpp` (game side, allowed), the SPR
-format note in `docs/formats/` and black-box captures of the oracle and of
-retail Half-Life. Conventions: [README.md](README.md).
+format note in `docs/formats/` and black-box captures of retail Half-Life
+(README "Oracles"). Conventions: [README.md](README.md).
 
 Content census (cook of Uplink + Hazard entity lumps): render modes used
 TransAlpha 4 (func_illusionary 173, func_wall 147, doors 36, breakables,
@@ -37,8 +37,8 @@ Every entity has a **blend** 0…255 computed each rendered frame from
 
 Rates for fades are per second (GoldSrc applies them per rendered frame;
 the per-second rates equal GoldSrc at 30 fps). Exact shapes of the sine and
-random fx are calibrated from fixture X3 (the oracle and a retail capture
-of the same entity over time).
+random fx are calibrated from retail capture X-fx (the same entity
+recorded over time).
 
 An entity whose render mode is not Normal and whose blend is 0 is not
 drawn (it stays solid).
@@ -130,8 +130,8 @@ All in fixed pools, randomness from the render random stream:
 |---|---|---|
 | X1 | render mode table: per mode and model kind, the RDP mode chosen (blend formula, depth write, alpha compare) | host recorder |
 | X2 | translucent ordering back to front, cap 64 nearest, invisible at blend 0 but still solid (trace hits it) | synthetic |
-| X3 | fx blend over 5 s for renderamt 255 and 128, each fx 0–19, at distances 50/200/500 u: fade/solid exact rates; pulse/strobe/flicker period and amplitude within 10 %; distort/hologram mean and spread within 10 % of the oracle capture | fixture X-fx (oracle) + retail capture where available |
+| X3 | fx blend over 5 s for renderamt 255 and 128, each fx 0–19, at distances 50/200/500 u: fade/solid exact rates; pulse/strobe/flicker period and amplitude within 10 %; distort/hologram mean and spread within 10 % | retail X-fx |
 | X4 | glow sprites: occluded → invisible; screen size constant across 100–2000 u ± 5 % | synthetic + fixture screenshots (env_glow in hldemo2) |
 | X5 | decals: a shot at a wall corner splits across both faces; decal clipped to each face polygon; decal on a door moves with it; pool of 96 replaces oldest | synthetic |
 | X6 | effect catalogue: each effect allocates within its pool caps and frees on time; a burst beyond a cap degrades by dropping, never crashes | synthetic |
-| X7 | hldemo2 firefight (route `fx_route.cfg` equivalent): screenshots at 3 steps SSIM ≥ 0.9 vs oracle; translucent pass ≤ oracle µs | fixture screenshots + PROFILE |
+| X7 | hldemo2 firefight: screenshots at 3 steps SSIM ≥ 0.9 vs retail at the same poses; translucent + effects CPU ≤ the old cart's `rview` share for the same scene | retail screenshots + PROFILE |

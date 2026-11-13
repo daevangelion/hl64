@@ -1,113 +1,86 @@
-# Area links and touch
+# Linked boxes, spatial grid, touches
 
-How entities are registered in space for collision queries and trigger
-touches. Conventions: [README.md](README.md).
+Behaviour: which entities a move collides with and which triggers it
+touches, as in GoldSrc. Mechanism: a uniform grid per open layer instead of
+GoldSrc's area-node tree (its node order is not observable except in the
+touch order of overlapping triggers, which hl64 fixes to entity index).
+Conventions and oracles: [README.md](README.md).
 
 ## 1. Linked box (absmin / absmax)
 
-Recomputed every time an entity is linked:
+Recomputed on every link:
 
-1. **Rotated brush** (SOLID_BSP with any non-zero angle): a cube centred on
-   the origin whose half-size r is the length of the vector whose
-   components are, per axis, max(|mins[i]|, |maxs[i]|). (It bounds the model
-   box under any rotation about the origin.)
-2. Otherwise `origin + mins` … `origin + maxs`.
-3. Then: if FL_ITEM is set, x and y extend by 15 u on both sides (z
-   unchanged) so items are easy to pick up off shelves; otherwise every axis
-   extends by 1 u on both sides (movement stops 1/32 u short of contact, so
-   contact must still overlap).
+1. Rotated brush (SOLID_BSP, any angle non-zero): a cube centred on the
+   origin with half-size = length of the vector of per-axis
+   max(|mins|, |maxs|).
+2. Otherwise `origin + mins … origin + maxs`.
+3. FL_ITEM: x and y extend by 15 u each side; everything else: every axis
+   extends by 1 u each side (moves stop 1/32 u short, contact must still
+   overlap) **[probe A-touch]**.
 
-`absmin/absmax` in the core record are these linked values; they are only
-written by linking.
+## 2. Spatial grid (mechanism)
 
-## 2. Linking rules
+- Each open layer has a grid over its global box with 256 u cells (the COLL
+  grid's cells): one u16 list head per cell, one u16 next per entity
+  (singly linked per cell). An entity whose linked box spans more than 8
+  cells goes to the layer's **large** list instead. Entities link to the
+  layer containing their box centre; SOLID_NOT entities are not linked.
+- Triggers and solids share the grid; each entity carries its solid type,
+  so a query filters by one byte.
+- A query (box) walks the touched cells plus the large list, deduplicates
+  with a per-query stamp, and returns candidates in **ascending entity
+  index**.
+- Cost bound: a move box ≤ 512 u touches ≤ 27 cells; cell occupancy on
+  the Uplink route is expected ≤ 8 [EST, M3 measures].
+- Leaf/sector membership for visibility is not stored per link
+  (architecture.md 5.5: sectors for rendering, exact leaf on demand).
 
-- The world (entity 0) and free entities are never linked.
-- Linking first unlinks the entity from wherever it was.
-- The entity's PVS leaf set is recomputed when it has a model index (any
-  solid type): up to 8 leaves of its layer that its linked box touches,
-  otherwise flagged "large" (visibility then tests its box against the
-  visible set). Its layer = the open layer whose global box contains the
-  linked box's centre (−1 if none).
-- SOLID_NOT entities are not put in area lists (traces and touches never
-  see them).
-- SOLID_TRIGGER entities go into the node's trigger list; every other solid
-  type into the node's solid list.
-- The node is the deepest area-tree node whose split plane the linked box
-  does not cross (a box straddling a split stays at the parent).
-- Insertion is at the tail of the node list.
+## 3. Trigger touch
 
-### 2.1 Area tree
+When an entity is linked **with touch** (all physics motion, the player
+move, walk moves; not `set_origin`, not `drop_to_floor`, not a pusher's own
+link), every SOLID_TRIGGER entity with a touch function whose linked box
+overlaps the mover's linked box (touching faces count) is touched,
+`self` = trigger, `other` = mover, in ascending entity index, provided:
 
-Built once at New Game over the home campaign component's global box (all
-maps of that component at their `g_M`). Each node splits its box at the
-midpoint of its longest axis (x, y or z) until a node's longest side is
-≤ 1024 u or depth 7 (≤ 256 nodes). Leaves have no split. Entities in other
-components never link (they cannot be open at the same time).
+- it is not the mover;
+- for a brush trigger (the trigger has a BSP model): the mover's origin,
+  traced as a point in the trigger's hull chosen for the mover's box
+  (trace-and-hulls.md 2), is inside the trigger's solid — so an angled or
+  non-box trigger fires only inside its shape, not anywhere in its bounding
+  box **[probe A-shape]**. (The old tree tested boxes only; GoldSrc's
+  behaviour wins.)
 
-## 3. Trigger touch on link
+Touches may free or relink any entity; the pass continues over the
+candidate list taken before the first call, skipping entities freed since.
 
-When an entity is linked **with touch** (all physics movement, the player
-move, walk/step moves; not `set_origin`, not `drop_to_floor`, not pusher
-self-links), every trigger is touched whose linked box overlaps the moved
-entity's linked box, where overlap means no axis has `a.min > b.max` or
-`a.max < b.min` (faces in contact count as overlapping), and which:
+**Force retouch**: for the next N frames every live entity in the active
+set and every entity resting inside a trigger box is relinked with touch
+(HLSDK sets `gpGlobals->force_retouch` when triggers are enabled).
+Mechanism: the engine keeps, per trigger, nothing extra; it relinks the
+entities whose boxes overlap any trigger (grid query per trigger), which is
+what is observable.
 
-- is not the moved entity itself,
-- is SOLID_TRIGGER at the time of the test and has a touch function.
-
-For each, the trigger's touch runs with `self` = trigger, `other` = moved
-entity, game time = current frame time. Traversal: from the root, a node's
-trigger list in list order, then the front child (if the box's max on the
-split axis is beyond the split) and the back child (if the box's min is
-below it). The traversal tolerates any entity being freed or relinked by a
-touch: a freed entity is not touched again in this pass and the walk
-continues with the entity that followed it when the touch began; an
-entity relinked during the pass may or may not be visited again (unspecified,
-not observable in the Uplink/Hazard routes).
-
-Trigger shape: the oracle tests boxes only (a trigger brush that is not an
-axis-aligned box touches anything inside its bounding box). GoldSrc may
-refine brush-shaped triggers against the trigger's hull [not measured];
-hl64 implements the box test (D6).
-
-**Force retouch**: the game can request that for the next N frames every
-live entity is relinked with touch at the start of its physics step even if
-it did not move (used when triggers are enabled under a standing entity).
-
-**Pending-record wake**: before the touch pass, pending map records
-(architecture.md 6.3) whose cooked bounds meet the moved entity's linked box
-are hydrated, so a trigger that was never spawned is touched in the same
-link. The same wake runs for every move query's swept box
-(trace-and-hulls.md 4.4).
+**Pending-record wake**: before the touch pass, pending map records whose
+cooked bounds meet the mover's box are hydrated (architecture.md 6.4) so a
+trigger that was never spawned is touched in the same link.
 
 ## 4. Impact touch
 
-When a physics move (fly/toss/step slide, pusher push, walk move) stops on
-an entity `B` (trace `ent` = B, B ≠ world or world included — the world
-has no touch), the mover `A` and `B` touch:
+When a physics move stops on entity B (trace `pHit` = B): first A.touch(B)
+if A has a touch function and is not SOLID_NOT, then B.touch(A) under the
+same rule re-checked after the first call. A caller checks A's liveness
+before continuing.
 
-1. if A has a touch function and A is not SOLID_NOT: A.touch(other = B);
-2. then, if B has a touch function and B is not SOLID_NOT (re-checked after
-   step 1): B.touch(other = A).
-
-Both run with the current frame time. Either may free A or B; the caller of
-the move checks A's liveness before continuing.
-
-## 5. Unlink
-
-Unlinking removes the entity from its node list and clears its leaf set.
-Freeing an entity unlinks it.
-
-## 6. Tests
+## 5. Tests
 
 | # | property | data |
 |---|---|---|
-| A1 | linked box rules 1–3 for: unrotated box, FL_ITEM box, rotated brush at several angles (cube half-size = |max-abs-extent vector|), SOLID_NOT with model (leaf set but no list) | self-contained |
-| A2 | node choice: a box straddling each split stays at the parent; a box fully inside a leaf cell goes to that leaf; tree depth ≤ 7, ≤ 256 nodes, cells ≤ 1024 u on Uplink and Hazard component boxes | self-contained on cooked CWG3 |
-| A3 | trigger touch fires exactly once per link for every overlapping trigger, including face contact (boxes sharing a face), and not for an adjacent trigger 0.01 u away | synthetic |
-| A4 | `set_origin` into a trigger fires nothing; the next physics move fires it | synthetic |
-| A5 | a touch that frees the trigger, another trigger, or the toucher does not crash, does not touch a freed entity, and continues with the remaining triggers | synthetic |
-| A6 | impact touch order: mover first, then the hit entity; a hit SOLID_NOT entity's touch is not called; a mover freed by its own touch skips step 2 | synthetic |
-| A7 | trigger_once / trigger_multiple / trigger_changelevel / trigger_teleport fire on the same route frames as the oracle along the Uplink route (first-fire frame per trigger lump, ±1 frame) | fixture A-links: `(map, lump, frame, activator class)` of every trigger touch that called a fire, from the oracle's host route |
-| A8 | pending records: a trigger whose record is pending and whose bounds overlap the player is hydrated and touched in the same frame | synthetic two-record map |
+| A1 | linked box rules (unrotated, FL_ITEM, rotated cube, SOLID_NOT not linked) | self-contained + probe A-touch (absmin/absmax read back) |
+| A2 | grid: every entity found by any box query that overlaps its linked box, none returned twice, order ascending; large-list entities found from every cell | randomised host test |
+| A3 | trigger touch once per link for each overlapping trigger, including face contact; not for a trigger 0.01 u away | probe A-touch |
+| A4 | `set_origin` into a trigger touches nothing; the next physics move does | probe A-touch |
+| A5 | angled brush trigger: a player inside its bbox but outside its brush does not fire it; inside it does | probe A-shape |
+| A6 | touch that frees the trigger / another trigger / the toucher: no crash, no touch of freed entities | synthetic |
+| A7 | impact touch order and SOLID_NOT rule | probe A-touch |
+| A8 | pending record hydrated and touched in the same frame | synthetic |

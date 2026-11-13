@@ -53,7 +53,10 @@ when the light that owns them starts off; any other 256), `>> 8`,
 clamped 0…255 (a face with no lighting gives 0). If no face is found on
 that crossing the walk continues on the far side; no hit at all → 0. A
 map without a lighting lump gives 255 everywhere. The runtime applies
-the 32 floor, dlights and the 255 clamp (dlights.md 4).
+the 32 floor, dlights and the 255 clamp (dlights.md 4). Probe format v3
+(lightstyles.md 4) splits this sum into a base (style 0 and styles that
+never change) and one (style, amount) term for the strongest animated or
+switchable style; the base + term at map-start values equals the v2 value.
 
 ## 4. Texture animation
 
@@ -67,7 +70,8 @@ frame index, `anim_max` = anim_min + 2, `next` = the following frame
 Runtime, per drawn surface: start from the face's texture; if the drawing
 entity's `frame` is non-zero and the texture has an alternate, start from
 the alternate. Then with `r = floor(time × 10) mod anim_total`, follow
-`next` until `anim_min ≤ r < anim_max`. Net effect: 5 frames per second,
+`next` until `anim_min ≤ r < anim_max`. Net effect: 5 frames per second
+**[retail W-texanim]**,
 all animated textures in phase with the game clock; buttons and other
 brush entities switch to the alternate sequence when the game sets their
 `frame` to 1. Every page a sequence can show is part of the sector's page
@@ -77,7 +81,7 @@ list (residency).
 
 | # | property | data |
 |---|---|---|
-| W1 | rewritten cook produces byte-identical `.w64` packages to the old cook for all 10 Uplink/Hazard maps (REND, MOVR, TEXP, probes, styles) | old-tree cook outputs as fixtures (the cooked files themselves are the oracle) |
+| W1 | rewritten cook produces REND, MOVR, TEXP, styles and texture tables byte-identical to the old cook for all 10 Uplink/Hazard maps; v3 probes evaluate to the old v2 probe values at map-start style values | old-tree cook outputs (local fixtures) |
 | W2 | luxel addressing: synthetic faces with negative and fractional s/t, clamping at grid edges | self-contained |
 | W3 | probe walk: synthetic two-floor BSP — the upper floor is found; a sky face above water is skipped; no lightmap → 0 | self-contained |
 | W4 | texture animation: a 3-frame sequence at t = 1.0, 1.15, 1.2, 1.45, 1.6 shows frames 2, 2, 0, 1, 2 (`floor(10t)` = 10, 11, 12, 14, 16 → r = 4, 5, 0, 2, 4); frame ≠ 0 switches to the alternate | self-contained |

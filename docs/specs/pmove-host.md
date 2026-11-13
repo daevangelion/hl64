@@ -26,7 +26,7 @@ here).
    `ground.speed · ground.movedir` to `basevelocity`; triggers that push
    set it themselves through their touch (HLSDK `trigger_push`).
    [GoldSrc documented behaviour, HLSDK `triggers.cpp` / `plats.cpp`;
-   not in the oracle, which handles conveyors in the game.]
+   **probe** PM-bot run on a conveyor.]
 5. Build the physent list (2) and call `game_pm_move` with the movevars
    (4), the player block and the usercmd.
 6. Write back origin, velocity, basevelocity, view_ofs, flags
@@ -48,7 +48,8 @@ here).
   when their global box meets the player's move box.
 - Then every linked entity whose linked box meets the player's move box
   for this frame (origin ± (box + |velocity|·dt + 18 + 1) on each axis),
-  in area-tree order, except: the player, SOLID_NOT and SOLID_TRIGGER
+  in ascending entity index (spatial grid query), except: the player,
+  SOLID_NOT and SOLID_TRIGGER
   entities, entities owned by the player.
   - SOLID_BSP entities: model physent (origin, angles, hulls of its
     model, `skin` contents if < −1, rendermode).
@@ -73,14 +74,14 @@ here).
 | trace line (start, end, flags, hull, ignore) | the same with an explicit hull |
 | test player position (pos) | physent index of the first solid the player box at pos is inside, −1 if free |
 | stuck touch (hit index, trace) | append to the touch list (deduplicated) |
-| play sound (channel, name, volume, attenuation, flags, pitch) | engine emit on the player entity; names are precached by the game at spawn (footsteps, ladder, wade, jump-land) |
-| trace texture (physent, start, end) | material code of the surface hit (trace-and-hulls.md 4.6) as the HLSDK texture-type character |
+| play sound (channel, name, volume, attenuation, flags, pitch) | engine emit on the player entity; pm_shared passes literal names (footsteps, ladder, wade, jump-land), so the adapter maps them to `res_t` through a small cooked table (≈ 40 names, perfect hash built by `restab`) |
+| trace texture (physent, start, end) | material code of the surface hit (trace-and-hulls.md 4.7) as the HLSDK texture-type character |
 | random long / float | engine random stream |
-| model type / bounds | from the precache table |
+| model type / bounds | from the resource table / submodel table |
 | info value for key | reads "slj" and similar physinfo keys: always empty |
 | console print | engine log |
 
-## 4. Movevars (HL defaults, cvars of the same names)
+## 4. Movevars (HL defaults, typed fields of `settings.h`)
 
 gravity 800, stopspeed 100, maxspeed 320, spectatormaxspeed 500,
 accelerate 10, airaccelerate 10, wateraccelerate 10, friction 4,
@@ -103,29 +104,28 @@ mistakes. All on flat ground unless stated.
 - Ladder: pressing forward while facing the ladder climbs at 200 u/s.
 - Water: waterlevel 1/2/3 by feet/waist/eyes; swimming speed ≤ 0.8 ×
   maxspeed; no gravity at waterlevel ≥ 2.
-- Started inside solid: pm_shared's stuck test nudges the player out
-  (positions differ from the oracle's own unstick by design).
+- Started inside solid: pm_shared's stuck test nudges the player out, as
+  in GoldSrc.
 
-## 6. Oracle parity note
+## 6. Reference behaviour
 
-The oracle (old tree) moves the player with Quake's server movement plus
-GoldSrc corrections (duck hull and timing, ladders, ramp stepping, friction
-probe with the player hull, punch decay). pm_shared is the reference
-GoldSrc behaviour, so hl64 will differ in details (air control, edge
-friction, water jumps). The route gates use positional checks with radii
-(`waitnear`) and `setpos` waypoints; walked legs are the only route parts
-sensitive to the difference, and M2/M5 report any `waitnear` that needs a
-larger radius rather than tuning pm_shared.
+GoldSrc is the target, and pm_shared is GoldSrc's movement; the GoldSrc
+probe drives fake clients through `pfnRunPlayerMove` on the same maps with
+the same command streams and logs origin, velocity, flags and view height
+per frame (PM-bot runs). hl64 must reproduce those traces. The old tree
+(Quake movement with GoldSrc patches) is not a reference for movement;
+route radii that the old route needed for its own movement are re-derived
+from the probe runs.
 
 ## 7. Tests
 
 | # | property | data |
 |---|---|---|
 | PM1 | adapter round trip: every field of section 1 step 6 written back unchanged when pm_shared does not touch it (identity move with zero cmd) | self-contained |
-| PM2 | section 5 properties (speeds, jump, step, duck timing, stand refusal, ladder speed, water levels) within 2 % / one frame | synthetic room cooked into a `.w64` test layer |
+| PM2 | section 5 properties and the PM-bot runs (walk, run, jump, duck, duck-jump, stairs, ladder, water, slopes): per-frame origin within 0.01 u and flags equal for 300 frames each | probe PM-bot runs on the player's maps |
 | PM3 | player trace: startsolid ⇒ fraction 0; allsolid ⇒ startsolid; hull per `usehull` mapping | self-contained |
 | PM4 | physents: a crate and a door near the player are physents; a trigger, a SOLID_NOT entity and the player's own grenades are not; a func_water volume changes waterlevel but not collision | synthetic |
 | PM5 | touch list: walking into a crate calls crate.touch once per frame; walking into a trigger calls trigger.touch through linking | synthetic |
 | PM6 | riding: standing on a moving lift keeps the player on it (pushed by the lift; FL_ONGROUND kept; no velocity added) | synthetic |
 | PM7 | caps: 70 crates around the player keep the 64 nearest, log once | synthetic |
-| PM8 | hldemo1 walk route (stairs, duck crawl under pipes, ladder, drop) passes every `waitnear` with the oracle radii | route `test/routes/m2-walk-hldemo1.cfg` |
+| PM8 | compiled route `m2-walk` in hldemo1 (stairs, duck crawl under pipes, ladder, drop) passes its `WAIT_NEAR` checks | route |

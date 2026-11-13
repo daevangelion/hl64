@@ -28,7 +28,7 @@ random stream):
 | game effect "elight" (HLSDK TE_ELIGHT) | entity attachment | given | models only (does not light the world) |
 | explosions, muzzle flashes of the view model | render-fx.md | | |
 
-## 2. Flashlight (observable behaviour of the oracle and retail HL)
+## 2. Flashlight (retail Half-Life behaviour, [retail D-flash])
 
 While the local player has EF_DIMLIGHT: a line trace (NORMAL, pass the
 player) from the eye (origin + view height) 2000 u along the view
@@ -49,7 +49,8 @@ d = 2000·fraction, quantised to 1/255. Recomputed every frame.
   `radius − |p|` ≥ minlight, else 0; contributions of all lights add to the
   vertex's base intensity before the light scale, then clamp 255.
   (Back faces are culled anyway.)
-- Movers are not dynamically lit (oracle), except by the flashlight pool.
+- Brush movers are lit by the same rule in their local frame (GoldSrc
+  lights brush entities' lightmaps too); the flashlight pool covers them.
 - **Flashlight pool**: because the world's faces are not subdivided, a
   vertex-only light leaves most of an 80 u spot dark. The flashlight is
   drawn instead as a second pass over the base triangles within its
@@ -78,6 +79,6 @@ entity they were attached to.
 | D2 | vertex falloff formula for synthetic planes (p, q grid) including the minlight cutoff | self-contained |
 | D3 | only meshlets meeting a light sphere are copied; the cooked meshlet bytes are unchanged after the frame | synthetic + memory compare |
 | D4 | flashlight: end point and brightness for traces at 100, 500, 1000, 2000 u and on a monster | synthetic |
-| D5 | flashlight screenshots at the route's `flashlight-on` step (dark duct, room) match the oracle (SSIM ≥ 0.9, same pose) | fixture screenshots |
-| D6 | muzzle flash light appears for 0.1 s per shot; the 9mm in the dark duct brightens the walls in the oracle's frame range | fixture screenshots |
-| D7 | cost: flashlight pass ≤ the oracle's measured per-frame µs in the dark duct (PROFILE zone) | M6 |
+| D5 | flashlight in the dark duct and the room: spot size, falloff and brightness match retail screenshots at the same pose (SSIM ≥ 0.9) | retail D-flash |
+| D6 | muzzle flash light lasts 0.1 s per shot and brightens nearby walls as in retail | retail D-flash |
+| D7 | cost: dlight + flashlight work ≤ the old cart's measured per-frame µs in the dark duct (`rflash` zone) | M6 |
