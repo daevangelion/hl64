@@ -20,6 +20,10 @@ void	game_init(void);
  * (the game's dispatch time per frame over the window; window totals),
  * then resets the window. */
 void	game_prof_line(void);
+/* The game's dispatch CPU (outermost calls) and the monster thinks' share
+ * of it, us since boot (u32, wraps): the seam-window profiler's game /
+ * mon zones (engine/test/seamprof.c). */
+void	game_prof_us(uint32_t *dispatch_us, uint32_t *mon_us);
 /* New Game: global state, skill, the player's inventory reset. */
 void	game_new_campaign(void);
 /* An HLE slot opened / is closing (its records' game state). The open

@@ -639,6 +639,7 @@ out:
 	us = (uint32_t)(sys_time_us() - t0);
 	mstat.thinks++;
 	mstat_frame_us += us;
+	game_mon_us_sum += us;
 }
 
 void CBaseMonster_CallMonsterThink(int e) { CBaseMonster_MonsterThink(e); }

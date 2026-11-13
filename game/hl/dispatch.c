@@ -39,9 +39,11 @@
 static struct {
 	uint64_t	sum, max, frame, t0;
 	uint32_t	frames, thinks, uses;
+	uint32_t	total;		/* dispatch us since boot (game_prof_us) */
 	int		depth;
 } gprof;
 uint32_t	game_fires;
+uint32_t	game_mon_us_sum;
 
 static void prof_enter(void)
 {
@@ -52,7 +54,18 @@ static void prof_enter(void)
 static void prof_leave(void)
 {
 	if (!--gprof.depth)
-		gprof.frame += sys_time_us() - gprof.t0;
+	{
+		uint64_t d = sys_time_us() - gprof.t0;
+
+		gprof.frame += d;
+		gprof.total += (uint32_t)d;
+	}
+}
+
+void game_prof_us(uint32_t *dispatch_us, uint32_t *mon_us)
+{
+	*dispatch_us = gprof.total;
+	*mon_us = game_mon_us_sum;
 }
 
 void game_prof_line(void)

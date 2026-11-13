@@ -50,6 +50,7 @@ static void feed(uint32_t frame, uint32_t dt, int map, uint32_t value, uint32_t 
 	for (z = 0; z < SEAMPROF_REGION_COUNT; z++)
 		f.mem[z] = value * 16;
 	seamprof_push(&f, sw, mark);
+	log_flush();	/* per frame, as eng_frame */
 }
 
 /* Switch at frame 100 of 200 at 30 fps: +-2 s = frames 40..160 (60 x
@@ -170,7 +171,8 @@ static void case_overlap(void)
 }
 
 /* Counter zones: growth of cumulative sums; a roll-up reset re-zeroes the
- * snapshot; u32 wrap. */
+ * snapshot of the zones whose sums it resets (not the since-boot ones);
+ * u32 wrap. */
 static void case_counters(void)
 {
 	static const uint32_t cum_seq[] = { 100, 250, 400 };
@@ -193,9 +195,11 @@ static void case_counters(void)
 	}
 	seamprof_rollup_reset();
 	for (z = 0; z < SEAMPROF_ZONE_COUNT; z++)
-		cum[z] = 30;
+		cum[z] = z >= SEAMPROF_Z_SINCE_BOOT ? cum_seq[2] + (uint32_t)z + 5u : 30u;
 	seamprof_counters(&f, cum);
 	CHECK(f.us[SEAMPROF_Z_PMOVE] == 30, "after reset %u", f.us[SEAMPROF_Z_PMOVE]);
+	for (z = SEAMPROF_Z_SINCE_BOOT; z < SEAMPROF_Z_WORLD; z++)
+		CHECK(f.us[z] == 5, "since-boot zone %d after reset: %u", z, f.us[z]);
 	seamprof_rollup_reset();
 	cum[SEAMPROF_Z_FX] = 0xfffffff0u;
 	seamprof_counters(&f, cum);
