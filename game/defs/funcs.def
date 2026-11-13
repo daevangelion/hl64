@@ -32,6 +32,8 @@ TOUCH(CGib_StickyGibTouch)
 TOUCH(CHeadCrab_LeapTouch)
 THINK(CBarnacle_BarnacleThink)
 THINK(CBarnacle_WaitTillDead)
+THINK(CRoach_MonsterThink)
+TOUCH(CRoach_Touch)
 // ---- Items ----
 // ---- GameCore: classes ----
 USE(CPathTrack_Use)
