@@ -889,7 +889,9 @@ static int weapon_spawn(int e, gid_t16 gid, int id)
 	const ItemInfo *ii = ItemInfoOf(id);
 	static const float zero[3] = { 0, 0, 0 };
 
-	(void)gid;
+	/* CBasePlayerItem : CBaseAnimating : CBaseDelay: delay / killtarget
+	 * keys (NAME_NONE when absent or runtime-created) */
+	CBaseDelay_KeyValue(e, gid);
 	if (!ii)
 		return SpawnRefuse("CBasePlayerItem: weapon not registered (no GetItemInfo)");
 	it->m_iId = (int16_t)id;

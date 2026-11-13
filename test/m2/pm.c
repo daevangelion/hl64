@@ -6,7 +6,7 @@
  * test/m2/pmbot.py builds the scripts from the GoldSrc probe fixtures
  * (PM-bot runs: PM2, PM9; T-segments pmove traces: PM3) and compares the
  * output; `selftest` runs the self-contained tests PM1, PM3 (rules),
- * PM4, PM5, PM6 and PM7 and prints "selftest ok" or FAIL lines.
+ * PM4, PM5, PM6, PM7, PM10 and PM14 and prints "selftest ok" or FAIL lines.
  *
  *   hl64-pm --root CONTENT < script
  *
@@ -549,6 +549,46 @@ static void test_pm5(const float org[3])
 	printf("PM5 done\n");
 }
 
+/* PM14: a monster box flagged FL_MONSTERCLIP (SF_MONSTER_HITMONSTERCLIP:
+ * "stopped by monster clips", hldemo1's dome barney and scientist) is a
+ * player physent and blocks the walk; only brushes with the flag are
+ * clips (pmove-host.md 2, trace-and-hulls.md 4.4). */
+static void test_pm14(const float org[3])
+{
+	static const float box[2][3] = { { -16, -16, -36 }, { 16, 16, 36 } };
+	float p[3], ang[3] = { 0, 0, 0 }, s[3], e[3];
+	col_trace_t t;
+	int frame, seen = 0;
+
+	stand(org);
+	free_all();
+	memcpy(p, org, sizeof(p));
+	p[0] += 64;
+	place(10, -1, p, ang, box[0], box[1], COL_SOLID_SLIDEBOX, 0, 0, -1,
+		COL_FL_MONSTER | COL_FL_MONSTERCLIP);
+	for (frame = 0; frame < 60; frame++)
+	{
+		move(3.0f + 0.01f * (float)frame, zero3, 400, 0, 0, IN_BTN_FORWARD, 10);
+		seen |= pe_has(10);
+	}
+	CHECK(seen, "PM14: the FL_MONSTERCLIP monster box is never a physent");
+	CHECK(phy_player()->origin[0] <= p[0] - 32 + 0.1f,
+		"PM14: walked to x %.3f through the monster box at %.3f", phy_player()->origin[0], p[0]);
+	/* a line trace (the player passing) stops at its box too */
+	for (frame = 0; frame < 3; frame++)
+	{
+		s[frame] = org[frame] + gofs[frame];
+		e[frame] = p[frame] + gofs[frame];
+	}
+	s[0] = e[0] - 48;
+	e[0] += 48;
+	col_trace_line(s, e, 0, ent_get(ENT_PLAYER), &t);
+	CHECK(t.ent == 10 && fabsf(t.end[0] - (e[0] - 48 - 16)) < 0.1f,
+		"PM14: line trace ent %d end x %.3f, want the monster box face", t.ent, t.end[0]);
+	free_all();
+	printf("PM14 done\n");
+}
+
 /* PM6: riding a rising platform. The pusher (M3, physics-movetypes.md)
  * moves the platform and carries the player; pmove keeps him on it. */
 static void test_pm6(const float org[3])
@@ -779,6 +819,7 @@ static int line(char *s)
 		test_pm6(v);
 		test_pm7(v);
 		test_pm10(v);
+		test_pm14(v);
 		printf(fails ? "selftest FAIL\n" : "selftest ok\n");
 		return 0;
 	}

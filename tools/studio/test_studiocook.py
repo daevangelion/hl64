@@ -91,6 +91,69 @@ class StudioCook(unittest.TestCase):
         evs = [(e.event, e.options) for e in info.events if e.seq == walk]
         self.assertIn((1004, "common/npc_step1.wav"), evs)
 
+    def test_triangles_wind_like_the_world(self):
+        """Cooked studio triangles face the way BSP faces do: front faces
+        wind clockwise seen from outside (edge cross product against the
+        normal < 0), so the cart culls both with one flag (plat/n64/n64.h
+        N64_CULL). A studio pass culling the other side shows the inside
+        of the far half: a model that seems to turn with the view."""
+        model, _, _ = self.cooked["models/barney.mdl"]
+        mo = struct.unpack_from(">I", model, 16)[0]
+        (nmesh,) = struct.unpack_from(">H", model, mo + 8)
+        (ml_ofs, ld_ofs, vt_ofs, tri_ofs) = struct.unpack_from(">4I", model, mo + 24 + 12)
+
+        def nrm(p):
+            def sx(v, bits):
+                return v - (1 << bits) if v & (1 << (bits - 1)) else v
+            return (sx(p >> 11, 5) / 15.5, sx((p >> 5) & 63, 6) / 31.5, sx(p & 31, 5) / 15.5)
+
+        def vert(s):
+            o = mo + vt_ofs + 32 * (s >> 1) + 8 * (s & 1)
+            x, y, z, n = struct.unpack_from(">3hH", model, o)
+            return (x, y, z), nrm(n)
+
+        def wind(p, n):
+            a = [p[1][i] - p[0][i] for i in range(3)]
+            b = [p[2][i] - p[0][i] for i in range(3)]
+            c = (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+            return sum(c[i] * n[i] for i in range(3))
+
+        cw = ccw = 0
+        slot = 0
+        for k in range(nmesh):
+            lf, nl, _, tf, nt = struct.unpack_from(">HBBHH", model, mo + ml_ofs + 8 * k)
+            cache = {}
+            for ld in range(lf, lf + nl):
+                bs, c0, cnt = struct.unpack_from(">BBB", model, mo + ld_ofs + 4 * ld)
+                for j in range(cnt):
+                    cache[c0 + j] = (bs,) + vert(slot + j)
+                slot += cnt + (cnt & 1)
+            for t in range(tf, tf + nt):
+                vs = [cache[i] for i in model[mo + tri_ofs + 3 * t:mo + tri_ofs + 3 * t + 3]]
+                if len({v[0] for v in vs}) != 1:
+                    continue
+                d = wind([v[1] for v in vs], [sum(v[2][i] for v in vs) for i in range(3)])
+                cw += d < 0
+                ccw += d > 0
+        self.assertGreater(cw, 9 * ccw, (cw, ccw))
+
+        # the world rule on the map the studio models stand in
+        bsp = read(os.path.join(DATA, "maps", "hldemo1.bsp"))
+        lump = [struct.unpack_from("<ii", bsp, 4 + 8 * i) for i in range(15)]
+        cw = ccw = 0
+        for f in range(lump[7][1] // 20):
+            pn, side, fe, ne = struct.unpack_from("<HhiH", bsp, lump[7][0] + 20 * f)
+            pts = []
+            for k in range(fe, fe + 3):
+                se = struct.unpack_from("<i", bsp, lump[13][0] + 4 * k)[0]
+                ed = struct.unpack_from("<HH", bsp, lump[12][0] + 4 * abs(se))
+                pts.append(struct.unpack_from("<3f", bsp, lump[3][0] + 12 * ed[0 if se >= 0 else 1]))
+            n = struct.unpack_from("<3f", bsp, lump[1][0] + 20 * pn)
+            d = wind(pts, [-c for c in n] if side else n)
+            cw += d < -1e-6
+            ccw += d > 1e-6
+        self.assertGreater(cw, 9 * ccw, (cw, ccw))
+
 
 @unittest.skipUnless(os.path.isfile(os.path.join(DATA, "models", "scientist.mdl")),
                      "player data with models/scientist.mdl")

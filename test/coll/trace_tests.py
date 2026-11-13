@@ -646,7 +646,8 @@ def candidates(ents, q, wend):
             continue
         if pas and (e.get("owner", -1) == pas["i"] or pas.get("owner", -1) == e["i"]):
             continue
-        if e.get("flags", 0) & FL_MONSTERCLIP and not (pas and pas.get("flags", 0) & FL_MONSTERCLIP):
+        if e.get("flags", 0) & FL_MONSTERCLIP and e["solid"] == 4 \
+                and not (pas and pas.get("flags", 0) & FL_MONSTERCLIP):
             continue
         if any(lo[k] > e["absmax"][k] or hi[k] < e["absmin"][k] for k in range(3)):
             continue
