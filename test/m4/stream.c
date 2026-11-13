@@ -18,8 +18,8 @@
  *   T5 teleport windows: pop-in inside a window is popin_tele, outside
  *      popin; a seam re-base is not a teleport.
  *   T6 blocked-I/O positive control: a deliberate 64 KB synchronous read
- *      counts as a frame > 1 ms; load I/O (io_set_load, io_load_window)
- *      does not.
+ *      counts as a frame > 1 ms; load I/O (io_set_load) does not; inside
+ *      a test teleport window (io_tele_window) it counts as blk1ms_tele.
  *
  * Usage: hl64-stream CONTENT_DIR. Output: `stream: T<n> <what>: PASS|FAIL
  * ...` lines, then `stream: N failed`; exit 0 when none failed.
@@ -725,14 +725,27 @@ static void t6_blocked(void)
 	io_read_sync(big, rom, sizeof(big));
 	io_set_load(0);
 	frames(1);
-	io_load_window(1);
-	io_read_sync(big, rom, sizeof(big));
-	frames(2);
 	io_read_sync(big, rom, 512);
 	frames(1);
 	io_stats(&b, 0);
-	check("T6 blocked", b.life_frames_blocked_1ms == a.life_frames_blocked_1ms,
-		"the same read as load I/O (io_set_load, io_load_window), a 512 B read: not counted");
+	check("T6 blocked", b.life_frames_blocked_1ms == a.life_frames_blocked_1ms
+		&& b.life_frames_blocked_1ms_tele == a.life_frames_blocked_1ms_tele,
+		"the same read as load I/O (io_set_load), a 512 B read: not counted");
+	a = b;
+	io_tele_window(2);
+	io_read_sync(big, rom, sizeof(big));
+	frames(1);
+	io_read_sync(big, rom, sizeof(big));
+	frames(1);
+	io_read_sync(big, rom, sizeof(big));
+	frames(1);
+	io_stats(&b, 0);
+	check("T6 blocked", b.life_frames_blocked_1ms_tele == a.life_frames_blocked_1ms_tele + 2
+		&& b.life_frames_blocked_1ms == a.life_frames_blocked_1ms + 1,
+		"the read in a 2-frame teleport window: 2 frames blk1ms_tele (%lu), the frame "
+		"after it blk1ms (%lu)",
+		(unsigned long)(b.life_frames_blocked_1ms_tele - a.life_frames_blocked_1ms_tele),
+		(unsigned long)(b.life_frames_blocked_1ms - a.life_frames_blocked_1ms));
 }
 
 int main(int argc, char **argv)

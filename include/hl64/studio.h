@@ -83,8 +83,10 @@ typedef struct {
 	uint32_t	models, pool_used, pool_peak, anims, sync_loads;
 	uint32_t	drawn, bones_us, draw_us, us_max;
 	uint32_t	frames, us_sum, culled, pending, nofit, dropped;
+	uint32_t	sync_play;	/* since boot: sync reads outside load I/O */
 } studio_stats_t;
-/* Counters since the last reset (pool fields: now / peak). */
+/* Counters since the last reset (pool fields: now / peak; sync_play is
+ * never reset). */
 void		studio_stats(studio_stats_t *s, int reset);
 
 #ifdef HL64_HOST

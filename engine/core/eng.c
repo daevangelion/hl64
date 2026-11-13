@@ -330,17 +330,22 @@ static int cmd_stats(const dbg_cmd_t *c)
 		{
 			wld_stream_stats_t ss;
 			io_stats_t io;
+			studio_stats_t sd;
 
 			wld_stream_stats(&ss, 0);
 			io_stats(&io, 0);
-			log_printf("stats %lu stream: popin=%lu popin_tele=%lu blk1ms=%lu pins=%lu "
-				"prefetch=%lu recompute=%lu reassert=%lu over=%lu tele=%lu open_async=%lu "
-				"open_fail=%lu\n", (unsigned long)c->arg[0].u, (unsigned long)ss.popin,
+			studio_stats(&sd, 0);
+			log_printf("stats %lu stream: popin=%lu popin_tele=%lu blk1ms=%lu "
+				"blk1ms_tele=%lu studio_sync=%lu pins=%lu prefetch=%lu recompute=%lu "
+				"reassert=%lu over=%lu tele=%lu open_async=%lu open_fail=%lu\n",
+				(unsigned long)c->arg[0].u, (unsigned long)ss.popin,
 				(unsigned long)ss.popin_tele, (unsigned long)io.life_frames_blocked_1ms,
-				(unsigned long)ss.pins, (unsigned long)ss.prefetch,
-				(unsigned long)ss.recompute, (unsigned long)ss.reassert,
-				(unsigned long)io.life_frames_budget_over, (unsigned long)ss.teleports,
-				(unsigned long)ss.open_async, (unsigned long)ss.open_fail);
+				(unsigned long)io.life_frames_blocked_1ms_tele,
+				(unsigned long)sd.sync_play, (unsigned long)ss.pins,
+				(unsigned long)ss.prefetch, (unsigned long)ss.recompute,
+				(unsigned long)ss.reassert, (unsigned long)io.life_frames_budget_over,
+				(unsigned long)ss.teleports, (unsigned long)ss.open_async,
+				(unsigned long)ss.open_fail);
 		}
 	}
 	if (phy_player_active())
@@ -586,9 +591,11 @@ static void rollup(void)
 		wld_stream_stats(&ss, 1);
 		n = ss.frames ? ss.frames : 1;
 		log_printf("prof stream_us avg=%lu max=%lu frames=%lu recompute=%lu reassert=%lu "
-			"blk1ms=%lu blkmax=%lu promoted=%lu\n", (unsigned long)ss.us_sum / n,
-			(unsigned long)ss.us_max, (unsigned long)ss.frames, (unsigned long)ss.recompute,
-			(unsigned long)ss.reassert, (unsigned long)io.life_frames_blocked_1ms,
+			"blk1ms=%lu blk1ms_tele=%lu blkmax=%lu promoted=%lu\n",
+			(unsigned long)ss.us_sum / n, (unsigned long)ss.us_max, (unsigned long)ss.frames,
+			(unsigned long)ss.recompute, (unsigned long)ss.reassert,
+			(unsigned long)io.life_frames_blocked_1ms,
+			(unsigned long)io.life_frames_blocked_1ms_tele,
 			(unsigned long)io.life_blocked_max_us, (unsigned long)ss.promoted);
 	}
 	if (eng.world)

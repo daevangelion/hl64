@@ -307,6 +307,9 @@ int rt_load(const char *path)
 #else
 			if (code == OP_START)
 				return bad(path, p, "START needs a test build");
+			/* a debug teleport (its blocked frames count as blk1ms_tele) */
+			if (code == OP_SETPOS)
+				return bad(path, p, "SETPOS needs a test build");
 #endif
 			break;
 		case OP_WAIT_MOVED: case OP_WAIT_GONE:
@@ -792,9 +795,10 @@ void rt_frame(double time)
 				fail("home map differs");
 			if (phy_player_spawn((int)b, org, ang))
 				fail("setpos refused");
-			/* a test teleport is a map load: the destination's
-			 * records hydrate in the next frames (load I/O, 1 s) */
-			io_load_window(30);
+			/* a test-only teleport: the destination's records hydrate
+			 * in the next frames; their blocked frames count apart
+			 * (blk1ms_tele, 1 s), not hidden */
+			io_tele_window(30);
 			break;
 		}
 		case OP_BUTTONS:

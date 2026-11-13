@@ -409,6 +409,19 @@ static int model_files(int i)
 	return m->rom && m->arom ? 0 : -1;
 }
 
+/* A synchronous read of model i's info or animation: sync_loads; outside
+ * load I/O (boot / New Game / setpos map loads) also sync_play, which
+ * blocks a playing frame, logged by model. */
+static void sync_read(int i, const char *what)
+{
+	st.sync_loads++;
+	if (io_loading())
+		return;
+	st.sync_play++;
+	log_printf("studio: sync %s read in play: model %d %s\n", what, i,
+		res_name(RES_MAKE(RES_K_MODEL, i)));
+}
+
 #ifdef HL64_HOST
 void studio_test_bind(int idx, const char *s64, const char *a64)
 {
@@ -599,7 +612,7 @@ static smodel_t *info_of(res_t r)
 				/* needed before its prefetch landed: finish it now
 				 * (blocked I/O, counted) */
 				iload_step(&iloads[k], 1);
-				st.sync_loads++;
+				sync_read(i, "info (queued)");
 			}
 	if (m->info_st == U_RESIDENT)
 	{
@@ -617,7 +630,7 @@ static smodel_t *info_of(res_t r)
 	io_read_sync(m->info, m->rom + m->info_ofs, m->info_size);
 	if (info_landed(m, i))
 		return NULL;
-	st.sync_loads++;
+	sync_read(i, "info");
 	return m;
 }
 
@@ -794,7 +807,10 @@ static const void *anim_get(res_t model, int seq, uint32_t *size, int want_only,
 
 		for (k = 0; k < REQS; k++)
 			if (reqs[k].kind == 2 && reqs[k].idx == a - anims)
+			{
 				io_finish(&reqs[k].r);
+				sync_read(mi, "anim (queued)");
+			}
 		io_pump();
 	}
 	if (sync && a->st == U_ABSENT)
@@ -802,7 +818,7 @@ static const void *anim_get(res_t model, int seq, uint32_t *size, int want_only,
 		if (!(a->blk = alloc(s->anim_size, (void **)&a->data)))
 			return NULL;
 		io_read_sync(a->data, m->arom + s->anim_ofs, s->anim_size);
-		st.sync_loads++;
+		sync_read(mi, "anim");
 		a->st = U_LANDED;
 	}
 	if (a->st == U_LANDED)
@@ -1706,10 +1722,12 @@ void studio_stats(studio_stats_t *s, int reset)
 	if (reset)
 	{
 		uint32_t models_n = st.models, peak = st.pool_peak, anims_n = st.anims;
+		uint32_t play = st.sync_play;
 
 		memset(&st, 0, sizeof(st));
 		st.models = models_n;
 		st.pool_peak = peak;
 		st.anims = anims_n;
+		st.sync_play = play;
 	}
 }
