@@ -14,7 +14,8 @@
  * --cmd         one debug command (engine/core/dbg.h names); run at frame
  *               FRAME (default 1). Settings may be named: "set gravity 600".
  * --route       a compiled route (.rbc) to run instead of the cart root's
- *               route.rbc (engine/test/route.c)
+ *               route.rbc (engine/test/route.c); a relative FILE is the
+ *               working directory's; a missing FILE fails (exit 2)
  * --play        without a route: New Game at the campaign start and play
  *               (eng_play; the playable build's boot), not the free camera
  * --write-cmds  write the parsed commands as a cart command file
@@ -24,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "hl64/limits.h"
 #include "hl64/settings.h"
@@ -47,6 +49,26 @@ static unsigned extra_files(const char *root, int ncmds, int route)
 	snprintf(path, sizeof(path), "%s/route.rbc", root);
 	n += route && stat(path, &st) != 0;
 	return n;
+}
+
+/* --route FILE as the engine opens it: an absolute path (the host io
+ * resolves relative paths against --root). NULL if FILE is not a file. */
+static const char *route_path(const char *file)
+{
+	static char abs[1024];
+	struct stat st;
+	size_t n;
+
+	if (stat(file, &st) != 0 || !S_ISREG(st.st_mode))
+		return NULL;
+	if (file[0] == '/')
+		return file;
+	if (!getcwd(abs, sizeof(abs)))
+		return NULL;
+	n = strlen(abs);
+	if ((size_t)snprintf(abs + n, sizeof(abs) - n, "/%s", file) >= sizeof(abs) - n)
+		return NULL;
+	return abs;
 }
 
 static int usage(void)
@@ -169,7 +191,11 @@ int main(int argc, char **argv)
 			out = argv[++i];
 		else if (!strcmp(argv[i], "--route") && i + 1 < argc)
 		{
-			eng_route_path = argv[++i];
+			if (!(eng_route_path = route_path(argv[++i])))
+			{
+				fprintf(stderr, "hl64-host: no route file %s\n", argv[i]);
+				return 2;
+			}
 			route = 1;
 		}
 		else if (!strcmp(argv[i], "--play"))
