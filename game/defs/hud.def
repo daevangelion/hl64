@@ -1,0 +1,16 @@
+//
+//	Copyright (c) 1996-2002, Valve LLC. All rights reserved.
+//	Half Life 1 SDK licence: game/LICENSE-HLSDK. hl64 game definitions.
+//
+// The HUD's 2D sheets (include/hl64/draw2d.h sheet ids = line order of the
+// HUD lines; the first five follow tools/cook/bake_hlhud.py SHEETS, the
+// sheet field of the generated HUD rectangles): HUD(IDENT, "gfx file").
+// engine/render/draw2d.c loads them into the HUD region at boot. FONT
+// lines are cooked WAD3 fonts with their glyph table (gfx/<name>.fnt).
+// Append only.
+HUD(320HUD1, "gfx/320hud1.ui8")
+HUD(320HUD2, "gfx/320hud2.ui8")
+HUD(CROSSHAIRS, "gfx/crosshairs.ui8")
+HUD(320HUD4, "gfx/320hud4.ui8")
+HUD(320_PAIN, "gfx/320_pain.ui8")
+FONT(CONCHARS, "gfx/conchars.ui8")
