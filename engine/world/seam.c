@@ -916,7 +916,7 @@ static void continuity_before(const seam_info_t *s, int sa, int sb)
 		S.cont_mins[k] = s->carry_mins[k] + s->delta[k];
 		S.cont_maxs[k] = s->carry_maxs[k] + s->delta[k];
 	}
-	for (e = ENT_PLAYER + 1; e < HL64_MAX_ENTITIES; e++)
+	for (e = ent_next_live(ENT_PLAYER); e >= 0; e = ent_next_live(e))
 	{
 		cont_t *c;
 
@@ -944,7 +944,7 @@ static void continuity_after(void)
 
 	S.cont_pending = 0;
 	memset(used, 0, sizeof(used));
-	for (e = ENT_PLAYER + 1; e < HL64_MAX_ENTITIES; e++)
+	for (e = ent_next_live(ENT_PLAYER); e >= 0; e = ent_next_live(e))
 	{
 		float p[3];
 
@@ -1039,12 +1039,12 @@ static void cross(int si)
 
 	/* (1) carried entities: into B's frame and slot */
 	eng_set_frame_layer(sa);
-	for (e = ENT_PLAYER + 1; e < HL64_MAX_ENTITIES; e++)
+	for (e = ent_next_live(ENT_PLAYER); e >= 0; e = ent_next_live(e))
 	{
 		const col_ent_t *c;
 		float org[3];
 
-		if (!ent_is_live(e) || ent_idc(e)->layer != sa || is_twin_a(&s, sa, e))
+		if (ent_idc(e)->layer != sa || is_twin_a(&s, sa, e))
 			continue;
 		c = ent_cv(e);
 		if (!boxes_meet(c->absmin, c->absmax, s.carry_mins, s.carry_maxs) || !game_carry(e))

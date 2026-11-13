@@ -207,7 +207,7 @@ static int each_mover(wld_layer_t *L, const uint16_t *list, int cnt, int cls,
 		if (box_seen(L, lo, hi, list, cnt) && !fn(L, mv->sub, cls))
 			ok = 0;
 	}
-	for (e = 1; e < HL64_MAX_ENTITIES; e++)
+	for (e = ent_next_live(0); e >= 0; e = ent_next_live(e))
 	{
 		res_t m;
 		const col_ent_t *cv;
@@ -215,7 +215,7 @@ static int each_mover(wld_layer_t *L, const uint16_t *list, int cnt, int cls,
 		float lo[3], hi[3];
 		int k;
 
-		if (!ent_is_live(e) || ent_idc(e)->layer != L->slot)
+		if (ent_idc(e)->layer != L->slot)
 			continue;
 		m = ent_rnd(e)->model;
 		if (RES_KIND(m) != RES_K_SUBMODEL || RES_SUB_SLOT(m) != L->slot)
@@ -512,12 +512,12 @@ static void ent_scan(wld_layer_t *H, const float eye[3])
 	if (H && (leaf = wld_point_leaf(H, eye)) > 0)
 		list = wld_leaf_sectors(H, leaf, &cnt);
 	memset(nt, 0, sizeof(nt));
-	for (e = ENT_PLAYER + 1; e < HL64_MAX_ENTITIES; e++)
+	for (e = ent_next_live(ENT_PLAYER); e >= 0; e = ent_next_live(e))
 	{
 		const col_ent_t *cv;
 		wld_layer_t *L;
 
-		if (!ent_is_live(e) || !(L = wld_layer(ent_idc(e)->layer)))
+		if (!(L = wld_layer(ent_idc(e)->layer)))
 			continue;
 		cv = ent_cv(e);
 		if (L == H && list && cv->model != COL_NONE && COL_MODEL_SLOT(cv->model) == L->slot

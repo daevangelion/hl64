@@ -163,14 +163,12 @@ void trans_frame(double dt)
 {
 	int e;
 
-	for (e = 1; e < HL64_MAX_ENTITIES; e++)
+	for (e = ent_next_live(0); e >= 0; e = ent_next_live(e))
 	{
 		ent_rnd_t *r;
 		int32_t rate, step;
 		int amt;
 
-		if (!ent_is_live(e))
-			continue;
 		r = ent_rnd(e);
 		switch (r->renderfx)
 		{
@@ -359,7 +357,7 @@ static void list_sprite_ents(void)
 {
 	int e;
 
-	for (e = 1; e < HL64_MAX_ENTITIES; e++)
+	for (e = ent_next_live(0); e >= 0; e = ent_next_live(e))
 	{
 		const ent_rnd_t *r;
 		const col_ent_t *cv;
@@ -367,8 +365,6 @@ static void list_sprite_ents(void)
 		uint8_t b;
 		int mode;
 
-		if (!ent_is_live(e))
-			continue;
 		r = ent_rnd(e);
 		if (RES_KIND(r->model) != RES_K_SPRITE || (r->effects & EF_NODRAW))
 			continue;

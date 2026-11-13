@@ -181,14 +181,12 @@ void ren_dlight_sources(double time)
 {
 	int e, k;
 
-	for (e = 1; e < HL64_MAX_ENTITIES; e++)
+	for (e = ent_next_live(0); e >= 0; e = ent_next_live(e))
 	{
 		ent_rnd_t *r;
 		const float *gm;
 		float org[3];
 
-		if (!ent_is_live(e))
-			continue;
 		r = ent_rnd(e);
 		if (!(r->effects & (EF_MUZZLEFLASH | EF_BRIGHTLIGHT | EF_DIMLIGHT)))
 			continue;
