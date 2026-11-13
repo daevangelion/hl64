@@ -45,6 +45,12 @@ void gpu_fx_mode(int m, const uint8_t prim[4])
 		mix(prim, 4);
 }
 
+/* as on the cart: a draw needs a gpu_fx_mode after this */
+void gpu_fx_state_lost(void)
+{
+	mode = -1;
+}
+
 void gpu_fx_tex_ci4(const uint16_t *tlut, const uint8_t *ci4, int w, int h)
 {
 	(void)ci4;

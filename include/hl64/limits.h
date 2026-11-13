@@ -24,10 +24,14 @@
 /*
  * Host heap arena (plat/host/heap_host.c): the cart's free heap after the
  * carve, measured from the HL64_TEST ROM's "mem: heap free" boot line in
- * ares (M0: 4128 KB, image 293 KB), so post-boot allocations fit or fail
- * as on the cart. test/run/m0.sh reports drift between the two lines.
+ * ares, so post-boot allocations fit or fail as on the cart. The host
+ * runs with cooked content, so it mirrors a ROM carrying it: image 1462
+ * KB, carve 3118 KB, and libdragon's DFS lookup table (malloc'd at mount,
+ * ~16 B per file: 20 KB for the 1228-file Uplink + Hazard cook) give 2791
+ * KB, PROFILE or not. The M0 ROM has no DFS: 2811 KB there (m0.sh's drift
+ * note). test/run/m3.sh --ares fails when host and cart differ.
  */
-#define HL64_HOST_HEAP_KB		4128
+#define HL64_HOST_HEAP_KB		2791
 
 /* Image (code + data + bss) budget, 4.1 first row; boot logs the size. */
 #define HL64_IMAGE_BUDGET_KB		900
@@ -61,10 +65,13 @@
 /* World chunk reads in flight or queued at once (engine/world). */
 #define HL64_WORLD_REQS			16
 
-/* Player move (specs/pmove-host.md 2, D2): physents, ladders, touch list. */
+/* Player move (specs/pmove-host.md 2, D2): physents, ladders, touch list,
+ * the player's physics info string (HLSDK MAX_PHYSINFO_STRING is 256; the
+ * HL game sets "\slj\N\hl\1"). */
 #define HL64_PM_PHYSENTS		64
 #define HL64_PM_MOVEENTS		8
 #define HL64_PM_TOUCH			32
+#define HL64_PM_PHYSINFO		32
 
 /* ---- renderer (9) ------------------------------------------------------ */
 

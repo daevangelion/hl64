@@ -155,7 +155,16 @@ accepted within 0.001 u.
 ### 4.4 Move query
 `move(start, mins, maxs, end, type, pass)`:
 
-1. World first (4.1), giving world fraction `fw` and end point `ew`.
+1. World first (4.1), giving world fraction `fw` and end point `ew`. An
+   all-solid world result, or **`fw` = 0** (the world stops the move at
+   its start), is the result: no entity is clipped. A collapsed corpse
+   that a passing door has swallowed (its point 1/32 u to 2 u inside the
+   door, on the floor) therefore lands on the floor each frame of its
+   toss step, FL_ONGROUND, velocity 0 — not all-solid in the door
+   **[probe:measured P-push corpse]** (7 maps; physics-movetypes.md P8);
+   with the rule hl64's impact touches over the physics captures fall
+   from 32 485 to 31 568 against the probe's 31 537. T-segments has 23
+   world traces at `fw` = 0, none with an entity at the start.
 2. Candidates: entities in the spatial grid cells the move box (swept from
    start to `ew`, +1 u) touches (area-links-and-touch.md 2), in ascending
    entity index (6).

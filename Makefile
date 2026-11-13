@@ -71,7 +71,7 @@ GAME_SRC_MON := game/hl/monsters.c game/hl/schedule.c game/hl/defaultai.c game/h
 GAME_SRC_ITEMS := game/hl/weapons.c game/hl/weapon_crowbar.c game/hl/weapon_glock.c \
 	game/hl/weapon_python.c game/hl/weapon_mp5.c game/hl/weapon_shotgun.c \
 	game/hl/weapon_handgrenade.c game/hl/items.c game/hl/chargers.c game/hl/grenade.c \
-	game/hl/tripmine.c game/hud/hud.c
+	game/hl/tripmine.c game/hl/weapon_tripmine.c game/hud/hud.c
 GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
 	$(ENGINE_SRC_SND) $(ENGINE_SRC_FX) $(ENGINE_SRC_D2)
@@ -117,7 +117,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -303,6 +303,23 @@ GAMETEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(GAMETEST_BIN): $(GAMETEST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 gametest: $(GAMETEST_BIN)
+
+# Monster sweep driver (test/m3/mon.c, run by test/m3/mon_sweep.py).
+MONTEST_BIN := $(BUILD_DIR)/host/hl64-mon
+MONTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/mon.o
+$(MONTEST_BIN): $(MONTEST_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+montest: $(MONTEST_BIN)
+
+# Items driver (test/m3/items.c, run by test/m3/items.py: tripmine,
+# weaponbox map ammo, long jump).
+ITEMSTEST_BIN := $(BUILD_DIR)/host/hl64-items
+ITEMSTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/items.o
+$(ITEMSTEST_BIN): $(ITEMSTEST_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+itemstest: $(ITEMSTEST_BIN)
 
 # Physics driver (test/m3/phys.c, run by test/m3/phys.py: P1-P15, K4).
 PHYS_BIN := $(BUILD_DIR)/host/hl64-phys

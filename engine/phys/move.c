@@ -424,9 +424,9 @@ water:
 
 /* ---- STEP and PUSHSTEP (spec 3) ------------------------------------------------- */
 
-/* Ground friction on the horizontal velocity while the world probe holds
- * (grounded); moving horizontally consumes the entity's friction scale,
- * which is then 1, grounded or not [probe:measured P-pushable, P-step]. */
+/* Ground friction on the horizontal velocity when grounded; moving
+ * horizontally consumes the entity's friction scale, which is then 1,
+ * grounded or not [probe:measured P-pushable, P-step]. */
 static void ground_friction(int e, double dt, int grounded)
 {
 	float *vel = ent_c.mot[e].velocity, *fr = &ent_c.phys[e].friction;
@@ -447,37 +447,43 @@ static void ground_friction(int e, double dt, int grounded)
 	vel[1] = (float)(vel[1] * (ns / s));
 }
 
-/* A 1 u probe down against the world alone: it does not see brush
- * entities (on a platform FL_ONGROUND alternates frame by frame)
- * [probe:measured P-step, P-pushable]. */
-static int world_below(const col_ent_t *v)
+/* On the ground after the move: a bottom corner, 1 u under the box, in
+ * world SOLID (brush entities are not seen: on a platform FL_ONGROUND
+ * alternates frame by frame; a corner over a slope counts while the
+ * rest of the box is in the air) [probe:measured P-step, P-pushable]. */
+static int corner_in_world(const col_ent_t *v)
 {
-	col_trace_t tr;
-	float down[3];
+	float p[3];
+	int x, y;
 
-	down[0] = v->origin[0];
-	down[1] = v->origin[1];
-	down[2] = v->origin[2] - 1;
-	phy_trace_count++;
-	col_trace_world(v->origin, v->mins, v->maxs, down, &tr);
-	return tr.frac < 1 || tr.startsolid;
+	p[2] = v->origin[2] + v->mins[2] - 1;
+	for (x = 0; x < 2; x++)
+		for (y = 0; y < 2; y++)
+		{
+			p[0] = v->origin[0] + (x ? v->maxs[0] : v->mins[0]);
+			p[1] = v->origin[1] + (y ? v->maxs[1] : v->mins[1]);
+			if (col_contents(p) == COL_SOLID)
+				return 1;
+		}
+	return 0;
 }
 
-/* The moving part of STEP / PUSHSTEP: ground friction when the world
- * probe holds before the move, the slide (a BSP floor sets FL_ONGROUND),
- * else the probe after the move decides FL_ONGROUND; link with touch. */
-static void ground_move(int e, double dt)
+/* The moving part of STEP / PUSHSTEP: ground friction when the entity
+ * was on the ground at the frame start and check_bottom holds there, the
+ * slide (a BSP floor sets FL_ONGROUND), else the corner test after the
+ * move decides FL_ONGROUND; link with touch. */
+static void ground_move(int e, double dt, int was)
 {
 	col_ent_t *v = &ent_c.cv[e];
 	uint16_t serial = ent_c.id[e].serial;
 
-	ground_friction(e, dt, world_below(v));
+	ground_friction(e, dt, was && phy_check_bottom(e));
 	v->flags &= ~FL_ONGROUND;
 	check_velocity(e);
 	slide(e, dt);
 	if (!phy_alive(e, serial))
 		return;
-	if (!(v->flags & FL_ONGROUND) && world_below(v))
+	if (!(v->flags & FL_ONGROUND) && corner_in_world(v))
 		v->flags |= FL_ONGROUND;
 	phy_link_touch(v);
 }
@@ -508,7 +514,7 @@ static void step_monster(int e, double time, double dt)
 		add_gravity(e, dt);
 	if (nonzero(m->velocity) || nonzero(m->basevelocity))
 	{
-		ground_move(e, dt);
+		ground_move(e, dt, was);
 		if (!phy_alive(e, serial))
 			return;
 	}
@@ -522,13 +528,15 @@ static void step_pushstep(int e, double time, double dt)
 	col_ent_t *v = &ent_c.cv[e];
 	ent_mot_t *m = &ent_c.mot[e];
 	uint16_t serial = ent_c.id[e].serial;
+	int was;
 
 	base_velocity(e, dt);
-	if (!(v->flags & FL_ONGROUND))
+	was = (v->flags & FL_ONGROUND) != 0;
+	if (!was)
 		add_gravity(e, dt);
 	if (nonzero(m->velocity) || nonzero(m->basevelocity))
 	{
-		ground_move(e, dt);
+		ground_move(e, dt, was);
 		if (!phy_alive(e, serial))
 			return;
 	}

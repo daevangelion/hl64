@@ -492,16 +492,20 @@ static void reset_out(place_t *P)
 }
 
 /* Winding sign: the hit face (coplanar with the point, normal along the
- * hit normal) decides whether strip winding gives outward normals. */
+ * hit normal, the point's foot inside it; the nearest such triangle)
+ * decides whether strip winding gives outward normals; without one, the
+ * vote of the coplanar parallel triangles near the point; 0 when this
+ * chunk holds none (the caller asks the point's other chunks). */
 static int winding_sign(const place_t *P, const wld_layer_t *L, const uint8_t *ch, uint32_t size)
 {
 	const w64_rend_t *r = (const w64_rend_t *)ch;
 	const w64_meshlet_t *m = (const w64_meshlet_t *)(ch + sizeof(w64_rend_t));
 	unsigned stride = L->hdr.idx_stride ? L->hdr.idx_stride : 1, base = L->hdr.idx_base;
-	int i, j, k, votes = 0;
+	int i, j, k, votes = 0, best = 0;
+	float best_d = 2;
 
 	if (!chunk_ok(ch, size))
-		return 1;
+		return 0;
 	for (i = 0; i < r->nmeshlets; i++, m++)
 	{
 		const w64_vert_t *vp = (const w64_vert_t *)(ch + W64_MESHLET_VOFS(m));
@@ -551,14 +555,38 @@ static int winding_sign(const place_t *P, const wld_layer_t *L, const uint8_t *c
 			d = dot(n, P->q) - dot(n, pa);
 			if (d > 1 || d < -1)
 				continue;
-			d = dot(n, P->n);
-			if (d > 0.99f)
-				votes++;
-			else if (d < -0.99f)
-				votes--;
+			{
+				float al = dot(n, P->n), foot[3], ad = d < 0 ? -d : d;
+				const float *pt[3] = { pa, pb, pc };
+				int e, in = 1;
+
+				if (al < 0.99f && al > -0.99f)
+					continue;
+				votes += al > 0 ? 1 : -1;
+				for (k = 0; k < 3; k++)
+					foot[k] = P->q[k] - d * n[k];
+				/* inside: on the inner side of every edge, 0.5 u slack */
+				for (e = 0; e < 3 && in; e++)
+				{
+					float ed[3], m2[3], l;
+
+					for (k = 0; k < 3; k++)
+						ed[k] = pt[(e + 1) % 3][k] - pt[e][k];
+					cross(n, ed, m2);
+					l = normalize(m2);
+					in = l < 1e-6f || dot(m2, foot) - dot(m2, pt[e]) > -0.5f;
+				}
+				if (in && ad < best_d)
+				{
+					best_d = ad;
+					best = al > 0 ? 1 : -1;
+				}
+			}
 		}
 	}
-	return votes < 0 ? -1 : 1;
+	if (best)
+		return best;
+	return votes < 0 ? -1 : votes > 0 ? 1 : 0;
 }
 
 /* Place now. Returns pieces placed (>= 0), -1 when a needed chunk is not
@@ -621,6 +649,8 @@ static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
 			P.n[1] = -dot(n_g, rt);
 			P.n[2] = dot(n_g, up);
 			P.sign = P.facing ? winding_sign(&P, L, ch, L->chunks[sb->chunk].size) : 1;
+			if (!P.sign)
+				P.sign = 1;
 			walk_chunk(&P, L, ch, L->chunks[sb->chunk].size);
 			placed = commit(&P, L->slot, L->map, sb->chunk, owner) ? P.np + 1 : 0;
 			st.dropped += P.dropped_verts ? 1 : 0;
@@ -676,13 +706,18 @@ static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
 			if (ch)
 				sign = winding_sign(&P, L, ch, L->chunks[chunks[k]].size);
 		}
-		P.sign = sign ? sign : 1;
+		/* each chunk's own vote first: the cook's strip winding is not one
+		 * convention across chunks (measured: hldemo1 a wall at x -1504 in
+		 * one chunk winds inward, a plaque 1 u off it in another outward) */
 		for (k = 0; k < nch; k++)
 		{
 			const uint8_t *ch = landed(L, chunks[k]);
+			int own;
 
 			if (!ch)
 				return -1;
+			own = P.facing ? winding_sign(&P, L, ch, L->chunks[chunks[k]].size) : 0;
+			P.sign = own ? own : sign ? sign : 1;
 			reset_out(&P);
 			walk_chunk(&P, L, ch, L->chunks[chunks[k]].size);
 			if (commit(&P, L->slot, L->map, chunks[k], 0))

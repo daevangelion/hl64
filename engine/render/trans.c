@@ -434,6 +434,7 @@ static void draw_item(const item_t *it)
 		break;
 	case TK_STUDIO_ENT:
 		studio_draw_trans(it->id, it->mode, it->blend);
+		gpu_fx_state_lost();
 		ds.studio++;
 		break;
 	case TK_BRUSH_ENT:
@@ -478,6 +479,7 @@ void fx_draw_particles(void)
 	uint64_t t0 = sys_time_us();
 
 	tent_draw_studio();
+	gpu_fx_state_lost();
 	part_draw();
 	fx_add_us((uint32_t)(sys_time_us() - t0));
 }

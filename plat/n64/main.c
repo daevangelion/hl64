@@ -67,8 +67,7 @@ int main(void)
 
 	if (get_memory_size() < HL64_RDRAM_BYTES)
 		sys_error("hl64 needs the Expansion Pak\n(8 MB RDRAM)");
-	if (dfs_init(DFS_DEFAULT_LOCATION) != DFS_ESUCCESS)
-		log_printf("io: no DFS in this ROM\n");
+	cart_mount();
 
 	eng_boot("n64");
 #ifdef HL64_TEST

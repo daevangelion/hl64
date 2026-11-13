@@ -19,14 +19,15 @@
  * HLSDK pm_shared/pm_defs.h with the hl64 changes of decision D2
  * (docs/specs/pmove-host.md 2, 3):
  * - caps: physents 64 (was 600), move-ents 8 (was 64), touch list 32
- *   (was 600, MAX_PHYSENTS), no visents (pm_shared's movement never reads
- *   them);
+ *   (was 600, MAX_PHYSENTS), physics info string 32 (was 256,
+ *   MAX_PHYSINFO_STRING of pm_info.h), no visents (pm_shared's movement
+ *   never reads them);
  * - physent_t keeps HLSDK's leading fields verbatim (the unused studio
  *   model pointer included) and drops the name, animation and mod user
  *   fields;
- * - playermove_t drops the visent list, the physics info string, the
- *   texture name buffer and the file / console / particle / event
- *   services pm_shared no longer calls; PM_TraceTexture returns the
+ * - playermove_t drops the visent list, the texture name buffer and the
+ *   file / console / particle / event services pm_shared no longer
+ *   calls; PM_TraceTexture returns the
  *   surface's texture-type character (the engine's cooked material
  *   table) instead of a texture name;
  * - trace_t (engine type, PM_TraceModel) is defined here; hull_t is an
@@ -38,6 +39,7 @@
 #define	MAX_PHYSENTS 64
 #define MAX_MOVEENTS 8
 #define MAX_PMTOUCH 32
+#define MAX_PHYSINFO_STRING 32
 #define	MAX_CLIP_PLANES	5
 
 #define PM_NORMAL			0x00000000
@@ -170,11 +172,14 @@ typedef struct playermove_s
 	int				numtouch;
 	pmtrace_t		touchindex[MAX_PMTOUCH];
 
+	char			physinfo[ MAX_PHYSINFO_STRING ]; // Physics info string
+
 	struct movevars_s *movevars;
 	vec3_t player_mins[ 4 ];
 	vec3_t player_maxs[ 4 ];
 	
 	// Common functions
+	const char		*(*PM_Info_ValueForKey) ( const char *s, const char *key );
 	int				(*PM_TestPlayerPosition) (float *pos, pmtrace_t *ptrace );
 	void			(*Con_DPrintf)( char *fmt, ... );
 	void			(*Con_Printf)( char *fmt, ... );

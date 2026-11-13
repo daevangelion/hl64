@@ -279,10 +279,23 @@ void game_start_frame(void)
 
 /* ---- spawn (DispatchSpawn) ----------------------------------------------------- */
 
-static void refuse_log(cls_t cls, gid_t16 gid, const char *why)
+/* the reasons a Spawn gave no HLSDK reason for (game.py fails them) */
+#define WHY_NONE	"Spawn refused with no reason (game_class_t.Spawn contract)"
+#define WHY_REMOVED	"Spawn removed itself with no reason (game_class_t.Spawn contract)"
+
+static const char *spawn_why;	/* the refusing Spawn's SpawnRefuse reason */
+
+int SpawnRefuse(const char *why)
+{
+	spawn_why = why;
+	return -1;
+}
+
+void game_refuse_log(cls_t cls, gid_t16 gid, int e, const char *why)
 {
 	if (gid == GID_NONE)
-		log_printf("spawn: %s (runtime) refused: %s\n", game_class_name(cls), why);
+		log_printf("spawn: %s (runtime entity %d) refused: %s\n", game_class_name(cls), e,
+			why);
 	else
 		log_printf("spawn: %s map %u lump %u refused: %s\n", game_class_name(cls),
 			(unsigned)GID_SLOT(gid), (unsigned)GID_LUMP(gid), why);
@@ -292,12 +305,14 @@ static int spawn(cls_t cls, gid_t16 gid, int e)
 {
 	const game_class_t *c = game_class(cls);
 	CBaseEntity *pev;
+	const char *why;
 	uint32_t size;
-	int i;
+	int i, r;
 
 	if (!c || !c->Spawn)
 	{
-		refuse_log(cls, gid, c ? "logic class has no entity spawn" : "class not implemented");
+		game_refuse_log(cls, gid, e,
+			c ? "logic class has no entity spawn" : "class not implemented");
 		return -1;
 	}
 	ent_idc(e)->cls = cls;
@@ -306,7 +321,7 @@ static int spawn(cls_t cls, gid_t16 gid, int e)
 	pev = (CBaseEntity *)ent_priv_alloc(e, size);
 	if (!pev)
 	{
-		refuse_log(cls, gid, "game private slab full");
+		game_refuse_log(cls, gid, e, "game private slab full");
 		return -1;
 	}
 	pev->target = NAME_NONE;
@@ -323,11 +338,20 @@ static int spawn(cls_t cls, gid_t16 gid, int e)
 		ent_cv(e)->absmax[i] = ent_cv(e)->origin[i] + 1;
 	}
 	EntvarsKeyvalue(e, gid);
-	if (c->Spawn(e, gid) < 0)
+	/* a Spawn creating entities (world_items) spawns them first: take the
+	 * reason this Spawn gave as it returned */
+	spawn_why = 0;
+	r = c->Spawn(e, gid);
+	why = spawn_why;
+	spawn_why = 0;
+	if (r < 0)
+	{
+		game_refuse_log(cls, gid, e, why ? why : WHY_NONE);
 		return -1;
+	}
 	if (!ent_is_live(e) || (ent_cv(e)->flags & FL_KILLME))
 	{
-		refuse_log(cls, gid, "removed itself in spawn");
+		game_refuse_log(cls, gid, e, why ? why : WHY_REMOVED);
 		return -1;
 	}
 	if (c->vt && c->vt->Activate)
@@ -360,7 +384,7 @@ void game_spawn_logic(gid_t16 gid)
 	 * nothing the record does not) has no spawn step */
 	if (!c || (!c->LogicSpawn && !c->LogicUse))
 	{
-		refuse_log(cls, gid, "no logic class");
+		game_refuse_log(cls, gid, -1, "no logic class");
 		return;
 	}
 	if (c->LogicSpawn)

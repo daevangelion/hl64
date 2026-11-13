@@ -57,6 +57,7 @@
 #define WEAPON_MP5		4
 #define WEAPON_SHOTGUN		7
 #define WEAPON_HANDGRENADE	12
+#define WEAPON_TRIPMINE		13
 #define WEAPON_SUIT		31
 #define MAX_WEAPONS		32
 #define MAX_NORMAL_BATTERY	100
@@ -67,12 +68,14 @@
 #define MP5_WEIGHT		15
 #define SHOTGUN_WEIGHT		15
 #define HANDGRENADE_WEIGHT	5
+#define TRIPMINE_WEIGHT		(-10)
 
 #define _9MM_MAX_CARRY		250
 #define _357_MAX_CARRY		36
 #define BUCKSHOT_MAX_CARRY	125
 #define HANDGRENADE_MAX_CARRY	10
 #define M203_GRENADE_MAX_CARRY	10
+#define TRIPMINE_MAX_CARRY	5
 
 #define WEAPON_NOCLIP		(-1)
 #define GLOCK_MAX_CLIP		17
@@ -86,6 +89,7 @@
 #define MP5_M203_DEFAULT_GIVE	0
 #define SHOTGUN_DEFAULT_GIVE	12
 #define HANDGRENADE_DEFAULT_GIVE 5
+#define TRIPMINE_DEFAULT_GIVE	1
 
 #define AMMO_GLOCKCLIP_GIVE	GLOCK_MAX_CLIP
 #define AMMO_357BOX_GIVE	PYTHON_MAX_CLIP
@@ -118,7 +122,8 @@
 #define AMMO_BUCKSHOT		3	/* "buckshot" */
 #define AMMO_ARGRENADES		4	/* "ARgrenades" */
 #define AMMO_HANDGRENADE	5	/* "Hand Grenade" */
-#define MAX_AMMO_TYPES		6
+#define AMMO_TRIPMINE		6	/* "Trip Mine" */
+#define MAX_AMMO_TYPES		7
 
 /* CBasePlayerItem::ItemInfo (GetItemInfo) of a weapon id. */
 typedef struct {
@@ -134,6 +139,10 @@ typedef struct {
 } ItemInfo;
 /* By weapon id; iId 0 rows unused. */
 const ItemInfo	*ItemInfoOf(int id);
+/* CBasePlayerItem::MaxAmmoCarry: the carry limit the registered weapons
+ * give ammo type ammo (their iMaxAmmo1 / iMaxAmmo2), -1 when no weapon of
+ * the game uses it. */
+int		MaxAmmoCarry(int ammo);
 
 /* ---- player.h --------------------------------------------------------------- */
 
@@ -195,7 +204,7 @@ typedef struct {
 } CBasePlayerWeapon;
 
 /* Weapon ids carried in the game (index into Player()->wpn). */
-#define WPN_SLOTS		13	/* ids 0..WEAPON_HANDGRENADE */
+#define WPN_SLOTS		14	/* ids 0..WEAPON_TRIPMINE */
 
 typedef struct {
 	/* buttons (pev->button, debounced) and the command */
@@ -353,7 +362,7 @@ typedef struct {
 	void	(*Think)(int id, int which);	/* the weapon entity's think */
 } weapon_vt_t;
 extern const weapon_vt_t wvt_crowbar, wvt_glock, wvt_python, wvt_mp5, wvt_shotgun,
-	wvt_handgrenade;
+	wvt_handgrenade, wvt_tripmine;
 /* CBasePlayerWeapon::ItemPostFrame (the default) */
 void	W_BaseItemPostFrame(int id);
 

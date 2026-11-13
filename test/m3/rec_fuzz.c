@@ -98,12 +98,36 @@ static int hle_once(const uint8_t *src, uint32_t n, const rec_limits_t *lim)
 	return ok;
 }
 
+/* the limits rec.c hands rec_hle_check, as res_install takes them from the
+ * campaign.rtb (KIND counts, PATN / GLOB / CLAS / TITL); nsub: the format's
+ * bound (the ENTS chunk alone has no layer) */
+static int rtb_limits(const uint8_t *src, uint32_t n, rec_limits_t *lim)
+{
+	rtb_dir_t d;
+	uint32_t bad;
+	const uint8_t *kind;
+	int k;
+
+	if (n < RTB_DIR_END || rtb_parse_dir(src, n, &d, &bad) || rtb_parse_cart(src, &d, &bad))
+		return -1;
+	memset(lim, 0, sizeof(*lim));
+	lim->classes = d.count[RTB_CLAS];
+	lim->patterns = d.count[RTB_PATN];
+	lim->globals = d.count[RTB_GLOB];
+	lim->titles = d.count[RTB_TITL];
+	kind = src + d.ofs[RTB_KIND];
+	for (k = 0; k < 8; k++)
+		lim->kcount[k] = (uint32_t)kind[4 * k] << 8 | kind[4 * k + 1];
+	lim->nsub = 1024;
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	uint32_t rn, hn, i, iters;
 	uint8_t *rtb, *hle, *buf;
 	rec_limits_t lim;
-	int racc = 0, hacc = 0, k;
+	int racc = 0, hacc = 0;
 
 	if (argc != 5)
 	{
@@ -114,15 +138,11 @@ int main(int argc, char **argv)
 	hle = load(argv[2], &hn);
 	iters = (uint32_t)strtoul(argv[3], NULL, 10);
 	rng = (uint32_t)strtoul(argv[4], NULL, 10) | 1;
-	memset(&lim, 0, sizeof(lim));
-	lim.classes = RC__N;
-	lim.patterns = lim.globals = lim.titles = 64;
-	for (k = 0; k < 8; k++)
-		lim.kcount[k] = 512;
-	lim.nsub = 1024;
-	if (!rtb_once(rtb, rn) || !hle_once(hle, hn, &lim))
+	if (rtb_limits(rtb, rn, &lim) || !rtb_once(rtb, rn) || !hle_once(hle, hn, &lim))
 	{
 		printf("FAIL the unmodified inputs do not pass\n");
+		free(rtb);
+		free(hle);
 		return 1;
 	}
 	buf = malloc((rn > hn ? rn : hn) + 16);
