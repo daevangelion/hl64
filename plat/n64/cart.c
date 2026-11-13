@@ -25,8 +25,20 @@
 
 #include <libdragon.h>
 
+#include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "plat/n64/n64.h"
+
+/* libdragon's DFS lookups dereference its file table unchecked: with no
+ * DFS mounted, dfs_rom_addr reads through NULL. */
+static int cart_dfs;
+
+void cart_mount(void)
+{
+	cart_dfs = dfs_init(DFS_DEFAULT_LOCATION) == DFS_ESUCCESS;
+	if (!cart_dfs)
+		log_printf("io: no DFS in this ROM\n");
+}
 
 /* DFS wants a root-relative path; "rom:/x" and "x" name the same file. */
 static const char *cart_dfs_path(const char *path)
@@ -44,7 +56,7 @@ uint32_t sys_cart_addr(const char *path, uint32_t *out_size)
 
 	if (out_size)
 		*out_size = 0;
-	if (!rel || !rel[0])
+	if (!cart_dfs || !rel || !rel[0])
 		return 0;
 	rom = dfs_rom_addr(rel);
 	if (!rom)
