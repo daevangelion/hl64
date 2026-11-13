@@ -187,7 +187,8 @@ Peaks are one-map values; M4 re-measures every region with two layers.
 
 | region | hl64 KB (carve) | M3 peak (use) | old tree | basis |
 |---|---:|---:|---:|---|
-| code + data + bss (cart image) | ≤ 900 **OVER** | 1475 KB cart image **measured** (M3Lead2) | 1428 **measured** (HL cart ELF) | flagged OVER until M3Lead2 reports the top contributors. `HL64_HOST_HEAP_KB` is now derived at build time from the cart image size, so the host heap tracks the cart's |
+| code + data + bss (cart image) | ≤ 900 **OVER** | 1475 KB cart image **measured** (M3Lead2) | 1428 **measured** (HL cart ELF) | flagged OVER until M3Lead2 reports the top contributors. `HL64_HOST_HEAP_KB` is now derived at build time from the cart image size, so the host heap tracks the cart's. With overlays (7.4) the resident target is ≈ 1370 KB and stays there for the full campaign (≈ 1.8 MB without) |
+| code overlay arena (TLB frames, 7.4) | 192 [EST] | — (M6) | — | cook-proved: Uplink pair 132 KB / 18 TLB entries, retail [EST] ≈ 160 KB / ≈ 22 entries; 48 × 4 KB frames, ≤ 30 wired entries |
 | framebuffers ×2 + Z | 450 | — | 450 | measured |
 | rspq / tiny3d / matrices | 96 | not reported | (in heap) | [EST] |
 | render / texture / collision pools | 240 / 128 / 208 | 117 KB (49%) / 99 KB (77%) / 55 KB (26%) | 240 / 128 / 208 | cook-proved worst sets (SA2 §8); **measured** one layer |
@@ -261,6 +262,7 @@ tree's ≈ 27 ms p50. The old [EST] rows are replaced by this table.
 | game (thinks) | 915 / 1540 / 24454 | 4000 / 8000 incl. mon | within on average; max frame 24.5 ms |
 | mon (monster AI) | 676 / 1015 / 19981 | (game) | |
 | rec (records, wakes, hydration) | 313 / 547 / 14086 | 400 + 2000 hydration cap | within |
+| overlay map (7.4, M6) | — | [EST] ≈ 0.05 ms CPU per unit on a frame that maps one, DMA async | at most one unit mapped per frame; measured in M6 |
 | snd | 1228 / 1514 / 6025 | **1500** (was 500) | the 500 µs [EST] was wrong: 1097 µs of the 1228 is the wav64 stream pump with ≤ 2 voices and 10 open waves; M6 measures the cost at 16 voices |
 
 Open items for M4/M6: single frames of 14–24 ms in game, ent, phys, mon
@@ -570,6 +572,167 @@ following the audit's §1.5 ranges (16.2; the Quake-interface glue is D9):
    engine): grenades become MOVETYPE_BOUNCE with gravity 0.5 / friction 0.8
    as HLSDK sets them, conveyors use basevelocity, etc.
 
+### 7.4 Code residency (overlays)
+
+User direction: only the code in use is resident (active monster and
+entity code, the menu while it is open), in dedicated arenas. No
+libdragon DSOs: `dlopen` reads synchronously, allocates from the general
+heap and keeps name-based symbol tables, which break 4.3 and the
+no-stall rule.
+
+**Units.** Sizes are text + data of the cart objects (main `8532e97`).
+
+| resident (always) | overlay units |
+|---|---|
+| engine (render 91 KB, ent 58, pm 34, …), libdragon 139, tiny3d 19 | one per **monster class** with helpers only it uses: grunt 18.2, garg 13.4, turret 9.7, scientist 9.0, houndeye 7.4, islave 6.8, headcrab 6.6, barney 5.8, roach 4.4, monster_tripmine 4.2, barnacle 4.1, generic 2.7, rat 0.7 (Uplink 93 KB; gman and zombie not written yet, [EST] 8 KB each; the retail campaign adds ≈ 39 classes) |
+| shared AI base: monsters 40.4, talkmonster 14.3, aicombat 12.5, schedule 11.5, scripted 7.2, aisquad 6.9, nodes 6.8, grenade 5.6, defaultai 3.6, sentences 3.6, aisound 0.8 (≈ 113 KB) | **map-only logic sets** (classes used by few maps, e.g. retail `func_tank`, `func_tracktrain`, Xen bosses) when ≥ 4 KB |
+| always-used game code: player 18.6, util 19.9, dispatch 10.0, triggers, doors, plats, buttons, bmodels, breakable, env, ambient, items, chargers, logic, lights, world, material, monstermaker, HUD, view | **front-end** (title, new game, options, save/load browser) and the in-game save/load screen (not written yet; [EST] ≈ 12 KB) |
+| **weapons** (base 16.5 + per-weapon 1.3–2.8; Uplink 29.5 KB, retail [EST] ≈ 50 KB) | — |
+
+Weapons stay resident: a full inventory pins every weapon unit, so
+overlaying them saves nothing at the worst point and costs mapping
+entries. Never in playable ROMs (build flag, not overlays): route VM
+(10.1 KB), test hooks, debug commands beyond the log ring (`dbg` 2.4 KB).
+
+**Mechanism: TLB-mapped fixed-virtual overlays.** libdragon never
+programs the VR4300 TLB (our fork only reports TLB exceptions), so all 32
+entries are free; hl64 writes them as **wired** entries (C0 `Wired`) and
+needs no refill handler.
+
+- Each unit is linked once, at its own unique virtual address in mapped
+  kseg2 (from `0xC0000000`; kuseg stays unmapped so NULL faults), 4 KB
+  aligned, with `-G 0` (grunt.o has 159 gp-relative accesses today, which
+  cannot reach an overlay) and `-mlong-calls` for calls to resident code
+  (`jal` reaches only within the current 256 MB segment, and kseg2 is not
+  kseg0's; [EST] +10% unit size, M6 measures). Resident references are
+  absolute and resolved by the linker against the final resident ELF
+  (`--just-symbols`); nothing is relocated at run time and there is no
+  relocation table.
+- Overlay file (built by `tools/ovlx`, host tool, MIT, provcheck-clean,
+  from the unit's linked ELF): header (virtual base, page count, bss size,
+  build hash of the resident ELF — a mismatch is `sys_error`), the text +
+  data blob, and the dispatch entries (`funcs.def` id → virtual address,
+  `classes.def` id → class ops address).
+- **Code arena**: a carved region of 4 KB physical frames with a frame
+  bitmap. A unit's pages may land in any free frames (no contiguity
+  needed), so the arena never fragments and never compacts.
+- **Load**: take free frames; invalidate the data cache over them; PI DMA
+  the blob page by page into the frames' physical addresses (async, 5.2);
+  zero bss pages; write the wired TLB entries (cacheable noncoherent, as
+  kseg0); invalidate the instruction cache over the unit's virtual range;
+  fill the dispatch slots. CPU cost ≈ cache-line operations only ([EST]
+  ≈ 0.05 ms for 18 KB).
+- **Unload**: point the unit's dispatch slots at a trap (`sys_error`
+  naming the function id and unit), mark its entries invalid, free its
+  frames. A stray call into an unloaded unit then takes a TLB exception
+  whose bad virtual address names the unit (fixed layout), instead of
+  running stale code.
+- One entry maps an even/odd pair of 4 KB pages, each page to any frame:
+  a unit of n pages needs ⌈n/2⌉ entries. 30 entries serve overlays; 2
+  are reserved (stack guard in debug builds, spare).
+
+Cost of mapped execution: the TLB translates in the pipeline beside the
+physically tagged cache lookup, so a hit costs what a kseg0 access costs;
+instruction fetch goes through the VR4300's small instruction micro-TLB,
+refilled from the joint TLB in a few cycles when execution moves to
+another mapped page **[to verify on hardware and in the M6 bench; ares
+translates through the joint TLB (`n64/cpu/tlb.cpp`) and has no
+micro-TLB model]**. GPU-visible buffers stay in contiguous kseg0 memory:
+PI, RSP and RDP use physical addresses and gain nothing from the TLB.
+
+| | TLB fixed-virtual (chosen) | relocating loader | fixed-slot overlays |
+|---|---|---|---|
+| load CPU (18 KB class) | cache ops + TLB writes ≈ 0.05 ms | + ≈ 600 relocations ≈ 0.2 ms; 0.3–3 KB relocation table per unit (measured own-base relocations: roach 40 … grunt 427, before `-G 0`) | cache ops only |
+| memory waste | page rounding: Uplink pair 132 KB of frames for ≈ 109 KB of code (≈ 20%); no fragmentation | 16 B rounding plus a × 1.25 fragmentation margin | each slot as large as its largest unit; co-resident units need distinct slots |
+| complexity | VA layout tool, wired entries, `-mlong-calls`; libdragon untouched | relocation extractor and applier, move/compaction | slot-assignment solver redone for every new class |
+| debuggability | best: one fixed address per symbol, clean fault on stray calls | addresses change per load | units sharing a slot share addresses |
+| limits | 30 entries (Uplink pair 18, retail [EST] ≈ 22) | arena size only | slot count and sizes |
+
+If a campaign's entry need exceeds 30, the fallbacks are, in order: the
+cook merges small classes that always occur together into one unit; then
+a software refill handler for the overlay region instead of wired
+entries (designed, not built unless needed).
+
+Data arenas: the TLB is **not** extended to CPU-only data (game private
+slabs, HLE slots, level state, collision chunks). Remapping individual
+4 KB frames costs one entry per page pair, so a 160–240 KB region would
+need 20–30 entries; with 64 KB or larger pages it saves nothing over a
+contiguous carve; and those regions already avoid fragmentation (page
+slabs, fixed slots). The one data use is a stack guard page in debug
+builds (the stack then lives in mapped space, one entry).
+
+**Binding rules.**
+
+- Resident code never calls into an overlay except through the dispatch
+  table (`funcs.def` ids for think/touch/use/blocked, `classes.def` class
+  ops for spawn and the class methods), looked up at each call, never
+  cached. Overlays call resident functions directly.
+- No overlay references another overlay's symbols (`ovlx` rejects it).
+- No overlay has writable static data that must outlive its residency:
+  state HLSDK keeps in class statics (talk timers, squad questions) lives
+  in a resident per-class statics block that saves with the game; `ovlx`
+  rejects other writable statics outside a declared scratch section.
+- No code address in data that outlives a frame: components, private
+  data, timers, saved games and level state hold ids only (`ent_tm_t`
+  already holds `fn_t` ids, 6.2). This rule holds from now on, so M6 needs
+  no retrofit.
+
+**What is resident when.** The cook already knows each map's class set
+(HLE1 records + `restab`). Per map it adds the classes named by
+`monstermaker` `monstertype` keys and the **spawn closure** (classes a
+class can create at run time: a `SPAWNS(...)` list per class in
+`classes.def`, e.g. grunt → grenade, gibs). Uplink sets (BSP entity
+lumps): hldemo1 barnacle, barney, roach, gargantua, gman, headcrab,
+houndeye, scientist, zombie + makers barney, gargantua, headcrab; hldemo2
+barney, roach, headcrab, grunt, tripmine, zombie + makers alien slave,
+grunt, scientist.
+
+- Approach (5.4 step 1) requests B's layer **and** B's overlay set (OPEN
+  priority, after AUDIO). B's records may hydrate only when its units are
+  mapped; the approach window covers the DMA.
+- New Game maps the start map's set at boot (blocking is allowed there),
+  before the settle frames.
+- A unit is **pinned** while any live entity has its class or holds one
+  of its function ids (a scan of 495 × 4 `tm` ids), while a pending timer
+  references it, and while its map's layer is open or approached.
+  Followers carried across a seam keep their class pinned.
+- The front-end maps when no map is open; the in-game save/load screen
+  maps into free frames while the simulation is paused.
+
+**Budget** (cook-proved, like the HLE region): frames = the largest union
+over two simultaneously open maps of their units' pages + the save/load
+screen; entries = the same union's ⌈pages/2⌉ per unit ≤ 30. Uplink
+(hldemo1 ∪ hldemo2, 12 classes, gman and zombie [EST]): 30 class pages +
+3 for the save screen = **132 KB of frames, 18 entries**. Retail [EST,
+the 125 BSPs' class sets, unwritten classes at 8–20 KB]: worst
+same-chapter pair (c3a1 + c3a1a, c2a5f + c2a5x) ≈ 103 KB in ≈ 13 units
+≈ 33 pages + 3 + 10% for `-mlong-calls` ≈ 160 KB, ≈ 22 entries. Carve
+**192 KB** (48 frames); the cook fails a campaign over the frames or the
+entries.
+
+Resident image: today 1475 KB (all game code resident). Moving the
+Uplink class units out (≈ 93 KB) and dropping the route VM and debug
+commands from playable ROMs (12.5 KB) gives ≈ 1370 KB resident + 192 KB
+arena — about 87 KB **more** than today for Uplink alone. The gain is the
+full campaign: without overlays the ≈ 39 retail classes add [EST]
+≈ 310 KB (≈ 1.8 MB resident); with them the resident image stays
+≈ 1370 KB and the arena 192 KB however many classes exist.
+
+**Load cost** [EST, M6 measures]: PI DMA at 195 µs/KB — grunt (≈ 20 KB
+with long calls) ≈ 4 ms of PI time, async; CPU ≈ 0.05 ms per unit; the
+whole hldemo2 set (≈ 80 KB) ≈ 16 ms of DMA spread over the approach
+window. Host builds link every unit statically but run the same pin
+bookkeeping and dispatch-slot clearing, so a call into an unloaded unit
+traps on host too.
+
+**Verification.** ares translates mapped addresses through its TLB model
+(`n64/cpu/tlb.cpp`: page masks, even/odd pairs, ASID/global). M6 adds a
+test ROM (`test/m6/tlb`) run on ares and on a flashcart: wire two
+entries, DMA a unit into scattered frames, call it through the dispatch
+table, unmap it and expect a TLB exception with the unit's address,
+repeat with 16 KB pages. Real-hardware risk is low (the TLB is standard
+VR4300 hardware) but only the flashcart run proves it.
+
 ---
 
 ## 8. Collision, traces, physics
@@ -860,7 +1023,7 @@ uses them (specs/README.md).
 | M3 | components, active sets, think heap, records, hydration (one layer), movetypes, resources, sound, studio, translucent/decals/sprites, HUD, game/ retargeted | compiled Uplink route segment A to the elevator `+use`, `WAIT_MOVED startele1`, changelevel fire logged; physics/think/sound/lightstyle/dlight/render-fx tests pass on their fixtures |
 | M4 | streaming crossings: CWG3, seams, twins, dehydrate/rehydrate, timers, async residency with change-driven recompute | route through hldemo1→2→3: PASS, 0 forced switches on host, `budget_over=0`, `open_fail=0`, 0 frames > 1 ms blocked I/O, pop-in only in teleport windows, entities continuous across seams |
 | M5 | full Uplink route (converted `uplink_route.cfg`) + Hazard routes | PASS on host and ares at the same checkpoints; any `WAIT_NEAR` radius widened versus the old route is listed with its GoldSrc-behaviour reason |
-| M6 | performance | ares median fps ≥ the old cart's at every stats step (same pacing); no frame > 50 ms within ±2 s of a seam switch (misses reported with zones); 4.1 and 4.2 [EST] rows replaced by measurements; flashcart run if available |
+| M6 | performance; code residency (7.4: TLB-mapped overlays, `tools/ovlx`, cook frame/entry proof) | ares median fps ≥ the old cart's at every stats step (same pacing); no frame > 50 ms within ±2 s of a seam switch (misses reported with zones); 4.1 and 4.2 [EST] rows replaced by measurements; flashcart run if available. Overlays: `test/m6/tlb` passes on ares (and the flashcart when available); on the Uplink route the resident code size, arena frame peak and TLB entry peak are reported and within 7.4's budget (≤ 192 KB, ≤ 30 entries), 0 frames > 1 ms blocked on overlay I/O, 0 calls into unmapped units (trap and TLB-exception count 0) |
 
 ---
 
@@ -934,3 +1097,4 @@ campaign graph's chapter boundaries; sizing is redone with the retail data.
 | D8 | Imported file history | copy with a commit note naming the audit entry; subtree import | copy with note |
 | D9 | Admit QUAKE-INTERFACE files (blocks M0 imports) | (a) amend PROVENANCE.md: importable when the same commit replaces every Quake binding the audit lists and rewrites its flagged ranges; provcheck verifies; (b) CLEAN-only | (a), now for fewer files: revision 2 already rewrites the route runner, console, area links and resource tables; (a) still saves ≈ 15k lines of streaming, seam, record, level-state, sound, studio-residency and sector/studio renderer code whose algorithms are ours |
 | D10 | GoldSrc oracle (blocks M2 fixtures) | (a) run Valve's Linux dedicated server (steamcmd app 90, anonymous) with a HLSDK-built probe game DLL and the player's Uplink maps on this machine, plus retail client captures when the user's Steam login is available; (b) no GoldSrc runs: specs from HLSDK and documentation only, old tree as fallback oracle | (a): server-side behaviour (traces, touches, physics, think timing, pmove via bots) becomes measured ground truth; black-box observation is allowed by PROVENANCE |
+| D11 | Code residency (M6; user direction: only active code resident, no libdragon DSOs) | (a) TLB-mapped fixed-virtual overlays in a 4 KB-frame arena, wired entries; (b) relocating loader into a first-fit arena; (c) fixed-slot overlays | (a): no relocation, no fragmentation, fixed addresses for debugging, clean faults; limit 30 entries (Uplink 18, retail [EST] ≈ 22), fallbacks in 7.4 |
