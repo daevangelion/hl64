@@ -23,8 +23,12 @@
  * pattern is the one the VI dedither filter (main.c display_init,
  * FILTERS_RESAMPLE_ANTIALIAS_DEDITHER) folds back to ~8 bits per channel;
  * alpha stays undithered so alpha-compare cutouts keep exact edges.
- * Expands to an rdpq_dither_t: include <libdragon.h> where used. */
+ * N64_DITHER_MODE() is the mode the passes set: N64_DITHER, or none
+ * while settings.r_dither is 0 (the M1 gate's old-cart comparison).
+ * Expand to an rdpq_dither_t: include <libdragon.h> and "hl64/settings.h"
+ * where used. */
 #define N64_DITHER	DITHER_SQUARE_NONE
+#define N64_DITHER_MODE()	(settings.r_dither ? N64_DITHER : DITHER_NONE_NONE)
 
 /* fpu_shim.c */
 void		fpu_shim_install(void);

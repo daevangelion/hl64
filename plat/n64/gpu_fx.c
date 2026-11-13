@@ -24,6 +24,7 @@
 #include <t3d/tpx.h>
 
 #include "hl64/limits.h"
+#include "hl64/settings.h"
 #include "engine/core/sys.h"
 #include "engine/render/gpu_fx.h"
 #include "plat/n64/n64.h"
@@ -74,7 +75,7 @@ void gpu_fx_end(void)
 {
 	/* the world's state for whoever draws next (view model, HUD) */
 	rdpq_set_mode_standard();
-	rdpq_mode_dithering(N64_DITHER);
+	rdpq_mode_dithering(N64_DITHER_MODE());
 	rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
 	rdpq_mode_tlut(TLUT_RGBA16);
 	rdpq_mode_filter(FILTER_BILINEAR);
@@ -120,7 +121,7 @@ void gpu_fx_mode(int m, const uint8_t prim[4])
 		return;
 	mode = m;
 	rdpq_set_mode_standard();
-	rdpq_mode_dithering(N64_DITHER);
+	rdpq_mode_dithering(N64_DITHER_MODE());
 	rdpq_mode_combiner(combiner(r->combiner));
 	rdpq_mode_blender(r->blender == GPU_FX_BL_ADD ? RDPQ_BLENDER_ADDITIVE
 		: r->blender == GPU_FX_BL_ALPHA ? RDPQ_BLENDER_MULTIPLY : 0);
