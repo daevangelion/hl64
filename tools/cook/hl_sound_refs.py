@@ -313,6 +313,8 @@ def collect(data: Data, maps: Iterable[str], models: Dict[str, bytes],
                 add_sentence_ref(refs, e.get("message", ""), sent_table, groups)
             elif cn == "env_message" and e.get("message", "").upper() in titles:
                 refs.titles.add(e["message"].upper())
+            elif cn == "worldspawn" and e.get("chaptertitle", "").upper() in titles:
+                refs.titles.add(e["chaptertitle"].upper())
             elif cn == "env_shooter" and e.get("shootmodel"):
                 refs.models.add(e["shootmodel"].lower())
             elif cn == "gibshooter":
