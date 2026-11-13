@@ -356,12 +356,15 @@ void game_spawn_logic(gid_t16 gid)
 	cls_t cls = rec_class(gid);
 	const game_class_t *c = game_class(cls);
 
-	if (!c || !c->LogicSpawn)
+	/* a use-only logic class (env_shake / fade / render: HLSDK Spawn keeps
+	 * nothing the record does not) has no spawn step */
+	if (!c || (!c->LogicSpawn && !c->LogicUse))
 	{
 		refuse_log(cls, gid, "no logic class");
 		return;
 	}
-	c->LogicSpawn(gid);
+	if (c->LogicSpawn)
+		c->LogicSpawn(gid);
 }
 
 /* ---- dispatch ------------------------------------------------------------------- */

@@ -27,6 +27,9 @@ import sys
 MAPS = "hldemo1,hldemo2,hldemo3,t0a0,t0a0a,t0a0b,t0a0b1,t0a0b2,t0a0c,t0a0d"
 SOLID_BSP = 4
 MOVETYPE_PUSH = 7
+# refusal reasons that mean a missing implementation (game/hl/dispatch.c)
+UNIMPLEMENTED = ("class not implemented", "logic class has no entity spawn",
+                 "no logic class", "game private slab full")
 CLASSES_DEF = os.path.join(os.path.dirname(__file__), "..", "..", "game", "defs", "classes.def")
 
 
@@ -111,14 +114,15 @@ def check(name, rc, lines, err, own, fails):
                 fails.append(f"{name}: lump {lump} {cn} ({owner}): SOLID_BSP without MOVETYPE_PUSH")
                 ok = False
         elif state in ("refused", "killed", "pending"):
-            why = refusals.get(lump)
-            if not why:
+            if lump not in refusals:
                 fails.append(f"{name}: lump {lump} {cn} ({owner}): {state} with no logged reason")
                 ok = False
-            elif why[1] in ("class not implemented", "logic class has no entity spawn",
-                            "game private slab full"):
-                fails.append(f"{name}: lump {lump} {cn} ({owner}): refused: {why[1]}")
-                ok = False
+    # a refusal for a missing implementation fails, logged or not (entity and
+    # logic records alike)
+    for lump, (cn, why) in sorted(refusals.items()):
+        if why in UNIMPLEMENTED:
+            fails.append(f"{name}: lump {lump} {cn} ({own.get(cn, '?')}): refused: {why}")
+            ok = False
     print(f"{name}: {'PASS' if ok else 'FAIL'} records={done} "
           + " ".join(f"{k}={v}" for k, v in sorted(count.items()))
           + f" refusals_logged={len(refusals)}")
