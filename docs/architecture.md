@@ -189,7 +189,7 @@ pointers, so `-m32` and LP64 sizes are identical.
 | layer directories (2 open) | 168 | 2 × 38–84 | measured |
 | studio pool | 1536 → 1024 with D3(b) | 1536 | old route fits; D3(b) per-sequence animation chunks: ≈ 60 KB per NPC model instead of 93–142 KB (SA2 §3.6) [EST] |
 | studio skinned-mesh tables, view model scratch | 192 | 256 heap reserve | [EST] 4–10 KB per drawn NPC (old `sk_build`) |
-| entity components | 113 | edicts 495 × 884 = 427 + client `entity_t` copies, baselines | 6.2: 220 B × 495 ≈ 109 KB |
+| entity components | 134 | edicts 495 × 884 = 427 + client `entity_t` copies, baselines | **measured** (M3 layout, `-m32` = cart): 228 B of components + 49 B of grid node, membership pool, touch rank, free time per slot × 495 = 137168 B |
 | game private data | 160 | (inside the 884 B edicts) | [EST] ~60 monsters × ≤ 1 KB + movers + items, slab size classes |
 | HLE1 blobs (4 slots) | 160 | 72 KB text + 13–19 KB keys per map before HLE1 | [EST] 40 KB per map; names/classes are ids, keys typed |
 | dehydrate store | 64 | similar | 64 runtime pickups + per-map deltas |
@@ -383,7 +383,7 @@ Slot index u16, cap 495 (ceil(1.25 × measured host peak 396)). A handle
 | `tm` | nextthink f32 s (0 = none), ltime f32 s (pushers), think / touch / use / blocked u16 function ids | 16 | think heap, pushers, dispatch |
 | `rnd` | modelindex `res_t` u16, sequence u16, frame f32, animtime f32 s, framerate f32, scale u16 (8.8), skin s16, body u8, effects u16, controller u8[4], blending u8[2], rendermode, renderfx, renderamt u8, rendercolor u8[3], sectors u16[4] | 48 | render, studio |
 | `id` | serial u16, state u8, layer s8, class u16 (from `classes.def`), private handle u16, record gid u16, runtime id u16, targetname `name_t` u16 | 16 | names, hydration, save |
-| **total** | | **220 × 495 ≈ 109 KB** | |
+| **total** | | **228 × 495 ≈ 110 KB measured** (`rnd` 44, `cv` = `xf` + `box` + collision fields 92) | |
 
 - **Game clock in GoldSrc's formats**: `time` is f64 seconds advanced by
   `dt` (f64), starting at 1.0; `nextthink`, `ltime` and `animtime` are the

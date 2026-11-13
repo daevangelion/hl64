@@ -38,6 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "hl64/ent.h"
 #include "hl64/grid.h"
 #include "hl64/limits.h"
 #include "engine/core/sys.h"
@@ -60,8 +61,11 @@ static int fails;
 
 static int quiet;
 
-static void on_touch(uint16_t fn, col_ent_t *self, col_ent_t *other)
+static void on_touch(int si, int oi)
 {
+	col_ent_t *self = ent_cv(si), *other = ent_cv(oi);
+	uint16_t fn = ent_tm(si)->touch;
+
 	if (nseen < 64)
 		seen[nseen++] = (uint32_t)self->index << 16 | other->index;
 	if (!quiet)
@@ -542,7 +546,11 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	ent_init();
-	phy_set_touch_call(on_touch);
+	{
+		static const phy_game_hooks_t hooks = { NULL, on_touch, NULL };
+
+		phy_set_game_hooks(&hooks);
+	}
 	while (fgets(buf, sizeof(buf), stdin))
 	{
 		ln++;

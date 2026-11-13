@@ -6,11 +6,15 @@
  * collision residency (docs/specs/trace-and-hulls.md, docs/architecture.md
  * 5.3 and 8, docs/formats/w64-format.md "Collision").
  *
- * Coordinates are global (map-local + the layer's placement g_M) unless a
- * name says otherwise. A model's `origin` is global too and already holds
- * g_M: the model frame is global - origin (a layer's world model sits at
- * origin = g_M, a door at g_M + its map-local origin). Every hull walk is
- * iterative with an explicit stack;
+ * Frames (architecture.md 8): every entry the game or physics calls takes
+ * and returns coordinates in the frame of eng_frame_layer()
+ * (include/hl64/ent.h; -1 = global): a layer's world model sits at
+ * g_M(layer) - g_M(frame) (exactly 0 for the frame's own layer), and an
+ * entity of another layer (a candidate of the move query, a contents
+ * brush, col_clip of a stored view) is moved by g_M(its layer) -
+ * g_M(frame). A model's `origin` argument is in the caller's frame: the
+ * model frame is point - origin. col_want takes a global box (residency).
+ * Every hull walk is iterative with an explicit stack;
  * no call allocates. A COLL chunk a walk needs that is not resident is read
  * synchronously (counted as blocked I/O); col_want() keeps the player's
  * collision window resident so that does not happen on the steady path.
@@ -107,14 +111,15 @@ typedef struct {
 /* ---- provided by other modules (link-time contract) ----------------------- */
 
 /* Entity layer (engine/ent spatial grid): entities whose linked box meets
- * [mins, maxs], every solid type, ascending index, no duplicates; at most
- * max, returns the count. */
+ * [mins, maxs] (frame of eng_frame_layer()), every solid type, ascending
+ * index, no duplicates; at most max, returns the count. */
 int		col_ents_box(const float mins[3], const float maxs[3], const col_ent_t **out, int max);
 
 /* Studio pose (M3, game_studio_setup_bones): the entity's hitboxes at its
- * current pose, world space; returns the count (0: no hitboxes, the
- * bounding box stands). Set to NULL (the default) until a studio module
- * exists: line traces then stop at the bounding box. */
+ * current pose, in the entity's own map-local frame; returns the count
+ * (0: no hitboxes, the bounding box stands). Set to NULL (the default)
+ * until a studio module exists: line traces then stop at the bounding
+ * box. */
 typedef int	(*col_hitbox_fn)(const col_ent_t *e, const col_hitbox_t **out);
 void		col_set_hitbox_source(col_hitbox_fn fn);
 
@@ -132,7 +137,7 @@ int		col_true_contents(const float p[3]);
 void		col_contents_add(const col_ent_t *e);
 void		col_contents_remove(const col_ent_t *e);
 /* Contents of hull k of a brush model placed at (origin, angles), at a
- * global point. */
+ * point (origin and point in one frame). */
 int		col_model_contents(uint16_t model, const float origin[3], const float angles[3],
 			int hull, const float p[3]);
 
@@ -144,11 +149,11 @@ typedef struct {
 	uint8_t		pad;
 	int32_t		root;
 } col_hull_t;
-/* Fills h; offset = origin (the model frame origin, global); returns 0
- * for a bad model. */
+/* Fills h; offset = origin (the model frame origin, in the caller's
+ * frame); returns 0 for a bad model. */
 int		col_hull_get(uint16_t model, int hull, const float origin[3], col_hull_t *h,
 			float offset[3]);
-/* Contents at p (model frame: global - offset) walking from node. */
+/* Contents at p (model frame: point - offset) walking from node. */
 int		col_hull_contents(const col_hull_t *h, int32_t node, const float p[3]);
 
 /* ---- traces ---------------------------------------------------------------- */
@@ -156,8 +161,8 @@ int		col_hull_contents(const col_hull_t *h, int32_t node, const float p[3]);
 /* Hull for a moving box against a brush model (spec 2). */
 int		col_hull_for_size(const float mins[3], const float maxs[3]);
 
-/* The world (entity 0): every open layer whose global box meets the move
- * box, nearest impact, ties to the lower slot (spec 4.1). */
+/* The world (entity 0): every open layer whose box meets the move box,
+ * nearest impact, ties to the lower slot (spec 4.1). */
 void		col_trace_world(const float start[3], const float mins[3], const float maxs[3],
 			const float end[3], col_trace_t *tr);
 /* One brush model at (origin, angles) for hull k (the moving box is that
@@ -167,7 +172,9 @@ void		col_trace_model(uint16_t model, const float origin[3], const float angles[
 			const float start[3], const float end[3], col_trace_t *tr);
 /* One entity (pfnTraceModel / pmove physents): SOLID_BSP and contents
  * brushes through their model (hull by size, 4.2), others as their box
- * (4.3); no hitboxes. tr->ent = e->index on a hit or start solid. */
+ * (4.3); no hitboxes. tr->ent = e->index on a hit or start solid. A view
+ * in the entity layer's storage is moved into the caller's frame; a copy
+ * (pmove physents) is taken as already in it. */
 void		col_clip(const col_ent_t *e, const float start[3], const float mins[3],
 			const float maxs[3], const float end[3], col_trace_t *tr);
 /* The move query (spec 4.4): world, then grid candidates with the filters,

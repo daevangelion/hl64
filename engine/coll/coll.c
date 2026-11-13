@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "hl64/coll.h"
+#include "hl64/ent.h"
 #include "hl64/limits.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
@@ -484,15 +485,36 @@ static void trace_src(src_t *s, const float o[3], const float *ang, const float 
 			tr->end[k] += o[k];
 }
 
+/* ---- frames (architecture.md 8) ---------------------------------------------- */
+
+/* Origin of layer L in the frame of eng_frame_layer(): g_M(L) - g_M(frame)
+ * (the frame's own layer: exactly 0). */
+static void layer_in_frame(const wld_layer_t *L, float o[3])
+{
+	const float *f = eng_layer_origin(eng_frame_layer());
+	int k;
+
+	for (k = 0; k < 3; k++)
+		o[k] = L->gofs[k] - f[k];
+}
+
+/* A collision view in the entity layer's storage (else a caller's copy,
+ * pmove physents: already in the caller's frame). */
+static int stored(const col_ent_t *e)
+{
+	return e->index < HL64_MAX_ENTITIES && e == ent_cv(e->index);
+}
+
 /* ---- contents ------------------------------------------------------------------ */
 
-static int layer_has(const wld_layer_t *L, const float p[3], const float lo[3], const float hi[3])
+static int layer_has(const wld_layer_t *L, const float o[3], const float p[3], const float lo[3],
+	const float hi[3])
 {
 	const w64_model_t *m = &L->models[0];
 	int k;
 
 	for (k = 0; k < 3; k++)
-		if (hi[k] + p[k] < m->mins[k] + L->gofs[k] || lo[k] + p[k] > m->maxs[k] + L->gofs[k])
+		if (hi[k] + p[k] < m->mins[k] + o[k] || lo[k] + p[k] > m->maxs[k] + o[k])
 			return 0;
 	return 1;
 }
@@ -508,13 +530,16 @@ int col_true_contents(const float p[3])
 	for (slot = 0; slot < HL64_WORLD_LAYERS && c == COL_SOLID; slot++)
 	{
 		wld_layer_t *L = wld_layer(slot);
-		float lp[3];
+		float lp[3], o[3];
 
-		if (!L || !layer_has(L, p, zero3, zero3))
+		if (!L)
 			continue;
-		lp[0] = p[0] - L->gofs[0];
-		lp[1] = p[1] - L->gofs[1];
-		lp[2] = p[2] - L->gofs[2];
+		layer_in_frame(L, o);
+		if (!layer_has(L, o, p, zero3, zero3))
+			continue;
+		lp[0] = p[0] - o[0];
+		lp[1] = p[1] - o[1];
+		lp[2] = p[2] - o[2];
 		c = L->leafc[wld_point_leaf(L, lp)];
 	}
 	return c;
@@ -531,10 +556,18 @@ int col_contents(const float p[3])
 	for (i = 0; i < ncbrush; i++)
 	{
 		const col_ent_t *e = cbrush[i];
+		float d[3], o[3];
+		int k;
 
-		if (p[0] >= e->absmin[0] && p[0] <= e->absmax[0] && p[1] >= e->absmin[1]
-			&& p[1] <= e->absmax[1] && p[2] >= e->absmin[2] && p[2] <= e->absmax[2]
-			&& col_model_contents(e->model, e->origin, e->angles, 0, p) != COL_EMPTY)
+		ent_frame_delta(e->index, d);
+		for (k = 0; k < 3; k++)
+			if (!(p[k] >= e->absmin[k] + d[k] && p[k] <= e->absmax[k] + d[k]))
+				break;
+		if (k < 3)
+			continue;
+		for (k = 0; k < 3; k++)
+			o[k] = e->origin[k] + d[k];
+		if (col_model_contents(e->model, o, e->angles, 0, p) != COL_EMPTY)
 			return e->skin;
 	}
 	return c <= COL_CURRENT_0 && c >= COL_CURRENT_DOWN ? COL_WATER : c;
@@ -697,16 +730,18 @@ void col_trace_world(const float start[3], const float mins[3], const float maxs
 		wld_layer_t *L = wld_layer(slot);
 		col_trace_t t;
 		src_t s;
-		float o[3];
+		float o[3], lo3[3];
 
-		if (!L || !layer_has(L, zero3, lo, hi))
+		if (!L)
+			continue;
+		layer_in_frame(L, lo3);
+		if (!layer_has(L, lo3, zero3, lo, hi))
 			continue;
 		src_model(&s, COL_MODEL(slot, 0), hull);
-		hull_place(o, L->gofs, hull, mins);
+		hull_place(o, lo3, hull, mins);
 		trace_src(&s, o, NULL, start, end, &t);
 		if (t.frac < 1)
-			t.dist += t.normal[0] * L->gofs[0] + t.normal[1] * L->gofs[1]
-				+ t.normal[2] * L->gofs[2];
+			t.dist += t.normal[0] * lo3[0] + t.normal[1] * lo3[1] + t.normal[2] * lo3[2];
 		if (!any || nearer(&t, tr))
 			*tr = t;
 		any = 1;
@@ -716,8 +751,9 @@ void col_trace_world(const float start[3], const float mins[3], const float maxs
 	tr->ent = tr->frac < 1 || tr->startsolid ? 0 : -1;
 }
 
-void col_clip(const col_ent_t *e, const float start[3], const float mins[3], const float maxs[3],
-	const float end[3], col_trace_t *tr)
+/* e at origin org (the caller's frame). */
+static void clip_at(const col_ent_t *e, const float org[3], const float start[3],
+	const float mins[3], const float maxs[3], const float end[3], col_trace_t *tr)
 {
 	src_t s;
 	int k;
@@ -731,7 +767,7 @@ void col_clip(const col_ent_t *e, const float start[3], const float mins[3], con
 
 		if (!src_model(&s, e->model, hull))
 			bad_model(e->model);
-		hull_place(o, e->origin, hull, mins);
+		hull_place(o, org, hull, mins);
 		trace_src(&s, o, e->angles, start, end, tr);
 	}
 	else
@@ -744,9 +780,25 @@ void col_clip(const col_ent_t *e, const float start[3], const float mins[3], con
 			hi[k] = e->maxs[k] - mins[k];
 		}
 		src_box(&s, lo, hi);
-		trace_src(&s, e->origin, NULL, start, end, tr);
+		trace_src(&s, org, NULL, start, end, tr);
 	}
 	tr->ent = tr->frac < 1 || tr->startsolid ? (int16_t)e->index : -1;
+}
+
+void col_clip(const col_ent_t *e, const float start[3], const float mins[3], const float maxs[3],
+	const float end[3], col_trace_t *tr)
+{
+	float d[3], o[3];
+	int k;
+
+	if (stored(e) && ent_frame_delta(e->index, d))
+	{
+		for (k = 0; k < 3; k++)
+			o[k] = e->origin[k] + d[k];
+		clip_at(e, o, start, mins, maxs, end, tr);
+	}
+	else
+		clip_at(e, e->origin, start, mins, maxs, end, tr);
 }
 
 void col_set_hitbox_source(col_hitbox_fn fn)
@@ -837,19 +889,42 @@ int col_trace_hitboxes(const col_hitbox_t *hb, int n, const float start[3], cons
 /* 4.5: a zero-size line trace whose box meets the linked box of a
  * studio-model box entity is traced against its hitboxes instead of its
  * bounding box (hitboxes reach past the box: arms at the box faces are hit
- * [probe:measured T-hitbox]); 0 when the entity has none (box stands). */
-static int trace_hitboxes(const col_ent_t *e, const float start[3], const float end[3],
-	col_trace_t *t)
+ * [probe:measured T-hitbox]); 0 when the entity has none (box stands).
+ * The hitboxes are in e's frame; d = e's frame - the caller's. */
+static int trace_hitboxes(const col_ent_t *e, const float d[3], int moved, const float start[3],
+	const float end[3], col_trace_t *t)
 {
 	const col_hitbox_t *hb;
-	int n;
+	int n, k;
 
 	if (!hitbox_fn || (n = hitbox_fn(e, &hb)) <= 0)
 		return 0;
 	tr_init(t, end);
 	t->allsolid = 0;
-	if (col_trace_hitboxes(hb, n, start, end, t))
-		t->ent = (int16_t)e->index;
+	if (!moved)
+	{
+		if (col_trace_hitboxes(hb, n, start, end, t))
+			t->ent = (int16_t)e->index;
+		return 1;
+	}
+	{
+		float s[3], en[3];
+
+		for (k = 0; k < 3; k++)
+		{
+			s[k] = start[k] - d[k];
+			en[k] = end[k] - d[k];
+		}
+		if (col_trace_hitboxes(hb, n, s, en, t))
+		{
+			t->ent = (int16_t)e->index;
+			for (k = 0; k < 3; k++)
+				t->end[k] += d[k];
+			t->dist += t->normal[0] * d[0] + t->normal[1] * d[1] + t->normal[2] * d[2];
+		}
+		else
+			memcpy(t->end, end, sizeof(t->end));
+	}
 	return 1;
 }
 
@@ -889,6 +964,8 @@ void col_move(const float start[3], const float mins[3], const float maxs[3], co
 	{
 		const col_ent_t *e = cand[i];
 		col_trace_t t;
+		float d[3];
+		int moved;
 
 		if (e->index == 0 || e->solid == COL_SOLID_NOT || e->solid == COL_SOLID_TRIGGER)
 			continue;
@@ -905,12 +982,15 @@ void col_move(const float start[3], const float mins[3], const float maxs[3], co
 			continue;
 		if ((e->flags & COL_FL_MONSTERCLIP) && !mclip)
 			continue;		/* func_monsterclip stops monsters only */
-		if (lo[0] > e->absmax[0] || lo[1] > e->absmax[1] || lo[2] > e->absmax[2]
-			|| hi[0] < e->absmin[0] || hi[1] < e->absmin[1] || hi[2] < e->absmin[2])
+		/* candidates of another layer: into this frame */
+		moved = ent_frame_delta(e->index, d);
+		if (lo[0] > e->absmax[0] + d[0] || lo[1] > e->absmax[1] + d[1]
+			|| lo[2] > e->absmax[2] + d[2] || hi[0] < e->absmin[0] + d[0]
+			|| hi[1] < e->absmin[1] + d[1] || hi[2] < e->absmin[2] + d[2])
 			continue;
 		if (line && e->studio != COL_NONE
 			&& (e->solid == COL_SOLID_BBOX || e->solid == COL_SOLID_SLIDEBOX)
-			&& trace_hitboxes(e, start, wend, &t))
+			&& trace_hitboxes(e, d, moved, start, wend, &t))
 			;
 		else if (mtype == COL_MOVE_MISSILE && (e->flags & COL_FL_MONSTER))
 			col_clip(e, start, m15, p15, wend, &t);
@@ -1090,8 +1170,19 @@ void col_want(const float mins[3], const float maxs[3])
 						wld_want_coll(L, L->dir->coll_first + v[i]);
 				}
 	}
-	/* brushes the window touches: solid ones from the grid, contents ones here */
-	n = col_ents_box(lo, hi, cand, HL64_MAX_ENTITIES);
+	/* brushes the window touches: solid ones from the grid (a query in the
+	 * caller's frame), contents ones here (their linked boxes + g_M) */
+	{
+		const float *f = eng_layer_origin(eng_frame_layer());
+		float flo[3], fhi[3];
+
+		for (k = 0; k < 3; k++)
+		{
+			flo[k] = lo[k] - f[k];
+			fhi[k] = hi[k] - f[k];
+		}
+		n = col_ents_box(flo, fhi, cand, HL64_MAX_ENTITIES);
+	}
 	for (i = 0; i < n; i++)
 		if (cand[i]->solid == COL_SOLID_BSP && cand[i]->model != COL_NONE
 			&& wld_layer(COL_MODEL_SLOT(cand[i]->model)))
@@ -1099,9 +1190,10 @@ void col_want(const float mins[3], const float maxs[3])
 	for (i = 0; i < ncbrush; i++)
 	{
 		const col_ent_t *e = cbrush[i];
+		const float *gm = eng_layer_origin(ent_idc(e->index)->layer);
 
 		for (k = 0; k < 3; k++)
-			if (e->absmin[k] > hi[k] || e->absmax[k] < lo[k])
+			if (e->absmin[k] + gm[k] > hi[k] || e->absmax[k] + gm[k] < lo[k])
 				break;
 		if (k == 3 && wld_layer(COL_MODEL_SLOT(e->model)))
 			want_model(wld_layer(COL_MODEL_SLOT(e->model)), COL_MODEL_SUB(e->model));
