@@ -155,9 +155,31 @@ void		rec_fire_at(float t, name_t target, name_t killtarget, int activator,
 /* ---- per-map, per-frame (engine) ----------------------------------------- */
 
 /* Open the HLE1 chunk of an open world layer's map into an HLE slot (the
- * same slot number as the world layer); records start pending. */
+ * same slot number as the world layer); records start pending. M4: the
+ * chunk read is queued at OPEN priority (never blocks; New Game finishes
+ * it under load I/O); a frozen map's runtime part (record states, frozen
+ * timers, deferred uses, runtime ids) is restored into the slot. */
 int		rec_map_open(int layer);
+/* 1 once the slot's chunk is resident and its logic / thawed timers are
+ * live (records may hydrate). */
+int		rec_map_ready(int slot);
+/* Close (M4): live entities dehydrate (game_cut_refs first), timers
+ * freeze by remaining time, the chunk is dropped and the runtime part is
+ * kept frozen by map (architecture.md 4.1 "Frozen"). */
 void		rec_map_close(int slot);
+/* Live entities and runtime name holders of a slot (0: it may close). */
+int		rec_slot_live(int slot);
+/* Release one live entity now (dehydrate into the store, record DRY;
+ * runtime entities by (map, runtime id)); 0 when the game refused it. */
+int		rec_release(int e);
+/* Twin pair (cwg-format.md twins): names fired in either slot resolve to
+ * the live copy; cleared with rec_twin_clear when either slot closes. */
+void		rec_twin_alias(gid_t16 a, gid_t16 b);
+void		rec_twin_clear(int slot);
+/* A carried entity (seam crossing) leaves its record (moved: never
+ * respawns in its map) and becomes a runtime entity of slot `slot` with a
+ * durable runtime id; the caller has re-based its origin. */
+int		rec_rehome(int e, int slot);
 /* New Game: open the start map, spawn its logic and its records within
  * the spawn radius of the player start, in entity order, at time 1.0; the
  * loop's next two frames are the settle frames (think-and-time.md 6,

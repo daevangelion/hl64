@@ -27,6 +27,12 @@ int		phy_player_active(void);
 /* The home map (CWG index) the player is in, WLD_NO_MAP before spawn. */
 int		phy_player_map(void);
 ent_player_t	*phy_player(void);
+/* Seam crossing (architecture.md 5.4 req. 3; the one place of the
+ * re-base): home := map_b and local += g_M(A) - g_M(B) + T, so the global
+ * position moves by exactly T; velocity, angles, punch, view, flags and
+ * inventory kept; the ground entity becomes `ground_b` (B's twin of the
+ * mover the player stands on, -1 none). Returns 0, -1 when B is not open. */
+int		phy_player_rebase(int map_b, const float T[3], int ground_b);
 
 /* Frame step 5 (pmove-host.md 1): physents, game_pm_move, write-back,
  * link with trigger touches, impact touches for the pmove touch list.

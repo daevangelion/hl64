@@ -111,10 +111,19 @@ typedef struct {
 #define WLD_STYLE_SLOTS		1024
 
 /* Open map (synchronous; returns the open layer if it is already open);
- * sys_error on a bad package. */
+ * sys_error on a bad package. Boot / New Game / setpos only (load I/O). */
 wld_layer_t	*wld_open(int map);
+/* Seam open (M4, architecture.md 5.4 req. 1): never blocks. Takes a free
+ * layer slot and queues the directory, tables and pinned hull-0 COLL reads
+ * at OPEN priority; returns the open layer if the map is already open, NULL
+ * when no slot / no layer-directory room (the caller counts open_fail). */
+wld_layer_t	*wld_open_async(int map);
+/* 1 once an async-opened layer has its directory, tables and pinned hull 0
+ * resident (point->leaf, traces and HLE open are then valid). */
+int		wld_layer_ready(const wld_layer_t *L);
 void		wld_close(wld_layer_t *L);
 wld_layer_t	*wld_layer(int slot);		/* NULL when closed */
+wld_layer_t	*wld_layer_of_map(int map);	/* NULL when not open */
 
 /* BSP leaf of a map-local point (hull 0, grid start node). */
 int		wld_point_leaf(const wld_layer_t *L, const float p[3]);
@@ -149,6 +158,25 @@ void		wld_want_coll(wld_layer_t *L, int c);
 uint8_t		*wld_chunk_sync(wld_layer_t *L, int c);
 /* Frame boundary: retire the GPU fences two frames old. */
 void		wld_frame(uint32_t frame);
+
+/* ---- M4 residency classes (architecture.md 5.3) -------------------------- */
+
+/* Pin class: a seam's B set (CWG sector-pool entries: sector < 0x8000,
+ * 0x8000 | n = BSP model n's MOVR, each with its TEXP pages) at SEAM
+ * priority, plus the B hull-0 window; one seam pin per layer (a new call
+ * replaces it). io_set_seam(1) while any seam pin is not resident. */
+void		wld_pin_seam(wld_layer_t *B, const uint16_t *pool, int n);
+void		wld_unpin_seam(wld_layer_t *B);
+int		wld_pin_resident(const wld_layer_t *B);	/* 1 when nothing pinned is missing */
+/* Step 9: the target-set inputs of the home layer (eye map-local, velocity);
+ * the set (open, pin lapse, prefetch at eye + v * {0.25, 0.5, 1} s,
+ * collision window + v * 0.5 s) is rebuilt only when an input changed
+ * (eye leaf, player cell, velocity bucket, pins, layer set), otherwise
+ * re-asserted by generation. Also detects teleports (a player jump that is
+ * not a seam re-base) and opens the teleport window for pop-in accounting. */
+void		wld_stream_frame(int home_map, const float eye[3], const float vel[3]);
+/* A seam crossing moved the player's global position by T (not a teleport). */
+void		wld_stream_rebase(const float T[3]);
 
 typedef struct {
 	uint32_t	loads, evictions, nofit, queued;

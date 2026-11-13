@@ -70,10 +70,23 @@ void	game_player_postthink(ent_player_t *pl);
 
 /* ---- level state (6.4) ------------------------------------------------------- */
 
-/* Per-class delta of a released entity into buf (<= max); bytes written. */
+/* Per-class delta of a released entity into buf (<= max); bytes written,
+ * 0 = refused (not quiescent: retried after 0.5 s). */
 uint32_t game_dehydrate(int e, void *buf, uint32_t max);
-/* Restore it into a freshly hydrated e (after game_spawn_record). */
+/* Restore it into a freshly hydrated e (after game_spawn_record, or
+ * game_spawn_class for a runtime entity). */
 void	game_rehydrate(int e, const void *buf, uint32_t n);
+/* Seam twin handoff (architecture.md 5.4 req. 3): the engine has copied
+ * the components of `from` (map A) into its twin `to` (map B, origin in
+ * B's frame); copy the game state (mover phase, toggle state, think,
+ * targets as names of B's map). `from` then retires silently. */
+void	game_twin_copy(int from, int to);
+/* 1 when e crosses with the player if it is in the seam's carry box
+ * (HLSDK ObjectCaps FCAP_ACROSS_TRANSITION / FCAP_FORCE_TRANSITION). */
+int	game_carry(int e);
+/* Slot is closing: cut AI / combat references across the map boundary
+ * (enemy, target ent, cine links) as if out of range. */
+void	game_cut_refs(int slot);
 
 /* ---- client side: view, HUD, studio (D3) ------------------------------------ */
 
