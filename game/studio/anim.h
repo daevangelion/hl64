@@ -63,6 +63,10 @@ int	gs_lookup_sequence(res_t model, const char *name);
 int	gs_lookup_activity(res_t model, int act);
 /* LookupActivityHeaviest: the sequence of act with the largest weight. */
 int	gs_lookup_activity_heaviest(res_t model, int act);
+/* Residency only (no game state, no random draw): request the animation
+ * chunks of every sequence whose activity is one of acts[0..n) ahead of
+ * the think that switches to it (studio_want). */
+void	gs_want_activities(res_t model, const int *acts, int n);
 /* GetSequenceInfo: frame units per second (256 * fps / (frames - 1), or
  * 256 for one frame) and ground speed (u/s); both 0 for a bad sequence. */
 void	gs_sequence_info(res_t model, int seq, float *framerate, float *groundspeed);

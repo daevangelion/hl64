@@ -31,6 +31,7 @@
 #include "hl64/ent.h"
 #include "hl64/game.h"
 #include "hl64/pmove.h"
+#include "hl64/studio.h"
 #include "game/studio/anim.h"
 #include "game/studio/pose.h"
 
@@ -121,6 +122,20 @@ int gs_lookup_activity_heaviest(res_t model, int activity)
 		}
 	}
 	return seq;
+}
+
+void gs_want_activities(res_t model, const int *acts, int n)
+{
+	const sfmt_info_t *h = gs_info(model);
+	int i, k;
+
+	for (i = 0; h && i < h->numseq; i++)
+		for (k = 0; k < n; k++)
+			if (SFMT_SEQS(h)[i].activity == acts[k])
+			{
+				studio_want(model, i);
+				break;
+			}
 }
 
 void gs_eye_position(res_t model, float out[3])
