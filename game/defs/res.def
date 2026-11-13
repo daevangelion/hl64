@@ -143,6 +143,10 @@ RES(SOUND, BCL_CHEW2, "barnacle/bcl_chew2.wav")
 RES(SOUND, BCL_CHEW3, "barnacle/bcl_chew3.wav")
 RES(SOUND, BCL_DIE1, "barnacle/bcl_die1.wav")
 RES(SOUND, BCL_DIE3, "barnacle/bcl_die3.wav")
+RES(MODEL, MON_ROACH_MDL, "models/roach.mdl")
+RES(SOUND, RCH_DIE, "roach/rch_die.wav")
+RES(SOUND, RCH_WALK, "roach/rch_walk.wav")
+RES(SOUND, RCH_SMASH, "roach/rch_smash.wav")
 // ---- Items ----
 // ---- GameCore: classes ----
 RES(SOUND, DOORMOVE1, "doors/doormove1.wav")
