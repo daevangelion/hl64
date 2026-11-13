@@ -72,6 +72,30 @@ uint16_t		wld_tgen = 1;
 uint32_t		wld_layer_gen;
 uint32_t		wld_n_promoted, wld_n_evict_queued, wld_n_prefetch_req;
 uint32_t		wld_n_open_async, wld_n_open_fail;
+uint32_t		wld_us_room, wld_n_room_scans;
+
+/* Eviction candidates of a pool (evict_one): the EVC_N best of one LRU
+ * scan (evc_scan), best first, for one frame, target generation and
+ * class; all = they are every candidate the scan found. */
+#define EVC_N		16
+#define EVC_GONE	0xFFFFFFFFu	/* entry evicted / no longer a candidate */
+typedef struct {
+	uint32_t	frame;
+	uint16_t	tgen;
+	uint8_t		cls, all, n, at;
+	uint8_t		k[EVC_N];
+	uint32_t	key[EVC_N];	/* layer slot << 16 | chunk */
+	uint32_t	used[EVC_N];
+} evc_t;
+static evc_t		evc[NPOOLS];
+/* A pool make_room found no candidate in, per frame and generation: a
+ * request of class <= cls without a hole fails at once (request). */
+static struct {
+	uint32_t	frame;
+	uint16_t	tgen;
+	uint8_t		cls;
+} dry[NPOOLS];
+_Static_assert((HL64_WORLD_LAYERS & (HL64_WORLD_LAYERS - 1)) == 0, "evict_one masks the slot");
 static wld_stats_t	st;
 
 /* ---- big-endian access, byte swap (host) --------------------------------- */
@@ -765,56 +789,161 @@ static io_req_t *weaker_queued(int p, int cls)
 	return best;
 }
 
+/* The eviction class of chunk c of L for a request of class cls in pool
+ * p (evict_one's rule): -1 when it is not a candidate. */
+static int evict_class(const wld_layer_t *L, int c, int p, int cls)
+{
+	const wld_chunk_t *ch = &L->ch[c];
+	int k;
+
+	if (ch->state != WLD_CH_RESIDENT || ch->used + 1 >= wld_frame_no
+		|| chunk_pool(L->chunks[c].fourcc) != p)
+		return -1;
+	k = ch->want == wld_tgen ? ch->cls : WLD_CLS_NONE;
+	if (k >= cls || (cls == WLD_CLS_PREFETCH && ch->used + 30 >= wld_frame_no))
+		return -1;
+	return k;
+}
+
+/* One LRU scan of pool p for class cls into its candidate list: the
+ * EVC_N best (weakest class, then least recently used; scan order on a
+ * tie), `all` when that is every candidate. */
+static void evc_scan(int p, int cls)
+{
+	evc_t *e = &evc[p];
+	uint32_t n = 0;
+	int i, c, j;
+
+	wld_n_room_scans++;
+	e->frame = wld_frame_no;
+	e->tgen = wld_tgen;
+	e->cls = (uint8_t)cls;
+	e->n = e->at = 0;
+	for (i = 0; i < HL64_WORLD_LAYERS; i++)
+	{
+		const wld_layer_t *L = &layers[i];
+
+		if (!L->open || !L->ch)
+			continue;
+		for (c = 0; c < L->dir->nchunks; c++)
+		{
+			int k = evict_class(L, c, p, cls);
+			uint32_t used;
+
+			if (k < 0)
+				continue;
+			n++;
+			used = L->ch[c].used;
+			/* insertion after its equals: scan order breaks ties */
+			for (j = e->n; j > 0 && (e->k[j - 1] > k
+				|| (e->k[j - 1] == k && e->used[j - 1] > used)); j--)
+				;
+			if (j == EVC_N)
+				continue;
+			if (e->n < EVC_N)
+				e->n++;
+			memmove(&e->key[j + 1], &e->key[j], (size_t)(e->n - 1 - j) * sizeof(e->key[0]));
+			memmove(&e->k[j + 1], &e->k[j], (size_t)(e->n - 1 - j) * sizeof(e->k[0]));
+			memmove(&e->used[j + 1], &e->used[j], (size_t)(e->n - 1 - j) * sizeof(e->used[0]));
+			e->key[j] = (uint32_t)i << 16 | (uint32_t)c;
+			e->k[j] = (uint8_t)k;
+			e->used[j] = used;
+		}
+	}
+	e->all = n <= EVC_N;
+}
+
 /* Make room in pool p for a request of class cls: a queued-not-started
  * read of a weaker class first, then the least recently used resident
  * chunk of a weaker class (not named this generation = NONE first) not
  * used this frame or the last; prefetch never evicts a chunk used in the
- * last 30 frames. 0 when nothing qualifies. */
+ * last 30 frames. 0 when nothing qualifies.
+ *
+ * The LRU order comes from the pool's candidate list (evc_scan), kept for
+ * the frame and target generation: chunks only leave it (evicted, used,
+ * named stronger), so its entries stay in order and a weaker request
+ * takes the first that still qualifies for it; the list is scanned
+ * again only when it runs out of candidates it did not hold all of, or
+ * for a stronger class. A pool with none left answers at once. */
 static int evict_one(int p, int cls)
 {
 	io_req_t *q = weaker_queued(p, cls);
-	wld_layer_t *bl = NULL;
-	int bc = -1, bk = 0, i, c;
+	evc_t *e = &evc[p];
+	int pass, j;
 
 	if (q)
 	{
 		cancel_queued(q);
 		return 1;
 	}
-	for (i = 0; i < HL64_WORLD_LAYERS; i++)
+	if (e->frame != wld_frame_no || e->tgen != wld_tgen || e->cls < cls)
+		evc_scan(p, cls);
+	for (pass = 0; pass < 2; pass++)
 	{
-		wld_layer_t *L = &layers[i];
-
-		if (!L->open || !L->ch)
-			continue;
-		for (c = 0; c < L->dir->nchunks; c++)
+		for (j = e->at; j < e->n; j++)
 		{
-			const wld_chunk_t *ch = &L->ch[c];
-			int k;
+			wld_layer_t *L = &layers[(e->key[j] >> 16) & (HL64_WORLD_LAYERS - 1)];
+			int c = (int)(e->key[j] & 0xFFFF);
 
-			if (ch->state != WLD_CH_RESIDENT || ch->used + 1 >= wld_frame_no
-				|| chunk_pool(L->chunks[c].fourcc) != p)
-				continue;
-			k = ch->want == wld_tgen ? ch->cls : WLD_CLS_NONE;
-			if (k >= cls || (cls == WLD_CLS_PREFETCH && ch->used + 30 >= wld_frame_no))
-				continue;
-			if (bc < 0 || k < bk || (k == bk && ch->used < bl->ch[bc].used))
+			if (e->key[j] == EVC_GONE || !L->open || !L->ch || c >= L->dir->nchunks
+				|| evict_class(L, c, p, e->cls) < 0)
 			{
-				bl = L;
-				bc = c;
-				bk = k;
+				/* no longer a candidate of the list's class, so of
+				 * no weaker one */
+				e->key[j] = EVC_GONE;
+				if (j == e->at)
+					e->at++;
+				continue;
 			}
+			if (evict_class(L, c, p, cls) < 0)
+				continue;	/* a stronger request's */
+			e->key[j] = EVC_GONE;
+			if (j == e->at)
+				e->at++;
+			drop(L, c);
+			st.evictions++;
+			return 1;
 		}
+		if (e->all || pass)
+			return 0;
+		evc_scan(p, cls);
 	}
-	if (bc < 0)
-		return 0;
-	drop(bl, bc);
-	st.evictions++;
+	return 0;
+}
+
+/* A free block for chunk ch (size bytes, pool p, class cls) once room is
+ * made (evict_one; a weaker queued read's block frees at once); 0 when
+ * none could be. A pool with no candidate left is dry for the class
+ * (and every weaker one) for the rest of the frame and generation. */
+static int make_room(wld_chunk_t *ch, int p, uint32_t size, int cls)
+{
+	const mem_pool_t *pl = &pools[p];
+
+	do
+	{
+		/* evicted REND / TEXP bytes free behind their fence: once the
+		 * fenced bytes could make the hole (the largest free block plus
+		 * every fenced byte covers the request), wait for them (two
+		 * frames) instead of evicting the rest of the pool; a pool whose
+		 * free bytes are fragmented evicts on until they could */
+		if (pl->fenced && mem_pool_largest(pl) + pl->fenced >= size && !weaker_queued(p, cls))
+			return 0;
+		if (!evict_one(p, cls))
+		{
+			if (dry[p].frame != wld_frame_no || dry[p].tgen != wld_tgen || dry[p].cls < cls)
+			{
+				dry[p].frame = wld_frame_no;
+				dry[p].tgen = wld_tgen;
+				dry[p].cls = (uint8_t)cls;
+			}
+			return 0;
+		}
+	} while (!(ch->blk = mem_pool_alloc(&pools[p], size, &ch->data)));
 	return 1;
 }
 
-/* Queue chunk c at class cls's priority; 0 when no request slot or no
- * room could be made (the caller retries next frame). */
+/* Queue chunk c at class cls's priority: 1; 0 when no request slot could
+ * be had, -1 when no room could be made (the caller retries). */
 static int request(wld_layer_t *L, int c, int cls)
 {
 	const w64_chunk_t *ck = &L->chunks[c];
@@ -823,6 +952,13 @@ static int request(wld_layer_t *L, int c, int cls)
 	uint32_t size = (ck->size + 15) & ~15u;
 	io_req_t *r = NULL;
 
+	/* a dry pool: no hole, nothing to evict for this class */
+	if (dry[p].frame == wld_frame_no && dry[p].tgen == wld_tgen && cls <= dry[p].cls
+		&& mem_pool_largest(&pools[p]) < size)
+	{
+		st.nofit++;
+		return -1;
+	}
 	for (i = 0; i < HL64_WORLD_REQS && !r; i++)
 		if (reqs[i].user < 0)
 			r = &reqs[i];
@@ -833,29 +969,22 @@ static int request(wld_layer_t *L, int c, int cls)
 			return 0;
 		cancel_queued(r);
 	}
-	while (!(ch->blk = mem_pool_alloc(&pools[p], size, &ch->data)))
+	if (!(ch->blk = mem_pool_alloc(&pools[p], size, &ch->data)))
 	{
-		const mem_pool_t *pl = &pools[p];
-		io_req_t *q = weaker_queued(p, cls);
+		uint64_t t0 = sys_time_us();
+		int ok = make_room(ch, p, size, cls);
 
-		/* a queued-not-started read of a weaker class gives its room
-		 * up first: its block frees at once (nothing landed in it) */
-		if (q)
-		{
-			cancel_queued(q);
-			continue;
-		}
-		/* evicted REND / TEXP bytes free behind their fence: once the
-		 * fenced bytes could make the hole (the largest free block plus
-		 * every fenced byte covers the request), wait for them (two
-		 * frames) instead of evicting the rest of the pool; a pool whose
-		 * free bytes are fragmented evicts on until they could */
-		if ((pl->fenced && mem_pool_largest(pl) + pl->fenced >= size) || !evict_one(p, cls))
+		wld_us_room += (uint32_t)(sys_time_us() - t0);
+		if (!ok)
 		{
 			st.nofit++;
-			return 0;
+			return -1;
 		}
 	}
+	/* a stronger request may take this read's room: the pool stays dry
+	 * only up to this class */
+	if (cls < dry[p].cls)
+		dry[p].cls = (uint8_t)cls;
 	ch->blk->locked = 1;
 	ch->state = WLD_CH_LOADING;
 	memset(r, 0, sizeof(*r));
@@ -912,7 +1041,7 @@ int wld_name(wld_layer_t *L, int c, int cls)
 	else if (cls > ch->cls)
 		ch->cls = (uint8_t)cls;
 	if (ch->state == WLD_CH_ABSENT)
-		return request(L, c, ch->cls);
+		return request(L, c, ch->cls) > 0;
 	if (ch->state == WLD_CH_LOADING)
 		promote(L, c, ch->cls);
 	return 1;
@@ -1561,6 +1690,8 @@ void wld_close(wld_layer_t *L)
 	L->open = 0;
 	L->ready = 0;
 	L->ch = NULL;
+	memset(evc, 0, sizeof(evc));	/* their keys name its chunks */
+	memset(dry, 0, sizeof(dry));
 	wld_layer_gen++;
 }
 

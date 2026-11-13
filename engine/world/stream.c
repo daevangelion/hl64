@@ -72,9 +72,11 @@
 #define SPAWN_MARGIN	32.0f		/* around a record's spawn box */
 #define TELE_PINS	4		/* teleport destinations pinned at once */
 #define SEEN_MODELS	64		/* brush entities' hulls named in the eye's sectors */
+#define RETRY_MAX	128		/* open / pin namings retried (S.retry) */
+#define PREF_RETRY	8		/* frames before a short prefetch naming is redone */
 
 typedef struct {
-	uint8_t		on, win, movr_wait;
+	uint8_t		on, win;
 	uint16_t	n;
 	uint16_t	e[WLD_PIN_POOL];
 	float		box[6];		/* B-local player box (window) */
@@ -117,7 +119,16 @@ static struct {
 	float		voff[3];	/* drawn eye - player eye (last frame) */
 	int32_t		vb[3];
 	uint32_t	pin_gen_seen, layer_gen_seen, coll_gen_seen;
-	uint8_t		valid, pending;
+	uint8_t		valid;
+	/* namings that could not be queued (architecture.md 5.3: retried,
+	 * not re-derived): open / pin chunks and MOVRs waiting to land on
+	 * the retry list (over: it filled, the whole set is named again);
+	 * prefetch ones degrade (pref_short: the whole set again after
+	 * PREF_RETRY frames or an input change) */
+	uint32_t	retry[RETRY_MAX];
+	int		nretry;
+	uint8_t		retry_over, pref_short;
+	uint32_t	named_frame;	/* wld_frame_no of the last whole naming */
 	/* this frame's inputs */
 	float		eye[3], vel[3];
 	/* collision window (wld_stream_coll) */
@@ -156,10 +167,40 @@ static float len3(const float v[3]);
 
 /* ---- naming helpers --------------------------------------------------------- */
 
+/* Retry list entries: RETRY_MOVR | slot << 16 | BSP model (a MOVR whose
+ * pages follow when it lands), or slot << 16 | chunk; the chunk's retry
+ * byte holds RETRY_CHUNK / RETRY_PAGES while it is listed. */
+#define RETRY_MOVR	0x80000000u
+#define RETRY_CHUNK	1
+#define RETRY_PAGES	2
+
+static void retry_add(wld_layer_t *L, int c, uint32_t e, int flag)
+{
+	if (L->ch[c].retry & flag)
+		return;
+	if (S.nretry == RETRY_MAX)
+	{
+		S.retry_over = 1;
+		return;
+	}
+	L->ch[c].retry |= (uint8_t)flag;
+	S.retry[S.nretry++] = e;
+}
+
+/* A chunk that could not be queued: listed when open / pin, degraded
+ * when prefetch (its class: the strongest naming of the generation). */
+static void failed(wld_layer_t *L, int c, uint32_t e, int flag)
+{
+	if (L->ch[c].cls <= WLD_CLS_PREFETCH)
+		S.pref_short = 1;
+	else
+		retry_add(L, c, e, flag);
+}
+
 static void name(wld_layer_t *L, int c, int cls)
 {
 	if (!wld_name(L, c, cls))
-		S.pending = 1;
+		failed(L, c, (uint32_t)L->slot << 16 | (uint32_t)c, RETRY_CHUNK);
 }
 
 /* A map-local box meets a sector of list (the renderer's mover / entity
@@ -182,6 +223,42 @@ static int box_seen(const wld_layer_t *L, const float lo[3], const float hi[3],
 	return 0;
 }
 
+/* The bounds of the sectors of list (ub: lo[3], hi[3]); lo > hi: none. */
+static void list_bounds(const wld_layer_t *L, const uint16_t *list, int cnt, float ub[6])
+{
+	int i, k;
+
+	for (k = 0; k < 3; k++)
+	{
+		ub[k] = 1e30f;
+		ub[k + 3] = -1e30f;
+	}
+	for (i = 0; i < cnt; i++)
+	{
+		const int16_t *sb = L->sects[list[i]].bbox;
+
+		for (k = 0; k < 3; k++)
+		{
+			if (sb[k] < ub[k])
+				ub[k] = sb[k];
+			if (sb[k + 3] > ub[k + 3])
+				ub[k + 3] = sb[k + 3];
+		}
+	}
+}
+
+/* box_seen behind the list's bounds (most movers are far from the view) */
+static int box_seen_b(const wld_layer_t *L, const float lo[3], const float hi[3],
+	const uint16_t *list, int cnt, const float ub[6])
+{
+	int k;
+
+	for (k = 0; k < 3; k++)
+		if (lo[k] > ub[k + 3] || hi[k] < ub[k])
+			return 0;
+	return box_seen(L, lo, hi, list, cnt);
+}
+
 /* The MOVR models the renderer can draw in the sectors of list: the ENTS
  * placements (rest positions, opaque and translucent; a record not yet
  * hydrated, or woken and drawn in the same frame, is drawn there) and the
@@ -191,7 +268,9 @@ static int each_mover(wld_layer_t *L, const uint16_t *list, int cnt, int cls,
 	int (*fn)(wld_layer_t *L, int sub, int cls))
 {
 	int i, k, e, ok = 1;
+	float ub[6];
 
+	list_bounds(L, list, cnt, ub);
 	for (i = 0; i < L->nmovers + L->ntrans_movers; i++)
 	{
 		const wld_mover_t *mv = &L->movers[i < L->nmovers ? i
@@ -204,7 +283,7 @@ static int each_mover(wld_layer_t *L, const uint16_t *list, int cnt, int cls,
 			lo[k] = mb[k] + mv->origin[k] - MOVER_MARGIN;
 			hi[k] = mb[k + 3] + mv->origin[k] + MOVER_MARGIN;
 		}
-		if (box_seen(L, lo, hi, list, cnt) && !fn(L, mv->sub, cls))
+		if (box_seen_b(L, lo, hi, list, cnt, ub) && !fn(L, mv->sub, cls))
 			ok = 0;
 	}
 	for (e = ent_next_live(0); e >= 0; e = ent_next_live(e))
@@ -232,7 +311,7 @@ static int each_mover(wld_layer_t *L, const uint16_t *list, int cnt, int cls,
 			lo[k] = cv->absmin[k] + (d < 0 ? d : 0) - MOVER_MARGIN;
 			hi[k] = cv->absmax[k] + (d > 0 ? d : 0) + MOVER_MARGIN;
 		}
-		if (box_seen(L, lo, hi, list, cnt) && !fn(L, (int)RES_SUB_NUM(m), cls))
+		if (box_seen_b(L, lo, hi, list, cnt, ub) && !fn(L, (int)RES_SUB_NUM(m), cls))
 			ok = 0;
 	}
 	return ok;
@@ -256,8 +335,7 @@ static void name_leaf(wld_layer_t *L, int leaf, int cls)
 		for (k = 0; k < s->page_count; k++)
 			name(L, L->dir->texp_first + L->pagepool[s->page_first + k], cls);
 	}
-	if (!each_mover(L, list, cnt, cls, name_movr))
-		S.pending = 1;	/* a MOVR's pages follow when it lands */
+	each_mover(L, list, cnt, cls, name_movr);
 }
 
 /* A texture's page and every page of its animation / alternate
@@ -299,7 +377,7 @@ static void name_tex(wld_layer_t *L, int t, int cls)
 }
 
 /* BSP model n's MOVR chunk, and its pages once it is resident; 0 while it
- * is not (its pages follow when it lands). */
+ * is not (its pages follow when it lands: the retry list). */
 static int name_movr(wld_layer_t *L, int n, int cls)
 {
 	const w64_sub_t *sb;
@@ -312,7 +390,10 @@ static int name_movr(wld_layer_t *L, int n, int cls)
 	sb = &L->subs[n];
 	name(L, sb->chunk, cls);
 	if (L->ch[sb->chunk].state < WLD_CH_RESIDENT)
+	{
+		failed(L, sb->chunk, RETRY_MOVR | (uint32_t)L->slot << 16 | (uint32_t)n, RETRY_PAGES);
 		return 0;
+	}
 	r = (const w64_rend_t *)L->ch[sb->chunk].data;
 	m = (const w64_meshlet_t *)((const uint8_t *)r + 24);
 	for (k = 0; k < r->nmeshlets; k++)
@@ -663,16 +744,12 @@ static void name_seam(wld_layer_t *L, seam_pin_t *p)
 	float lo[3], hi[3];
 	int i, k, leaves[ARRIVAL_PTS], nl;
 
-	p->movr_wait = 0;
 	for (i = 0; i < p->n; i++)
 	{
 		uint16_t e = p->e[i];
 
 		if (e & 0x8000)
-		{
-			if (!name_movr(L, e & 0x7FFF, WLD_CLS_PIN))
-				p->movr_wait = 1;
-		}
+			name_movr(L, e & 0x7FFF, WLD_CLS_PIN);
 		else if (e < L->dir->nsect)
 		{
 			const w64_sector_t *s = &L->sects[e];
@@ -741,6 +818,8 @@ static void name_pvs_ahead(wld_layer_t *L)
 	wld_pvs_want(L, wld_point_leaf(L, p), WLD_CLS_PREFETCH);
 }
 
+static void retry_clear(void);
+
 /* Name the whole set, strongest class first (a stronger request may take
  * a weaker queued read's slot, never the reverse). The want peak is
  * measured after the open set and the seam pins: the test route's point
@@ -751,7 +830,8 @@ static void name_all(void)
 	float d[3];
 	int s, i, k, cls;
 
-	S.pending = 0;
+	retry_clear();
+	S.named_frame = wld_frame_no;
 	for (cls = WLD_CLS_OPEN; cls >= WLD_CLS_PREFETCH; cls--)
 	{
 		if (cls == WLD_CLS_PREFETCH)
@@ -840,28 +920,65 @@ static void name_all(void)
 	}
 }
 
-/* A pinned MOVR landed since the set was named: its pages join. */
-static int movr_landed(void)
+/* Empty the retry list (a whole naming lists its failures again). */
+static void retry_clear(void)
 {
-	int s, i;
+	int i;
 
-	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+	for (i = 0; i < S.nretry; i++)
 	{
-		wld_layer_t *L = wld_layer(s);
-		seam_pin_t *p = &S.seam[s];
+		wld_layer_t *L = wld_layer((int)(S.retry[i] >> 16 & 0xFF));
+		unsigned n = S.retry[i] & 0xFFFF;
 
-		if (!L || !p->on || !p->movr_wait)
+		if (!L)
 			continue;
-		for (i = 0; i < p->n; i++)
+		if (S.retry[i] & RETRY_MOVR)
 		{
-			unsigned n = p->e[i] & 0x7FFF;
+			if (n < L->dir->nsub)
+				L->ch[L->subs[n].chunk].retry = 0;
+		}
+		else if (n < L->dir->nchunks)
+			L->ch[n].retry = 0;
+	}
+	S.nretry = 0;
+	S.retry_over = 0;
+	S.pref_short = 0;
+}
 
-			if ((p->e[i] & 0x8000) && n < L->dir->nsub && L->subs[n].kind == W64_SUB_MOVR
-				&& L->ch[L->subs[n].chunk].state >= WLD_CH_RESIDENT)
-				return 1;
+/* Name the listed chunks again (a slot or room may have come free) and
+ * the pages of listed MOVRs that landed; failures list themselves
+ * again. Entries of a generation since replaced are dropped. */
+static void retry_names(void)
+{
+	uint32_t e[RETRY_MAX];
+	int n = S.nretry, i;
+
+	memcpy(e, S.retry, (size_t)n * sizeof(e[0]));
+	S.nretry = 0;
+	for (i = 0; i < n; i++)
+	{
+		wld_layer_t *L = wld_layer((int)(e[i] >> 16 & 0xFF));
+		unsigned x = e[i] & 0xFFFF;
+		int c;
+
+		if (!L)
+			continue;
+		if (e[i] & RETRY_MOVR)
+		{
+			if (x >= L->dir->nsub)
+				continue;
+			c = L->subs[x].chunk;
+			L->ch[c].retry &= (uint8_t)~RETRY_PAGES;
+			if (L->ch[c].want == wld_tgen)
+				name_movr(L, (int)x, L->ch[c].cls);
+		}
+		else if (x < L->dir->nchunks)
+		{
+			L->ch[x].retry &= (uint8_t)~RETRY_CHUNK;
+			if (L->ch[x].want == wld_tgen)
+				name(L, (int)x, L->ch[x].cls);
 		}
 	}
-	return 0;
 }
 
 static int32_t eye_cell(const wld_layer_t *L, const float p[3])
@@ -926,9 +1043,18 @@ static void teleport_check(int home_map, double now)
 	S.have_prev = 1;
 }
 
+/* CPU since *t into sub-step z (wld_stream_stats sub_us) */
+static void sub_mark(uint64_t *t, int z)
+{
+	uint64_t n = sys_time_us();
+
+	S.st.sub_us[z] += (uint32_t)(n - *t);
+	*t = n;
+}
+
 void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 {
-	uint64_t t0 = sys_time_us();
+	uint64_t t0 = sys_time_us(), tm = t0;
 	double now = eng_time();
 	wld_layer_t *H;
 	int32_t vb[3];
@@ -945,6 +1071,7 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 	}
 	/* landed PVS offset pairs go on to their rows */
 	wld_pvs_step();
+	sub_mark(&tm, WLD_SS_OPEN);
 	/* the drawn eye's offset from the player's eye (bob, punch, landing
 	 * offset): last frame's view minus last frame's eye */
 	if (home_map >= 0 && ren_cam.map == home_map && S.have_prev)
@@ -979,8 +1106,6 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 		H = NULL;
 	for (k = 0; k < 3; k++)
 		vb[k] = vbucket(S.vel[k]);
-	if (S.pending == 0 && movr_landed())
-		S.pin_gen++;
 	/* moving entities' windows (a rebuild when one's cells changed) and
 	 * reachable teleport destinations */
 	ent_scan(H, eye);
@@ -1016,6 +1141,7 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 		S.nvleaf = nv;
 		S.cell = cell;
 	}
+	sub_mark(&tm, WLD_SS_SCAN);
 	if (changed)
 	{
 		memcpy(S.vb, vb, sizeof(vb));
@@ -1030,12 +1156,17 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 	}
 	else
 	{
-		/* the standing generation; a naming that could not be queued
-		 * is retried in it */
-		if (S.pending)
+		/* the standing generation: the namings that could not be
+		 * queued are retried in it (the listed ones each frame; the
+		 * whole set when the list filled, or PREF_RETRY frames after a
+		 * prefetch naming fell short) */
+		if (S.retry_over || (S.pref_short && wld_frame_no - S.named_frame >= PREF_RETRY))
 			name_all();
+		else if (S.nretry)
+			retry_names();
 		S.st.reassert++;
 	}
+	sub_mark(&tm, WLD_SS_NAME);
 	/* brush entities move without changing an input (doors, trains, the
 	 * elevator): the ones now in the eye's sectors join the standing set */
 	if (H && S.leaf > 0)
@@ -1044,14 +1175,15 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 		int cnt;
 
 		list = wld_leaf_sectors(H, S.leaf, &cnt);
-		if (!each_mover(H, list, cnt, WLD_CLS_OPEN, name_movr))
-			S.pending = 1;
+		each_mover(H, list, cnt, WLD_CLS_OPEN, name_movr);
 	}
+	sub_mark(&tm, WLD_SS_MOVERS);
 	/* the 128 KB seam budget while a seam pin is still missing chunks */
 	for (s = 0; s < HL64_WORLD_LAYERS; s++)
 		if (S.seam[s].on && wld_layer(s) && !wld_pin_resident(wld_layer(s)))
 			seam_out = 1;
 	io_set_seam(seam_out);
+	sub_mark(&tm, WLD_SS_PINS);
 
 	us = (uint32_t)(sys_time_us() - t0);
 	S.st.frames++;
@@ -1145,7 +1277,6 @@ void wld_pin_seam(wld_layer_t *B, const uint16_t *pool, int n)
 	p->n = (uint16_t)n;
 	p->on = 1;
 	p->win = 0;
-	p->movr_wait = 0;
 	S.pin_gen++;
 	S.st.pins++;
 }
@@ -1430,6 +1561,7 @@ void wld_stream_stats(wld_stream_stats_t *s, int reset)
 	s->evict_queued = wld_n_evict_queued;
 	s->open_async = wld_n_open_async;
 	s->open_fail = wld_n_open_fail;
+	s->room_us = wld_us_room;
 	if (reset)
 	{
 		S.st.frames = 0;
