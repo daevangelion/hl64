@@ -126,7 +126,7 @@
 #define HL64_RESTAB_KB			56	/* resource table: 44528 B measured (full res.def, Uplink + Hazard cook of main 1a9e4e8: 1192 files, 1015 sounds) x 1.25; cook-proved: restab computes engine/res's table bytes and fails above it */
 #define HL64_SENTENCES_KB		24	/* [EST] word ids, no strings */
 #define HL64_LIGHTSTYLE_KB		4	/* patterns + state */
-#define HL64_LAYER_DIRS_KB		168	/* 2 open .w64 directories, measured */
+#define HL64_LAYER_DIRS_KB		267	/* cook-proved (tools/cook/layerdirs.py, every CWG link pair's two layers: directory + tables, 16-aligned, as engine/world/world.c allocates): worst t0a0b + t0a0a 218624 B (Uplink + Hazard c6 cook) x 1.25 */
 #define HL64_POOL_RENDER_KB		240	/* cook-proved: t0a0b leaf 726, 223904 B */
 #define HL64_POOL_TEXTURE_KB		128	/* cook-proved: t0a0d leaf 127, 112864 B */
 #define HL64_POOL_COLLISION_KB		208	/* cook-proved: seam hldemo3->hldemo2, 206592 B */

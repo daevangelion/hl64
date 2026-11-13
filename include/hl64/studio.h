@@ -42,6 +42,11 @@ void		studio_want(res_t model, int sequence);
  * hitbox source for engine/coll (col_set_hitbox_source). */
 void		studio_init(void);
 void		studio_frame(void);
+/* New Game (load I/O): read the info block of every model with residency
+ * interest now; afterwards studio_frame prefetches newly interesting
+ * models' infos asynchronously (no mid-game synchronous info read once
+ * the interest precedes the use). */
+void		studio_preload(void);
 void		studio_draw(double time);
 /* The renderer's translucent pass (engine/render/trans.c, back to front):
  * entity e, already found visible by studio_draw, in gpu_mode

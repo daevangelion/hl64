@@ -10,9 +10,14 @@
  * submodel hull setup, hull walks, point-in-leaf, touched leaves, vis
  * decompression, fat PVS) are not used: point -> leaf here is written from
  * w64-format.md (COLL node encoding, grid start node) and architecture.md
- * 5.5. The residency is new and minimal for M1 (OPEN class only, LRU
- * eviction behind a two-frame fence); M4 adds pins, prefetch and the
- * change-driven target set.
+ * 5.5. Layers open through engine/io in stages (header, directory with
+ * an incremental CRC, tables, pinned hull 0, ENTS scan): asynchronously
+ * for seams, finished at once under load I/O for wld_open. Chunk
+ * requests carry their residency class (architecture.md 5.3): a request
+ * evicts queued-not-started reads of weaker classes first, then the LRU
+ * of chunks of weaker classes (unwanted ones first) not used this frame
+ * or the last; prefetch never evicts a chunk used in the last 30 frames.
+ * The class policy (target set, pins, prefetch) is engine/world/stream.c.
  *
  * Every cooked byte is untrusted (architecture.md 18.2): the header,
  * directory tables, chunk ranges and each chunk's internal offsets are
@@ -29,6 +34,7 @@
 #include "engine/mem/pool.h"
 #include "engine/render/gpu.h"
 #include "engine/world/wld.h"
+#include "engine/world/wld_int.h"
 
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #define WLD_SWAP	1
@@ -51,12 +57,19 @@ typedef struct {
 static wld_map_t	maps[HL64_MAX_MAPS];
 static int		nmaps, start_map;
 static wld_layer_t	layers[HL64_WORLD_LAYERS];
+/* tools/cook/layerdirs.py proves the layer region with these sizes */
+_Static_assert(sizeof(wld_chunk_t) == 20, "wld_chunk_t: update tools/cook/layerdirs.py");
+_Static_assert(sizeof(wld_mover_t) == 16, "wld_mover_t: update tools/cook/layerdirs.py");
 
 static mem_pool_t	pools[NPOOLS], layer_pool;
 static mem_blk_t	desc_render[DESC_RENDER], desc_texture[DESC_TEXTURE];
 static mem_blk_t	desc_coll[DESC_COLL], desc_layers[DESC_LAYERS];
 static io_req_t		reqs[HL64_WORLD_REQS];
-static uint32_t		frame_no = 1;
+uint32_t		wld_frame_no = 1;
+uint16_t		wld_tgen = 1;
+uint32_t		wld_layer_gen;
+uint32_t		wld_n_promoted, wld_n_evict_queued, wld_n_prefetch_req;
+uint32_t		wld_n_open_async, wld_n_open_fail;
 static wld_stats_t	st;
 
 /* ---- big-endian access, byte swap (host) --------------------------------- */
@@ -131,14 +144,19 @@ static void crc_init(void)
 	}
 }
 
-static uint32_t crc32(const uint8_t *p, uint32_t n)
+static uint32_t crc_update(uint32_t c, const uint8_t *p, uint32_t n)
 {
-	uint32_t c = 0xFFFFFFFFu;
-
 	while (n--)
 		c = crc_table[(c ^ *p++) & 0xFF] ^ (c >> 8);
-	return ~c;
+	return c;
 }
+
+#ifdef HL64_HOST
+static uint32_t crc32(const uint8_t *p, uint32_t n)
+{
+	return ~crc_update(0xFFFFFFFFu, p, n);
+}
+#endif
 
 /* ---- campaign map table ----------------------------------------------- */
 
@@ -631,6 +649,18 @@ static int chunk_pool(uint32_t fourcc)
 		: POOL_RENDER;
 }
 
+static int cls_prio(int cls)
+{
+	return cls >= WLD_CLS_OPEN ? IO_PRIO_OPEN : cls == WLD_CLS_PIN ? IO_PRIO_SEAM
+		: IO_PRIO_PREFETCH;
+}
+
+static int prio_cls(int prio)
+{
+	return prio == IO_PRIO_OPEN ? WLD_CLS_OPEN : prio == IO_PRIO_SEAM ? WLD_CLS_PIN
+		: WLD_CLS_PREFETCH;
+}
+
 static void landed(wld_layer_t *L, int c, uint8_t *p)
 {
 	uint32_t fc = L->chunks[c].fourcc;
@@ -640,6 +670,8 @@ static void landed(wld_layer_t *L, int c, uint8_t *p)
 	if (crc32(p, L->chunks[c].size) != L->chunks[c].crc)
 		bad(maps[L->map].name, L->chunks[c].ofs, "chunk CRC");
 #endif
+	if (fc == W64_CHUNK_ENTS)
+		return;		/* scanned by the open (scan_ents) */
 	if (fc == W64_CHUNK_TEXP)
 		check_texp(L, c, p);
 	else if (fc == W64_CHUNK_COLL)
@@ -652,6 +684,14 @@ static void landed(wld_layer_t *L, int c, uint8_t *p)
 	sys_cache_writeback(p, L->chunks[c].size);
 }
 
+/* Never evicted: world hull 0 while the layer is open, ENTS until the
+ * open scanned it. */
+static int pinned(const wld_layer_t *L, int c)
+{
+	return (c >= L->dir->coll_first && c < L->dir->coll_first + L->dir->coll_pinned)
+		|| (c == L->dir->ents_chunk && L->ready != 1);
+}
+
 static void req_done(io_req_t *r)
 {
 	wld_layer_t *L = &layers[r->user >> 16];
@@ -660,53 +700,120 @@ static void req_done(io_req_t *r)
 
 	r->user = -1;
 	ch->blk->locked = 0;
-	ch->state = WLD_CH_RESIDENT;
-	ch->used = frame_no;	/* not the first eviction candidate before its draw */
+	ch->state = pinned(L, c) ? WLD_CH_PINNED : WLD_CH_RESIDENT;
+	ch->used = wld_frame_no;	/* not the first eviction candidate before its draw */
 	st.loads++;
 	landed(L, c, ch->data);
 }
 
-/* Evict the least recently used resident chunk of pool p not used this
- * frame or the last; freed behind a fence two frames ahead (the GPU may
- * still read REND / TEXP bytes); COLL bytes only the CPU reads, and no
- * walk holds a chunk it did not use this frame, so they free at once. */
-static int evict_one(int p)
+static io_req_t *req_of(const wld_layer_t *L, int c)
 {
-	wld_layer_t *bl = NULL;
-	int bc = -1, i, c;
+	int key = (int)L->slot << 16 | c, i;
 
+	for (i = 0; i < HL64_WORLD_REQS; i++)
+		if (reqs[i].user == key)
+			return &reqs[i];
+	return NULL;
+}
+
+/* Free chunk c's bytes: REND / TEXP / MOVR behind a fence two frames ahead
+ * (the GPU may still read them); COLL bytes only the CPU reads, and no
+ * walk holds a chunk it did not use this frame, so they free at once, as
+ * do the blocks of reads that never landed. */
+static void drop(wld_layer_t *L, int c)
+{
+	wld_chunk_t *ch = &L->ch[c];
+	int p = chunk_pool(L->chunks[c].fourcc);
+
+	mem_pool_free(&pools[p], ch->blk, p == POOL_COLL || ch->state == WLD_CH_LOADING ? 0
+		: wld_frame_no + 2);
+	ch->blk = NULL;
+	ch->data = NULL;
+	ch->state = WLD_CH_ABSENT;
+}
+
+/* Cancel a queued read nothing has landed of. */
+static void cancel_queued(io_req_t *r)
+{
+	wld_layer_t *L = &layers[r->user >> 16];
+
+	io_cancel(r);
+	drop(L, r->user & 0xFFFF);
+	r->user = -1;
+	wld_n_evict_queued++;
+}
+
+/* The weakest queued-not-started read (of pool p, or any pool when p < 0)
+ * whose class is weaker than cls; NULL none. */
+static io_req_t *weaker_queued(int p, int cls)
+{
+	io_req_t *best = NULL;
+	int i;
+
+	for (i = 0; i < HL64_WORLD_REQS; i++)
+	{
+		io_req_t *r = &reqs[i];
+
+		if (r->user < 0 || r->state != IO_QUEUED || r->done || prio_cls(r->prio) >= cls
+			|| (p >= 0 && chunk_pool(layers[r->user >> 16].chunks[r->user & 0xFFFF].fourcc) != p))
+			continue;
+		if (!best || r->prio > best->prio)
+			best = r;
+	}
+	return best;
+}
+
+/* Make room in pool p for a request of class cls: a queued-not-started
+ * read of a weaker class first, then the least recently used resident
+ * chunk of a weaker class (not named this generation = NONE first) not
+ * used this frame or the last; prefetch never evicts a chunk used in the
+ * last 30 frames. 0 when nothing qualifies. */
+static int evict_one(int p, int cls)
+{
+	io_req_t *q = weaker_queued(p, cls);
+	wld_layer_t *bl = NULL;
+	int bc = -1, bk = 0, i, c;
+
+	if (q)
+	{
+		cancel_queued(q);
+		return 1;
+	}
 	for (i = 0; i < HL64_WORLD_LAYERS; i++)
 	{
 		wld_layer_t *L = &layers[i];
 
-		if (!L->open)
+		if (!L->open || !L->ch)
 			continue;
 		for (c = 0; c < L->dir->nchunks; c++)
 		{
 			const wld_chunk_t *ch = &L->ch[c];
+			int k;
 
-			if (ch->state != WLD_CH_RESIDENT || ch->used + 1 >= frame_no
-				|| chunk_pool(L->chunks[c].fourcc) != p
-				|| ch->want == (p == POOL_COLL ? L->coll_gen : L->want_gen))
+			if (ch->state != WLD_CH_RESIDENT || ch->used + 1 >= wld_frame_no
+				|| chunk_pool(L->chunks[c].fourcc) != p)
 				continue;
-			if (bc < 0 || ch->used < bl->ch[bc].used)
+			k = ch->want == wld_tgen ? ch->cls : WLD_CLS_NONE;
+			if (k >= cls || (cls == WLD_CLS_PREFETCH && ch->used + 30 >= wld_frame_no))
+				continue;
+			if (bc < 0 || k < bk || (k == bk && ch->used < bl->ch[bc].used))
 			{
 				bl = L;
 				bc = c;
+				bk = k;
 			}
 		}
 	}
 	if (bc < 0)
 		return 0;
-	mem_pool_free(&pools[p], bl->ch[bc].blk, p == POOL_COLL ? 0 : frame_no + 2);
-	bl->ch[bc].blk = NULL;
-	bl->ch[bc].data = NULL;
-	bl->ch[bc].state = WLD_CH_ABSENT;
+	drop(bl, bc);
 	st.evictions++;
 	return 1;
 }
 
-static void request(wld_layer_t *L, int c)
+/* Queue chunk c at class cls's priority; 0 when no request slot or no
+ * room could be made (the caller retries next frame). */
+static int request(wld_layer_t *L, int c, int cls)
 {
 	const w64_chunk_t *ck = &L->chunks[c];
 	wld_chunk_t *ch = &L->ch[c];
@@ -718,24 +825,51 @@ static void request(wld_layer_t *L, int c)
 		if (reqs[i].user < 0)
 			r = &reqs[i];
 	if (!r)
-		return;			/* next frame */
+	{
+		/* every slot busy: a weaker queued read gives its slot up */
+		if (!(r = weaker_queued(-1, cls)))
+			return 0;
+		cancel_queued(r);
+	}
 	while (!(ch->blk = mem_pool_alloc(&pools[p], size, &ch->data)))
-		if (!evict_one(p))
+	{
+		const mem_pool_t *pl = &pools[p];
+
+		/* evicted REND / TEXP bytes free behind their fence: once the
+		 * fenced bytes cover the request, wait for them (two frames)
+		 * instead of evicting the rest of the pool */
+		if ((pl->fenced && pl->size - pl->used + pl->fenced >= size) || !evict_one(p, cls))
 		{
 			st.nofit++;
-			return;		/* fenced space frees in two frames */
+			return 0;
 		}
+	}
 	ch->blk->locked = 1;
 	ch->state = WLD_CH_LOADING;
 	memset(r, 0, sizeof(*r));
 	r->rom = L->rom + ck->ofs;
 	r->dst = ch->data;
 	r->len = size;
-	r->prio = IO_PRIO_OPEN;
+	r->prio = (uint8_t)cls_prio(cls);
 	r->cb = req_done;
 	r->user = (int)L->slot << 16 | c;
 	io_submit(r);
 	st.queued++;
+	if (cls == WLD_CLS_PREFETCH)
+		wld_n_prefetch_req++;
+	return 1;
+}
+
+/* A loading chunk is needed at class cls: promote its queued read. */
+static void promote(wld_layer_t *L, int c, int cls)
+{
+	io_req_t *r = req_of(L, c);
+
+	if (r && cls_prio(cls) < r->prio)
+	{
+		io_promote(r, cls_prio(cls));
+		wld_n_promoted++;
+	}
 }
 
 uint8_t *wld_chunk_use(wld_layer_t *L, int c)
@@ -744,56 +878,51 @@ uint8_t *wld_chunk_use(wld_layer_t *L, int c)
 
 	if (ch->state >= WLD_CH_RESIDENT)
 	{
-		ch->used = frame_no;
+		ch->used = wld_frame_no;
 		return ch->data;
 	}
 	if (ch->state == WLD_CH_ABSENT)
-		request(L, c);
+		request(L, c, WLD_CLS_OPEN);
+	else
+		promote(L, c, WLD_CLS_OPEN);
 	return NULL;
 }
 
-static void want(wld_layer_t *L, int c, int *pending)
+int wld_name(wld_layer_t *L, int c, int cls)
 {
 	wld_chunk_t *ch = &L->ch[c];
 
-	ch->want = L->want_gen;
-	if (ch->state == WLD_CH_ABSENT)
+	if (ch->want != wld_tgen)
 	{
-		request(L, c);
-		if (ch->state == WLD_CH_ABSENT)
-			*pending = 1;
+		ch->want = wld_tgen;
+		ch->cls = (uint8_t)cls;
 	}
+	else if (cls > ch->cls)
+		ch->cls = (uint8_t)cls;
+	if (ch->state == WLD_CH_ABSENT)
+		return request(L, c, ch->cls);
+	if (ch->state == WLD_CH_LOADING)
+		promote(L, c, ch->cls);
+	return 1;
 }
 
 void wld_want_open(wld_layer_t *L, int leaf)
 {
 	const uint16_t *list;
-	int i, k, cnt, pending = 0;
+	int i, k, cnt;
 
-	if (leaf == L->want_leaf && !L->want_pending)
-		return;
+	if (!++wld_tgen)
+		wld_tgen = 1;
 	L->want_leaf = leaf;
-	if (!++L->want_gen)
-		L->want_gen = 1;
 	list = wld_leaf_sectors(L, leaf, &cnt);
 	for (i = 0; i < cnt; i++)
 	{
 		const w64_sector_t *s = &L->sects[list[i]];
 
-		want(L, s->rend_chunk, &pending);
+		wld_name(L, s->rend_chunk, WLD_CLS_OPEN);
 		for (k = 0; k < s->page_count; k++)
-			want(L, L->dir->texp_first + L->pagepool[s->page_first + k], &pending);
+			wld_name(L, L->dir->texp_first + L->pagepool[s->page_first + k], WLD_CLS_OPEN);
 	}
-	L->want_pending = (uint8_t)pending;
-}
-
-void wld_want_coll(wld_layer_t *L, int c)
-{
-	wld_chunk_t *ch = &L->ch[c];
-
-	ch->want = L->coll_gen;
-	if (ch->state == WLD_CH_ABSENT)
-		request(L, c);
 }
 
 uint8_t *wld_chunk_sync(wld_layer_t *L, int c)
@@ -801,16 +930,14 @@ uint8_t *wld_chunk_sync(wld_layer_t *L, int c)
 	const w64_chunk_t *ck = &L->chunks[c];
 	wld_chunk_t *ch = &L->ch[c];
 	uint32_t size = (ck->size + 15) & ~15u;
-	int i;
+	io_req_t *r;
 
-	if (ch->state == WLD_CH_LOADING)
-		for (i = 0; i < HL64_WORLD_REQS; i++)
-			if (reqs[i].user == ((int)L->slot << 16 | c))
-				io_finish(&reqs[i]);	/* req_done lands it */
+	if (ch->state == WLD_CH_LOADING && (r = req_of(L, c)))
+		io_finish(r);	/* req_done lands it */
 	if (ch->state == WLD_CH_ABSENT)
 	{
 		while (!(ch->blk = mem_pool_alloc(&pools[POOL_COLL], size, &ch->data)))
-			if (!evict_one(POOL_COLL))
+			if (!evict_one(POOL_COLL, WLD_CLS_OPEN))
 				sys_error("world: %s: COLL chunk %d does not fit the collision pool",
 					maps[L->map].name, c);
 		io_read_sync(ch->data, L->rom + ck->ofs, size);
@@ -818,7 +945,7 @@ uint8_t *wld_chunk_sync(wld_layer_t *L, int c)
 		st.loads++;
 		landed(L, c, ch->data);
 	}
-	ch->used = frame_no;
+	ch->used = wld_frame_no;
 	return ch->data;
 }
 
@@ -826,10 +953,10 @@ void wld_frame(uint32_t frame)
 {
 	int p;
 
-	frame_no = frame + 1;	/* 0 means never used */
+	wld_frame_no = frame + 1;	/* 0 means never used */
 	for (p = 0; p < NPOOLS; p++)
-		mem_pool_retire(&pools[p], frame_no);
-	mem_pool_retire(&layer_pool, frame_no);
+		mem_pool_retire(&pools[p], wld_frame_no);
+	mem_pool_retire(&layer_pool, wld_frame_no);
 }
 
 void wld_stats(wld_stats_t *s)
@@ -842,6 +969,9 @@ void wld_stats(wld_stats_t *s)
 		s->pool_used[p] = pools[p].used;
 		s->pool_peak[p] = pools[p].peak;
 	}
+	s->dirs_used = layer_pool.used;
+	s->dirs_peak = layer_pool.peak;
+	s->dirs_size = layer_pool.size;
 }
 
 /* ---- ENTS scan: mover placements, player start (M1) ----------------------- */
@@ -870,25 +1000,20 @@ static int hle_vec(const uint8_t *b, uint32_t floats, uint32_t nfloats, uint32_t
 	return 1;
 }
 
-static void scan_ents(wld_layer_t *L)
+/* b: the ENTS chunk's bytes (resident in the render pool while the open
+ * scans it). */
+static void scan_ents(wld_layer_t *L, const uint8_t *b)
 {
 	const char *file = maps[L->map].name;
-	const w64_chunk_t *ck;
-	/* scratch, not the HLE region: engine/ent/rec.c keeps the open slots'
-	 * chunks there */
-	uint8_t *b = mem_region(MEM_SCRATCH);
+	const w64_chunk_t *ck = &L->chunks[L->dir->ents_chunk];
 	uint32_t size, nrecs, nkn, nkeys, nfloats, strsize, ncls;
 	uint32_t o_recs, o_cls, o_kn, o_keys, o_floats, o_str, i, k;
 	int kn_model = -1, kn_origin = -1, kn_angles = -1, kn_rmode = -1;
 	int kn_style = -1, kn_flags = -1, kn_pattern = -1;
 
-	if (L->dir->ents_chunk == W64_NONE)
-		return;
-	ck = &L->chunks[L->dir->ents_chunk];
 	size = ck->size;
-	if (size > mem_region_bytes(MEM_SCRATCH) || size < 96)
+	if (size < 96)
 		bad(file, ck->ofs, "ENTS size");
-	io_read_sync(b, L->rom + ck->ofs, (size + 1) & ~1u);
 	if (le32(b) != 0x31454C48u || le16(b + 4) != 1 || (le16(b + 6) & 1) || le32(b + 8) > size)
 		bad(file, ck->ofs, "ENTS not a little-endian HLE1 v1 chunk");
 	size = le32(b + 8);
@@ -1024,6 +1149,21 @@ static void scan_ents(wld_layer_t *L)
 
 /* ---- layers ----------------------------------------------------------------- */
 
+/* An open in flight (one per slot): the header / directory read, the
+ * incremental directory CRC, retries of a full layer region. */
+enum { OS_IDLE, OS_HDR, OS_DIR, OS_CRC, OS_PIN, OS_ENTS, OS_DONE };
+typedef struct {
+	io_req_t	req;
+	uint8_t		hb[64] __attribute__((aligned(16)));
+	uint8_t		stage, tries;
+	uint32_t	crc, crc_pos;
+	void		*dir;		/* directory bytes (L->mem's block; its owner) */
+	void		*tab;		/* tables bytes (L->tables' block; its owner) */
+} open_t;
+static open_t opens[HL64_WORLD_LAYERS];
+
+#define OPEN_TRIES	8	/* frames a full layer region may wait for fenced frees */
+
 static void *carve(uint8_t **cur, uint32_t bytes)
 {
 	void *p = *cur;
@@ -1032,40 +1172,118 @@ static void *carve(uint8_t **cur, uint32_t bytes)
 	return p;
 }
 
-wld_layer_t *wld_open(int map)
+uint32_t wld_layer_bytes(uint32_t dir_size, uint32_t nchunks, uint32_t npages, uint32_t nsub)
 {
-	char path[HL64_MAP_NAME + 16];
+	return ((dir_size + 15) & ~15u) + ((nchunks * (uint32_t)sizeof(wld_chunk_t) + 15) & ~15u)
+		+ WLD_STYLE_SLOTS * 4 + ((npages * WLD_PAGE_STATE + 15) & ~15u)
+		+ ((nsub * (uint32_t)sizeof(wld_mover_t) + 15) & ~15u);
+}
+
+wld_layer_t *wld_slot(int s)
+{
+	return &layers[s];
+}
+
+static const char *pkg_path(const wld_layer_t *L)
+{
+	static char path[HL64_MAP_NAME + 16];
+
+	snprintf(path, sizeof(path), "maps/%s.w64", maps[L->map].name);
+	return path;
+}
+
+/* Layer-region block for L: both of a layer's blocks at one end, the other
+ * open layer's at the other, so the free space between them stays one
+ * hole and any two layers whose sum fits the region open (the cook proof,
+ * tools/cook/layerdirs.py). */
+static mem_blk_t *layer_alloc(wld_layer_t *L, uint32_t bytes, void **owner)
+{
+	return L->high ? mem_pool_alloc_high(&layer_pool, bytes, owner)
+		: mem_pool_alloc(&layer_pool, bytes, owner);
+}
+
+static void open_fail(wld_layer_t *L, const char *what, uint32_t bytes)
+{
+	log_printf("world: open_fail %s: %s needs %lu B of the layer region (%lu B free, "
+		"largest %lu B)\n", maps[L->map].name, what, (unsigned long)bytes,
+		(unsigned long)mem_pool_free_bytes(&layer_pool),
+		(unsigned long)mem_pool_largest(&layer_pool));
+	L->ready = -1;
+	opens[L->slot].stage = OS_DONE;
+	wld_n_open_fail++;
+}
+
+/* Take a free slot for map and queue its header read; NULL when no slot. */
+static wld_layer_t *open_begin(int map)
+{
 	wld_layer_t *L = NULL;
-	uint8_t hb[64] __attribute__((aligned(16)));
-	void *mem;
-	uint8_t *cur;
-	uint32_t bytes, i, size;
-	int s;
+	open_t *o;
+	int s, other_low = 0;
 
 	if (map < 0 || map >= nmaps)
 		sys_error("world: no map %d", map);
+	if ((L = wld_layer_of_map(map)))
+		return L;
 	for (s = 0; s < HL64_WORLD_LAYERS; s++)
-		if (layers[s].open && layers[s].map == map)
-			return &layers[s];
-	for (s = 0; s < HL64_WORLD_LAYERS && !L; s++)
 		if (!layers[s].open)
-			L = &layers[s];
+		{
+			if (!L)
+				L = &layers[s];
+		}
+		else if (!layers[s].high)
+			other_low = 1;
 	if (!L)
-		sys_error("world: %d layers open", HL64_WORLD_LAYERS);
+		return NULL;
 	memset(L, 0, sizeof(*L));
 	L->slot = (uint8_t)(L - layers);
 	L->want_leaf = -1;
-	L->coll_gen = 1;
 	L->map = (uint16_t)map;
+	L->high = (uint8_t)other_low;
 	memcpy(L->gofs, maps[map].gofs, sizeof(L->gofs));
-	snprintf(path, sizeof(path), "maps/%s.w64", maps[map].name);
-	L->rom = sys_cart_addr(path, &L->size);
+	L->rom = sys_cart_addr(pkg_path(L), &L->size);
 	if (!L->rom || L->size < 64 + sizeof(w64_dir_t))
-		sys_error("%s missing: cook the player's content (make cook)", path);
+		sys_error("%s missing: cook the player's content (make cook)", pkg_path(L));
+	L->open = 1;
+	o = &opens[L->slot];
+	memset(o, 0, sizeof(*o));
+	o->stage = OS_HDR;
+	o->req.rom = L->rom;
+	o->req.dst = o->hb;
+	o->req.len = 64;
+	o->req.prio = IO_PRIO_OPEN;
+	o->req.user = -1;
+	io_submit(&o->req);
+	return L;
+}
 
-	io_set_load(1);
-	io_read_sync(hb, L->rom, 64);
-	memcpy(&L->hdr, hb, 64);
+wld_layer_t *wld_open_async(int map)
+{
+	wld_layer_t *L = wld_layer_of_map(map);
+
+	if (L)
+		return L;
+	if (!(L = open_begin(map)))
+	{
+		log_printf("world: open_fail %s: no free layer slot\n", wld_map_name(map));
+		wld_n_open_fail++;
+		return NULL;
+	}
+	wld_n_open_async++;
+	return L;
+}
+
+int wld_layer_ready(const wld_layer_t *L)
+{
+	return L->ready;
+}
+
+/* Header landed: validate, take the directory block, queue its read. */
+static void open_header(wld_layer_t *L, open_t *o)
+{
+	const char *path = pkg_path(L);
+	uint32_t bytes;
+
+	memcpy(&L->hdr, o->hb, 64);
 #if WLD_SWAP
 	swap_header(&L->hdr);
 #endif
@@ -1078,28 +1296,41 @@ wld_layer_t *wld_open(int map)
 		bad(path, 12, "directory range");
 	if (!(L->hdr.nchunks < 0xFFFF))
 		bad(path, 20, "chunk count");
-
-	/* layer region: the directory block, then one block of the tables
-	 * sized from it (chunk records, style epochs, per-page GPU state,
-	 * movers) */
 	bytes = (L->hdr.dir_size + 15) & ~15u;
-	L->mem = mem_pool_alloc(&layer_pool, bytes, &mem);
-	if (!L->mem)
-		sys_error("world: %s: directory needs %lu B of the layer region (%lu B free)", path,
-			(unsigned long)bytes, (unsigned long)mem_pool_largest(&layer_pool));
-	io_read_sync(mem, L->rom + L->hdr.dir_ofs, (L->hdr.dir_size + 1) & ~1u);
-	if (crc32(mem, L->hdr.dir_size) != L->hdr.dir_crc)
-		bad(path, 24, "directory CRC");
-	parse_dir(L, mem, path);
-	size = ((L->dir->nchunks * (uint32_t)sizeof(wld_chunk_t) + 15) & ~15u) + WLD_STYLE_SLOTS * 4
-		+ ((L->dir->npages * WLD_PAGE_STATE + 15) & ~15u)
-		+ ((L->dir->nsub * (uint32_t)sizeof(wld_mover_t) + 15) & ~15u);
-	L->tables = mem_pool_alloc(&layer_pool, size, &mem);
-	if (!L->tables)
-		sys_error("world: %s: tables need %lu B of the layer region (%lu B free)", path,
-			(unsigned long)size, (unsigned long)mem_pool_largest(&layer_pool));
-	bytes += size;
-	cur = mem;
+	if (!(L->mem = layer_alloc(L, bytes, &o->dir)))
+	{
+		if (layer_pool.fenced && ++o->tries < OPEN_TRIES)
+			return;		/* the region's fenced frees retire within two frames */
+		open_fail(L, "directory", bytes);
+		return;
+	}
+	memset(&o->req, 0, sizeof(o->req));
+	o->req.rom = L->rom + L->hdr.dir_ofs;
+	o->req.dst = o->dir;
+	o->req.len = (L->hdr.dir_size + 1) & ~1u;
+	o->req.prio = IO_PRIO_OPEN;
+	o->req.user = -1;
+	io_submit(&o->req);
+	o->stage = OS_DIR;
+	o->tries = 0;
+}
+
+/* Directory checked: the tables block (chunk records, style epochs,
+ * per-page GPU state, movers). 0 while the region has no room yet. */
+static int open_tables(wld_layer_t *L, open_t *o)
+{
+	uint32_t size = wld_layer_bytes(L->hdr.dir_size, L->dir->nchunks, L->dir->npages,
+		L->dir->nsub) - ((L->hdr.dir_size + 15) & ~15u), i;
+	uint8_t *cur;
+
+	if (!(L->tables = layer_alloc(L, size, &o->tab)))
+	{
+		if (layer_pool.fenced && ++o->tries < OPEN_TRIES)
+			return 0;
+		open_fail(L, "tables", size);
+		return 0;
+	}
+	cur = o->tab;
 	L->ch = carve(&cur, L->dir->nchunks * (uint32_t)sizeof(wld_chunk_t));
 	memset(L->ch, 0, L->dir->nchunks * sizeof(wld_chunk_t));
 	for (i = 0; i < L->dir->nchunks; i++)
@@ -1123,67 +1354,177 @@ wld_layer_t *wld_open(int map)
 			wld_style_set(0, &letter, 1);
 		}
 	}
-
-	/* pinned world hull 0 */
-	for (i = 0; i < L->dir->coll_pinned; i++)
-	{
-		int c = L->dir->coll_first + (int)i;
-		wld_chunk_t *ch = &L->ch[c];
-
-		size = (L->chunks[c].size + 15) & ~15u;
-		ch->blk = mem_pool_alloc(&pools[POOL_COLL], size, &ch->data);
-		if (!ch->blk)
-			sys_error("world: %s: pinned COLL does not fit the collision pool", path);
-		io_read_sync(ch->data, L->rom + L->chunks[c].ofs, size);
-		ch->state = WLD_CH_PINNED;
-		landed(L, c, ch->data);
-	}
-	scan_ents(L);
-	io_set_load(0);
-	L->open = 1;
 	{
 		int head = L->models[0].head[0];
 
 		if (head >= 0 && W64_GID_COLL(head) >= L->dir->coll_pinned)
-			bad(path, L->hdr.dir_ofs + L->dir->model_ofs + 36, "world hull 0 not pinned");
+			bad(pkg_path(L), L->hdr.dir_ofs + L->dir->model_ofs + 36, "world hull 0 not pinned");
 	}
-	log_printf("world: open %s slot %d: %u B dir, %u sectors, %u pages, %u chunks, "
-		"%u movers, layer block %lu B\n", maps[map].name, L->slot, (unsigned)L->hdr.dir_size,
-		L->dir->nsect, L->dir->npages, L->dir->nchunks, L->nmovers, (unsigned long)bytes);
+	return 1;
+}
+
+void wld_open_step(wld_layer_t *L, uint32_t crc_budget)
+{
+	open_t *o = &opens[L->slot];
+	uint32_t n, i;
+	int all;
+
+	switch (o->stage)
+	{
+	case OS_HDR:
+		if (o->req.state != IO_DONE)
+			return;
+		open_header(L, o);
+		return;
+	case OS_DIR:
+		if (o->req.state != IO_DONE)
+			return;
+		o->stage = OS_CRC;
+		o->crc = 0xFFFFFFFFu;
+		o->crc_pos = 0;
+		/* fall through */
+	case OS_CRC:
+		if (o->crc_pos < L->hdr.dir_size)
+		{
+			n = L->hdr.dir_size - o->crc_pos;
+			if (crc_budget && n > crc_budget)
+				n = crc_budget;
+			o->crc = crc_update(o->crc, (const uint8_t *)o->dir + o->crc_pos, n);
+			o->crc_pos += n;
+			if (o->crc_pos < L->hdr.dir_size)
+				return;
+			if (~o->crc != L->hdr.dir_crc)
+				bad(pkg_path(L), 24, "directory CRC");
+			parse_dir(L, o->dir, pkg_path(L));
+		}
+		if (!open_tables(L, o))
+			return;
+		o->stage = OS_PIN;
+		/* fall through */
+	case OS_PIN:
+		for (all = 1, i = 0; i < L->dir->coll_pinned; i++)
+		{
+			int c = L->dir->coll_first + (int)i;
+
+			if (L->ch[c].state == WLD_CH_ABSENT)
+				request(L, c, WLD_CLS_OPEN);
+			all &= L->ch[c].state == WLD_CH_PINNED;
+		}
+		if (!all)
+			return;
+		o->stage = OS_ENTS;
+		/* fall through */
+	case OS_ENTS:
+		if (L->dir->ents_chunk != W64_NONE)
+		{
+			wld_chunk_t *ch = &L->ch[L->dir->ents_chunk];
+
+			if (ch->state == WLD_CH_ABSENT)
+				request(L, L->dir->ents_chunk, WLD_CLS_OPEN);
+			if (ch->state != WLD_CH_PINNED)
+				return;
+			scan_ents(L, ch->data);
+			drop(L, L->dir->ents_chunk);
+		}
+		L->ready = 1;
+		o->stage = OS_DONE;
+		wld_layer_gen++;
+		log_printf("world: open %s slot %d: %u B dir, %u sectors, %u pages, %u chunks, "
+			"%u movers, layer block %lu B\n", maps[L->map].name, L->slot,
+			(unsigned)L->hdr.dir_size, L->dir->nsect, L->dir->npages, L->dir->nchunks,
+			L->nmovers, (unsigned long)wld_layer_bytes(L->hdr.dir_size, L->dir->nchunks,
+			L->dir->npages, L->dir->nsub));
+		return;
+	default:
+		return;
+	}
+}
+
+wld_layer_t *wld_open(int map)
+{
+	wld_layer_t *L = open_begin(map);
+	open_t *o;
+	int i, spins = 0;
+
+	if (!L)
+		sys_error("world: %d layers open", HL64_WORLD_LAYERS);
+	o = &opens[L->slot];
+	/* load I/O: land the open's reads now, stage by stage */
+	io_set_load(1);
+	while (!L->ready)
+	{
+		uint8_t stage = o->stage;
+
+		if (o->req.state == IO_QUEUED || o->req.state == IO_ACTIVE)
+			io_finish(&o->req);
+		for (i = 0; i < HL64_WORLD_REQS; i++)
+			if (reqs[i].user >= 0)
+				io_finish(&reqs[i]);
+		wld_open_step(L, 0);
+		spins = o->stage == stage ? spins + 1 : 0;
+		if (spins > OPEN_TRIES + 2)
+			sys_error("world: %s: the open cannot proceed (no collision / render pool room)",
+				pkg_path(L));
+	}
+	io_set_load(0);
+	if (L->ready < 0)
+		sys_error("world: %s: no layer-region room (see the open_fail line)", pkg_path(L));
 	return L;
 }
 
 void wld_close(wld_layer_t *L)
 {
+	open_t *o;
 	uint32_t c;
 
 	if (!L || !L->open)
 		return;
-	for (c = 0; c < L->dir->nchunks; c++)
+	o = &opens[L->slot];
+	if (o->req.state == IO_QUEUED || o->req.state == IO_ACTIVE)
+		io_cancel(&o->req);
+	for (c = 0; L->ch && c < L->dir->nchunks; c++)
 	{
 		wld_chunk_t *ch = &L->ch[c];
+		io_req_t *r;
 
-		if (ch->state == WLD_CH_LOADING)
-			for (int i = 0; i < HL64_WORLD_REQS; i++)
-				if (reqs[i].user == ((int)L->slot << 16 | (int)c))
-				{
-					io_cancel(&reqs[i]);
-					reqs[i].user = -1;
-				}
+		if (ch->state == WLD_CH_LOADING && (r = req_of(L, (int)c)))
+		{
+			io_cancel(r);
+			r->user = -1;
+		}
 		if (ch->blk)
-			mem_pool_free(&pools[chunk_pool(L->chunks[c].fourcc)], ch->blk, frame_no + 2);
+			mem_pool_free(&pools[chunk_pool(L->chunks[c].fourcc)], ch->blk, wld_frame_no + 2);
 	}
 	/* page_state holds RDP bind lists the RDP may still read */
-	mem_pool_free(&layer_pool, L->tables, frame_no + 2);
-	mem_pool_free(&layer_pool, L->mem, 0);
-	for (c = 32; c < 64; c++)
-		wld_style_set(wld_style_slot(L, (int)c), NULL, 0);
+	if (L->tables)
+		mem_pool_free(&layer_pool, L->tables, wld_frame_no + 2);
+	if (L->mem)
+		mem_pool_free(&layer_pool, L->mem, 0);
+	if (L->ch)
+		for (c = 32; c < 64; c++)
+			wld_style_set(wld_style_slot(L, (int)c), NULL, 0);
+	wld_stream_closed(L->slot);
+	o->stage = OS_IDLE;
 	L->open = 0;
+	L->ready = 0;
+	L->ch = NULL;
+	wld_layer_gen++;
 }
 
 wld_layer_t *wld_layer(int slot)
 {
-	return slot >= 0 && slot < HL64_WORLD_LAYERS && layers[slot].open ? &layers[slot] : NULL;
+	return slot >= 0 && slot < HL64_WORLD_LAYERS && layers[slot].open && layers[slot].ready == 1
+		? &layers[slot] : NULL;
+}
+
+wld_layer_t *wld_layer_of_map(int map)
+{
+	int s;
+
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+		if (layers[s].open && layers[s].map == map)
+			return &layers[s];
+	return NULL;
 }
 
 /* ---- point -> leaf (architecture.md 5.5, w64-format.md COLL / grid) ------- */

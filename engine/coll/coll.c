@@ -1105,57 +1105,20 @@ int col_material(uint16_t model, const float origin[3], const float angles[3],
 
 /* ---- residency (architecture.md 5.3) ------------------------------------------------ */
 
-static void want_model(wld_layer_t *L, unsigned sub)
-{
-	const w64_model_t *m;
-	unsigned c;
-
-	if (sub >= L->dir->nsub)
-		return;
-	m = &L->models[sub];
-	for (c = 0; c < m->coll_count && m->coll_first + c < L->dir->ncoll; c++)
-		wld_want_coll(L, L->dir->coll_first + (int)(m->coll_first + c));
-}
-
+/* The collision window: the player box + COL_WINDOW (global) and the
+ * brush models it touches go to the stream as target-set inputs; the
+ * stream names their COLL chunks (OPEN, + v * 0.5 s prefetch) only when
+ * the window's grid cells or the model set changed. */
 void col_want(const float mins[3], const float maxs[3])
 {
+	static uint32_t models[64];
 	float lo[3], hi[3];
-	int slot, k, n, i;
+	int k, n, i, nm = 0;
 
 	for (k = 0; k < 3; k++)
 	{
 		lo[k] = mins[k] - COL_WINDOW;
 		hi[k] = maxs[k] + COL_WINDOW;
-	}
-	for (slot = 0; slot < HL64_WORLD_LAYERS; slot++)
-	{
-		wld_layer_t *L = wld_layer(slot);
-		const w64_grid_t *g;
-		int c0[3], c1[3], x, y, z;
-
-		if (!L)
-			continue;
-		if (!++L->coll_gen)
-			L->coll_gen = 1;
-		g = L->grid;
-		for (k = 0; k < 3; k++)
-		{
-			float a = (lo[k] - L->gofs[k] - g->origin[k]) / (float)g->cell;
-			float b = (hi[k] - L->gofs[k] - g->origin[k]) / (float)g->cell;
-
-			c0[k] = a < 0 ? 0 : a >= g->dims[k] ? g->dims[k] : (int)a;
-			c1[k] = b < 0 ? -1 : b >= g->dims[k] ? g->dims[k] - 1 : (int)b;
-		}
-		for (z = c0[2]; z <= c1[2]; z++)
-			for (y = c0[1]; y <= c1[1]; y++)
-				for (x = c0[0]; x <= c1[0]; x++)
-				{
-					const uint16_t *v = L->glists
-						+ L->cells[x + g->dims[0] * (y + g->dims[1] * z)].list;
-
-					for (i = 1; i <= v[0]; i++)
-						wld_want_coll(L, L->dir->coll_first + v[i]);
-				}
 	}
 	/* brushes the window touches: solid ones from the grid (a query in the
 	 * caller's frame), contents ones here (their linked boxes + g_M) */
@@ -1170,11 +1133,12 @@ void col_want(const float mins[3], const float maxs[3])
 		}
 		n = col_ents_box(flo, fhi, cand, HL64_MAX_ENTITIES);
 	}
-	for (i = 0; i < n; i++)
+	for (i = 0; i < n && nm < 64; i++)
 		if (cand[i]->solid == COL_SOLID_BSP && cand[i]->model != COL_NONE
 			&& wld_layer(COL_MODEL_SLOT(cand[i]->model)))
-			want_model(wld_layer(COL_MODEL_SLOT(cand[i]->model)), COL_MODEL_SUB(cand[i]->model));
-	for (i = 0; i < ncbrush; i++)
+			models[nm++] = (uint32_t)COL_MODEL_SLOT(cand[i]->model) << 16
+				| COL_MODEL_SUB(cand[i]->model);
+	for (i = 0; i < ncbrush && nm < 64; i++)
 	{
 		const col_ent_t *e = cbrush[i];
 		const float *gm = eng_layer_origin(ent_idc(e->index)->layer);
@@ -1183,8 +1147,9 @@ void col_want(const float mins[3], const float maxs[3])
 			if (e->absmin[k] + gm[k] > hi[k] || e->absmax[k] + gm[k] < lo[k])
 				break;
 		if (k == 3 && wld_layer(COL_MODEL_SLOT(e->model)))
-			want_model(wld_layer(COL_MODEL_SLOT(e->model)), COL_MODEL_SUB(e->model));
+			models[nm++] = (uint32_t)COL_MODEL_SLOT(e->model) << 16 | COL_MODEL_SUB(e->model);
 	}
+	wld_stream_coll(lo, hi, models, nm);
 }
 
 void col_stats(col_stats_t *s)

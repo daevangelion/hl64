@@ -76,6 +76,8 @@ GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
 	$(ENGINE_SRC_SND) $(ENGINE_SRC_FX) $(ENGINE_SRC_D2)
 GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO)
+# M4 Stream: residency classes, target set, pins, prefetch, pop-in
+ENGINE_SRC += engine/world/stream.c
 # HLSDK sources kept as Valve wrote them: their unused locals, MSVC
 # pragmas and array-parameter styles are not ours to fix; HLSDK builds
 # them without strict aliasing (mathlib.h IS_NAN)
@@ -117,7 +119,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest sndtest streamtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -368,6 +370,14 @@ $(REC_BIN): $(REC_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) $(foreach f,$(REC_WRAP),-Wl,--wrap=$(f))
 rectest: $(REC_BIN)
 
+# M4 Stream residency driver (test/m4/stream.c, run by test/m4/stream.sh).
+STREAM_BIN := $(BUILD_DIR)/host/hl64-stream
+STREAM_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m4/stream.o
+$(STREAM_BIN): $(STREAM_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+streamtest: $(STREAM_BIN)
+
 # Sound driver (test/m3/snd.c, run by test/m3/snd.sh: S1-S8 host parts).
 SND_BIN := $(BUILD_DIR)/host/hl64-snd
 SND_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
@@ -392,6 +402,7 @@ cook: $(HLECOOK)
 		$(if $(HL64_REF_PALETTE),--ref-palette '$(HL64_REF_PALETTE)'))
 	python3 -m tools.restab.restab --content $(HL64_CONTENT) --defs game/defs -o $(HL64_CONTENT)/campaign.rtb
 	$(if $(HL64_DATA),python3 -m tools.w64c.hleids --check $(HL64_CONTENT) --defs game/defs)
+	python3 -m tools.cook.layerdirs $(HL64_CONTENT)
 
 ROUTES := $(wildcard test/routes/*.route)
 routes: cook

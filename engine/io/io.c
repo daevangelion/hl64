@@ -7,6 +7,7 @@
  */
 #include <string.h>
 
+#include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/io/io.h"
 
@@ -18,9 +19,17 @@ static uint32_t		budget = IO_BUDGET;
 static uint32_t		fr_async, fr_blocked_us, fr_us;
 static uint32_t		last_async, last_blocked;
 static io_stats_t	st;
-static int		loading;
+static int		loading;	/* io_set_load depth */
+static int		booting;	/* boot: until the first io_frame_begin */
 static uint32_t		q_bytes;	/* remaining bytes of queued + active requests */
 static uint32_t		fr_pi_us;	/* modelled PI busy time this frame (host) */
+/* this frame's sync reads (the > 1 ms report) */
+static uint32_t		fr_sync_calls, fr_sync_bytes, fr_sync_max, fr_sync_max_rom;
+/* since boot, never reset by io_stats */
+static uint32_t		life_frames, life_blocked_max, life_blocked_1ms, life_budget_over;
+static uint32_t		load_until;	/* io_load_window: load I/O before this frame */
+
+#define LOADING()	(loading > 0 || booting || life_frames < load_until)
 
 /* ---- backend (sys_pi_*) ------------------------------------------------ */
 
@@ -38,8 +47,16 @@ static void HwWaitIdle(void)
 static void HwSync(uint8_t *dst, uint32_t rom, uint32_t len)
 {
 	fr_blocked_us += sys_pi_read(dst, rom, len);
-	if (!loading)
-		fr_pi_us += sys_pi_cost_us(len);	/* layer-open reads are not a playing frame's PI time */
+	if (LOADING())
+		return;		/* layer-open reads are not a playing frame's PI time */
+	fr_pi_us += sys_pi_cost_us(len);
+	fr_sync_calls++;
+	fr_sync_bytes += len;
+	if (len > fr_sync_max)
+	{
+		fr_sync_max = len;
+		fr_sync_max_rom = rom;
+	}
 }
 
 /* ---- queue -------------------------------------------------------------- */
@@ -61,6 +78,19 @@ static void Unlink(io_req_t *r)
 	r->next = NULL;
 	q_len--;
 	q_bytes -= r->len - r->done;
+}
+
+static void Link(io_req_t *r)
+{
+	r->next = NULL;
+	q_bytes += r->len - r->done;
+	if (q_tail[r->prio])
+		q_tail[r->prio]->next = r;
+	else
+		q_head[r->prio] = r;
+	q_tail[r->prio] = r;
+	if (++q_len > (int)st.queue_max)
+		st.queue_max = (uint32_t)q_len;
 }
 
 static void Complete(io_req_t *r)
@@ -95,16 +125,22 @@ void io_init(void)
 	q_len = 0;
 	q_bytes = 0;
 	loading = 0;
+	booting = 1;
 	act = NULL;
 	act_len = 0;
 	budget = IO_BUDGET;
+	fr_async = fr_blocked_us = fr_pi_us = 0;
+	fr_sync_calls = fr_sync_bytes = fr_sync_max = fr_sync_max_rom = 0;
+	life_frames = life_blocked_max = life_blocked_1ms = life_budget_over = 0;
+	load_until = 0;
 	memset(&st, 0, sizeof(st));
 }
 
 void io_frame_begin(uint32_t frame_us)
 {
-	/* close the previous frame */
-	if (st.frames || fr_async || fr_blocked_us)
+	/* close the previous frame (the boot interval is load I/O: its
+	 * blocked time already went to the load counters) */
+	if (!booting && life_frames)
 	{
 		if (fr_async > st.frame_async_max)
 			st.frame_async_max = fr_async;
@@ -116,22 +152,37 @@ void io_frame_begin(uint32_t frame_us)
 			st.kb_hist[kb < IO_KB_BINS - 1 ? kb : IO_KB_BINS - 1]++;
 		}
 		if (fr_async > budget)
+		{
 			st.frames_budget_over++;
+			life_budget_over++;
+		}
 		if (fr_blocked_us > st.frame_blocked_max_us)
 			st.frame_blocked_max_us = fr_blocked_us;
+		if (fr_blocked_us > life_blocked_max)
+			life_blocked_max = fr_blocked_us;
 		if (fr_blocked_us > 1000)
+		{
 			st.frames_blocked_1ms++;
+			life_blocked_1ms++;
+			log_printf("io: frame %lu blocked %lu us: %lu sync reads %lu B, largest %lu B "
+				"at 0x%08lx\n", (unsigned long)life_frames, (unsigned long)fr_blocked_us,
+				(unsigned long)fr_sync_calls, (unsigned long)fr_sync_bytes,
+				(unsigned long)fr_sync_max, (unsigned long)fr_sync_max_rom);
+		}
 		st.blocked_us += fr_blocked_us;
 		if (fr_us && fr_pi_us > fr_us)
 			st.frames_pi_over++;
 	}
+	booting = 0;
 	last_async = fr_async;
 	last_blocked = fr_blocked_us;
 	fr_async = 0;
 	fr_blocked_us = 0;
 	fr_us = frame_us;
 	fr_pi_us = 0;
+	fr_sync_calls = fr_sync_bytes = fr_sync_max = fr_sync_max_rom = 0;
 	st.frames++;
+	life_frames++;
 }
 
 void io_set_seam(int on)
@@ -156,16 +207,18 @@ void io_submit(io_req_t *r)
 	if (r->prio >= IO_NPRIO)
 		r->prio = IO_PRIO_PREFETCH;
 	r->done = 0;
-	r->next = NULL;
 	r->state = IO_QUEUED;
-	q_bytes += r->len;
-	if (q_tail[r->prio])
-		q_tail[r->prio]->next = r;
-	else
-		q_head[r->prio] = r;
-	q_tail[r->prio] = r;
-	if (++q_len > (int)st.queue_max)
-		st.queue_max = (uint32_t)q_len;
+	Link(r);
+}
+
+void io_promote(io_req_t *r, int prio)
+{
+	if ((r->state != IO_QUEUED && r->state != IO_ACTIVE) || prio >= r->prio)
+		return;
+	Unlink(r);
+	r->prio = (uint8_t)prio;
+	Link(r);
+	st.promoted++;
 }
 
 void io_pump(void)
@@ -223,7 +276,7 @@ void io_cancel(io_req_t *r)
 /* Map-load reads: move this call's blocked time to the load counters. */
 static void LoadAccount(uint32_t blocked_before, uint32_t n)
 {
-	if (!loading)
+	if (!LOADING())
 		return;
 	st.load_us += fr_blocked_us - blocked_before;
 	st.load_bytes += n;
@@ -232,7 +285,14 @@ static void LoadAccount(uint32_t blocked_before, uint32_t n)
 
 void io_set_load(int on)
 {
-	loading = on;
+	loading += on ? 1 : -1;
+	if (loading < 0)
+		sys_error("io: io_set_load(0) without io_set_load(1)");
+}
+
+void io_load_window(uint32_t frames)
+{
+	load_until = life_frames + frames;
 }
 
 uint32_t io_queued(void)
@@ -250,7 +310,7 @@ void io_finish(io_req_t *r)
 		return;
 	Drain();
 	n = r->len - r->done;
-	if (!loading)
+	if (!LOADING())
 	{
 		st.sync_calls++;
 		st.sync_bytes += n;
@@ -267,7 +327,7 @@ void io_read_sync(void *dst, uint32_t rom, uint32_t len)
 	uint32_t b0 = fr_blocked_us;
 
 	Drain();
-	if (!loading)
+	if (!LOADING())
 	{
 		st.sync_calls++;
 		st.sync_bytes += len;
@@ -303,6 +363,10 @@ int io_in_flight(void)
 void io_stats(io_stats_t *out, int reset)
 {
 	*out = st;
+	out->life_frames = life_frames;
+	out->life_blocked_max_us = life_blocked_max;
+	out->life_frames_blocked_1ms = life_blocked_1ms;
+	out->life_frames_budget_over = life_budget_over;
 	if (reset)
 		memset(&st, 0, sizeof(st));
 }
@@ -331,4 +395,9 @@ void io_last_frame(uint32_t *async_bytes, uint32_t *blocked_us, uint32_t *queued
 	*async_bytes = last_async;
 	*blocked_us = last_blocked;
 	*queued = (uint32_t)q_len;
+}
+
+uint32_t io_frame_blocked_us(void)
+{
+	return fr_blocked_us;
 }

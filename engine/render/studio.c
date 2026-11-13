@@ -71,7 +71,7 @@ typedef struct {
 	uint32_t	rom, size, arom, asize;
 	uint8_t		files;		/* rom / arom resolved */
 	uint8_t		info_st, mesh_st;
-	uint8_t		pad;
+	uint8_t		info_try;	/* an async info prefetch was started (once) */
 	uint16_t	numseq, ntex;
 	sfmt_info_t	*info;
 	mem_blk_t	*info_blk;
@@ -99,6 +99,18 @@ typedef struct {
 	uint8_t		kind;		/* 0 free, 1 mesh, 2 anim */
 	uint16_t	idx;
 } sreq_t;
+
+/* Async info loads (studio_frame's prefetch of interest models): the
+ * 64-byte header, then the info block, at SEAM priority (D3(b): an info
+ * must be resident before its record hydrates). */
+#define ILOADS		4
+typedef struct {
+	io_req_t	r;
+	sfmt_file_t	hdr __attribute__((aligned(16)));
+	int16_t		idx;		/* model, -1 free */
+	uint8_t		phase;		/* 1 header in flight, 2 info in flight */
+} iload_t;
+static iload_t		iloads[ILOADS];
 
 /* STEP interpolation: the last two think-step placements per slot. */
 typedef struct {
@@ -492,16 +504,103 @@ static mem_blk_t *alloc(uint32_t size, void **owner)
 
 /* ---- info -------------------------------------------------------------------------- */
 
+/* Check a landed .s64 header (byte-swapped here) against the model's files;
+ * on success the info / mesh ranges are set. */
+static int info_header(smodel_t *m, int i, sfmt_file_t *hdr)
+{
+	sw32(&hdr->magic, 1);
+	sw16(&hdr->version, 2);
+	sw32(&hdr->info_ofs, 6);
+	if (hdr->magic != SFMT_MODEL_MAGIC || hdr->version != SFMT_VERSION || hdr->info_ofs != 64
+		|| (hdr->info_size & 15) || hdr->mesh_ofs != 64 + hdr->info_size || (hdr->mesh_size & 15)
+		|| hdr->mesh_ofs + hdr->mesh_size != m->size || hdr->anim_size != m->asize)
+	{
+		log_printf("studio: model %d: bad .s64 header\n", i);
+		m->info_st = U_BAD;
+		return -1;
+	}
+	m->info_ofs = hdr->info_ofs;
+	m->info_size = hdr->info_size;
+	m->mesh_ofs = hdr->mesh_ofs;
+	m->mesh_size = hdr->mesh_size;
+	return 0;
+}
+
+/* The info block landed: check it, the model's info is resident. */
+static int info_landed(smodel_t *m, int i)
+{
+	if (fix_info(m->info, m->info_size, 1))
+	{
+		log_printf("studio: model %d: bad info block\n", i);
+		mem_pool_free(&pool, m->info_blk, 0);
+		m->info = NULL;
+		m->info_st = U_BAD;
+		return -1;
+	}
+	m->numseq = m->info->numseq;
+	m->info_st = U_RESIDENT;
+	m->info_used = frame;
+	st.models++;
+	return 0;
+}
+
+/* Advance async info load l (sync: land it now, a blocked read). */
+static void iload_step(iload_t *l, int sync)
+{
+	smodel_t *m = &models[l->idx];
+
+	if (sync && (l->r.state == IO_QUEUED || l->r.state == IO_ACTIVE))
+		io_finish(&l->r);
+	if (l->r.state != IO_DONE)
+		return;
+	if (l->phase == 1)
+	{
+		/* no eviction for a prefetch: the pool keeps what is in use */
+		if (info_header(m, l->idx, &l->hdr)
+			|| !(m->info_blk = mem_pool_alloc(&pool, m->info_size, (void **)&m->info)))
+		{
+			if (m->info_st != U_BAD)
+				m->info_st = U_ABSENT;
+			l->idx = -1;
+			return;
+		}
+		if (pool.used > st.pool_peak)
+			st.pool_peak = pool.used;
+		m->info_blk->locked = 1;
+		memset(&l->r, 0, sizeof(l->r));
+		l->r.rom = m->rom + m->info_ofs;
+		l->r.dst = (uint8_t *)m->info;
+		l->r.len = m->info_size;
+		l->r.prio = IO_PRIO_SEAM;
+		io_submit(&l->r);
+		l->phase = 2;
+		if (sync)
+			iload_step(l, 1);
+		return;
+	}
+	m->info_blk->locked = 0;
+	info_landed(m, l->idx);
+	l->idx = -1;
+}
+
 static smodel_t *info_of(res_t r)
 {
 	static sfmt_file_t hdr __attribute__((aligned(16)));
-	int i = model_index(r);
+	int i = model_index(r), k;
 	smodel_t *m;
-	uint64_t t0;
 
 	if (i < 0)
 		return NULL;
 	m = &models[i];
+	if (m->info_st == U_LOADING)
+		for (k = 0; k < ILOADS; k++)
+			if (iloads[k].idx == i)
+			{
+				/* needed before its prefetch landed: finish it now
+				 * (blocked I/O, counted) */
+				iload_step(&iloads[k], 1);
+				st.sync_loads++;
+			}
 	if (m->info_st == U_RESIDENT)
 	{
 		m->info_used = frame;
@@ -509,42 +608,74 @@ static smodel_t *info_of(res_t r)
 	}
 	if (m->info_st == U_BAD || model_files(i) || m->size < 64)
 		return NULL;
-	t0 = sys_time_us();
 	io_read_sync(&hdr, m->rom, 64);
-	sw32(&hdr.magic, 1);
-	sw16(&hdr.version, 2);
-	sw32(&hdr.info_ofs, 6);
-	if (hdr.magic != SFMT_MODEL_MAGIC || hdr.version != SFMT_VERSION || hdr.info_ofs != 64
-		|| (hdr.info_size & 15) || hdr.mesh_ofs != 64 + hdr.info_size || (hdr.mesh_size & 15)
-		|| hdr.mesh_ofs + hdr.mesh_size != m->size || hdr.anim_size != m->asize)
-	{
-		log_printf("studio: model %d: bad .s64 header\n", i);
-		m->info_st = U_BAD;
+	if (info_header(m, i, &hdr))
 		return NULL;
-	}
-	m->info_ofs = hdr.info_ofs;
-	m->info_size = hdr.info_size;
-	m->mesh_ofs = hdr.mesh_ofs;
-	m->mesh_size = hdr.mesh_size;
 	if (!(m->info_blk = alloc(m->info_size, (void **)&m->info)))
 		sys_error("studio: no pool room for model %d info (%lu B)", i,
 			(unsigned long)m->info_size);
 	io_read_sync(m->info, m->rom + m->info_ofs, m->info_size);
-	if (fix_info(m->info, m->info_size, 1))
-	{
-		log_printf("studio: model %d: bad info block\n", i);
-		mem_pool_free(&pool, m->info_blk, 0);
-		m->info = NULL;
-		m->info_st = U_BAD;
+	if (info_landed(m, i))
 		return NULL;
-	}
-	m->numseq = m->info->numseq;
-	m->info_st = U_RESIDENT;
-	m->info_used = frame;
 	st.sync_loads++;
-	st.models++;
-	(void)t0;
 	return m;
+}
+
+/* Prefetch the info of every model with residency interest (res_precache:
+ * the records' models of the open maps, the ring) once, asynchronously;
+ * sync (New Game, load I/O): read them now. */
+static void info_prefetch(int sync)
+{
+	int n = res_count(RES_K_MODEL), i, k;
+
+	if (n > HL64_STUDIO_MODELS)
+		n = HL64_STUDIO_MODELS;
+	for (k = 0; k < ILOADS; k++)
+		if (iloads[k].idx >= 0)
+			iload_step(&iloads[k], sync);
+	for (i = 0; i < n; i++)
+	{
+		smodel_t *m = &models[i];
+		res_t r = RES_MAKE(RES_K_MODEL, i);
+
+		if (m->info_st != U_ABSENT || m->info_try || !res_interest(r))
+			continue;
+		if (sync)
+		{
+			info_of(r);
+			continue;
+		}
+		for (k = 0; k < ILOADS && iloads[k].idx >= 0; k++)
+			;
+		if (k == ILOADS)
+			return;
+		if (model_files(i) || m->size < 64)
+		{
+			m->info_try = 1;
+			continue;
+		}
+		m->info_try = 1;
+		m->info_st = U_LOADING;
+		memset(&iloads[k].r, 0, sizeof(iloads[k].r));
+		iloads[k].idx = (int16_t)i;
+		iloads[k].phase = 1;
+		iloads[k].r.rom = m->rom;
+		iloads[k].r.dst = (uint8_t *)&iloads[k].hdr;
+		iloads[k].r.len = 64;
+		iloads[k].r.prio = IO_PRIO_SEAM;
+		io_submit(&iloads[k].r);
+	}
+}
+
+void studio_preload(void)
+{
+	int e;
+
+	info_prefetch(1);
+	/* the live entities' models (the player's has no precache) */
+	for (e = 1; e < HL64_MAX_ENTITIES; e++)
+		if (ent_is_live(e) && RES_KIND(ent_rnd(e)->model) == RES_K_MODEL)
+			info_of(ent_rnd(e)->model);
 }
 
 const void *studio_info(res_t model, uint32_t *size)
@@ -772,7 +903,10 @@ void studio_init(void)
 {
 	uint8_t *sc = mem_region(MEM_STUDIO_SCRATCH);
 	uint32_t scb = mem_region_bytes(MEM_STUDIO_SCRATCH);
+	int k;
 
+	for (k = 0; k < ILOADS; k++)
+		iloads[k].idx = -1;
 	mem_pool_init(&pool, "studio", mem_region(MEM_POOL_STUDIO),
 		mem_region_bytes(MEM_POOL_STUDIO), desc, HL64_STUDIO_BLOCKS);
 	if (scb < (MAT_KB + VIEW_KB + 16) * 1024u)
@@ -799,6 +933,7 @@ void studio_frame(void)
 
 	frame++;
 	mem_pool_retire(&pool, frame);
+	info_prefetch(0);
 	for (e = 1; e < HL64_MAX_ENTITIES; e++)
 	{
 		const ent_rnd_t *r;
