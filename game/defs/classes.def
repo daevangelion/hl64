@@ -6,6 +6,24 @@
 // class id = line order of the CLASS lines. Map classes first (the cook's
 // hle_classes[] in tools/w64c/hl_entcook.h), then classes only the game
 // creates at run time. Append only: inserting renumbers every later id.
+//
+// Owners (M3 slices; the gc_<IDENT> entry lives in that slice's game/hl file):
+// GameCore: worldspawn, info_player_*, info_teleport_destination,
+//   info_landmark, info_target, path_corner, path_track, every trigger_*,
+//   multi_manager, multisource, env_global, light, light_spot, light_fluoro,
+//   light_fluorospark, func_door, func_door_rotating, func_water,
+//   momentary_door, func_button, func_rot_button, momentary_rot_button,
+//   func_wall, func_wall_toggle, func_illusionary, func_rotating,
+//   func_pendulum, func_conveyor, func_plat, plat_trigger, func_train,
+//   func_guntarget, func_breakable, func_pushable, func_ladder,
+//   ambient_generic, speaker, env_beverage, item_sodacan, env_sprite,
+//   env_explosion, env_shake, env_fade, env_message, env_render, env_spark,
+//   spark_shower, env_shooter, gibshooter, bodyque.
+// GameMon: scripted_sequence, aiscripted_sequence, scripted_sentence,
+//   monstermaker, every monster_* except monster_tripmine, gib.
+// Items: player, item_suit / healthkit / battery / longjump, world_items,
+//   ammo_*, weapon_*, player_weaponstrip, weaponbox, grenade,
+//   monster_tripmine, func_healthcharger, func_recharge.
 CLASS(WORLDSPAWN, "worldspawn")
 CLASS(INFO_PLAYER_START, "info_player_start")
 CLASS(INFO_PLAYER_DEATHMATCH, "info_player_deathmatch")
@@ -113,3 +131,5 @@ CLASS(WEAPONBOX, "weaponbox")
 CLASS(ITEM_SODACAN, "item_sodacan")
 CLASS(GIB, "gib")
 CLASS(SPARK_SHOWER, "spark_shower")
+CLASS(PLAT_TRIGGER, "plat_trigger")
+CLASS(FUNC_CONVEYOR, "func_conveyor")
