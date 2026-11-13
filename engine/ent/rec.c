@@ -2712,6 +2712,47 @@ static int release_pass(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, ui
 	return 1;
 }
 
+/* the last rec_frame's anchors (global): rec_slot_held */
+static float	held_anc[8][3];
+static int	held_nanc;
+
+int rec_slot_held(int slot)
+{
+	const float r2 = REC_RELEASE_R * REC_RELEASE_R;
+	const wld_layer_t *L = wld_layer(slot);
+	float loc[8][3];
+	int e, a, k, j, n = 0;
+
+	if (slot < 0 || slot >= REC_SLOTS)
+		return 0;
+	for (a = 0; a < held_nanc; a++)
+		for (k = 0; k < 3; k++)
+			loc[a][k] = held_anc[a][k] - (L ? L->gofs[k] : 0);
+	for (e = 2; e < HL64_MAX_ENTITIES; e++)
+	{
+		const col_ent_t *cv;
+		const float *lo, *hi;
+
+		if (!ent_is_live(e) || ent_idc(e)->layer != slot)
+			continue;
+		cv = ent_cv(e);
+		lo = cv->absmin;
+		hi = cv->absmax;
+		if (!memcmp(lo, zero3, sizeof(zero3)) && !memcmp(hi, zero3, sizeof(zero3)))
+			lo = hi = cv->origin;
+		for (a = 0; a < held_nanc; a++)
+			if (abs_d2(lo, hi, loc[a]) <= r2)
+				break;
+		if (a < held_nanc)
+			n++;
+	}
+	for (j = 0; j < REC_HOLDERS; j++)
+		if (R.hold[j].n != NAME_NONE && NAME_SLOT(R.hold[j].n) == slot
+			&& (e = ent_of(R.hold[j].h)) >= 0 && ent_idc(e)->layer != slot)
+			n++;
+	return n;
+}
+
 /* the open slot whose world bounds hold the global point, -1 none */
 static int home_slot(const float g[3])
 {
@@ -2742,6 +2783,9 @@ void rec_frame(const float (*anchors)[3], int nanchors)
 
 	if (!R.map)
 		return;
+	held_nanc = n > 0 ? n : 0;
+	if (held_nanc)
+		memcpy(held_anc, anchors, (size_t)held_nanc * sizeof(held_anc[0]));
 	for (s = 0; s < REC_SLOTS; s++)
 	{
 		rmap_t *m = &R.map[s];

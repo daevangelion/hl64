@@ -362,8 +362,11 @@ translation `T`). Requirements:
    frame with none.
 4. Leave: A's chunks drop by LRU; A's records dehydrate by distance
    (release radius 1024 u, batches every 0.1 s); A closes when nothing of
-   it is resident or live; its timers freeze by remaining time and thaw on
-   reopen.
+   it is resident or live, or, when another seam needs its layer, when
+   nothing of it is live within the release radius (what is left far
+   away refused dehydration for good, e.g. a monster idling in a script;
+   the closing release drops it and its record respawns fresh); its
+   timers freeze by remaining time and thaw on reopen.
 5. OPEN seams draw B's draw set translated by −T, scaled about the eye by
    1 + 1/256, limited to meshlets touching the carry box.
 

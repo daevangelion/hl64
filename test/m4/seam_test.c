@@ -73,6 +73,7 @@ int		__wrap_rec_map_open(int layer);
 int		__wrap_rec_map_ready(int slot);
 void		__wrap_rec_map_close(int slot);
 int		__wrap_rec_slot_live(int slot);
+int		__wrap_rec_slot_held(int slot);
 int		__wrap_rec_release(int e);
 void		__wrap_rec_twin_alias(gid_t16 a, gid_t16 b);
 void		__wrap_rec_twin_clear(int slot);
@@ -93,7 +94,7 @@ int		__wrap_game_carry(int e);
 
 static struct {
 	int		ready, hle_ready, open_null;
-	int		live[4];
+	int		live[4], held[4];
 	int		open_async, alias, twin_clear, rehome, release, pin, window, unpin;
 	int		rebase, fire, fire_at, map_open, map_close, copies, kill;
 	int		pin_n;
@@ -220,6 +221,11 @@ void __wrap_rec_map_close(int slot)
 int __wrap_rec_slot_live(int slot)
 {
 	return D.live[slot];
+}
+
+int __wrap_rec_slot_held(int slot)
+{
+	return D.held[slot];
 }
 
 int __wrap_rec_release(int e)
@@ -533,8 +539,9 @@ static void test_approach(void)
 		&& D.twin_clear == 1, "leave rule close: open=%d closes=%u map_close=%d",
 		__wrap_wld_layer_of_map(s.to) != NULL, st.closes, D.map_close);
 
-	/* both layers in use by home + another neighbour that is live:
-	 * open_fail once, retried; released: that neighbour closes, B opens */
+	/* both layers in use by home + another neighbour holding entities near
+	 * the player: open_fail once, retried; the rest far and refused (live,
+	 * not held): that neighbour closes (closing release), B opens */
 	{
 		int other = wld_map_find("hldemo1");
 		seam_info_t r;
@@ -554,19 +561,21 @@ static void test_approach(void)
 		CHECK(__wrap_wld_layer_of_map(other) != NULL, "hldemo1 not opened");
 		st0 = stats();
 		D.live[slot_of(other)] = 5;
+		D.held[slot_of(other)] = 2;
 		put_player(org);
 		step();
 		step();
 		st = stats();
 		CHECK(st.open_fail == st0.open_fail + 1, "open_fail %u (want %u)", st.open_fail,
 			st0.open_fail + 1);
-		CHECK(!__wrap_wld_layer_of_map(s.to), "B opened over a live neighbour");
-		D.live[slot_of(other)] = 0;
+		CHECK(!__wrap_wld_layer_of_map(s.to), "B opened over a held neighbour");
+		D.held[slot_of(other)] = 0;
 		step();
 		st = stats();
 		CHECK(__wrap_wld_layer_of_map(s.to) && !__wrap_wld_layer_of_map(other),
-			"released neighbour not replaced");
+			"neighbour with only far refusers not replaced");
 		CHECK(st.open_fail == st0.open_fail + 1, "open_fail counted again");
+		D.live[slot_of(other)] = 0;
 	}
 	/* NULL from wld_open_async: open_fail, no retry in this approach */
 	start("hldemo2", far);
