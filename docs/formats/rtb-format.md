@@ -25,7 +25,7 @@ there are no resource names, no precache slots and no slot reuse.
 | 8 | `build_id` u32 | CRC-32 of bytes `[32, file_size)`; compiled routes record it (route-bytecode.md) |
 | 12 | `file_size` u32 | equals the file length |
 | 16 | `cwg_crc` u32 | CRC-32 of the `campaign.cwg` the table was cooked against (map indices are CWG map indices) |
-| 20 | `nsect` u16 | 23 |
+| 20 | `nsect` u16 | 26 |
 | 22 | reserved u16 | 0 |
 | 24 | `dir_ofs` u32 | 32 |
 | 28 | reserved u32 | 0 |
@@ -41,9 +41,10 @@ contiguous: the first at `align16(32 + 16·nsect)`, each next at
 
 Three groups, so a loader reads one prefix:
 
-- **cart** (`FILE` … `GLOB`): loaded at boot; `STRS` is needed only while
+- **cart** (`FILE` … `TTXT`): loaded at boot; `STRS` is needed only while
   the boot resolves the file table (architecture.md 5.1) and may live in the
-  boot arena.
+  boot arena (the engine keeps the files as (PI address, size) and drops the
+  paths).
 - **test** (`TARG`, `TLMP`): loaded by test builds for the route VM.
 - **host** (`NMAP` … `NSTR`): names, for the cook tools, the route compiler
   and debug printing; never on the cart's steady path.
@@ -63,16 +64,19 @@ Three groups, so a loader reads one prefix:
 | 10 | `DEFS` | u16 `res_t` | `res.def` lines | the id of each line of `game/defs/res.def`, in line order |
 | 11 | `CLAS` | — | classes | count of `classes.def` lines (class id = line order) |
 | 12 | `GLOB` | — | global states | count of global-state ids (sorted names, `NGLB`) |
-| 13 | `TARG` | 8 B: `map` u16, `lump_first` u16 (into `TLMP`), `lump_count` u16, `spawners` u16 | names | entity name id → map and BSP entity lumps (below) |
-| 14 | `TLMP` | u16 | lumps | BSP entity lump indices (worldspawn 0), HLE's `lump` |
-| 15 | `NMAP` | u32 offset into `NSTR` | CWG maps | map names |
-| 16 | `NRES` | u32 | `RES_` entries | resource names (below) |
-| 17 | `NSEN` | u32 | sentences | sentence names (upper case) |
-| 18 | `NSGR` | u32 | groups | group names (upper case) |
-| 19 | `NCLS` | u32 | classes | classnames |
-| 20 | `NTGT` | u32 | names | entity names |
-| 21 | `NGLB` | u32 | global states | global-state names |
-| 22 | `NSTR` | byte | bytes | NUL-terminated UTF-8 names |
+| 13 | `TITL` | 40 B: `x`, `y`, `fadein`, `fadeout`, `holdtime`, `fxtime` f32, `text` u32 (into `TTXT`), `text_len` u16, `effect` u8, reserved u8, `color1` u8[4], `color2` u8[4] (r g b a) | titles | titles.txt messages (below) |
+| 14 | `TTXT` | byte | bytes | title texts, each NUL-terminated |
+| 15 | `TARG` | 8 B: `map` u16, `lump_first` u16 (into `TLMP`), `lump_count` u16, `spawners` u16 | names | entity name id → map and BSP entity lumps (below) |
+| 16 | `TLMP` | u16 | lumps | BSP entity lump indices (worldspawn 0), HLE's `lump` |
+| 17 | `NMAP` | u32 offset into `NSTR` | CWG maps | map names |
+| 18 | `NRES` | u32 | `RES_` entries | resource names (below) |
+| 19 | `NSEN` | u32 | sentences | sentence names (upper case) |
+| 20 | `NSGR` | u32 | groups | group names (upper case) |
+| 21 | `NCLS` | u32 | classes | classnames |
+| 22 | `NTGT` | u32 | names | entity names |
+| 23 | `NGLB` | u32 | global states | global-state names |
+| 24 | `NTTL` | u32 | titles | title names (as in titles.txt) |
+| 25 | `NSTR` | byte | bytes | NUL-terminated UTF-8 names |
 
 ## `res_t`
 
@@ -130,6 +134,20 @@ generated constants), then every distinct map `pattern` key value not
 already present, sorted. Letters are stored as 0–25; length 1–255. The
 value of letter index `k` is `k × 22` (lightstyles.md 1).
 
+## Titles
+
+Title ids follow the staged `titles.txt` order (the stage keeps the titles
+the maps name: env_message `message`, worldspawn `chaptertitle`); a name
+repeated (case-insensitive, as GoldSrc looks titles up) keeps its first
+message. Each `TITL` entry is HLSDK's `client_textmessage_t` without the
+name: the parameters the `$` directives in effect before the message set
+(`$position x y`, `$effect 0-2`, `$color r g b [a]`, `$color2 r g b [a]`,
+`$fadein`, `$fadeout`, `$holdtime`, `$fxtime`; a missing directive leaves
+x = y = -1 (centred), colours 255 255 255 0, effect and times 0) and the
+text lines between `{` and `}` joined by `\n` (≤ 1023 bytes). The HLE1 id
+step types the two title keys (hle-format-v1.md "Ids"); the runtime gives
+the game `res_title(id)` / `res_title_text(id)` (include/hl64/rec.h).
+
 ## Entity names (`TARG`)
 
 One entry per distinct (map, name), ordered by map index then name: names
@@ -148,7 +166,7 @@ A reader rejects the file (`sys_error(file, offset, rule)` on the cart,
 
 - header fields as above; `file_size` = bytes present; `build_id` matches
   (host always, cart debug builds);
-- the directory holds exactly the 23 sections in order, contiguous,
+- the directory holds exactly the 26 sections in order, contiguous,
   16-aligned, inside the file, sizes = count × element size, zero padding,
   nothing after the last section;
 - `STRS` / `NSTR` end with NUL; every string offset lies inside its pool
@@ -164,6 +182,9 @@ A reader rejects the file (`sys_error(file, offset, rule)` on the cart,
   exactly; the SENTENCE / GROUP counts equal `SENT` / `SGRP`;
 - `PPOL` bytes ≤ 25; `PATN` ranges inside `PPOL`, length ≥ 1;
 - `DEFS` ids name existing entries (kinds 1–3, 5, 6);
+- `TTXT` ends with NUL; each `TITL` text range lies inside `TTXT`, is
+  NUL-terminated there, holds no NUL and is ≤ 1023 bytes; effect ≤ 2,
+  reserved 0; every float finite with magnitude < 2^20;
 - `TARG.map` < maps, non-decreasing; lump ranges inside `TLMP`,
   `lump_count` ≥ 1, `spawners` ≤ `lump_count`;
 - each name section's count equals its id space; map names, class names
@@ -187,6 +208,7 @@ same layout is packed into the ROM's DFS):
 | `sprites/*.sc4` | SPRITE cart files |
 | `sound/**/*.wav64` | SOUND cart files |
 | `sound/sentences.txt` | the player's sentence file (optional; without it no sentence may be referenced) |
+| `titles.txt` | the staged titles (optional; without it there are no titles) |
 
 File lookups ignore case; two staged files differing only in case are an
 error when used.
@@ -196,13 +218,20 @@ Entity key values (every key of every entity):
 - `targetname` → entity name; `monstermaker`'s `netname` → spawned name;
 - `globalstate` → global-state id;
 - `pattern` → lightstyle pattern (must be 1–255 letters `a`–`z`);
-- `!NAME` in `message`, `sentence`, `noise`, `noise1`–`noise3` → sentence;
+- `!NAME` in `message`, `sentence`, `noise`, `noise1`–`noise3`,
+  `UseSentence`, `UnUseSentence` → sentence; a speaker's `message` (unless
+  `preset` is set) and a plain `UseSentence` / `UnUseSentence` value →
+  sentence group;
 - a value ending in `.mdl` (not `*N`), `.spr` or `.wav` (leading `*`
   dropped) → MODEL, SPRITE or SOUND by name.
 
-Typed keys whose meaning depends on the class (group names, numeric sound
-sets, `func_breakable` gib models chosen by material) are cooked to ids by
-the HLE cook in M1 using this table's name sections and `game/defs`.
+The HLE1 id step (`tools/w64c/hleids.py`, hle-format-v1.md "Ids") writes
+these ids into each map's entity chunk; class-dependent keys (titles,
+monstermaker `monstertype`, `func_breakable` gib models chosen by material
+through `res.def`) are typed there or by the game.
+
+`restab.cook(content, defs, map_names)` (the id step's prepass) builds the
+same id spaces without `maps/campaign.cwg` and the map packages.
 
 `--defs` is `game/defs/`: plain X-macro lines (C includes them with the
 macro defined), `//` comments, blank lines; any other line is an error:

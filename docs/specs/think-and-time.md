@@ -112,16 +112,22 @@ is that of HLSDK's float arithmetic. hl64 reproduces it exactly:
 - Slot 0 world, slot 1 player, game entities from slot 2; cap 495.
 - **Allocate**: lowest free slot ≥ 2 that was freed before time 2.0 s or at
   least 0.5 s ago; else the next never-used slot **[probe:measured
-  K-alloc]** (90/90 allocations). The new entity's components are zeroed,
-  serial incremented, creation serial assigned (area-links-and-touch.md
-  3.1).
+  K-alloc]** (90/90 allocations). The new entity's components are zeroed
+  and a creation serial assigned (area-links-and-touch.md 3.1); the slot's
+  serial is unchanged (it was incremented when the slot was freed): a
+  reused slot reports the serial and free time of its last free
+  **[probe:measured K-alloc]**. Slots taken by map entities between
+  probe allocations follow the same rule (hldemo2: 5 of 5).
 - Reserves: optional hydration only while ≥ 48 slots are free; transient
   effects (gibs, debris, shells) only while ≥ 32 are free (otherwise
   skipped); game allocations may use every slot; exhaustion is fatal with a
   class census.
 - **Free**: unlink, remove from the heap and active sets, zero components
-  (keep serial and free time), serial += 1. References held elsewhere are
-  validated through handles.
+  (keep serial and free time), serial += 1; free time = the frame's time
+  (f32). References held elsewhere are validated through handles.
+  `FL_KILLME` (HLSDK `UTIL_Remove`) frees the entity when the active-set
+  pass reaches its slot, after its step (set at StartFrame: freed in that
+  frame's pass with that frame's time **[probe:measured K-alloc]**).
 - **New Game settle**: after the start map's records spawn and precache at
   time 1.0, the first two frames run `game_start_frame` and the active-set
   pass with **time 1.0 and frame time 0** (not 0.1): nothing moves under
@@ -143,3 +149,13 @@ is that of HLSDK's float arithmetic. hl64 reproduces it exactly:
 | K8 | settle: the first two frames after New Game have time 1.0 and frame time 0; the clock advances from the third | **[probe:measured K-settle]** |
 | K9 | active set: identical results with a debug mode that steps every live entity every frame (route checksum of all components at each stats step) | host route |
 | K10 | host and cart clocks bit-identical on a fixed-dt route | route stats |
+
+Host runner: `test/m3/ent.py --bin BUILD/host/hl64-ent` (`make enttest`)
+replays K-think scenarios 0–7 (K1–K3; 8–9 are K5), K-alloc (K6, slot
+indices compressed in order to fit the 495 cap) and K-settle (K8) on the
+real engine/ent code, and runs K7, K9 (a randomised NONE / NOCLIP /
+FOLLOW world with thinks, spawns, removes and cross-entity nextthinks,
+checksummed every frame with and without `phy_set_step_all`, plus a
+control that bypasses the setters and must differ), the heap / active-set
+unit test and P13's resting counters. K9 on full game routes waits for the
+game's entities (M3 gate route).

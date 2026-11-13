@@ -51,6 +51,11 @@ void	fx_particles(const float org[3], const float dir[3], int color, int count);
 int	fx_beam(int e0, const float p0[3], int e1, const float p1[3], res_t sprite, int width,
 		int noise, int r, int g, int b, int brightness, int speed, int life);
 void	fx_beam_kill(int beam);
+/* TE_BEAMCYLINDER: a ring growing to radius over life (0.1 s) */
+void	fx_beam_cylinder(const float org[3], float radius, res_t sprite, int life, int width,
+		int noise, int r, int g, int b, int bright);
+/* TE_IMPLOSION: count tracers converging on org from radius over life (0.1 s) */
+void	fx_implosion(const float org[3], int radius, int count, int life);
 
 /* ---- decals (render-fx.md 4) -------------------------------------------- */
 
