@@ -18,6 +18,7 @@
  * timing (dt from the VI clock, I/O, pacing, profiling).
  */
 #include <math.h>
+#include <string.h>
 
 #include "hl64/ent.h"
 #include "hl64/grid.h"
@@ -199,6 +200,76 @@ static int cmd_shot(const dbg_cmd_t *c)
 	return 0;
 }
 
+/* FNV-1a over a 32-bit value, byte order independent (host = cart) */
+static uint32_t hash_u32(uint32_t h, uint32_t v)
+{
+	int k;
+
+	for (k = 0; k < 4; k++, v >>= 8)
+		h = (h ^ (v & 0xFFu)) * 16777619u;
+	return h;
+}
+
+static uint32_t hash_f(uint32_t h, const float *f, int n)
+{
+	uint32_t u;
+
+	while (n--)
+	{
+		memcpy(&u, f++, sizeof(u));
+		h = hash_u32(h, u);
+	}
+	return h;
+}
+
+/* Stats record `ents` (K9 step-all equivalence, K10 host = cart): live
+ * entity count and a hash of every live entity's simulated state (slot,
+ * identity, collision view, motion, physics, think times and functions,
+ * animation). */
+static int ents_hash(uint32_t *out)
+{
+	uint32_t h = 2166136261u;
+	int e, live = 0;
+
+	for (e = 0; e < HL64_MAX_ENTITIES; e++)
+	{
+		const col_ent_t *cv = ent_cv(e);
+		const ent_mot_t *m = ent_mot(e);
+		const ent_phys_t *ph = ent_phys(e);
+		const ent_tm_t *tm = ent_tm(e);
+		const ent_rnd_t *r = ent_rnd(e);
+		const ent_id_t *id = ent_idc(e);
+
+		if (!ent_is_live(e))
+			continue;
+		live++;
+		h = hash_u32(h, (uint32_t)e << 16 | id->cls);
+		h = hash_u32(h, (uint32_t)id->gid << 16 | id->targetname);
+		h = hash_f(h, cv->origin, 3);
+		h = hash_f(h, cv->angles, 3);
+		h = hash_f(h, cv->mins, 3);
+		h = hash_f(h, cv->maxs, 3);
+		h = hash_u32(h, cv->flags);
+		h = hash_u32(h, (uint32_t)cv->owner << 16 | cv->model);
+		h = hash_u32(h, (uint32_t)(uint16_t)cv->skin << 16 | (uint32_t)cv->solid << 8 | cv->movetype);
+		h = hash_f(h, m->velocity, 3);
+		h = hash_f(h, m->avelocity, 3);
+		h = hash_f(h, m->basevelocity, 3);
+		h = hash_u32(h, (uint32_t)ph->groundentity << 16 | ph->aiment);
+		h = hash_u32(h, (uint32_t)(uint8_t)ph->waterlevel << 8 | (uint8_t)ph->watertype);
+		h = hash_f(h, &ph->ideal_yaw, 1);
+		h = hash_f(h, &tm->nextthink, 1);
+		h = hash_f(h, &tm->ltime, 1);
+		h = hash_u32(h, (uint32_t)tm->think << 16 | tm->touch);
+		h = hash_u32(h, (uint32_t)tm->use << 16 | tm->blocked);
+		h = hash_u32(h, (uint32_t)r->model << 16 | r->sequence);
+		h = hash_f(h, &r->frame, 1);
+		h = hash_u32(h, (uint32_t)r->effects << 16 | (uint32_t)r->body << 8 | r->renderamt);
+	}
+	*out = h;
+	return live;
+}
+
 static int cmd_stats(const dbg_cmd_t *c)
 {
 	stats_t s;
@@ -238,6 +309,13 @@ static int cmd_stats(const dbg_cmd_t *c)
 			(double)pl->velocity[2], (unsigned long)pl->flags, pl->usehull,
 			pl->groundentity, pl->waterlevel);
 	}
+	{
+		uint32_t h;
+		int live = ents_hash(&h);
+
+		log_printf("stats %lu ents: live=%d hash=%08lx\n", (unsigned long)c->arg[0].u, live,
+			(unsigned long)h);
+	}
 	return 0;
 }
 
@@ -264,23 +342,6 @@ static int cmd_prof(const dbg_cmd_t *c)
 	eng.rollup_t0 = sys_time_us();
 	eng.rollup_world_us = 0;
 	eng.rollup_world_max = 0;
-	if (eng.world)
-	{
-		studio_stats_t ss;
-
-		studio_stats(&ss, 1);
-		log_printf("prof studio_us avg=%lu max=%lu drawn=%lu bones_us=%lu draw_us=%lu "
-			"pool=%lu pool_peak=%lu sync=%lu models=%lu anims=%lu culled=%lu pending=%lu "
-			"nofit=%lu dropped=%lu\n",
-			(unsigned long)(ss.frames ? ss.us_sum / ss.frames : 0), (unsigned long)ss.us_max,
-			(unsigned long)(ss.frames ? ss.drawn / ss.frames : 0),
-			(unsigned long)(ss.frames ? ss.bones_us / ss.frames : 0),
-			(unsigned long)(ss.frames ? ss.draw_us / ss.frames : 0),
-			(unsigned long)ss.pool_used, (unsigned long)ss.pool_peak,
-			(unsigned long)ss.sync_loads, (unsigned long)ss.models, (unsigned long)ss.anims,
-			(unsigned long)ss.culled, (unsigned long)ss.pending, (unsigned long)ss.nofit,
-			(unsigned long)ss.dropped);
-	}
 	return 0;
 }
 
@@ -288,6 +349,12 @@ static int cmd_flush(const dbg_cmd_t *c)
 {
 	(void)c;
 	log_flush();
+	return 0;
+}
+
+static int cmd_step_all(const dbg_cmd_t *c)
+{
+	phy_set_step_all((int)c->arg[0].u);
 	return 0;
 }
 
@@ -328,6 +395,7 @@ void eng_boot(const char *platform)
 	dbg_handler_set(DBG_PROF, cmd_prof);
 	dbg_handler_set(DBG_LOG_FLUSH, cmd_flush);
 	dbg_handler_set(DBG_QUIT, cmd_quit);
+	dbg_handler_set(DBG_STEP_ALL, cmd_step_all);
 	ent_init();
 	eng.world = (uint8_t)wld_init();
 	res_init();
@@ -416,6 +484,23 @@ static void rollup(void)
 			(unsigned long)eng.rollup_world_max, (unsigned long)eng.rollup_frames);
 	eng.rollup_world_us = 0;
 	eng.rollup_world_max = 0;
+	if (eng.world)
+	{
+		studio_stats_t ss;
+
+		studio_stats(&ss, 1);
+		log_printf("prof studio_us avg=%lu max=%lu drawn=%lu bones_us=%lu draw_us=%lu "
+			"pool=%lu pool_peak=%lu sync=%lu models=%lu anims=%lu culled=%lu pending=%lu "
+			"nofit=%lu dropped=%lu\n",
+			(unsigned long)(ss.frames ? ss.us_sum / ss.frames : 0), (unsigned long)ss.us_max,
+			(unsigned long)(ss.frames ? ss.drawn / ss.frames : 0),
+			(unsigned long)(ss.frames ? ss.bones_us / ss.frames : 0),
+			(unsigned long)(ss.frames ? ss.draw_us / ss.frames : 0),
+			(unsigned long)ss.pool_used, (unsigned long)ss.pool_peak,
+			(unsigned long)ss.sync_loads, (unsigned long)ss.models, (unsigned long)ss.anims,
+			(unsigned long)ss.culled, (unsigned long)ss.pending, (unsigned long)ss.nofit,
+			(unsigned long)ss.dropped);
+	}
 	if (phy_player_active())
 	{
 		unsigned long n;

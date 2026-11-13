@@ -29,6 +29,7 @@
 #include <string.h>
 
 #include "hl64/ent.h"
+#include "hl64/game.h"
 #include "hl64/pmove.h"
 #include "game/studio/anim.h"
 #include "game/studio/pose.h"
@@ -433,6 +434,13 @@ int gs_attachment(int e, int i, float out[3])
 		out[k] = a->org[0] * bones[a->bone][k][0] + a->org[1] * bones[a->bone][k][1]
 			+ a->org[2] * bones[a->bone][k][2] + bones[a->bone][k][3];
 	return 1;
+}
+
+/* game.h game_attachment: the engine's effects (engine/render/fx.c) ask for
+ * an entity's attachment point (map-local, e's frame); 0 when it has none. */
+int game_attachment(int e, int i, float out[3])
+{
+	return gs_attachment(e, i, out);
 }
 
 int gs_bone_position(int e, int bone, float out[3])

@@ -28,11 +28,6 @@
 #include "game/studio/anim.h"
 #include "game/studio/pose.h"
 
-/* the effects and sound slices land separately (engine/ent/rec.c pattern) */
-#pragma weak fx_muzzle_flash
-#pragma weak fx_sparks
-#pragma weak snd_ambient
-
 /* The cooked resource of the option text `options` (a pointer into the
  * model's string pool, as gs_anim_event / the client event walk hand it
  * out): pfnPlaySoundByNameAtLocation's sound without a name lookup. */
@@ -56,8 +51,6 @@ void game_studio_event(int e, int event, const char *options)
 	float org[3];
 	res_t r;
 
-	if (!fx_muzzle_flash || !fx_sparks || !snd_ambient)
-		return;
 	switch (event)
 	{
 	case 5001:
