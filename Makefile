@@ -266,6 +266,7 @@ cook: $(HLECOOK)
 		--hlecook $(HLECOOK) $(if $(MAPS),--maps $(foreach m,$(MAPS),'$(m)')) \
 		$(if $(HL64_REF_PALETTE),--ref-palette '$(HL64_REF_PALETTE)'))
 	python3 -m tools.restab.restab --content $(HL64_CONTENT) --defs game/defs -o $(HL64_CONTENT)/campaign.rtb
+	$(if $(HL64_DATA),python3 -m tools.w64c.hleids --check $(HL64_CONTENT) --defs game/defs)
 
 ROUTES := $(wildcard test/routes/*.route)
 routes: cook
@@ -281,7 +282,7 @@ test-host: $(HLECOOK)
 	python3 -m unittest tools.restab.test_restab tools.routec.test_routec
 	HL64_HLECOOK=$(HLECOOK) python3 -m unittest tools.cook.test_cook tools.cook.test_hl_campaign \
 		tools.w64c.test_w64c tools.w64c.test_w64check tools.w64c.test_w64seam \
-		tools.w64c.test_hlecook
+		tools.w64c.test_hlecook tools.w64c.test_hleids
 
 test-ares:
 	BUILD_DIR=$(BUILD_DIR) test/run/m0.sh --ares

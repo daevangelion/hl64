@@ -34,7 +34,10 @@ MAX_PATTERN = 255
 MAX_SEQGROUPS = 15
 # entity keys whose "!NAME" value names a sentence (ambient_generic message,
 # scripted_sentence sentence, noise keys)
-SENTENCE_KEYS = frozenset(("message", "sentence", "noise", "noise1", "noise2", "noise3"))
+SENTENCE_KEYS = frozenset(("message", "sentence", "noise", "noise1", "noise2", "noise3",
+                           "UseSentence", "UnUseSentence"))
+# keys whose plain value names a sentence group (talk monsters' use lines)
+GROUP_KEYS = frozenset(("UseSentence", "UnUseSentence"))
 
 
 class CookError(Exception):
@@ -271,6 +274,97 @@ def group_name(sentence: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# titles.txt (the player's titles.txt as staged: env_message / chapter titles)
+
+MAX_TITLES_FILE = 1 << 20
+
+
+def read_titles(data: bytes) -> Tuple[List[rtb.Title], List[str]]:
+    """Messages in file order (title id = index) and their names. `$`
+    directives set the parameters of the messages after them (GoldSrc
+    client_textmessage_t: $position x y, $effect n, $color / $color2
+    r g b [a], $fadein, $fadeout, $holdtime, $fxtime); a message is a name
+    line, `{`, text lines, `}`; `//` lines are comments. A repeated name
+    keeps the first message."""
+    if len(data) > MAX_TITLES_FILE:
+        raise CookError("titles.txt: larger than 1 MB")
+    lines = data.decode("latin-1").splitlines()
+    cur = rtb.Title()
+    titles: List[rtb.Title] = []
+    names: List[str] = []
+    seen: Set[str] = set()
+    i = 0
+    name: Optional[str] = None
+
+    def num(v: str, where: str) -> float:
+        try:
+            f = float(v)
+        except ValueError:
+            raise CookError(f"{where}: {v!r} is not a number") from None
+        if not abs(f) < rtb.TITLE_VALUE_MAX:
+            raise CookError(f"{where}: {v!r} out of range")
+        return f
+
+    while i < len(lines):
+        s = lines[i].strip()
+        where = f"titles.txt:{i + 1}"
+        i += 1
+        if not s or s.startswith("//"):
+            continue
+        if s.startswith("$"):
+            w = s.split()
+            d, args = w[0].lower(), w[1:]
+            if d == "$position" and len(args) == 2:
+                cur.x, cur.y = num(args[0], where), num(args[1], where)
+            elif d == "$effect" and len(args) == 1:
+                cur.effect = int(num(args[0], where))
+                if not 0 <= cur.effect <= 2:
+                    raise CookError(f"{where}: effect {cur.effect} is not 0-2")
+            elif d in ("$color", "$color2") and len(args) in (3, 4):
+                c = tuple(int(num(a, where)) for a in args) + ((0,) if len(args) == 3 else ())
+                if any(not 0 <= v <= 255 for v in c):
+                    raise CookError(f"{where}: colour out of range")
+                if d == "$color":
+                    cur.color1 = c
+                else:
+                    cur.color2 = c
+            elif d in ("$fadein", "$fadeout", "$holdtime", "$fxtime") and len(args) == 1:
+                setattr(cur, d[1:], num(args[0], where))
+            else:
+                raise CookError(f"{where}: unknown or malformed directive {s!r}")
+            continue
+        if s.startswith("{"):
+            if name is None:
+                raise CookError(f"{where}: '{{' without a message name")
+            body: List[str] = []
+            while i < len(lines) and not lines[i].strip().startswith("}"):
+                body.append(lines[i].rstrip("\r"))
+                i += 1
+            if i >= len(lines):
+                raise CookError(f"{where}: message {name} has no closing '}}'")
+            i += 1
+            text = "\n".join(body).encode("latin-1")
+            if len(text) > rtb.TITLE_TEXT_MAX or b"\0" in text:
+                raise CookError(f"{where}: message {name} longer than "
+                                f"{rtb.TITLE_TEXT_MAX} bytes")
+            if name.upper() not in seen:
+                seen.add(name.upper())
+                titles.append(rtb.Title(cur.effect, cur.color1, cur.color2, cur.x, cur.y,
+                                        cur.fadein, cur.fadeout, cur.holdtime, cur.fxtime,
+                                        text))
+                names.append(name)
+            name = None
+            continue
+        if name is not None or len(s.split()) != 1:
+            raise CookError(f"{where}: expected a message name, then '{{'")
+        name = s
+    if name is not None:
+        raise CookError(f"titles.txt: message {name} has no text")
+    if len(titles) > 0xFFFF:
+        raise CookError("titles.txt: more than 65535 messages")
+    return titles, names
+
+# --------------------------------------------------------------------------
 # the cook
 
 class Content:
@@ -319,7 +413,11 @@ def cart_file_of(kind: int, name: str) -> str:
     return "sound/" + name + "64"     # x.wav -> sound/x.wav64
 
 
-def cook(content_dir: str, defs_dir: str) -> rtb.Table:
+def cook(content_dir: str, defs_dir: str, map_names: Optional[List[str]] = None) -> rtb.Table:
+    """The table of a staged content directory. With map_names (the HLE1 id
+    step, tools/w64c/hleids.py, before the map packages exist) the id spaces
+    only: no campaign graph, no map packages in the file table; ids depend on
+    names alone, so they equal the final table's."""
     content = Content(content_dir)
     t = rtb.Table()
 
@@ -330,11 +428,14 @@ def cook(content_dir: str, defs_dir: str) -> rtb.Table:
         return hit
 
     # maps
-    cwg_path = need("maps/campaign.cwg", "campaign graph")
-    with open(os.path.join(content_dir, cwg_path), "rb") as f:
-        cwg = f.read()
-    t.cwg_crc = zlib.crc32(cwg) & 0xFFFFFFFF
-    t.map_names = read_cwg_maps(cwg)
+    if map_names is None:
+        cwg_path = need("maps/campaign.cwg", "campaign graph")
+        with open(os.path.join(content_dir, cwg_path), "rb") as f:
+            cwg = f.read()
+        t.cwg_crc = zlib.crc32(cwg) & 0xFFFFFFFF
+        t.map_names = read_cwg_maps(cwg)
+    else:
+        t.map_names = sorted(map_names)
 
     refs: Dict[Tuple[int, str], str] = {}          # (kind, name) -> first referrer
     sentence_refs: Dict[str, str] = {}            # upper-case name -> referrer
@@ -351,6 +452,10 @@ def cook(content_dir: str, defs_dir: str) -> rtb.Table:
         spawned: Dict[str, List[int]] = {}     # monstermaker netname -> spawners
         for lump, kvs in enumerate(ents):
             is_maker = ("classname", "monstermaker") in kvs
+            # speaker message: a sentence group name (HLSDK CSpeaker, unless
+            # preset chooses a built-in group)
+            is_speaker = ("classname", "speaker") in kvs and not any(
+                k == "preset" and v not in ("", "0") for k, v in kvs)
             for key, value in kvs:
                 where = f"{mname}:{lump} {key}"
                 if key == "targetname" and value:
@@ -367,6 +472,8 @@ def cook(content_dir: str, defs_dir: str) -> rtb.Table:
                     patterns_map.add(value)
                 elif key in SENTENCE_KEYS and value.startswith("!") and len(value) > 1:
                     sentence_refs.setdefault(value[1:].upper(), where)
+                elif (key == "message" and is_speaker or key in GROUP_KEYS) and value:
+                    group_refs.setdefault(value.upper(), where)
                 else:
                     rk = res_kind_of_value(value)
                     if rk:
@@ -445,8 +552,9 @@ def cook(content_dir: str, defs_dir: str) -> rtb.Table:
         files.append(rtb.FileEntry(rel, len(data), zlib.crc32(data) & 0xFFFFFFFF))
         return file_index[rel]
 
-    for mname in t.map_names:
-        t.map_files.append(add_file(need(f"maps/{mname}.w64", f"map {mname}")))
+    if map_names is None:
+        for mname in t.map_names:
+            t.map_files.append(add_file(need(f"maps/{mname}.w64", f"map {mname}")))
 
     res_id: Dict[Tuple[int, str], int] = {}
     for kind in rtb.FILE_KINDS:
@@ -540,6 +648,12 @@ def cook(content_dir: str, defs_dir: str) -> rtb.Table:
         t.targets.append((mi, lumps, spawners))
         t.target_names.append(name)
     t.global_names = sorted(globals_)
+
+    # titles: every message of the staged titles.txt, file order
+    tpath = content.find("titles.txt")
+    if tpath:
+        with open(os.path.join(content_dir, tpath), "rb") as f:
+            t.titles, t.title_names = read_titles(f.read(MAX_TITLES_FILE + 1))
     return t
 
 
