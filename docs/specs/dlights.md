@@ -66,8 +66,10 @@ d = 2000·fraction, quantised to 1/255. Recomputed every frame.
   depth, shade = base light + falloff, texture coordinates from the base
   triangle's affine gradients, so it joins the base exactly where the
   falloff ends. Pool vertices are stored relative to the light at 1/64 u
-  under one extra matrix so pieces stay on their base plane. Counters:
-  pool verts and triangles drawn per frame.
+  under one extra matrix so pieces stay on their base plane. Each draw
+  batch's strip starts 8-byte aligned in the pool's index buffer (the
+  cart DMAs it; engine/render/gpu.h `gpu_draw`). Counters: pool verts and
+  triangles drawn per frame.
 
 ## 4. On models
 
