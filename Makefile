@@ -294,7 +294,10 @@ pmtest: $(PM_BIN)
 
 # Records / resources driver (test/m3/rec_test.c, run by test/m3/rec.py).
 REC_BIN := $(BUILD_DIR)/host/hl64-rec
-REC_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+# (the driver's test game replaces game/hl's record dispatch; game/hl/player.c stays)
+REC_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o \
+	$(filter-out $(BUILD_DIR)/host/game/hl/player.o,$(filter $(BUILD_DIR)/host/game/hl/%,$(HOST_OBJS))),\
+	$(HOST_OBJS)) \
 	$(BUILD_DIR)/host/test/m3/rec_test.o
 $(REC_BIN): $(REC_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)

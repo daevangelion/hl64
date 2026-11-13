@@ -136,8 +136,10 @@ rec_logic_t	*rec_logic(gid_t16 gid);	/* NULL unless logic */
 
 /* Timer for a record: due at the f32 nextthink t by rule 2, callback
  * game_logic_timer(gid, arg, activator) at game_start_frame in due order
- * (ties: insertion order). 128 entries; full = sys_error naming the map
- * and record. */
+ * (ties: insertion order); one per record (replaces). Timers armed by a
+ * callback that are due run in the same pass, except the record re-arming
+ * itself, which runs on the next frame (one think per frame). 128
+ * entries; full = sys_error naming the map and record. */
 void		rec_timer(gid_t16 gid, float t, uint16_t arg, int activator);
 void		rec_timer_cancel(gid_t16 gid);
 /* FireAndDie / CBaseDelay::SUB_UseTargets delay from a runtime entity or

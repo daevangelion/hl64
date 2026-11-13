@@ -3,8 +3,8 @@
  * rec_test.c -- host driver for the record module and the resource table
  * (engine/ent/rec.c, engine/res): the real engine (carve, io, world
  * layers, components, think heap) on cooked content, with a test game
- * (the game_* exports below) that records what the engine asks of it,
- * until game/ lands. Run by test/m3/rec.py.
+ * (the game_* exports below; game/hl is left out of this binary) that
+ * records what the engine asks of it. Run by test/m3/rec.py.
  *
  *   hl64-rec --root CONTENT selftest
  *       hldemo1 records, typed keys, names, fires and deferred uses,
@@ -59,11 +59,25 @@ static struct {
 	int		ntl;
 	struct { gid_t16 gid; uint16_t arg; float t; } tl[64];
 	/* K5 */
-	gid_t16		mm, relay;
+	gid_t16		mm, relay, other;
 	name_t		t5;
 	float		start;
 	int		index;
 } G;
+
+/* the rest of the game exports the linked engine names (game/hl is not
+ * linked into this driver) */
+void game_init(void)
+{
+}
+
+void game_new_campaign(void)
+{
+}
+
+void game_start_frame(void)
+{
+}
 
 int game_spawn_record(gid_t16 gid, int e)
 {
@@ -163,9 +177,12 @@ void game_logic_timer(gid_t16 gid, uint16_t arg, int activator)
 			rec_timer(gid, G.start + k5_targets[G.index].delay, 0, activator);
 		return;
 	}
-	/* cascade test: arg 1 schedules arg 2 at its own due time */
+	/* cascade test: arg 1 arms record G.other due now (same pass); arg 10
+	 * re-arms itself due now (next pass: one think per frame) */
 	if (arg == 1)
-		rec_timer(GID_MAKE(GID_SLOT(gid), GID_LUMP(gid)), now_f(), 2, -1);
+		rec_timer(G.other, now_f(), 2, -1);
+	if (arg == 10)
+		rec_timer(gid, now_f(), 11, -1);
 }
 
 /* ---- helpers ------------------------------------------------------------------- */
@@ -345,13 +362,22 @@ static void test_timers(int slot)
 	rec_timer(a, 52.0f, 6, -1);
 	rec_run_timers(51.5, 0.01);
 	CHECK(G.ntl == 0, "replaced timer");
-	/* cascade: arg 1 schedules arg 2 due now: same pass */
+	/* cascade: arg 1 arms another record due now: same pass */
 	rec_timer_cancel(a);
+	G.other = a;
 	G.ntl = 0;
 	rec_timer(b, 52.0f, 1, -1);
 	rec_run_timers(52.0, 0.01);
-	CHECK(G.ntl == 2 && G.tl[0].arg == 1 && G.tl[1].arg == 2 && G.tl[1].t == 52.0f,
-		"cascade in the same pass (%d)", G.ntl);
+	CHECK(G.ntl == 2 && G.tl[0].arg == 1 && G.tl[1].arg == 2 && G.tl[1].gid == a
+		&& G.tl[1].t == 52.0f, "cascade in the same pass (%d)", G.ntl);
+	/* a record re-arming itself due now runs next frame, seeing its time */
+	G.ntl = 0;
+	rec_timer(b, 53.0f, 10, -1);
+	rec_run_timers(53.0, 0.01);
+	CHECK(G.ntl == 1 && G.tl[0].arg == 10, "self re-arm waits (%d)", G.ntl);
+	rec_run_timers(53.01, 0.01);
+	CHECK(G.ntl == 2 && G.tl[1].arg == 11 && G.tl[1].t == (float)53.01,
+		"self re-arm next frame (%d)", G.ntl);
 	/* freeze / thaw: 0.3 s left when the map closes, due 0.3 s after reopen */
 	G.ntl = 0;
 	eng_set_clock(60.0, 0.01);
