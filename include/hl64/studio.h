@@ -42,6 +42,9 @@ void		studio_want(res_t model, int sequence);
  * hitbox source for engine/coll (col_set_hitbox_source). */
 void		studio_init(void);
 void		studio_frame(void);
+/* New Game after the entity slots were reset: per-entity STEP and probe
+ * state back to boot (the model pools keep their residency). */
+void		studio_new_game(void);
 /* New Game (load I/O): read the info block of every model with residency
  * interest now; afterwards studio_frame prefetches newly interesting
  * models' infos asynchronously (no mid-game synchronous info read once

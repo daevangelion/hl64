@@ -41,6 +41,10 @@ void	game_precache_class(cls_t cls);
 int	game_spawn_record(gid_t16 gid, int e);
 /* A logic record goes live (its rec_logic block zeroed). */
 void	game_spawn_logic(gid_t16 gid);
+/* A live logic record of a reopened map (its frozen state and timers
+ * thawed): the class's Precache on restore (HLSDK DispatchRestore calls
+ * Precache after Restore: trigger_auto thinks again). */
+void	game_logic_restored(gid_t16 gid);
 /* Runtime creation by class (HLSDK CBaseEntity::Create / route DROP):
  * spawn class cls into the fresh entity e at its origin / angles. */
 int	game_spawn_class(cls_t cls, int e);

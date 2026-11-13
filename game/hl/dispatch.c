@@ -408,6 +408,14 @@ void game_spawn_logic(gid_t16 gid)
 		c->LogicSpawn(gid);
 }
 
+void game_logic_restored(gid_t16 gid)
+{
+	const game_class_t *c = game_class(rec_class(gid));
+
+	if (c && c->LogicRestored)
+		c->LogicRestored(gid);
+}
+
 /* ---- dispatch ------------------------------------------------------------------- */
 
 void game_think(int e)

@@ -47,6 +47,13 @@ out:
 	return &lights[pick];
 }
 
+void ren_dlight_reset(void)
+{
+	memset(lights, 0, sizeof(lights));
+	memset(live, 0, sizeof(live));
+	src_rng = 0x9E3779B9u;
+}
+
 void ren_dlight_frame(double time, double dt)
 {
 	int i;

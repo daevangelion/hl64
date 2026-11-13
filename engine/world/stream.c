@@ -1389,6 +1389,17 @@ void wld_unpin_seam(wld_layer_t *B)
 	S.pin_gen++;
 }
 
+void wld_stream_new_game(void)
+{
+	wld_stream_stats_t st = S.st;
+
+	/* boot state (pins, teleport window, the previous player position,
+	 * the standing set) with the stats kept; the target set is named
+	 * again from the next frame's inputs */
+	memset(&S, 0, sizeof(S));
+	S.st = st;
+}
+
 void wld_stream_closed(int slot)
 {
 	if (S.seam[slot].on)

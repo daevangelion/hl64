@@ -23,6 +23,9 @@ void		phy_player_init(void);
 int		phy_player_spawn(int map, const float org[3], const float ang[3]);
 /* At the map's info_player_start (+1 u, as HLSDK spawns), or -1. */
 int		phy_player_spawn_start(int map);
+/* New Game after the entity slots were reset: no player until the next
+ * phy_player_spawn creates it (GoldSrc spawn state, CBasePlayer::Spawn). */
+void		phy_player_reset(void);
 /* Test builds' debug teleport (route-bytecode.md SETPOS): phy_player_spawn,
  * then lifted (<= 64 u, 1 u steps) to the first z where the box of the
  * player's hull is free. Returns 0, or -1 for a bad map. */

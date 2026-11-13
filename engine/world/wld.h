@@ -212,6 +212,9 @@ void		wld_pin_point(int map, const float org[3]);
 void		wld_stream_frame(int home_map, const float eye[3], const float vel[3]);
 /* A seam crossing moved the player's global position by T (not a teleport). */
 void		wld_stream_rebase(const float T[3]);
+/* New Game after every layer closed: the stream's boot state (pins,
+ * teleport window, previous position), stats kept. */
+void		wld_stream_new_game(void);
 /* engine/coll col_want: this frame's collision window (global box, the
  * player box + COL_WINDOW) and the brush models touching it (slot << 16 |
  * BSP model); an input of the target set (OPEN COLL, and + v * 0.5 s for
