@@ -20,7 +20,8 @@
 //   env_explosion, env_shake, env_fade, env_message, env_render, env_spark,
 //   spark_shower, env_shooter, gibshooter, bodyque.
 // GameMon: scripted_sequence, aiscripted_sequence, scripted_sentence,
-//   monstermaker, every monster_* except monster_tripmine, gib.
+//   monstermaker, every monster_* except monster_tripmine, gib, garg_stomp,
+//   streak_spiral, env_smoker.
 // Items: player, item_suit / healthkit / battery / longjump, world_items,
 //   ammo_*, weapon_*, player_weaponstrip, weaponbox, grenade,
 //   monster_tripmine, func_healthcharger, func_recharge.
@@ -133,3 +134,9 @@ CLASS(GIB, "gib")
 CLASS(SPARK_SHOWER, "spark_shower")
 CLASS(PLAT_TRIGGER, "plat_trigger")
 CLASS(FUNC_CONVEYOR, "func_conveyor")
+CLASS(MONSTER_ALIEN_SLAVE, "monster_alien_slave")
+CLASS(MONSTER_RAT, "monster_rat")
+CLASS(MONSTER_MINITURRET, "monster_miniturret")
+CLASS(GARG_STOMP, "garg_stomp")
+CLASS(STREAK_SPIRAL, "streak_spiral")
+CLASS(ENV_SMOKER, "env_smoker")
