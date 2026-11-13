@@ -823,6 +823,13 @@ All recommendations below were accepted by the user on 2026-11-13 (D1 a,
 D2 a, D3 b, D4 FlashRAM, D5 recorder, D6 i-iv as recommended, D7 Expansion
 Pak, D8 copy with note, D9 a, D10 a).
 
+Update 2026-11-13 (user): the full campaign may span several carts if it
+does not fit one 64 MiB cart. Moving between carts uses a Controller Pak
+save (32 KB): the GoldSrc changelevel carry set (player state, inventory,
+global state, landmark-relative transition) plus the next cart/chapter id.
+Within-cart saves stay on FlashRAM per D4. Cart split points follow the
+campaign graph's chapter boundaries; sizing is redone with the retail data.
+
 | # | decision | options | recommendation |
 |---|---|---|---|
 | D1 | Entity representation (M0) | (a) typed components in parallel arrays (228 B per slot), active sets, think heap, ids, HLSDK field names via accessors (6); (b) HLSDK `edict_t` + `entvars_t` verbatim (≈ 800 B per slot, scanned per frame) | (a): ≈ 314 KB less than the old edicts at the 495 cap, O(active) frame loops, exact host/cart sizes, saves by block copy |
