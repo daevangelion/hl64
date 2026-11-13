@@ -98,6 +98,9 @@ void	ent_sets_update(int e);
 void	ent_sets_remove(int e);
 /* Movers membership rule (think-and-time.md 3). */
 int	ent_needs_step(int e);
+/* Live entities whose groundentity is e (being freed) join the movers
+ * once (their next step re-evaluates). */
+void	ent_sets_ground_lost(int e);
 /* Pop every heap entry due by time + dt into the due set; heap_max stat. */
 void	ent_heap_pop_due(double time, double dt);
 /* Next slot >= from in due | movers | kill (| live when all), -1 none. */

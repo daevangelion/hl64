@@ -52,7 +52,7 @@ GAME_SRC := game/pm/pm_shared.c game/pm/pm_math.c game/pm/pm_host.c game/hl/play
 ENGINE_SRC_ENT := engine/ent/heap.c engine/ent/pass.c engine/ent/priv.c
 ENGINE_SRC_PHYS :=
 ENGINE_SRC_REC := engine/ent/rec.c engine/ent/rec_hle.c engine/res/res.c engine/res/rtb.c
-ENGINE_SRC_STUDIO :=
+ENGINE_SRC_STUDIO := engine/render/studio.c
 ENGINE_SRC_SND :=
 ENGINE_SRC_FX :=
 ENGINE_SRC_D2 :=
@@ -62,7 +62,7 @@ GAME_SRC_CORE := game/hl/util.c game/hl/dispatch.c game/hl/world.c game/hl/trigg
 	game/hl/breakable.c
 GAME_SRC_MON :=
 GAME_SRC_ITEMS :=
-GAME_SRC_STUDIO :=
+GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
 	$(ENGINE_SRC_SND) $(ENGINE_SRC_FX) $(ENGINE_SRC_D2)
 GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO)
@@ -72,9 +72,10 @@ GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO
 HLSDK_CFLAGS := -fno-strict-aliasing -Wno-unused-variable -Wno-unused-but-set-variable \
 	-Wno-unknown-pragmas -Wno-array-parameter
 ENGINE_SRC += $(GAME_SRC)
-N64_SRC := plat/n64/cart.c plat/n64/fpu_shim.c plat/n64/gpu.c plat/n64/main.c plat/n64/sys.c \
+N64_SRC := plat/n64/cart.c plat/n64/fpu_shim.c plat/n64/gpu.c plat/n64/gpu_studio.c plat/n64/main.c \
+	plat/n64/sys.c \
 	plat/n64/vid.c
-HOST_SRC := plat/host/gpu.c plat/host/heap_host.c plat/host/io_host.c plat/host/main.c \
+HOST_SRC := plat/host/gpu.c plat/host/gpu_studio.c plat/host/heap_host.c plat/host/io_host.c plat/host/main.c \
 	plat/host/sys.c
 
 # Directories built without -ffast-math on the cart (18.2): host and cart
@@ -98,7 +99,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest area pmtest rectest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest rectest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -237,10 +238,20 @@ unit: $(UNIT_BIN)
 COLLTEST_BIN := $(BUILD_DIR)/host/hl64-colltest
 COLLTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o $(BUILD_DIR)/host/engine/core/eng.o,\
 	$(HOST_OBJS)) \
-	$(BUILD_DIR)/host/test/coll/colltest.o
+	$(BUILD_DIR)/host/test/coll/colltest.o $(BUILD_DIR)/host/test/m3/studio_doubles.o
 $(COLLTEST_BIN): $(COLLTEST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 colltest: $(COLLTEST_BIN)
+
+# Studio residency + animation API driver (test/m3/studio.c, run by
+# test/m3/studio_test.py).
+STUDIOTEST_BIN := $(BUILD_DIR)/host/hl64-studiotest
+STUDIOTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o $(BUILD_DIR)/host/engine/core/eng.o,\
+	$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/studio.o $(BUILD_DIR)/host/test/m3/studio_doubles.o
+$(STUDIOTEST_BIN): $(STUDIOTEST_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+studiotest: $(STUDIOTEST_BIN)
 
 # Area links / touches driver (test/m2/area.c, run by test/m2/area.py).
 AREA_BIN := $(BUILD_DIR)/host/hl64-area
@@ -249,6 +260,14 @@ AREA_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(AREA_BIN): $(AREA_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 area: $(AREA_BIN)
+
+# Entity layer driver (test/m3/ent.c, run by test/m3/ent.py: K1-K3, K6-K9).
+ENTTEST_BIN := $(BUILD_DIR)/host/hl64-ent
+ENTTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/ent.o
+$(ENTTEST_BIN): $(ENTTEST_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+enttest: $(ENTTEST_BIN)
 
 # Player move driver (test/m2/pm.c, run by test/m2/pmbot.py and test/run/m2.sh).
 PM_BIN := $(BUILD_DIR)/host/hl64-pm
@@ -294,7 +313,7 @@ routes: cook
 
 test-host: $(HLECOOK)
 	BUILD_DIR=$(BUILD_DIR) test/run/m0.sh
-	python3 -m unittest tools.restab.test_restab tools.routec.test_routec
+	python3 -m unittest tools.restab.test_restab tools.routec.test_routec tools.studio.test_studiocook
 	HL64_HLECOOK=$(HLECOOK) python3 -m unittest tools.cook.test_cook tools.cook.test_hl_campaign \
 		tools.w64c.test_w64c tools.w64c.test_w64check tools.w64c.test_w64seam \
 		tools.w64c.test_hlecook tools.w64c.test_hleids

@@ -11,14 +11,10 @@
  * the game's touch hook (phy_dispatch_touch), frame layer = the toucher's.
  */
 #include "hl64/ent.h"
+#include "hl64/rec.h"
 #include "engine/core/log.h"
 #include "engine/ent/ent.h"
 #include "engine/phys/phys.h"
-
-/* Pending-record wakes in a global box (include/hl64/rec.h, slice Rec);
- * until engine/res is linked the call is skipped. */
-int rec_wake_box(const float gmins[3], const float gmaxs[3]);
-#pragma weak rec_wake_box
 
 /* Triggers touched in one link; more are dropped and logged. */
 #define PHY_TOUCH_MAX	64
@@ -40,7 +36,7 @@ void phy_link_touch(col_ent_t *e)
 	ent_link(e);
 	if (e->solid == COL_SOLID_NOT)
 		return;
-	if (rec_wake_box)
+	/* pending records in the box hydrate first (area-links-and-touch.md) */
 	{
 		const float *gm = eng_layer_origin(layer);
 		float gmins[3], gmaxs[3];

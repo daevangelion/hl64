@@ -77,6 +77,13 @@
 /* Texture pages and textures per layer (cooked maps: <= 134 / 142). */
 #define HL64_REN_PAGES_MAX		512
 #define HL64_REN_TEX_MAX		512
+/* Studio models (engine/render/studio.c): cooked MODEL ids the residency
+ * table covers, resident animation chunks (D3 b), pool block descriptors,
+ * studio entities drawn per frame (nearest kept, overflow counted). */
+#define HL64_STUDIO_MODELS		256
+#define HL64_STUDIO_ANIMS		512
+#define HL64_STUDIO_BLOCKS		1024
+#define HL64_STUDIO_DRAWN		64
 /* Dynamic lights (docs/specs/dlights.md 1). */
 #define HL64_DLIGHTS			32
 

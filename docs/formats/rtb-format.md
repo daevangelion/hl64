@@ -86,10 +86,10 @@ Three groups, so a loader reads one prefix:
 | kind | name | id space |
 |---:|---|---|
 | 0 | NONE | — (count 0) |
-| 1 | MODEL | `RES_` entries; `models/<name>.mdl` |
+| 1 | MODEL | `RES_` entries; `models/<name>.mdl` (cart file `models/<name>.s64` when cooked, [studio-format.md](studio-format.md)) |
 | 2 | SPRITE | `RES_` entries; `sprites/<name>.spr` (cart file `.sc4`) |
 | 3 | SOUND | `RES_` entries; `<path>.wav` relative to `sound/` (cart file `.wav64`) |
-| 4 | ANIM | `RES_` entries; reserved for D3(b) studio animation chunk sets (count 0 until M3) |
+| 4 | ANIM | `RES_` entries; D3(b) studio animation chunks: ANIM index i is `models/<name>.a64` of MODEL index i (same name); count = MODEL count when the models are cooked, else 0 |
 | 5 | SENTENCE | `SENT` |
 | 6 | GROUP | `SGRP` |
 | 7 | SUBMODEL | not in the table: `index = map slot << 10 \| submodel` (architecture.md 6.5); count 0 |
@@ -100,10 +100,17 @@ ids (precache-and-resources.md R1).
 
 `RES_` entry: `offset`/`size` are the resource's byte range in `file`
 (whole files today: offset 0, size = file size). `flags`: bit 0 EXTTEX (a
-model whose textures are in `<name>t.mdl`, cart file `file + 1`), bits 4–7
-the number of sequence-group files `<name>01.mdl`, `<name>02.mdl`, … that
-follow (after the texture file); other bits 0; only MODEL entries carry
-flags.
+raw model whose textures are in `<name>t.mdl`, cart file `file + 1`), bits
+4–7 the number of sequence-group files `<name>01.mdl`, `<name>02.mdl`, …
+that follow (after the texture file); other bits 0; only raw MODEL entries
+carry flags. Cooked models (`<name>.s64` + `.a64` staged for every model,
+or for none: a mix is an error) have no companions and flags 0.
+
+Studio events: the cook adds the resources a cooked model's event options
+name — a staged `*.wav` (SOUND), a `!NAME` in `sentences.txt` (SENTENCE),
+the group name of event 1009 (GROUP) — and writes each one's `res_t` into
+the event's `res` field of the `.s64` before the file enters `FILE`
+(idempotent: ids follow from names alone).
 
 ## Sentences and groups
 
@@ -259,6 +266,12 @@ resources, 59 sentences, 54 groups, 1082 entity names; cart part
 10,944 B, test part (`TARG`/`TLMP`) 11,664 B, host names 25,216 B;
 47,824 B total. The cart part grows with `res.def` (≈ 12 B per resource
 and 12 B per file).
+
+M3 (**measured**, same 10 maps with titles and speaker / talk-monster
+groups, no `res.def`): 195 files, 185 resources, 93 sentences, 60 groups,
+33 titles; file 54,544 B, cart part 16,352 B. The engine keeps 9,516 B of
+native tables (files as PI address + size, no paths; `mem res`), so the
+RESTAB region is 28 KB for the game's `res.def` (≈ 20 B per resource).
 
 ## Open points
 
