@@ -71,13 +71,20 @@ overlaps the mover's linked box (touching faces count) is touched,
 
 - it is not the mover;
 - for a brush trigger (the trigger has a BSP model): the mover's origin is
-  inside the trigger brush's **hull 1** (standing-player hull) solid,
-  tested in the model's unrotated frame — the trigger's angles are ignored
-  (a yaw-30° trigger fires on its unrotated shape) — so a non-box trigger
-  fires only inside its shape, not anywhere in its bounding box
-  **[probe:measured A-shape]** (960 samples, player-size movers). Movers of
-  other sizes are not yet measured; until they are, hl64 uses hull 1 for
-  every mover **[probe]**.
+  inside the trigger brush's solid in the **hull of the mover's size**,
+  selected and placed as for a trace (trace-and-hulls.md 2: hull 0 for a
+  point-size box, hull 1 / 3 / 2 by size, the brush at origin + hull.mins −
+  mover.mins), tested in the model's unrotated frame — the trigger's
+  angles are ignored (a yaw-30° trigger fires on its unrotated shape) — so
+  a non-box trigger fires only inside its shape, not anywhere in its
+  bounding box **[probe:measured A-shape]** (960 samples, player-size
+  movers). The hull follows the mover's size **[probe:measured A-order]**:
+  of the 499 brush-trigger touches of hull-2-size movers (64 × 64 × 64),
+  384 have the origin outside the trigger's bounds grown by the hull-1
+  extents and all 499 inside them grown by the hull-2 extents; with this
+  rule the A9 replay touches exactly GoldSrc's ranked triggers at all
+  3 452 placements (point 448, human 1 176, large 1 052, head 776 movers),
+  hull 1 for every mover missed 218 large-mover placements.
 
 Because both linked boxes are widened by 1 u, a mover and a box trigger
 that overlap on two axes touch while the gap between their real boxes on
@@ -96,40 +103,67 @@ analysis script `/scratch/quakegeneric/tmp/EngineSpec/acell4.py`):
 
 - **Cell model** (fitted to the capture, prose only): halve the world
   model's box four times, each time along the longer horizontal axis at
-  its midpoint (31 cells, a binary tree); a trigger belongs to the
-  deepest cell whose box contains its linked box (it stays at the first
-  split plane it straddles). A trigger in an **ancestor cell** touches
-  before one in a descendant cell: **666 of 666** co-touched placements in
-  ancestor/descendant cells **[probe:measured A-order]**. Within one cell,
-  brush triggers touch in ascending entity index (**411 of 411**
-  placements); pairs involving point triggers (items, SOLID_TRIGGER
-  weapons) follow ascending index in 2 212 of 2 405 placements; the 193
-  exceptions all involve items, which relink after
-  spawn when they settle **[probe:measured A-order]**. 33 placements
-  co-touched triggers in disjoint cells (order there is the tree walk:
-  the cell nearer the mover's box first) **[probe]**.
-- **Map triggers**: the `touchrank` cook step computes `trank` (HLE1 field,
+  its midpoint (31 cells, a binary tree; no captured map has equal x and y
+  extents at any split, hl64 then splits y **[probe]**); a trigger belongs
+  to the deepest cell whose box contains its linked box (it stays at the
+  first split plane it straddles, and a box face lying **on** a split
+  plane also stays above it: the other choice breaks 1 pair). A trigger in
+  an **ancestor cell** touches before one in a descendant cell: **666 of
+  666** co-touched placements in ancestor/descendant cells
+  **[probe:measured A-order]**. Triggers in disjoint cells touch in
+  pre-order with the **upper child** (coordinates above the split) first,
+  whatever the mover's position (lower child first breaks 11 pairs)
+  **[probe:measured A-order]**.
+- **Order inside a cell** is the order of each trigger's last link before
+  play, entity index within a group: brush triggers, `path_track` and
+  items (`item_*`: linked at spawn, dropped to the floor in their spawn),
+  then ammo (`ammo_*`: MOVETYPE_TOSS, relinked when it lands in the first
+  physics frames), then weapons (`weapon_*`: SOLID_TRIGGER only when their
+  fall think materialises them, ≥ 0.1 s) **[probe:measured A-order]**.
+  Linked boxes at that point: brush triggers model bounds + origin ± 2
+  (GoldSrc pads model bounds by 1, the link by 1 more); `path_track`
+  origin ± 9; items and ammo origin + (−17, −17, −1)…(17, 17, 17); weapons
+  origin + (−24, −24, 0)…(24, 24, 16) (CBasePlayerItem's own collision
+  box, not widened) — all equal to the captured boxes on the 10 maps.
+  Ammo that falls longer than a weapon's first fall think is not
+  captured; the groups are then a model, not a measurement **[probe]**.
+- **Map triggers**: the `touchrank` cook step (`tools/w64c/touchrank.py`,
+  after `hlecook`) computes `trank` (HLE1 field,
   `docs/formats/hle-format-v1.md`) **from geometry with the cell model**:
-  cells in pre-order, then entity index. It needs no capture, so it works
-  on any player-supplied map; the A-order captures are its regression test
-  (A9), and a mismatch on a probed map fails the cook check. Where point
-  triggers end up after settling is part of the open item below.
+  `cell << 11 | place`, cells in pre-order, place in the cell's link
+  order. It needs no capture, so it works on any player-supplied map; it
+  ranks every GoldSrc SOLID_TRIGGER class (also those hlecook drops, such
+  as `trigger_autosave`), so the kept ones keep GoldSrc's relative order.
+  Check (`python3 -m tools.w64c.touchrank --check FIXTURES --maps-dir
+  MAPS [--content CONTENT]`, A9): of the **526** captured map-trigger pairs
+  (phases 1 and 3), **506** touch in `trank` order, **19** involve a
+  trigger the game created (no lump), and **1** is known: hldemo2
+  `item_healthkit` (lump 601) spawns inside `func_wall_toggle` `*80` and
+  falls 8 u after spawn (z 168 → 160), so GoldSrc relinks it after
+  `ammo_9mmAR` (lump 509) lands; geometry cannot see that relink. Every
+  captured placement's full list of touched map triggers is in `trank`
+  order except the 9 that hold that pair (3 443 of 3 452)
+  **[probe:measured A-order]**.
 - **Triggers created at run time** touch in **creation order** (the order
   they were allocated), not index order: a trigger of index 179 created
   earlier touches before one of index 7 created later
   **[probe:measured A-touch, A-order]** (all 10 maps). Whether they
-  interleave with map triggers by cell is not yet measured **[probe]**;
-  Uplink and Hazard create none.
+  interleave with map triggers by cell is not yet measured **[probe]**:
+  of the 19 A-order pairs with a game-created trigger (Hazard Course
+  batteries and MP5s, a hldemo2 handgun), the 17 mixed pairs touch the map
+  trigger first and the 2 between created triggers in index order, but the
+  cell model predicts the same order for all 19.
 - **Re-enabled / relinked triggers reorder**: a trigger that is unlinked
   and linked again changes its place within its cell; after the probe's
   sequential re-enables, the most recently re-enabled trigger touched
   **first** among same-cell partners in 392 of 421 placements, and order across
   cells never changed (88 of 88) **[probe:measured A-order]**. hl64 rule:
   the touch key is (cell, link sequence); spawn assigns ascending
-  sequences by index; re-enabling a trigger (SOLID_NOT → SOLID_TRIGGER)
-  gives it a sequence ahead of every trigger currently in its cell. The
-  29 re-enable pairs this rule misses and the 193 settled-item pairs are
-  tracked by A9 until the rule is refined **[probe]**. Which HLSDK classes can be re-enabled:
+  sequences in the cooked `trank` order; re-enabling a trigger
+  (SOLID_NOT → SOLID_TRIGGER) gives it a sequence ahead of every trigger
+  currently in its cell. The 29 re-enable pairs this rule misses are
+  tracked by A9 until the rule is refined **[probe]** (the former 193
+  settled-item exceptions are the link-order groups above). Which HLSDK classes can be re-enabled:
   `trigger_multiple` has **no** toggle Use; ToggleUse exists on
   `trigger_hurt` (only with a targetname), `trigger_push` and
   `trigger_monsterjump` (HLSDK).
@@ -167,8 +201,8 @@ checks A's liveness before continuing.
 | A2 | grid: every entity found by any box query that overlaps its linked box, none returned twice, at every level and through the huge list and a dry membership pool; solids in ascending index, triggers in touch order | randomised host test |
 | A3 | box trigger touched once per link when the real-box gap is ≤ 2.0 u on any one axis (and overlapping on the others), including face contact; not at 2.01 u; same for FLY movers and the player | **[probe:measured A-touch]** |
 | A4 | `set_origin` into a trigger touches nothing; the next physics move does | probe A-touch |
-| A5 | brush trigger fires iff the mover's origin is inside its hull-1 brush, trigger angles ignored (a yaw-30° trigger uses its unrotated shape); inside the bbox but outside the brush never fires | **[probe:measured A-shape]** (960 samples) |
+| A5 | brush trigger fires iff the mover's origin is inside its brush in the hull of the mover's size (trace hull selection), trigger angles ignored (a yaw-30° trigger uses its unrotated shape); inside the bbox but outside the brush never fires; A-order movers of every hull touch exactly GoldSrc's triggers (A9 touched h0–h3) | **[probe:measured A-shape]** (960 samples), **[probe:measured A-order]** (3 452 placements) |
 | A6 | touch that frees the trigger / another trigger / the toucher: no crash, no touch of freed entities | synthetic |
 | A7 | impact touch: A.touch(B) then B.touch(A); no B.touch(A) when A removed itself in A.touch(B); a SOLID_NOT mover passes through box entities with no impact and no touch | **[probe:measured A-touch]** |
 | A8 | pending record hydrated and touched in the same frame | synthetic |
-| A9 | touch order: runtime-created triggers in creation order (index 179 created before index 7 touches first); map triggers in geometry-computed `trank` order (ancestor cell first 666/666, same-cell brush triggers by index 411/411; 526 pairs consistent, no cycle); re-enabled trigger first in its cell (392/421); force retouch lasts one frame | **[probe:measured A-touch, A-order]** (all 10 maps); every A-order placement is a regression case for `touchrank` |
+| A9 | touch order: runtime-created triggers in creation order (index 179 created before index 7 touches first); map triggers in geometry-computed `trank` order (ancestor cell first 666/666, upper child first, link-order groups; 506 of 526 pairs, 19 with a game-created trigger, 1 known; `touchrank --check` on the rule, `test/m2/area.py` replaying every placement through the engine with the cooked `trank`); re-enabled trigger first in its cell (392/421); force retouch lasts one frame | **[probe:measured A-touch, A-order]** (all 10 maps); every A-order placement is a regression case for `touchrank` |

@@ -54,11 +54,20 @@ void phy_link_touch(col_ent_t *e)
 			continue;
 		if (!ent_s.touch[list[i]])
 			continue;
-		/* brush trigger: the mover's origin inside its hull-1 brush,
-		 * in the model's unrotated frame */
-		if (t->model != COL_NONE
-			&& col_model_contents(t->model, t->origin, zero3, 1, e->origin) != COL_SOLID)
-			continue;
+		/* brush trigger: the mover's origin inside the trigger brush's
+		 * hull for the mover's size, placed as for a trace
+		 * (trace-and-hulls.md 2), in the model's unrotated frame */
+		if (t->model != COL_NONE)
+		{
+			int hull = col_hull_for_size(e->mins, e->maxs), k;
+			float o[3];
+
+			for (k = 0; k < 3; k++)
+				o[k] = hull ? t->origin[k] + (col_hull_mins[hull][k] - e->mins[k])
+					: t->origin[k];
+			if (col_model_contents(t->model, o, zero3, hull, e->origin) != COL_SOLID)
+				continue;
+		}
 		call(t, e);
 	}
 }

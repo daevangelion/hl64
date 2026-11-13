@@ -93,8 +93,8 @@ void		phy_set_touch_call(phy_touch_call_fn fn);
 
 /* Link with touch (spec 3): ent_link, then every overlapping trigger with
  * a touch function, in touch-rank order, self = trigger, other = e; brush
- * triggers only when e's origin is inside their hull-1 brush, angles
- * ignored. A SOLID_NOT e touches nothing. */
+ * triggers only when e's origin is inside their brush for the hull of e's
+ * size (col_hull_for_size), angles ignored. A SOLID_NOT e touches nothing. */
 void		phy_link_touch(col_ent_t *e);
 /* self.touch(other) when both are live and self has a touch function and
  * is not SOLID_NOT (pmove touch lists). */
