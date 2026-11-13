@@ -965,9 +965,7 @@ void	FireBullets(int e, int cShots, const float src[3], const float dirShooting[
 int	Sqm_SquadRecruit(int e, int searchRadius, int maxMembers);
 int	Sqm_SquadCount(int e);
 void	Sqm_SquadRemove(int e, int remove);
-void	Sqm_SquadUnlink(int e);
 int	Sqm_SquadAdd(int e, int add);
-void	Sqm_SquadDisband(int e);
 void	Sqm_SquadMakeEnemy(int e, int enemy);
 void	Sqm_SquadPasteEnemyInfo(int e);
 void	Sqm_SquadCopyEnemyInfo(int e);
@@ -980,6 +978,7 @@ int	Sqm_IsLeader(int e);
 int	Sqm_OccupySlot(int e, int iDesiredSlot);
 void	Sqm_VacateSlot(int e);
 int	Sqm_NoFriendlyFire(int e);
+void	Sqm_Init(int e);
 int	CSquadMonster_CheckEnemy(int e, int enemy);
 void	CSquadMonster_StartMonster(int e);
 void	CSquadMonster_ScheduleChange(int e);
@@ -1127,6 +1126,14 @@ void	mon_stats_script(void);
 #define g_flMeleeRange	64.0f
 #define g_flMediumRange	512.0f
 #define g_flLongRange	8192.0f
+
+/* HLSDK RANDOM_SOUND_ARRAY / PRECACHE_SOUND_ARRAY over arrays of res.def
+ * line ids (R_<IDENT>) */
+#define RANDOM_SOUND_ARRAY(a)	res_def((a)[RANDOM_LONG(0, ARRAYSIZE(a) - 1)])
+#define PRECACHE_SOUND_ARRAY(a)	do { for (int i_ = 0; i_ < ARRAYSIZE(a); i_++) PRECACHE(res_def((a)[i_])); } while (0)
+/* the player's punch angle (pev->punchangle of the player) */
+void	Mon_PunchPlayer(int e, float x, float z);
+extern const float VEC_VIEW[3];
 
 /* skill-dependent values (HLSDK skill.h / skill.cfg values for the monsters) */
 float	mon_skill(const float v[3]);

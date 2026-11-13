@@ -27,6 +27,7 @@
 #include <string.h>
 
 #include "engine/core/sys.h"
+#include "engine/phys/player.h"
 #include "game/hl/monster.h"
 
 #define MONSTER_CUT_CORNER_DIST	8
@@ -2206,4 +2207,15 @@ void game_mon_start_frame(void)
 {
 	mon_stats_frame();
 	CSoundEnt_Think();
+}
+
+const float VEC_VIEW[3] = { 0, 0, 28 };
+
+void Mon_PunchPlayer(int e, float x, float z)
+{
+	if (IsPlayer(e) && phy_player())
+	{
+		phy_player()->punchangle[0] = x;
+		phy_player()->punchangle[2] = z;
+	}
 }

@@ -32,6 +32,7 @@ USE(CSpeaker_ToggleUse)
 THINK(CGib_WaitTillLand)
 TOUCH(CGib_BounceGibTouch)
 TOUCH(CGib_StickyGibTouch)
+TOUCH(CHeadCrab_LeapTouch)
 // ---- Items ----
 // ---- GameCore: classes ----
 USE(CPathTrack_Use)
