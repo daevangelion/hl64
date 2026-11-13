@@ -98,3 +98,29 @@ Captures owed before the milestone that needs them:
 | PM-bot runs (walk, run, jump, duck, ladder, water, stairs) | probe | pmove-host.md (M2) |
 | X-fx, X-glow, S-mix, L-anim, D-flash, W-texanim | retail client | render-fx, sound, lightstyles, dlights, world-surfaces (M3) |
 | old cook outputs, M1 poses, route logs and PROFILE logs | old tree | world-surfaces W1, M1, M4–M6 baselines |
+
+### How the GoldSrc probe captures were taken
+
+The probe is in `test/oracle/` (HLSDK licence for the DLL sources; record
+formats and server setup in `test/oracle/README.md`); `test/oracle/run.sh`
+reproduces every capture byte for byte and `test/oracle/tools/summarize.py`
+prints coverage per test id. Fixtures:
+`$HL64_FIXTURES/goldsrc/<spec>/<capture>/<map>.jsonl`, maps hldemo1–3 and
+t0a0, t0a0a, t0a0b, t0a0b1, t0a0b2, t0a0c, t0a0d. Server: HLDS build 10211,
+one client slot (so `host_framerate 0.01` holds every frame at 10 ms),
+single-player rules and movevars (`sv_maxspeed 320`, `sv_clienttrace 1`),
+map monsters removed and map triggers set SOLID_NOT before capturing (both
+listed in each file's `meta`), brush entities in their spawn state (listed
+on line 2). Inputs come from a generator seeded by (map, capture).
+
+| capture | taken as |
+|---|---|
+| T-points | 20 000 points per map in the BSP world bounds, every 4th on the 1/16 u lattice, plus 64 inside each contents-skin brush entity; `pfnPointContents` and the pmove `PM_PointContents` / `PM_TruePointContents` of a parked fake client |
+| T-segments | per hull 2000 segments ≤ 192 u (80 % starting open) and 200 of 192–4096 u; `pfnTraceModel` on the world and `pfnTraceHull(ignore_monsters)`; 500 per hull also as pmove `PM_PlayerTrace(PM_WORLD_ONLY)` |
+| T-allsolid | per hull 500 segments inside solid and 500 leaving solid, same three traces |
+| T-entities | probe box B and pass entity P at an open spot: B as bbox / slidebox / not / trigger / owned by P / owner of P / glass / FL_MONSTER / zero size; line traces in modes 0, 1, 2, 0x100, 0x101 with pass none/P/B at lateral offsets around B's faces and ±15; hull 1–3 traces; `pfnTraceMonsterHull` boxes {0,8,8.01,32,36,36.01,64}² × {18,36,36.01,72} (centred and feet-origin) against a probe brush entity and the world |
+| T-rotated | a map brush model as probe SOLID_BSP entity at seven angle sets; line, hull 1–3, feet-origin box and single-model (`pfnTraceModel`) traces aimed through it |
+| T-hitbox | scientist, barney, human_grunt, zombie spawned by the game DLL and frozen in four poses (sequence, frame, yaw, controllers, blending); line traces on a 4-side × 21-height × 11-lateral grid, a few hull 3 traces |
+| A-touch | linked boxes read back per solid type, bit 256 (Quake's FL_ITEM; HLSDK has none), yaw, rotated SOLID_BSP / SOLID_TRIGGER brushes; box trigger vs. FLY / bit-256 / SOLID_NOT / SOLID_TRIGGER / MOVETYPE_NONE / TOSS movers and the fake client at real-box gaps −8…3 u per axis, touches tagged set_origin / physics / pmove; three overlapping triggers; seven impact scenarios |
+| A-shape | the map brush model that least fills its bounds (an angled `trigger_once` in hldemo1–3; none in the Hazard Course) as a probe trigger, unrotated and at yaw 30; 320 sample origins, each probed by the fake client's 1 ms zero move and by a physics mover |
+| PM-bot | fake client via `pfnRunPlayerMove`, 300 frames per run: stand, walk, run, strafe, jump, standjump, duck, duckjump on level floor (msec 10; run/jump/duck/duckjump at 33; run/jump at 50), 18 u and 19 u step brushes, stairs, ladder (pitch −45 and 0), water, slope; per frame the command and the player state after the move, plus hull, physents and touches from `playermove_t` |

@@ -1,0 +1,71 @@
+diff --git a/dlls/cbase.cpp b/dlls/cbase.cpp
+index a77605d..4029687 100644
+--- a/dlls/cbase.cpp
++++ b/dlls/cbase.cpp
+@@ -26,6 +26,7 @@ void EntvarsKeyvalue( entvars_t *pev, KeyValueData *pkvd );
+ extern "C" void PM_Move ( struct playermove_s *ppmove, int server );
+ extern "C" void PM_Init ( struct playermove_s *ppmove  );
+ extern "C" char PM_FindTextureType( char *name );
++#include "probe.h"
+ 
+ extern Vector VecBModelOrigin( entvars_t* pevBModel );
+ extern DLL_GLOBAL Vector		g_vecAttackDir;
+@@ -76,7 +77,7 @@ static DLL_FUNCTIONS gFunctionTable =
+ 
+ 	Sys_Error,					//pfnSys_Error				Called when engine has encountered an error
+ 
+-	PM_Move,					//pfnPM_Move
++	Probe_PM_Move,				//pfnPM_Move (hl64 probe: wraps PM_Move)
+ 	PM_Init,					//pfnPM_Init				Server version of player movement initialization
+ 	PM_FindTextureType,			//pfnPM_FindTextureType
+ 	
+diff --git a/dlls/client.cpp b/dlls/client.cpp
+index e2f30b7..3380167 100644
+--- a/dlls/client.cpp
++++ b/dlls/client.cpp
+@@ -791,8 +791,10 @@ void ParmsChangeLevel( void )
+ //
+ // GLOBALS ASSUMED SET:  g_ulFrameCount
+ //
++#include "probe.h"
+ void StartFrame( void )
+ {
++	Probe_StartFrame();
+ 	if ( g_pGameRules )
+ 		g_pGameRules->Think();
+ 
+diff --git a/dlls/game.cpp b/dlls/game.cpp
+index 6f2db09..3d8ec49 100644
+--- a/dlls/game.cpp
++++ b/dlls/game.cpp
+@@ -457,8 +457,10 @@ cvar_t sv_busters = { "sv_busters", "0" };
+ 
+ // Register your console variables here
+ // This gets called one time when the game is initialied
++#include "probe.h"
+ void GameDLLInit( void )
+ {
++	Probe_Init();
+ 	// Register cvars here:
+ 
+ 	g_psv_gravity = CVAR_GET_POINTER( "sv_gravity" );
+diff --git a/dlls/world.cpp b/dlls/world.cpp
+index 5e1d634..4e42642 100644
+--- a/dlls/world.cpp
++++ b/dlls/world.cpp
+@@ -43,6 +43,7 @@ CGlobalState					gGlobalState;
+ extern DLL_GLOBAL	int			gDisplayTitle;
+ 
+ extern void W_Precache(void);
++#include "probe.h"
+ 
+ //
+ // This must match the list in util.h
+@@ -526,6 +527,7 @@ void CWorld :: Precache( void )
+ 	W_Precache ();									// get weapon precaches
+ 
+ 	ClientPrecache();
++	Probe_Precache();
+ 
+ // sounds used from C physics code
+ 	PRECACHE_SOUND("common/null.wav");				// clears sound channels
