@@ -180,56 +180,89 @@ pointers, so `-m32` and LP64 sizes are identical.
 
 ### 4.1 Memory (8 MB)
 
-| region | hl64 KB | old tree | basis |
-|---|---:|---:|---|
-| code + data + bss | ≤ 900 | 1428 **measured** (HL cart ELF) | [EST] the old ELF carries the Quake engine (client, server, protocol, console, QuakeC field tables, alias models, v1 world) and the QuakeC translations; hl64's engine is sector/record based and its game drops the `g_*` layer |
-| framebuffers ×2 + Z | 450 | 450 | measured |
-| rspq / tiny3d / matrices | 96 | (in heap) | [EST] |
-| render / texture / collision pools | 240 / 128 / 208 | 240 / 128 / 208 | cook-proved worst sets (SA2 §8, `q64_limits.h`) |
-| layer directories (2 open) | 168 | 2 × 38–84 | measured |
-| studio pool | 1536 → 1024 with D3(b) | 1536 | old route fits; D3(b) per-sequence animation chunks: ≈ 60 KB per NPC model instead of 93–142 KB (SA2 §3.6) [EST] |
-| studio skinned-mesh tables, view model scratch | 192 | 256 heap reserve | [EST] 4–10 KB per drawn NPC (old `sk_build`) |
-| entity components | 134 | edicts 495 × 884 = 427 + client `entity_t` copies, baselines | **measured** (M3 layout, `-m32` = cart): 228 B of components + 49 B of grid node, membership pool, touch rank, free time per slot × 495 = 137168 B |
-| game private data | 160 | (inside the 884 B edicts) | [EST] ~60 monsters × ≤ 1 KB + movers + items, slab size classes |
-| HLE1 blobs (4 slots) | 160 | 72 KB text + 13–19 KB keys per map before HLE1 | [EST] 40 KB per map; names/classes are ids, keys typed |
-| dehydrate store | 64 | similar | 64 runtime pickups + per-map deltas |
-| resource table (cooked) | 12 (Uplink + Hazard ≈ 800 entries × 12 B; full HL ≈ 40) | precache name tables, sfx names, string interning | 6.5 |
-| sentence table (cooked) | 24 | parsed text in RAM | [EST] word ids, no strings |
-| lightstyle patterns + state | 4 | strings + 96 × value | lightstyles.md |
-| think heap, active bitsets, grid tables | 12 | area tree + leaf lists in edicts | 6.3, 8; the grid tables use 2 KB (measured), grid nodes (16 B each) and the 1485 × 8 B membership pool sit in the entity components region |
-| sound (16 voice buffers, 10 wav64, loops) | 96 | not measured | **measured** (ares, test/m3/snd_ares.sh): 78144 B peak (16 × 4 KB voice buffers in the region, 10 open wav64, tables, AUDIO bounce) × 1.25 = 97680 B |
-| sprite cache / decal texels / particles | 64 / 48 / 12 | 64 / 8 / 512 Quake particles | render-fx.md |
-| dlight scratch + flashlight pool | 48 | same | |
-| HUD sheets + font (ui8) | 128 | similar | [EST] |
-| debug log ring (cart) | 8 | 16 KB console text + notify + command buffer | 12 |
-| per-frame scratch arena | 64 | — | |
-| stack + libdragon slack | 256 | — | |
-| **total** | **≈ 5.1 MB** (≈ 4.6 with D3(b)) | old cart route low point: 259 KB heap free (PROFILE) **measured** | headroom ≈ 3 MB |
+Measured columns: M3 gate, ares, route `m3-a` (hldemo1 only, one geometry
+layer, 2400 frames; `/scratch/hl64/tmp/Gate/rest/table.md`). Carved heap
+at boot: **3696 KB** in 166 allocations, 0 frees, 0 failures (peak = carve).
+Peaks are one-map values; M4 re-measures every region with two layers.
 
-Every [EST] row prints a `mem` line at boot and a high-water mark in every
-stats record; M3/M4/M6 replace it with peak × 1.25.
+| region | hl64 KB (carve) | M3 peak (use) | old tree | basis |
+|---|---:|---:|---:|---|
+| code + data + bss | ≤ 900 | not reported | 1428 **measured** (HL cart ELF) | [EST] the old ELF carries the Quake engine and the QuakeC translations |
+| framebuffers ×2 + Z | 450 | — | 450 | measured |
+| rspq / tiny3d / matrices | 96 | not reported | (in heap) | [EST] |
+| render / texture / collision pools | 240 / 128 / 208 | 117 KB (49%) / 99 KB (77%) / 55 KB (26%) | 240 / 128 / 208 | cook-proved worst sets (SA2 §8); **measured** one layer |
+| layer directories (2 open) | 168 | not reported (hldemo1 dir 40.8 KB) | 2 × 38–84 | measured |
+| studio pool | 1024 (D3 b) | 225 KB (22%) | 1536 | **measured** |
+| studio skinned-mesh tables, view model scratch | 192 | not reported | 256 heap reserve | [EST] |
+| entity components | 134 | 137168 of 137216 B (100%) | edicts 495 × 884 = 427 | **measured**, exact by construction: 495 × 228 B + 24308 B grid nodes, membership pool, touch rank, free times |
+| game private data | 160 | 30.6 KB (19%), 98 live entities | (inside the edicts) | **measured** ≈ 320 B per live entity; at the 495 cap ≈ 155 KB, so 160 stays |
+| HLE slots | 160 | 77.9 KB (49%) for **one** map | 72 KB text + 13–19 KB keys per map | **measured**: hldemo1 chunk 48912 + runtime 14278 B = one 63190 B slot block, plus 16592 B shared tables. 160 KB holds **2** such slots, not 4; M4 sizing below |
+| dehydrate store | 64 | 0 (no crossing in m3-a) | similar | M4 measures |
+| resource table + pattern table | 56 | 43.5 KB (78%) | precache name tables, sfx names | **measured** (the earlier 12 KB counted the 12 B entries only) |
+| sentence table (cooked) | 24 | not reported | parsed text | [EST] |
+| lightstyle patterns + state | 4 | not reported | strings + 96 × value | lightstyles.md |
+| think heap, active bitsets, grid tables | 12 | 6.3 KB (52%) | area tree + leaf lists | **measured** |
+| sound (16 voice buffers, 10 wav64, loops) | 96 | 76.1 KB (79%) | not measured | **measured** (route; the earlier `snd_ares.sh` peak was 78144 B) |
+| sprite cache / decals / particles | 64 / 56 / 12 | — / 51.7 KB (92%) / — | 64 / 8 / 512 | decals **measured**: peak × 1.25 = 64.6 KB exceeds the 56 KB carve, so the decal region grows to **68 KB** (limits.h change owed) |
+| dlight scratch + flashlight pool | 48 | not reported | same | |
+| HUD sheets + font (ui8) | 128 | 71.5 KB (56%) | similar | **measured** |
+| debug log ring (cart) | 8 | — | 16 KB console text | 12 |
+| per-frame scratch arena | 96 | not reported | — | |
+| stack + libdragon slack | 256 | 4.5 KB stack peak | — | measured stack only |
+| **total** | **≈ 5.1 MB** (carved heap 3696 KB measured) | | old cart route low point: 259 KB heap free (PROFILE) **measured** | headroom ≈ 3 MB |
+
+Rows still marked "not reported" print a `mem` line at boot and a
+high-water mark in every stats record from M4; each carve becomes
+peak × 1.25 (M4 for two layers, M6 for the full route). Region use above
+90% (decals) or a peak × 1.25 over the carve is a gate failure.
+
+**HLE slots for M4** (2 geometry layers + up to 4 HLE slots, 5.3). Four
+full slots need 4 × (largest chunk + runtime) + tables: the largest cooked
+HLE1 of the 106 retail maps is 50728 B (c2a5f; hldemo1 48516 B is second),
+so ≈ 4 × 65 KB + 16 KB ≈ 276 KB. hl64 instead defines what a closing map
+keeps:
+
+- **Open** map (geometry layer resident): full slot, chunk + runtime.
+- **Frozen** map (closed with frozen timers or logic still referenced):
+  runtime only — record state, timers, logic thinks, masters and the
+  name→record index a cross-map fire or timer callback can reach (the
+  cook puts those in the runtime part). The chunk (immutable cooked
+  records and keys) is dropped and re-read from the cart when the map
+  reopens: ≤ 50 KB on the OPEN DMA priority in the approach window, before
+  any of its records can hydrate (no record of a closed map can).
+- Carve = 2 × (max chunk + max runtime) + 2 × max runtime + tables
+  ≈ 2 × (49.5 + 14.6) + 2 × 14.6 + 16.2 ≈ **174 KB → 192 KB** (+32 KB;
+  limits.h change owed for M4), with runtime ≈ 32 B per record (hldemo1:
+  14278 B / 447 records); the cook computes the formula for its campaign
+  and fails if it exceeds the carve.
 
 ### 4.2 CPU per frame (33.3 ms at 30 fps)
 
-| work | old p50 / p90 µs (measured, table above) | hl64 budget µs | reasoning |
-|---|---|---:|---|
-| client/server message path | `smsg` 1851 / 2941 + `cl` 1772 / 2666 | 0 | no protocol: the renderer reads components; the per-frame render list build is counted under render |
-| non-moving entities visited every frame | `none` 720 / 1081 + resting part of `toss` | ≈ 50 | [EST] active sets (6.3): resting and idle entities cost nothing |
-| linking, PVS leaf lists | `link` 974 / 1749 + `leafs` 529 / 716 | 600 | [EST] grid cell insert (O(cells)), leaf lookup memoised per origin change, sector overlap instead of 48-leaf lists |
-| record wakes | `wake` 750 / 1432 | 400 | [EST] same pending grid, but woken from the entity grid walk already done by the trace/link |
-| residency recompute | `wsf` 3286 / 4094 | 1000 | [EST] recompute only on eye-leaf / player-cell / pin change; most frames reuse the target set |
-| traces | `trace` 2131 / 4773 | 2000 / 4500 | [EST] same COLL data and per-node cost; entity candidates from the grid instead of the tree; hitbox traces add ≈ 0.1 ms on firing frames |
-| monster/toss/push motion | `step` 2339 / 6253, `toss` 1111, `push` 959 (incl. their traces) | 3500 | [EST] traces dominate; integer think scheduling and active sets remove the per-entity visits |
-| player | `pcl` 1122 / 1527 | 1500 | [EST] pm_shared does more float work than the old movement but runs once |
-| thinks (game AI) | `think` 1364 / 3807 | 4000 / 8000 | game-owned; unchanged by the engine; AI think budgets are a game/ task |
-| hydration | 2000 cap | 2000 cap | unchanged rule |
-| render CPU | `rview` 7102 / 15536, `r2d` 604 / 1517 | 8000 / 12000 | world ≈ 1–2 ms (SA2 spike: 806 µs submit for the dome set), studio ≈ 3 ms, translucent/decals ≈ 1 ms, HUD ≈ 0.6 ms, flashlight ≈ 0.5 ms |
-| sound | ≈ 0 (`snd`) | 500 | |
-| **sum, p50** | ≈ 27 ms | ≈ 19 ms | **[EST] saving ≈ 7–8 ms p50 per frame**, of which ≈ 3.6 ms protocol, ≈ 2.3 ms residency recompute, ≈ 1.5 ms entity visits/linking |
+Measured (M3 gate, ares, route `m3-a`, 80 one-second windows): the frame
+holds the 30 fps VI cap (`frame` 33436 µs avg). Zones are independent
+roll-up timers and may nest (phys inside the ent pass, mon inside game),
+so their sum, 13.8 ms, is an upper bound on simulated CPU, against the old
+tree's ≈ 27 ms p50. The old [EST] rows are replaced by this table.
 
-RSP/RDP time runs in parallel (SA2 spike: ≤ 4.1 ms for a full dome
-visible set); `disp` waits are not CPU budget. M6 measures every row with
-the zones of 15.
+| zone | avg / p90 / max µs (measured) | budget µs | status |
+|---|---|---:|---|
+| world (render list + submit) | 2385 / 5946 / 8319 | render CPU 8000 / 12000 total | world + studio + fx + hud avg 6441: within |
+| studio | 1727 / 4309 / 11445 | (render) | |
+| fx (translucent, decals, temp ents) | 1179 / 1985 / 3262 | (render) | |
+| hud | 1150 / 2160 / 5727 | (render) | |
+| pmove | 1862 / 1647 / 9470 | 1500 | **over** by 24% on average; p90 within, so a few heavy frames carry the mean |
+| ent (active-set pass) | 1249 / 2069 / 20439 | — (new zone; set from M4) | max frame 20 ms |
+| phys (toss, step, push, pushstep) | 1124 / 1816 / 20267 | 3500 | within |
+| game (thinks) | 915 / 1540 / 24454 | 4000 / 8000 incl. mon | within on average; max frame 24.5 ms |
+| mon (monster AI) | 676 / 1015 / 19981 | (game) | |
+| rec (records, wakes, hydration) | 313 / 547 / 14086 | 400 + 2000 hydration cap | within |
+| snd | 1228 / 1514 / 6025 | **1500** (was 500) | the 500 µs [EST] was wrong: 1097 µs of the 1228 is the wav64 stream pump with ≤ 2 voices and 10 open waves; M6 measures the cost at 16 voices |
+
+Open items for M4/M6: single frames of 14–24 ms in game, ent, phys, mon
+and rec (with render on the same frame they can exceed 33 ms; causes to be
+attributed with the zone maxima);
+pmove's average over budget. RSP/RDP time runs in parallel (SA2 spike:
+≤ 4.1 ms for a full dome visible set); `disp` waits are not CPU budget.
 
 ### 4.3 Allocation rules
 
