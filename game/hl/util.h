@@ -43,6 +43,13 @@
 #include "hl64/settings.h"
 #include "hl64/snd.h"
 
+/* rec.h additions on m3-rec (Rec): typed record keys for global states,
+ * lightstyle patterns and classnames; the GLOB count. */
+int		rec_key_global(gid_t16 gid, key_t16 k);	/* id or -1 */
+int		rec_key_pattern(gid_t16 gid, key_t16 k);	/* pattern id or -1 */
+cls_t		rec_key_cls(gid_t16 gid, key_t16 k);
+int		res_globals(void);
+
 /* ---- ids ------------------------------------------------------------------ */
 
 /* keys.def: K_<IDENT> */
@@ -338,8 +345,13 @@ void		RadiusDamage(const float src[3], int inflictor, int attacker, float damage
 #define GLOBAL_OFF		0
 #define GLOBAL_ON		1
 #define GLOBAL_DEAD		2
-int		GlobalState(int id);		/* GLOBAL_*; GLOBAL_OFF unknown */
+/* ids: rec_key_global (-1 none). EntityGetState: GLOBAL_OFF when the id is
+ * not in the table; EntitySetState of an absent id does nothing;
+ * EntityAdd adds or overwrites. */
+int		GlobalState(int id);
+int		GlobalInTable(int id);
 void		GlobalSetState(int id, int state);
+void		GlobalAdd(int id, int state);
 void		GlobalReset(void);
 
 /* ---- decals (HLSDK decals.h order; FX owns the cooked sheet) --------------- */

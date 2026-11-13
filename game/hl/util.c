@@ -1279,23 +1279,40 @@ void RadiusDamage(const float src_in[3], int inflictor, int attacker, float dama
 /* ---- global states ------------------------------------------------------------ */
 
 #define GAME_MAX_GLOBALS	64
+/* 0: not in the table, else GLOBAL_* + 1 */
 static uint8_t	global_state[GAME_MAX_GLOBALS];
+
+static int global_ok(int id)
+{
+	if (id >= 0 && id < GAME_MAX_GLOBALS && id < res_globals())
+		return 1;
+	if (id >= 0)
+		log_printf("game: global state id %d out of range\n", id);
+	return 0;
+}
 
 int GlobalState(int id)
 {
-	if (id < 0 || id >= GAME_MAX_GLOBALS)
+	if (!global_ok(id) || !global_state[id])
 		return GLOBAL_OFF;
-	return global_state[id];
+	return global_state[id] - 1;
+}
+
+int GlobalInTable(int id)
+{
+	return global_ok(id) && global_state[id] != 0;
 }
 
 void GlobalSetState(int id, int state)
 {
-	if (id < 0 || id >= GAME_MAX_GLOBALS)
-	{
-		log_printf("game: global state id %d out of range\n", id);
-		return;
-	}
-	global_state[id] = (uint8_t)state;
+	if (GlobalInTable(id))
+		global_state[id] = (uint8_t)(state + 1);
+}
+
+void GlobalAdd(int id, int state)
+{
+	if (global_ok(id))
+		global_state[id] = (uint8_t)(state + 1);
 }
 
 void GlobalReset(void)
