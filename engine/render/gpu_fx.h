@@ -10,7 +10,8 @@
  * Calls happen between gpu_begin and gpu_end. Positions are
  * camera-relative (eye at the origin, world axes) in quarter units:
  * s16 = 4 x (p - eye), so +-8191 u are reachable; anything farther is
- * culled by the engine before it gets here.
+ * culled by the engine before it gets here. Decals instead draw in their
+ * surface's own frame (gpu_fx_frame), so their decal depth compare holds.
  */
 #ifndef HL64_GPU_FX_H
 #define HL64_GPU_FX_H
@@ -90,6 +91,13 @@ void	gpu_fx_state_lost(void);
  * The bytes stay valid until the GPU has read them (two frames). */
 void	gpu_fx_tex_ci4(const uint16_t *tlut, const uint8_t *ci4, int w, int h);
 void	gpu_fx_tex_i4(const uint8_t *i4, int w, int h);
+/* Frame of the following gpu_fx_tris (until the next call): positions are
+ * s16 under m, the way the world and its movers reach the GPU (rows 0-2:
+ * the frame's axes / GPU_FX_POS_SCALE, row 3: frame origin - eye). Keep
+ * the origin near the vertices: the RSP folds 1 / GPU_FX_POS_SCALE into
+ * the view matrix with 2^-16 steps, an error that grows with |pos|.
+ * NULL = camera-relative quarter units (the default after gpu_fx_begin). */
+void	gpu_fx_frame(const ren_mat_t *m);
 /* Triangles over nv vertices (nv <= 64): idx holds 3 x ntri indices. */
 void	gpu_fx_tris(const gpu_fx_vert_t *v, int nv, const uint8_t *idx, int ntri);
 /* Particles (one call per frame). */
@@ -104,8 +112,10 @@ typedef struct {
 void	gpu_fx_stats(gpu_fx_stats_t *s);
 
 #ifdef HL64_HOST
-/* Recorder: the vertices of the last gpu_fx_tris call and its mode (tests). */
+/* Recorder: the vertices of the last gpu_fx_tris call and its mode (tests);
+ * its gpu_fx_frame matrix (returns 0 when it was camera-relative). */
 int	gpu_fx_host_last(gpu_fx_vert_t *out, int max, int *mode);
+int	gpu_fx_host_last_frame(ren_mat_t *m);
 #endif
 
 #endif

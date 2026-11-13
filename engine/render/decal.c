@@ -892,17 +892,26 @@ static void world_of(const dvert_t *v, const float org[3], float ax[3][3], float
 		out[k] = org[k] + x * ax[0][k] + y * ax[1][k] + z * ax[2][k];
 }
 
-void decal_draw(void)
+/* Drawn in the surface's frame like the world (push_translation) and the
+ * movers (mover_matrix), anchored at the decal's first vertex: rows 0-2
+ * the axes / GPU_FX_POS_SCALE, row 3 the anchor - eye; the vertices are
+ * the stored quarter units minus the anchor's, exact. Measured on ares
+ * (hldemo1, eye x .96875): camera-relative quarter-unit positions put the
+ * decal behind the wall by more than the RDP decal Z tolerance, and every
+ * pixel failed the compare. */
+void decal_draw(uint32_t *ndecals, uint32_t *nverts)
 {
 	int i, last = -1, set = 0;
 
+	*ndecals = *nverts = 0;
 	for (i = 0; i < HL64_FX_DECALS; i++)
 	{
 		fxdecal_t *d = &pool[i];
 		const dvert_t *dv = &verts[i * HL64_FX_DECAL_VERTS];
 		gpu_fx_vert_t v[HL64_FX_DECAL_VERTS];
 		uint8_t idx[3 * HL64_FX_DECAL_VERTS];
-		float org[3], ax[3][3];
+		float org[3], ax[3][3], a[3];
+		ren_mat_t mt;
 		int k, j, ni = 0, b = 0, f;
 
 		if (!d->live)
@@ -915,20 +924,28 @@ void decal_draw(void)
 		}
 		if (d->map != fx_s.map)
 			continue;
+		world_of(&dv[0], org, ax, a);
+		memset(&mt, 0, sizeof(mt));
+		for (k = 0; k < 3; k++)
+		{
+			mt.m[3][k] = a[k] - fx_s.eye[k];
+			if (mt.m[3][k] < -8191.0f || mt.m[3][k] > 8191.0f)
+				break;		/* beyond the far plane */
+			for (j = 0; j < 3; j++)
+				mt.m[j][k] = ax[j][k] / GPU_FX_POS_SCALE;
+		}
+		if (k < 3)
+			continue;
+		mt.m[3][3] = 1.0f;
 		for (j = 0; j < d->nverts; j++)
 		{
-			float g[3];
-
-			world_of(&dv[j], org, ax, g);
-			if (!fx_cam_pos(g, v[j].pos))
-				break;
+			for (k = 0; k < 3; k++)
+				v[j].pos[k] = (int16_t)(dv[j].pos[k] - dv[0].pos[k]);
 			v[j].st[0] = dv[j].st[0];
 			v[j].st[1] = dv[j].st[1];
 			memcpy(v[j].rgba, tex[d->tex].tint, 3);
 			v[j].rgba[3] = 255;
 		}
-		if (j < d->nverts)
-			continue;
 		/* each piece a fan */
 		for (k = 0; k < d->npieces; k++)
 		{
@@ -950,8 +967,12 @@ void decal_draw(void)
 			gpu_fx_tex_i4(tex[d->tex].i4, tex[d->tex].tw, tex[d->tex].th);
 			last = d->tex;
 		}
+		gpu_fx_frame(&mt);
 		gpu_fx_tris(v, d->nverts, idx, ni / 3);
+		(*ndecals)++;
+		*nverts += (uint32_t)d->nverts;
 	}
+	gpu_fx_frame(NULL);
 }
 
 int decal_info(int i, int *owner, int *nverts, float (*out)[3], int max)

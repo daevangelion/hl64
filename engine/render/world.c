@@ -669,9 +669,23 @@ static void fp_tri(const wld_layer_t *L, const float lo[3], float p3[3][3],
 		return;
 	for (k = 0; k < 3; k++)
 		foot[k] = lo[k] - pd * n[k];
-	len = sqrtf(fp_dot(e1, e1));
+	/* fan axes from the plane alone, not from the triangle's own edge:
+	 * coplanar neighbours cut the same wedges, so their pieces meet on
+	 * the shared edge at the same points (a per-triangle fan left
+	 * T-junctions there: a dotted crack along the diagonals on ares) */
+	{
+		float ax[3] = { 0, 0, 1 };
+
+		if (n[2] > 0.9f || n[2] < -0.9f)
+		{
+			ax[0] = 1;
+			ax[2] = 0;
+		}
+		fp_cross(ax, n, u);
+	}
+	len = sqrtf(fp_dot(u, u));
 	for (k = 0; k < 3; k++)
-		u[k] = e1[k] / len;
+		u[k] /= len;
 	fp_cross(n, u, w);
 	for (j = 0; j < 8; j++)
 	{

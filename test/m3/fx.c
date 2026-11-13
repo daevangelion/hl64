@@ -970,6 +970,44 @@ static void test_x5(void)
 		gpu_fx_stats(&gs);
 		CHECK(gs.calls[GPU_FX_DECAL] >= 1, "decals redrawn after landing");
 	}
+	/* drawn in the surface's frame: every drawn vertex is its stored
+	 * position, whatever the eye's fraction (the cart's decal Z compare
+	 * failed when camera-relative quarter units at eye x .96875 put the
+	 * decals behind the wall) */
+	{
+		float g[3], w[HL64_FX_DECAL_VERTS][3], err = 0;
+		gpu_fx_vert_t v[64];
+		ren_mat_t mt;
+		int j, m, nv = 0, nd = 0, owner, framed;
+
+		fx_init();
+		CHECK(decal_place_now(p, n, -1, 0) > 0, "frame: placement");
+		for (i = 0; i < HL64_FX_DECALS && decal_info(i, &owner, &nd, w, HL64_FX_DECAL_VERTS) <= 0; i++)
+			;
+		for (k = 0; k < 3; k++)
+			g[k] = eg[k] + (k == 0 ? 0.96875f : k == 1 ? 0.40625f : 0.15625f);
+		eye(g, 0, 0);
+		draw();
+		nv = gpu_fx_host_last(v, 64, &m);
+		framed = gpu_fx_host_last_frame(&mt);
+		CHECK(i < HL64_FX_DECALS && m == GPU_FX_DECAL && framed && nv == nd,
+			"frame: decal %d mode %d framed %d verts %d/%d", i, m, framed, nv, nd);
+		for (j = 0; j < nv && j < nd; j++)
+			for (k = 0; k < 3; k++)
+			{
+				float q = mt.m[3][k] + g[k] + v[j].pos[0] * mt.m[0][k]
+					+ v[j].pos[1] * mt.m[1][k] + v[j].pos[2] * mt.m[2][k];
+
+				if (fabsf(q - w[j][k]) > err)
+					err = fabsf(q - w[j][k]);
+			}
+		CHECK(err <= 1.0f / 256, "frame: drawn vertex %.4f u off its stored position", err);
+		{
+			size_t l = strlen(note);
+
+			snprintf(note + l, sizeof(note) - l, "; drawn in frame, max %.4f u off", err);
+		}
+	}
 	{
 		size_t l = strlen(note);
 

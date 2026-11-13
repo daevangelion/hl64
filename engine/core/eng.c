@@ -179,11 +179,12 @@ static void log_draw(const char *what, uint32_t label)
 		for (m = 0; m < GPU_FX_MODES; m++)
 			calls += gf.calls[m];
 		log_printf("%s %lu fx: items=%lu cutouts=%lu dropped=%lu sprites=%lu studio=%lu "
-			"brushes=%lu temps=%lu beams=%lu occluded=%lu calls=%lu tris=%lu points=%lu "
-			"tex=%lu hash=%08lx\n", what, (unsigned long)label, (unsigned long)fd.items,
-			(unsigned long)fd.cutouts, (unsigned long)fd.dropped, (unsigned long)fd.sprites,
-			(unsigned long)fd.studio, (unsigned long)fd.brushes, (unsigned long)fd.temps,
-			(unsigned long)fd.beams, (unsigned long)fd.glow_occluded, calls,
+			"brushes=%lu temps=%lu beams=%lu occluded=%lu decals=%lu dverts=%lu calls=%lu "
+			"tris=%lu points=%lu tex=%lu hash=%08lx\n", what, (unsigned long)label,
+			(unsigned long)fd.items, (unsigned long)fd.cutouts, (unsigned long)fd.dropped,
+			(unsigned long)fd.sprites, (unsigned long)fd.studio, (unsigned long)fd.brushes,
+			(unsigned long)fd.temps, (unsigned long)fd.beams, (unsigned long)fd.glow_occluded,
+			(unsigned long)fd.decals, (unsigned long)fd.decal_verts, calls,
 			(unsigned long)gf.tris, (unsigned long)gf.points, (unsigned long)gf.texloads,
 			(unsigned long)gf.hash);
 	}
