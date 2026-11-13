@@ -196,14 +196,14 @@ Peaks are one-map values; M4 re-measures every region with two layers.
 | studio skinned-mesh tables, view model scratch | 192 | not reported | 256 heap reserve | [EST] |
 | entity components | 134 | 137168 of 137216 B (100%) | edicts 495 × 884 = 427 | **measured**, exact by construction: 495 × 228 B + 24308 B grid nodes, membership pool, touch rank, free times |
 | game private data | 160 | 30.6 KB (19%), 98 live entities | (inside the edicts) | **measured** ≈ 320 B per live entity; at the 495 cap ≈ 155 KB, so 160 stays |
-| HLE slots | 192 | 77.9 KB for **one** map (m3-a) | 72 KB text + 13–19 KB keys per map | **measured**: hldemo1 chunk 48912 + runtime 14278 B = one 63190 B resident slot, 67702 B while opening, plus ≈ 16.3 KB shared tables; 160 KB held 2 slots, not 4; cook-checked need below |
+| HLE slots | 240 | 77.9 KB for **one** map (m3-a, before infodecal/env_glow) | 72 KB text + 13–19 KB keys per map | **measured** (cook5, infodecal and env_glow kept): hldemo1 chunk 52000 B, resident slot 67344 B, 72512 B while opening, runtime 15344 B, plus 16688 B shared tables; cook-checked need below |
 | dehydrate store | 64 | 0 (no crossing in m3-a) | similar | M4 measures |
 | resource table + pattern table | 56 | 43.5 KB (78%) | precache name tables, sfx names | **measured** (the earlier 12 KB counted the 12 B entries only) |
 | sentence table (cooked) | 24 | not reported | parsed text | [EST] |
 | lightstyle patterns + state | 4 | not reported | strings + 96 × value | lightstyles.md |
 | think heap, active bitsets, grid tables | 12 | 6.3 KB (52%) | area tree + leaf lists | **measured** |
 | sound (16 voice buffers, 10 wav64, loops) | 96 | 76.1 KB (79%) | not measured | **measured** (route; the earlier `snd_ares.sh` peak was 78144 B) |
-| sprite cache / decals / particles | 64 / 56 / 12 | — / 51.7 KB (92%) / — | 64 / 8 / 512 | decals **measured**: peak × 1.25 = 64.6 KB exceeds the 56 KB carve, so the decal region grows to **68 KB** (limits.h change owed) |
+| sprite cache / decals / particles | 64 / 106 / 12 | — / 51.7 KB (92% of the old 56 KB, m3-a) / — | 64 / 8 / 512 | decals: global sheet + 2 per-map placed-decal sheets (`DECL`, one per open layer) + piece vertices, cook-proved (`tools/cook/decals.py`): Uplink 76672 B (29856 + 2 × 11888 t0a0b + 23040), retail 86528 B; carve = retail × 1.25 → **106 KB** (`HL64_DECAL_TEXELS_KB`) |
 | dlight scratch + flashlight pool | 48 | not reported | same | |
 | HUD sheets + font (ui8) | 128 | 71.5 KB (56%) | similar | **measured** |
 | debug log ring (cart) | 8 | — | 16 KB console text | 12 |
@@ -230,14 +230,16 @@ what a closing map keeps:
   any of its records can hydrate (no record of a closed map can).
 - **Cook check** (`hleids`, measured by M3Lead2): need = shared tables +
   the **opening** map at its open-time need (the heap must hold it while
-  it opens: hldemo1 67702 B, not its resident 63190 B) + one open map's
-  resident slot + 2 × frozen runtime, each 16-aligned, over the worst maps
-  of the campaign. Measured need: Uplink + Hazard **176176 B** (tables
-  16688 + opening hldemo1 67702 + open hldemo1 63190 + 2 × 14278); 83
-  retail campaign maps **185184 B**; worst single map c2a5f **182944 B**
-  (its chunk is 51472 B). All fit the **192 KB** carve (196608 B,
-  `HL64_HLE_BLOBS_KB`); the cook fails any campaign over it. Evidence:
-  `/scratch/hl64/tmp/M3Lead2/cook4.log`, `/scratch/hl64/tmp/Rec/retail/`.
+  it opens) + one open map's resident slot + 2 × frozen runtime, each
+  16-aligned, over the worst maps of the campaign. With `infodecal` and
+  `env_glow` cooked (user decision: GoldSrc shows them), measured need:
+  Uplink + Hazard **187232 B** (tables 16688 + opening hldemo1 72512 +
+  open hldemo1 67344 + 2 × 15344); retail campaign estimate **194768 B**
+  (worst c2a5f). Before that change: 176176 B Uplink + Hazard, 185184 B
+  for the 83 retail maps. `HL64_HLE_BLOBS_KB` is **240 KB** (retail
+  × 1.25); the cook proof stays the hard bound and fails any campaign
+  over the carve. Evidence: `/scratch/hl64/tmp/M3Lead2/cook4.log`,
+  `cook5.log`, `/scratch/hl64/tmp/Rec/retail/`, Rec commit `48e213e`.
 
 ### 4.2 CPU per frame (33.3 ms at 30 fps)
 
