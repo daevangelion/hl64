@@ -760,6 +760,34 @@ static void test_x5(void)
 		gpu_fx_stats(&gs);
 		CHECK(gs.calls[GPU_FX_DECAL] >= 1, "decals drawn %lu", (unsigned long)gs.calls[GPU_FX_DECAL]);
 	}
+	/* regression (hldemo3 SIGSEGV): a chunk whose block is being refilled
+	 * (evicted, LOADING again) is never walked or drawn from; placement
+	 * waits, the decals are kept and come back when it lands */
+	{
+		static uint8_t saved[1024];
+		gpu_fx_stats_t gs;
+		int c, kept = decal_count(), r;
+
+		for (c = 0; c < (int)L->hdr.nchunks && c < 1024; c++)
+		{
+			saved[c] = L->ch[c].state;
+			if (L->chunks[c].fourcc == W64_CHUNK_REND && L->ch[c].state == WLD_CH_RESIDENT)
+				L->ch[c].state = WLD_CH_LOADING;
+		}
+		r = decal_place_now(p, n, -1, 0);
+		CHECK(r < 0, "placement on a loading chunk returned %d (must wait)", r);
+		draw();
+		gpu_fx_stats(&gs);
+		CHECK(gs.calls[GPU_FX_DECAL] == 0, "decals drawn from a loading chunk");
+		CHECK(decal_count() == kept, "decals dropped while their chunk reloads");
+		for (c = 0; c < (int)L->hdr.nchunks && c < 1024; c++)
+			L->ch[c].state = saved[c];
+		r = decal_place_now(p, n, -1, 0);
+		CHECK(r > 0, "placement after the chunk landed %d", r);
+		draw();
+		gpu_fx_stats(&gs);
+		CHECK(gs.calls[GPU_FX_DECAL] >= 1, "decals redrawn after landing");
+	}
 	finish("X5", note);
 }
 

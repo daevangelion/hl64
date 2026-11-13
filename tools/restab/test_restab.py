@@ -253,6 +253,26 @@ class CookTest(Base):
             self.assertCookFails("SENTENCE SC_HELLO1: none of its words", files=f)
         self.assertIn("sentences.txt:3 SC_HELLO1: no word left", err.getvalue())
 
+    def test_region_limits(self) -> None:
+        """architecture.md 4.3: the cook proves the RESTAB and scratch regions"""
+        content, defs_dir = testdata.build(tempfile.mkdtemp(dir=self.root))
+        t = restab.cook(content, defs_dir)
+        data = rtb.write(t)
+        tables, cart = restab.check_limits(t, data, restab.DEFAULT_LIMITS)
+        self.assertEqual(cart, struct.unpack_from(">I", data, 32 + 16 * rtb.SECTION_INDEX["TARG"] + 4)[0])
+        self.assertGreater(tables, 0)
+        lim = os.path.join(self.root, "limits.h")
+        for restab_kb, scratch_kb, rule in ((0, 64, "HL64_RESTAB_KB"), (64, 0, "HL64_SCRATCH_KB")):
+            with open(lim, "w") as f:
+                f.write(f"#define HL64_RESTAB_KB\t\t{restab_kb}\t/* x */\n"
+                        f"#define HL64_SCRATCH_KB {scratch_kb}\n")
+            with self.assertRaisesRegex(restab.CookError, rule):
+                restab.check_limits(t, data, lim)
+        out = os.path.join(self.root, "c.rtb")
+        self.assertEqual(restab.main(["--content", content, "--defs", defs_dir, "-o", out,
+                                      "--limits", lim]), 1)
+        self.assertFalse(os.path.exists(out))
+
     def test_prepass_ids_equal_final(self) -> None:
         """the HLE1 id step's prepass: no campaign graph, no packages, same ids"""
         content, defs_dir = testdata.build(tempfile.mkdtemp(dir=self.root))

@@ -48,3 +48,9 @@ cc -std=c99 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Wall 
 cp "$BUILD_DIR/host/hl64-rec" "$OUT/"
 TMPDIR="$OUT" python3 test/m3/rec.py --bin "$OUT" --content "$CONTENT" --fixtures "$FIX/goldsrc" \
 	--fuzz "${REC_FUZZ:-20000}" --scratch "$OUT" || fail "rec.py"
+# the cook's proof of the RESTAB region equals what the engine takes
+T_COOK=$(python3 -c "from tools.restab import restab, rtb; \
+print(restab.engine_table_bytes(rtb.read(open('$CONTENT/campaign.rtb', 'rb').read())))")
+T_ENG=$("$OUT/hl64-rec" --root "$CONTENT" selftest | sed -n 's/^mem res: .* tables=\([0-9]*\) .*/\1/p')
+[[ -n "$T_ENG" && "$T_COOK" == "$T_ENG" ]] || fail "RESTAB proof: cook $T_COOK B, engine $T_ENG B"
+echo "RESTAB proof: cook $T_COOK B = engine $T_ENG B"

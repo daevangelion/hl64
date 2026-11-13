@@ -33,8 +33,9 @@ enum {
 #define REC_SPAWN_R		(768.0f + 192.0f)	/* architecture.md 6.4 */
 #define REC_PREFETCH_R		256.0f	/* model-request ring past it */
 #define REC_RING		6
-#define REC_BUDGET_US		2000u	/* cart pump budget per frame */
-#define REC_BUDGET_HOST		8	/* host pump budget: records */
+#define REC_BUDGET_US		2000u	/* playable builds: pump wall time per frame */
+#define REC_BUDGET_HOST		8	/* HL64_TEST builds (host and cart): records
+					   per frame, deterministic (K10) */
 
 /* The id spaces an HLE1 chunk's typed ids are checked against. */
 typedef struct {
