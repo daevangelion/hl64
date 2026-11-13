@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# M3 gate route (docs/architecture.md 17 M3): segment A of the Uplink
+# route (test/routes/uplink.route, same ops) on hldemo1 with the game
+# running: the intro multi_manager and trigger_teleport, the dome
+# scripted scene, the multisource chain that opens the elevator doors
+# (WAIT_MOVED startele1), a runtime item drop (CBaseEntity::Create, TOSS
+# landing at z 112), and the elevator button +use whose chain fires the
+# USEONLY trigger_changelevel changetohldemo2. M3 has no seams: the
+# crossing (waitmap hldemo2) is M4's; test/run/m3.sh checks the
+# `changelevel: hldemo2` log line the game prints when it fires.
+# Syntax and semantics: docs/formats/route-bytecode.md.
+# ---- A: hldemo1, first visit: intro → dome scene → elevator → hldemo2 ----
+waitmap hldemo1 600
+# intro: hldemo_init_mm opens tele_init_master at 26 s; the start room's
+# trigger_teleport drops the player at tele_init_destination
+waitnear -2048 744 36 48 60
+shot start
+stats hldemo1
+# dome entrance trigger_once start_script_trigger → startdometalk_mm/dometalk_mm
+setpos -2048 -496 70 0 270
+wait 4
+setpos -2000 -620 196 0 270
+wait 26
+shot dome-scene
+# domesci_script_3 'lean' → domesci_script_4 → start_ele_unlock_mm opens the
+# multisource start_ele_lock_1 (~40 s after the dome trigger)
+wait 12
+# trigger_once #151 (master start_ele_lock_1) → start_ele_open_mm → startele1
+setpos -2327 -230 196 0 180
+# runtime-item persistence: a monster-style drop (CBaseEntity::Create) above
+# the dome-view spot, away from the route; it lands at z 112. hldemo1 must
+# still close when hldemo3 opens (a dropped item once kept its map open: the
+# next seam waited forever) and the item must be back on hldemo1-return.
+drop weapon_9mmAR -2000 -620 196
+waitmoved startele1 15
+waitclass weapon_9mmAR -2000 -620 112 32 5
+setpos -2500 -100 196 0 0
+wait 1
+shot elevator
+# elevator button #81 (master button_lock, opened by the doors) → doors close
+# → eledoordelaymm → changetohldemo2 (USEONLY, changetarget elestartmm)
++use
+wait 0.3
+-use
+# the chain: button -> doors close -> eledoordelaymm -> changetohldemo2
+wait 8
+stats segment-a-end
+pass
