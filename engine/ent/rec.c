@@ -233,6 +233,7 @@ static struct {
 	uint32_t	us_max, frames, frame_us;
 	uint32_t	rel_us_max, rel_frames;	/* frames with a release batch */
 	uint32_t	late, close_dropped, store_full;
+	uint8_t		sweep;		/* HL64_TEST class sweep: slot + 1, 0 off */
 	uint32_t	live_peak;
 	uint8_t		*store;		/* DEHYDRATE region */
 	uint32_t	store_used, store_cap, store_peak;
@@ -2680,7 +2681,8 @@ static int release_pass(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, ui
 	double now = eng_time();
 	int e, a, tried = 0;
 
-	if (now < (double)m->rel_next && (double)m->rel_next <= now + REC_RELEASE_PERIOD)
+	if (R.sweep
+		|| (now < (double)m->rel_next && (double)m->rel_next <= now + REC_RELEASE_PERIOD))
 		return 0;
 	m->rel_next = (float)(now + REC_RELEASE_PERIOD);
 	for (e = 2; e < HL64_MAX_ENTITIES; e++)
@@ -2753,6 +2755,15 @@ int rec_slot_held(int slot)
 	return n;
 }
 
+#ifdef HL64_TEST
+void rec_test_class_sweep(int slot)
+{
+	R.sweep = (uint8_t)(slot >= 0 && slot < REC_SLOTS ? slot + 1 : 0);
+	log_printf("rec: class sweep %s: no distance release, pump only in slot %d (test)\n",
+		R.sweep ? "on" : "off", slot);
+}
+#endif
+
 /* the open slot whose world bounds hold the global point, -1 none */
 static int home_slot(const float g[3])
 {
@@ -2807,6 +2818,8 @@ void rec_frame(const float (*anchors)[3], int nanchors)
 				loc[s][a][k] = anchors[a][k] - L->gofs[k];
 		live |= 1u << s;
 	}
+	if (R.sweep)
+		live &= 1u << (R.sweep - 1);	/* test class sweep: one map */
 	deliver_deferred(t0, &done);
 	if (n > 0)
 	{
