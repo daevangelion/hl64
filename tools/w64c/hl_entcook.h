@@ -424,7 +424,7 @@ static const struct { const char *name; uint16_t flags; } hle_classes[] = {
 	{"monster_gman", 0}, {"monster_gargantua", 0}, {"monster_barnacle", 0},
 	{"monster_human_grunt", 0}, {"monster_hgrunt_dead", 0},
 	{"monster_grunt_repel", 0}, {"monster_tripmine", 0},
-	{"monster_generic", 0},
+	{"monster_generic", 0}, {"monster_rat", 0}, {"monster_miniturret", 0},
 	/* items / ammo / weapons */
 	{"item_suit", 0}, {"item_healthkit", 0}, {"item_battery", 0},
 	{"item_longjump", 0}, {"world_items", 0},
@@ -541,6 +541,9 @@ static const struct { const char *name; uint16_t kind; } hle_xkeys[] = {
 	{"lfomodvol",HLE_KF}, {"cspinup",HLE_KF}, {"startdark",HLE_KF},
 	{"WaveHeight",HLE_KF}, {"MaxRange",HLE_KF}, {"chaptertitle",HLE_KS},
 	{"gametitle",HLE_KF}, {"m_flRepeat",HLE_KF}, {"m_iFinishSchedule",HLE_KF},
+	/* monster_miniturret (CBaseTurret::KeyValue) */
+	{"orientation",HLE_KF}, {"maxsleep",HLE_KF}, {"searchspeed",HLE_KF},
+	{"turnrate",HLE_KF},
 	{NULL, 0}
 };
 
