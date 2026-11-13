@@ -139,11 +139,12 @@
 #define HL64_COMPONENTS_KB		134
 #define HL64_GAME_PRIVATE_KB		160	/* [EST] game private slabs */
 #define HL64_THINK_GRID_KB		12	/* think heap, active bitsets, grids */
-/* architecture 4.1 (measured, m3-a on ares): hldemo1 slot 63190 B (chunk
- * 48912 + runtime 14278) + 16592 B shared tables; M4 keeps 2 open maps full
- * and frozen maps runtime-only: 2 x (49.5 + 14.6) + 2 x 14.6 + 16.2 = 174 KB.
- * Cook-proved: the cook fails when its computed need exceeds this carve. */
-#define HL64_HLE_BLOBS_KB		192
+/* HLE region (architecture 4.1): tables + the opening map at open_chunk's
+ * open-time need + the open map's block + 2 frozen maps' runtime, each
+ * 16-aligned. With infodecal / env_glow records kept: Uplink + Hazard need
+ * 187232 B (hldemo1), retail estimate 194768 B (c2a5f); carve = retail x 1.25
+ * (Main). Cook-proved: hleids --check fails when the need exceeds it. */
+#define HL64_HLE_BLOBS_KB		240
 #define HL64_DEHYDRATE_KB		64	/* dehydrate store */
 /* Measured (ares, test/m3/snd_ares.sh): 78144 B peak = tables 3424 + AUDIO
  * bounce 2048 + 16 voice buffers (4096 + VADPCM state 48 + arena header)
