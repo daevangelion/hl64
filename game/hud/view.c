@@ -26,8 +26,12 @@
 #include <math.h>
 #include <stddef.h>
 
+#include "hl64/fx.h"
 #include "hl64/game.h"
 #include "hl64/settings.h"
+#include "hl64/studio.h"
+#include "game/hl/player.h"
+#include "game/studio/anim.h"
 
 #define CL_BOB		0.01f
 #define CL_BOBCYCLE	0.8f
@@ -111,6 +115,46 @@ static float V_CalcRoll(const float *angles, const float *velocity, float rollan
 	return side * sign;
 }
 
+/* The view model (V_CalcNormalRefdef's view entity): at the eye with
+ * 40% of the bob forward, the bob up and a little tilt, shaken at 90%. */
+static void view_model(const ent_player_t *pl, float wofs, float bob,
+	const float so[3], const float sa[3])
+{
+	const CBasePlayer *p = Player();
+	studio_view_t vm;
+	float fwd[3], right[3], up[3];
+	int i;
+
+	if (!p || p->viewmodel == RES_NONE || !PlayerMon() || pl->dead)
+	{
+		studio_view_model(NULL);
+		return;
+	}
+	vm.model = p->viewmodel;
+	vm.sequence = p->weaponanim;
+	vm.frame = gs_view_frame(p->viewmodel, p->weaponanim, 0, p->weaponanim_time, 1.0f);
+	vm.body = p->viewbody;
+	vm.skin = 0;
+	for (i = 0; i < 4; i++)
+		vm.controller[i] = 0;
+	vm.pad[0] = vm.pad[1] = 0;
+	angle_vectors(pl->view_angles, fwd, right, up);
+	for (i = 0; i < 3; i++)
+	{
+		vm.ang[i] = pl->view_angles[i] + sa[i] * 0.9f;
+		vm.org[i] = pl->origin[i] + pl->view_ofs[i] + so[i] * 0.9f + bob * 0.4f * fwd[i];
+	}
+	vm.org[2] += wofs + bob;
+	/* throw in a little tilt */
+	vm.ang[1] -= bob * 0.5f;
+	vm.ang[2] -= bob * 1;
+	vm.ang[0] -= bob * 0.3f;
+	/* pushing the view origin down off of the same X/Y plane as the ent's
+	 * origin gives the gun a nice 'shifting' effect when looking up/down */
+	vm.org[2] -= 1;
+	studio_view_model(&vm);
+}
+
 void game_calc_view(const ent_player_t *pl, float time, float frametime, game_view_t *out)
 {
 	static float oldz, lasttime;
@@ -192,4 +236,18 @@ void game_calc_view(const ent_player_t *pl, float time, float frametime, game_vi
 		oldz = pl->origin[2];
 
 	lasttime = time;
+
+	/* screen shake (the engine's V_CalcShake / V_ApplyShake, fx.h) */
+	{
+		float so[3], sa[3];
+		uint8_t fade[4];
+
+		fx_view(so, sa, fade);
+		for (i = 0; i < 3; i++)
+		{
+			out->org[i] += so[i];
+			out->ang[i] += sa[i];
+		}
+		view_model(pl, waterOffset, bob, so, sa);
+	}
 }

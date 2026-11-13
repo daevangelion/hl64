@@ -228,5 +228,19 @@ int		trans_blend_amt(int rendermode, int renderfx, int amt, int e, float dist);
 /* GPU mode for (render mode, model kind) and the capped blend (X1). */
 int		trans_gpu_mode(int rendermode, int kind, uint8_t *blend);
 void		trans_frame(double dt);		/* persistent fades (5-8) */
+/* Translucent pass callback of the temp entities (tent.c). */
+void		tent_draw(int i, uint8_t blend, int mode);
+
+/* Pool drops since the last reset (counted by each pool). */
+uint32_t	tent_dropped(int reset);
+uint32_t	part_dropped(int reset);
+uint32_t	beam_dropped(int reset);
+
+#ifdef HL64_HOST
+/* Tests: a cooked .sc4 image (big-endian, caller-owned) as resident sprite r. */
+int		sprite_test_inject(res_t r, uint8_t *bytes, uint32_t size);
+/* X2: the last translucent pass's items, back to front. */
+int		trans_last_order(uint8_t *kind, uint16_t *id, uint8_t *blend, int max);
+#endif
 
 #endif

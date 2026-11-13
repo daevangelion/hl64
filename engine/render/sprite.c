@@ -225,6 +225,33 @@ static void request(res_t r)
 	io_submit(&e->req);
 }
 
+#ifdef HL64_HOST
+int sprite_test_inject(res_t r, uint8_t *bytes, uint32_t size)
+{
+	int i;
+
+	for (i = 0; i < HL64_FX_SPRITE_MODELS; i++)
+		if (ent[i].state == SE_FREE)
+		{
+			sent_t *e = &ent[i];
+
+			memset(e, 0, sizeof(*e));
+			e->r = r;
+			e->data = bytes;
+			e->size = size;
+			e->used = frame;
+			if (parse(e))
+			{
+				memset(e, 0, sizeof(*e));
+				return -1;
+			}
+			e->state = SE_RESIDENT;
+			return 0;
+		}
+	return -1;
+}
+#endif
+
 const fx_sprite_t *sprite_get(res_t r)
 {
 	int i;

@@ -4,8 +4,8 @@
  * written from the spec. The old tree's r64_decal.c was not used.
  *
  * Sheet: gsfx/decals.i4 (tools/cook/stage.py stage_decals), loaded at boot
- * into the decal region; the game names decals by HLSDK decals.h index
- * (dlls/world.cpp gDecals order), mapped by name onto the sheet.
+ * into the decal region; its entry i is HLSDK decals.h index i (dlls/
+ * world.cpp gDecals order, as the game names decals), no names at run time.
  *
  * Placement: every cooked triangle of the hit model (the REND chunks of
  * the world sectors around the point, or the mover's MOVR chunk in its
@@ -35,7 +35,7 @@
 #include "engine/render/ren.h"
 #include "engine/world/wld.h"
 
-#define SHEET_MAGIC	0x44493401u	/* 'DI4' 1 */
+#define SHEET_MAGIC	0x44493402u	/* 'DI4' 2: HLSDK decals.h order */
 #define SHEET_ENTRY	28
 #define SHEET_MAX	64		/* decals in a sheet */
 #define REACH		4.0f		/* plane distance that receives the decal */
@@ -45,20 +45,6 @@
 #define RETRIES		4
 #define QUEUE_LIFE	2.0
 #define MAX_CHUNKS	16		/* chunks one placement may touch */
-
-/* HLSDK decals.h order (dlls/world.cpp gDecals): index -> decals.wad name */
-static const char *const hl_names[] = {
-	"{shot1", "{shot2", "{shot3", "{shot4", "{shot5",
-	"{lambda01", "{lambda02", "{lambda03", "{lambda04", "{lambda05", "{lambda06",
-	"{scorch1", "{scorch2",
-	"{blood1", "{blood2", "{blood3", "{blood4", "{blood5", "{blood6",
-	"{yblood1", "{yblood2", "{yblood3", "{yblood4", "{yblood5", "{yblood6",
-	"{break1", "{break2", "{break3",
-	"{bigshot1", "{bigshot2", "{bigshot3", "{bigshot4", "{bigshot5",
-	"{spit1", "{spit2", "{bproof1", "{gargstomp",
-	"{smscorch1", "{smscorch2", "{smscorch3", "{mommablob", "{mommablob"
-};
-#define HL_DECALS	((int)(sizeof(hl_names) / sizeof(hl_names[0])))
 
 typedef struct {
 	uint8_t		tw, th, ww, wh;		/* texels, world units */
@@ -91,7 +77,6 @@ typedef struct {
 
 static dtex_t		tex[SHEET_MAX];
 static int		ntex;
-static int8_t		hl_map[HL_DECALS];	/* HLSDK index -> sheet, -1 */
 static fxdecal_t	pool[HL64_FX_DECALS];
 static dvert_t		*verts;			/* HL64_FX_DECALS x HL64_FX_DECAL_VERTS */
 static pend_t		queue[HL64_FX_DECAL_QUEUE];
@@ -108,7 +93,7 @@ static uint32_t be32(const uint8_t *p)
 /* Validate the sheet (hostile input); 0 ok. */
 static int load_sheet(uint8_t *b, uint32_t size)
 {
-	int n, i, j;
+	int n, i;
 
 	if (size < 8 || be32(b) != SHEET_MAGIC || (b[6] << 8 | b[7]) != SHEET_ENTRY)
 		return -1;
@@ -131,20 +116,6 @@ static int load_sheet(uint8_t *b, uint32_t size)
 		tex[i].i4 = b + ofs;
 	}
 	ntex = n;
-	for (j = 0; j < HL_DECALS; j++)
-	{
-		hl_map[j] = -1;
-		for (i = 0; i < n; i++)
-		{
-			const char *nm = (const char *)b + 8 + SHEET_ENTRY * i;
-
-			if (!strncmp(nm, hl_names[j], 16))
-			{
-				hl_map[j] = (int8_t)i;
-				break;
-			}
-		}
-	}
 	return 0;
 }
 
@@ -159,7 +130,6 @@ void decal_init(void)
 	memset(pool, 0, sizeof(pool));
 	memset(queue, 0, sizeof(queue));
 	memset(&st, 0, sizeof(st));
-	memset(hl_map, -1, sizeof(hl_map));
 	ntex = 0;
 	seq = 0;
 	if (vbytes > cap)
@@ -561,7 +531,7 @@ static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
 	place_t P;
 	int li, k, placed = 0, missing = 0, sheet;
 
-	if (decal < 0 || decal >= HL_DECALS || (sheet = hl_map[decal]) < 0)
+	if (decal < 0 || decal >= ntex || !tex[sheet = decal].tw)
 	{
 		st.nosheet++;
 		return 0;

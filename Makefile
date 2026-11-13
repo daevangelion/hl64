@@ -56,7 +56,7 @@ ENGINE_SRC_STUDIO := engine/render/studio.c
 ENGINE_SRC_SND := engine/snd/snd.c
 ENGINE_SRC_FX := engine/render/fx.c engine/render/tent.c engine/render/part.c \
 	engine/render/beam.c engine/render/decal.c engine/render/sprite.c engine/render/trans.c
-ENGINE_SRC_D2 :=
+ENGINE_SRC_D2 := engine/render/draw2d.c
 GAME_SRC_CORE := game/hl/util.c game/hl/dispatch.c game/hl/world.c game/hl/triggers.c game/hl/logic.c \
 	game/hl/doors.c game/hl/buttons.c game/hl/lights.c game/hl/ambient.c \
 	game/hl/material.c game/hl/env.c game/hl/bmodels.c game/hl/plats.c \
@@ -65,8 +65,12 @@ GAME_SRC_MON := game/hl/monsters.c game/hl/schedule.c game/hl/defaultai.c game/h
 	game/hl/aisound.c game/hl/nodes.c game/hl/scripted.c game/hl/sentences.c \
 	game/hl/talkmonster.c game/hl/scientist.c game/hl/monstermaker.c \
 	game/hl/barney.c game/hl/generic.c game/hl/headcrab.c \
-	game/hl/aisquad.c game/hl/houndeye.c game/hl/barnacle.c
-GAME_SRC_ITEMS :=
+	game/hl/aisquad.c game/hl/houndeye.c game/hl/barnacle.c \
+	game/hl/roach.c game/hl/grunt.c
+GAME_SRC_ITEMS := game/hl/weapons.c game/hl/weapon_crowbar.c game/hl/weapon_glock.c \
+	game/hl/weapon_python.c game/hl/weapon_mp5.c game/hl/weapon_shotgun.c \
+	game/hl/weapon_handgrenade.c game/hl/items.c game/hl/chargers.c game/hl/grenade.c \
+	game/hl/tripmine.c game/hud/hud.c
 GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
 	$(ENGINE_SRC_SND) $(ENGINE_SRC_FX) $(ENGINE_SRC_D2)
@@ -88,6 +92,8 @@ HOST_SRC += plat/host/audio_host.c
 # the FX slice's effects GPU seam (engine/render/gpu_fx.h)
 N64_SRC += plat/n64/gpu_fx.c
 HOST_SRC += plat/host/gpu_fx.c
+N64_SRC += plat/n64/gpu_2d.c
+HOST_SRC += plat/host/gpu_2d.c
 
 # Directories built without -ffast-math on the cart (18.2): host and cart
 # must agree bit for bit on collision and physics, on the world draw list
@@ -110,7 +116,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -280,6 +286,15 @@ $(ENTTEST_BIN): $(ENTTEST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 enttest: $(ENTTEST_BIN)
 
+# Effects driver (test/m3/fx.c, run by test/m3/fx.py: X1-X6, D1/D2/D4,
+# L1/L2, model light terms).
+FXTEST_BIN := $(BUILD_DIR)/host/hl64-fx
+FXTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/fx.o
+$(FXTEST_BIN): $(FXTEST_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+fxtest: $(FXTEST_BIN)
+
 # Physics driver (test/m3/phys.c, run by test/m3/phys.py: P1-P15, K4).
 PHYS_BIN := $(BUILD_DIR)/host/hl64-phys
 PHYS_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
@@ -298,10 +313,14 @@ pmtest: $(PM_BIN)
 
 # Records / resources driver (test/m3/rec_test.c, run by test/m3/rec.py).
 REC_BIN := $(BUILD_DIR)/host/hl64-rec
+# The driver's test game takes the record dispatch rec.c calls (--wrap);
+# the rest of game/ links as usual.
+REC_WRAP := game_spawn_record game_spawn_logic game_use game_logic_use game_logic_timer \
+	game_map_opened game_map_closing
 REC_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 	$(BUILD_DIR)/host/test/m3/rec_test.o
 $(REC_BIN): $(REC_OBJS)
-	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) $(foreach f,$(REC_WRAP),-Wl,--wrap=$(f))
 rectest: $(REC_BIN)
 
 # Sound driver (test/m3/snd.c, run by test/m3/snd.sh: S1-S8 host parts).

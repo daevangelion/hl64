@@ -17,23 +17,19 @@
  *
  * barnacle.c -- monster_barnacle (HLSDK dlls/barnacle.cpp CBarnacle).
  * The player's FBecomeProne / BarnacleVictimBitten / BarnacleVictimReleased
- * overrides (CBasePlayer, player.cpp) are Items' (game/hl/player.c); the
+ * overrides (CBasePlayer, player.cpp) are Items' (game/hl/player.h); the
  * player's entvars the barnacle writes are its ent_player_t.
  */
 #include <math.h>
 
 #include "engine/phys/player.h"
 #include "game/hl/monster.h"
+#include "game/hl/player.h"
 
 #define BARNACLE_BODY_HEIGHT		44
 #define BARNACLE_PULL_SPEED		8
 #define BARNACLE_AE_PUKEGIB		2
 #define BARNACLE_CHECK_SPACING		8
-
-/* CBasePlayer overrides (Items, game/hl/player.c) */
-int	Player_FBecomeProne(int e) __attribute__((weak));
-void	Player_BarnacleVictimBitten(int e, int barnacle) __attribute__((weak));
-void	Player_BarnacleVictimReleased(int e) __attribute__((weak));
 
 typedef struct {
 	CBASEENTITY_FIELDS
@@ -68,17 +64,14 @@ static int victim_deadflag(int v)
 static int victim_FBecomeProne(int v)
 {
 	if (IsPlayer(v))
-		return Player_FBecomeProne ? Player_FBecomeProne(v) : 0;
+		return Player_FBecomeProne(v);
 	return Mon_FBecomeProne(v);
 }
 
 static void victim_Bitten(int v, int barnacle)
 {
 	if (IsPlayer(v))
-	{
-		if (Player_BarnacleVictimBitten)
-			Player_BarnacleVictimBitten(v, barnacle);
-	}
+		Player_BarnacleVictimBitten(v, barnacle);
 	else if (mon_is_monster(v))
 		Mon_BarnacleVictimBitten(v, barnacle);
 }
@@ -86,10 +79,7 @@ static void victim_Bitten(int v, int barnacle)
 static void victim_Released(int v)
 {
 	if (IsPlayer(v))
-	{
-		if (Player_BarnacleVictimReleased)
-			Player_BarnacleVictimReleased(v);
-	}
+		Player_BarnacleVictimReleased(v);
 	else if (mon_is_monster(v))
 		Mon_BarnacleVictimReleased(v);
 }
