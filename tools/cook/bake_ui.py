@@ -13,7 +13,8 @@ transparent index 255.
 Lump types: 0x42 picture (u32 w, h, texels, u16 colours, palette) and 0x46
 font (u32 cell width, height, rowcount, rowheight, 256 x {u16 offset, u16
 width}, a 256-texel-wide glyph sheet of `height` rows, u16 colours,
-palette); a font bakes as its 256 x height glyph sheet.
+palette); a font bakes as its 256 x height glyph sheet plus its glyph
+table (<name>.fnt, below).
 
 UI8 (big-endian): u32 magic 'UI8 ', u16 version 1, u16 flags (1 = index
 255 transparent), u16 w, h, u32 pix_ofs (68), u32 file_size, char
@@ -120,7 +121,30 @@ def bake(wad: bytes, palette: bytes, names: Optional[List[str]] = None,
             lut.append(TRANSPARENT if i == 255 or (r, g, bl) == (0, 0, 255)
                        else nearest(palette, r, g, bl))
         out[n.lower() + ".ui8"] = ui8_bytes(n.lower(), w, h, bytes(lut[t] for t in texels))
+        if typ == TYP_FONT:
+            out[n.lower() + ".fnt"] = font_table(b, h, f"{what}:{n}")
     return out
+
+
+FNT_MAGIC = 0x464E5431  # 'FNT1'
+
+
+def font_table(b: bytes, h: int, what: str) -> bytes:
+    """gfx/<font>.fnt: u32 'FNT1', u16 row height, u16 rows, 256 x {u16
+    offset (y * 256 + x in the glyph sheet), u16 width}, big-endian."""
+    try:
+        rows, rowh = struct.unpack_from("<ii", b, 8)
+        out = bytearray(struct.pack(">IHH", FNT_MAGIC, rowh, rows))
+        for i in range(256):
+            ofs, wid = struct.unpack_from("<HH", b, 16 + 4 * i)
+            if (ofs >> 8) + rowh > h or (ofs & 255) + wid > FONT_SHEET_W:
+                ofs, wid = 0, 0
+            out += struct.pack(">HH", ofs, wid)
+    except struct.error:
+        raise UiError(f"{what}: truncated font table") from None
+    if not 0 < rowh <= h:
+        raise UiError(f"{what}: bad row height {rowh}")
+    return bytes(out)
 
 
 def main(argv=None) -> int:

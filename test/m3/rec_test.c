@@ -3,8 +3,9 @@
  * rec_test.c -- host driver for the record module and the resource table
  * (engine/ent/rec.c, engine/res): the real engine (carve, io, world
  * layers, components, think heap) on cooked content, with a test game
- * (the game_* exports below) that records what the engine asks of it,
- * until game/ lands. Run by test/m3/rec.py.
+ * (the record dispatch rec.c calls, taken over with ld --wrap: the
+ * __wrap_game_* below; the rest of game/ links as usual) that records
+ * what the engine asks of it. Run by test/m3/rec.py.
  *
  *   hl64-rec --root CONTENT selftest
  *       hldemo1 records, typed keys, names, fires and deferred uses,
@@ -42,6 +43,15 @@
 #include "engine/world/wld.h"
 #include "plat/host/host.h"
 
+/* ld --wrap=game_* (Makefile REC_WRAP): rec.c's calls land here */
+int	__wrap_game_spawn_record(gid_t16 gid, int e);
+void	__wrap_game_spawn_logic(gid_t16 gid);
+void	__wrap_game_map_opened(int slot);
+void	__wrap_game_map_closing(int slot);
+void	__wrap_game_use(int e, int activator, int caller, int use_type, float value);
+void	__wrap_game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float value);
+void	__wrap_game_logic_timer(gid_t16 gid, uint16_t arg, int activator);
+
 static int fails;
 
 #define CHECK(cond, ...) do { if (!(cond)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); \
@@ -59,13 +69,13 @@ static struct {
 	int		ntl;
 	struct { gid_t16 gid; uint16_t arg; float t; } tl[64];
 	/* K5 */
-	gid_t16		mm, relay;
+	gid_t16		mm, relay, other;
 	name_t		t5;
 	float		start;
 	int		index;
 } G;
 
-int game_spawn_record(gid_t16 gid, int e)
+int __wrap_game_spawn_record(gid_t16 gid, int e)
 {
 	if (rec_class(gid) == G.refuse_cls)
 		return -1;
@@ -75,25 +85,25 @@ int game_spawn_record(gid_t16 gid, int e)
 	return 0;
 }
 
-void game_spawn_logic(gid_t16 gid)
+void __wrap_game_spawn_logic(gid_t16 gid)
 {
 	(void)gid;
 	G.logic++;
 }
 
-void game_map_opened(int slot)
+void __wrap_game_map_opened(int slot)
 {
 	(void)slot;
 	G.opened++;
 }
 
-void game_map_closing(int slot)
+void __wrap_game_map_closing(int slot)
 {
 	(void)slot;
 	G.closing++;
 }
 
-void game_use(int e, int activator, int caller, int use_type, float value)
+void __wrap_game_use(int e, int activator, int caller, int use_type, float value)
 {
 	(void)activator; (void)caller; (void)use_type; (void)value;
 	G.uses++;
@@ -115,7 +125,7 @@ static float now_f(void)
 	return (float)eng_time();
 }
 
-void game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float value)
+void __wrap_game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float value)
 {
 	(void)caller; (void)value;
 	G.logic_uses++;
@@ -137,7 +147,7 @@ void game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float 
 		printf("use hl64_t5 %.9g\n", (double)now_f());
 }
 
-void game_logic_timer(gid_t16 gid, uint16_t arg, int activator)
+void __wrap_game_logic_timer(gid_t16 gid, uint16_t arg, int activator)
 {
 	G.timers++;
 	if (G.ntl < 64)
@@ -154,7 +164,7 @@ void game_logic_timer(gid_t16 gid, uint16_t arg, int activator)
 		while (G.index < K5_N && t >= k5_targets[G.index].delay)
 		{
 			if (!strcmp(k5_targets[G.index].name, "hl64_relay"))
-				game_logic_use(G.relay, activator, -1, USE_TOGGLE, 0);
+				__wrap_game_logic_use(G.relay, activator, -1, USE_TOGGLE, 0);
 			else
 				printf("use %s %.9g\n", k5_targets[G.index].name, (double)now_f());
 			G.index++;
@@ -163,9 +173,12 @@ void game_logic_timer(gid_t16 gid, uint16_t arg, int activator)
 			rec_timer(gid, G.start + k5_targets[G.index].delay, 0, activator);
 		return;
 	}
-	/* cascade test: arg 1 schedules arg 2 at its own due time */
+	/* cascade test: arg 1 arms record G.other due now (same pass); arg 10
+	 * re-arms itself due now (next pass: one think per frame) */
 	if (arg == 1)
-		rec_timer(GID_MAKE(GID_SLOT(gid), GID_LUMP(gid)), now_f(), 2, -1);
+		rec_timer(G.other, now_f(), 2, -1);
+	if (arg == 10)
+		rec_timer(gid, now_f(), 11, -1);
 }
 
 /* ---- helpers ------------------------------------------------------------------- */
@@ -345,13 +358,22 @@ static void test_timers(int slot)
 	rec_timer(a, 52.0f, 6, -1);
 	rec_run_timers(51.5, 0.01);
 	CHECK(G.ntl == 0, "replaced timer");
-	/* cascade: arg 1 schedules arg 2 due now: same pass */
+	/* cascade: arg 1 arms another record due now: same pass */
 	rec_timer_cancel(a);
+	G.other = a;
 	G.ntl = 0;
 	rec_timer(b, 52.0f, 1, -1);
 	rec_run_timers(52.0, 0.01);
-	CHECK(G.ntl == 2 && G.tl[0].arg == 1 && G.tl[1].arg == 2 && G.tl[1].t == 52.0f,
-		"cascade in the same pass (%d)", G.ntl);
+	CHECK(G.ntl == 2 && G.tl[0].arg == 1 && G.tl[1].arg == 2 && G.tl[1].gid == a
+		&& G.tl[1].t == 52.0f, "cascade in the same pass (%d)", G.ntl);
+	/* a record re-arming itself due now runs next frame, seeing its time */
+	G.ntl = 0;
+	rec_timer(b, 53.0f, 10, -1);
+	rec_run_timers(53.0, 0.01);
+	CHECK(G.ntl == 1 && G.tl[0].arg == 10, "self re-arm waits (%d)", G.ntl);
+	rec_run_timers(53.01, 0.01);
+	CHECK(G.ntl == 2 && G.tl[1].arg == 11 && G.tl[1].t == (float)53.01,
+		"self re-arm next frame (%d)", G.ntl);
 	/* freeze / thaw: 0.3 s left when the map closes, due 0.3 s after reopen */
 	G.ntl = 0;
 	eng_set_clock(60.0, 0.01);
@@ -650,7 +672,7 @@ int main(int argc, char **argv)
 		{
 			eng_set_clock(t, dt);
 			if (f == 0)
-				game_logic_use(G.mm, -1, -1, USE_TOGGLE, 0);
+				__wrap_game_logic_use(G.mm, -1, -1, USE_TOGGLE, 0);
 			rec_run_timers(t, dt);
 			t += dt;
 		}
