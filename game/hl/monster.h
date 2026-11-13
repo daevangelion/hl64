@@ -910,15 +910,15 @@ int	CBaseMonster_IsMoving(int e);
 /* the game_vt_t slots every monster class fills (CBaseMonster overrides of
  * CBaseEntity virtuals) */
 #define MON_GAME_VT_BASE \
-	.TraceAttack = CBaseMonster_TraceAttack, \
 	.TakeHealth = CBaseMonster_TakeHealth, \
 	.IsAlive = CBaseMonster_IsAlive, \
 	.BloodColor = CBaseMonster_BloodColor, \
 	.IsMoving = CBaseMonster_IsMoving, \
 	.BodyTarget = Mon_BodyTarget
-/* ... plus the three a class most often overrides */
+/* ... plus the four a class most often overrides */
 #define MON_GAME_VT \
 	MON_GAME_VT_BASE, \
+	.TraceAttack = CBaseMonster_TraceAttack, \
 	.TakeDamage = CBaseMonster_TakeDamage, \
 	.Killed = CBaseMonster_Killed, \
 	.IRelationship = CBaseMonster_IRelationship

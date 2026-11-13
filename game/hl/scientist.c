@@ -671,12 +671,14 @@ static int CScientist_Spawn(int e, gid_t16 gid)
 		ent_cv(e)->skin = 1;
 	Mon_MonsterInit(e);
 	SetUse(e, FN_CTalkMonster_FollowerUse);
+	SetTouch(e, FN_CTalkMonster_Touch);	/* CTalkMonster::Touch override */
 	(void)s;
 	return 0;
 }
 
 static const game_vt_t sci_vt = {
 	MON_GAME_VT_BASE,
+	.TraceAttack = CBaseMonster_TraceAttack,
 	.ObjectCaps = CScientist_ObjectCaps,
 	.Classify = CScientist_Classify,
 	.TakeDamage = CScientist_TakeDamage,

@@ -59,7 +59,8 @@ ENGINE_SRC_D2 :=
 GAME_SRC_CORE := game/hl/util.c game/hl/dispatch.c game/hl/world.c
 GAME_SRC_MON := game/hl/monsters.c game/hl/schedule.c game/hl/defaultai.c game/hl/aicombat.c \
 	game/hl/aisound.c game/hl/nodes.c game/hl/scripted.c game/hl/sentences.c \
-	game/hl/talkmonster.c game/hl/scientist.c game/hl/monstermaker.c
+	game/hl/talkmonster.c game/hl/scientist.c game/hl/monstermaker.c \
+	game/hl/barney.c game/hl/generic.c
 GAME_SRC_ITEMS :=
 GAME_SRC_STUDIO :=
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \

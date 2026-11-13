@@ -2177,3 +2177,33 @@ CBaseMonster *Mon_SpawnKeys(int e, gid_t16 gid)
 	CBaseMonster_KeyValue(e, gid);
 	return MON(e);
 }
+
+/* ---- lifetime hooks (game/hl/dispatch.c weak game_mon_*) ----------------------- */
+
+void mon_stats_script(void) { mstat.scripts++; }
+
+void game_mon_init(void)
+{
+	SENTENCEG_Init();
+}
+
+void game_mon_new_campaign(void)
+{
+	int i;
+
+	CSoundEnt_Init();
+	SENTENCEG_Init();
+	g_talkWaitTime = 0;
+	for (i = 0; i < 4; i++)
+		Graph_SlotChanged(i);
+	memset(&mstat, 0, sizeof(mstat));
+}
+
+void game_mon_map_opened(int slot) { Graph_SlotChanged(slot); }
+void game_mon_map_closing(int slot) { Graph_SlotChanged(slot); }
+
+void game_mon_start_frame(void)
+{
+	mon_stats_frame();
+	CSoundEnt_Think();
+}
