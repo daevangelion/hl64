@@ -260,6 +260,12 @@ resources, 59 sentences, 54 groups, 1082 entity names; cart part
 47,824 B total. The cart part grows with `res.def` (≈ 12 B per resource
 and 12 B per file).
 
+M3 (**measured**, same 10 maps with titles and speaker / talk-monster
+groups, no `res.def`): 195 files, 185 resources, 93 sentences, 60 groups,
+33 titles; file 54,544 B, cart part 16,352 B. The engine keeps 9,516 B of
+native tables (files as PI address + size, no paths; `mem res`), so the
+RESTAB region is 28 KB for the game's `res.def` (≈ 20 B per resource).
+
 ## Open points
 
 - Multi-cart campaigns (architecture.md 19, 2026-11-13 update): global-state
