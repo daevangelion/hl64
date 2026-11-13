@@ -129,4 +129,11 @@ void	gs_event_window(int e, gs_animating_t *a, float *start, float *end);
 /* SetSequenceBox: size from the sequence bbox rotated by yaw (z 0..1). */
 void	gs_set_sequence_box(int e);
 
+/* ---- view model (HUD / weapons) ----------------------------------------------- */
+
+/* The client's frame estimate (StudioEstimateFrame) for a view model
+ * playing seq since animtime at framerate from frame (pev units), in pev
+ * units: game_pose_t.frame of the studio_view_t the HUD hands the engine. */
+float	gs_view_frame(res_t model, int seq, float frame, float animtime, float framerate);
+
 #endif

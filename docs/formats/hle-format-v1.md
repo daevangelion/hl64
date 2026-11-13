@@ -154,10 +154,13 @@ name / multisource lists naming dropped lumps.
   a small per-record state block plus a class handler; point records are
   queried by name or class.
 - Delays (multi_manager steps, CBaseDelay `delay`, fire-and-die, logic
-  thinks) run from a bounded 128-entry timer queue in µs, serviced at the
+  thinks) run from a bounded 128-entry timer queue holding the f32
+  nextthink HLSDK would write (specs/think-and-time.md 5), serviced at the
   start of the game frame — no helper entities are created for them.
 - The `mem` debug command reports per-map chunk / record / runtime bytes and
-  the timer peak.
+  the timer peak. Measured (hl64 cook, M3): hldemo1 48,912 B chunk (447
+  records: 166 logic, 275 physical) + 14,278 B runtime (24 B per record,
+  16 B per logic record, the pending list); hldemo2 44,624 B (420 records).
 
 ## Node graph (`HLN1`, optional tail)
 

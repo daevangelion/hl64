@@ -76,6 +76,31 @@ int	game_studio_setup_bones(int e, float (*out)[3][4], int max);
 /* Client-side animation event of e (HLSDK cl_dll StudioEvent: muzzle
  * flashes, client sounds), called by the engine's studio draw. */
 void	game_studio_event(int e, int event, const char *options);
+/* Server-side studio pose (GoldSrc's server bone setup: pev->frame as is,
+ * no client interpolation, no sequence blend-in): bone-to-world 3x4
+ * matrices of the pose *p describes into out (<= max); returns the bone
+ * count, 0 for a non-studio model. A pure function of *p (memoised): the
+ * hitbox source (trace-and-hulls.md 4.5), attachments, bone positions and
+ * the view model's pose (frame from gs_view_frame). */
+typedef struct {
+	res_t		model;
+	uint16_t	sequence;
+	float		frame;		/* pev->frame, 0..256 */
+	float		origin[3];	/* placement in the caller's frame */
+	float		angles[3];	/* pev->angles (pitch negated as HLSDK) */
+	uint8_t		controller[4];
+	uint8_t		blending[2];
+	uint8_t		pad[2];
+} game_pose_t;
+int	game_studio_pose(const game_pose_t *p, float (*out)[3][4], int max);
+/* Chrome texture coordinates (HLSDK mdlviewer StudioModel::Chrome): per
+ * bone of a pose (bone-to-view-space matrices, viewer at the origin) the
+ * chrome up / right vectors in the bone frame for the view's right axis,
+ * then s, t (0..64 texels) of a bone-frame normal. */
+void	game_studio_chrome_axes(const float (*bones)[3][4], int nbones, const float vright[3],
+		float (*up)[3], float (*right)[3]);
+void	game_studio_chrome_st(const float up[3], const float right[3], const float normal[3],
+		float st[2]);
 
 /* ---- player move (M2) -------------------------------------------------------- */
 
