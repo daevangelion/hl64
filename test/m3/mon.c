@@ -10,6 +10,10 @@
  * creation paths) and of every monster_miniturret (deploy / search), then runs FRAMES frames at a fixed 1/30 s. Every frame
  * it samples the live entities whose class is a monster_* (or a GameMon
  * helper) and counts a think whenever an entity's nextthink changed.
+ * The sweep is a class test over the whole map, not a streaming test
+ * (rec_test_class_sweep): records woken beyond 1024 u of the player stay
+ * live for the run (no distance release, architecture.md 6.4), and a
+ * neighbour map a seam approach opens is not hydrated.
  * Output, between the engine's own log lines:
  *
  *   mon fire NAME-ID CLASSNAME
@@ -30,6 +34,7 @@
 #include "engine/core/eng.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
+#include "engine/ent/rec_int.h"
 #include "engine/phys/player.h"
 #include "engine/world/wld.h"
 #include "game/hl/util.h"
@@ -134,6 +139,7 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	slot = wld_open(map)->slot;
+	rec_test_class_sweep(slot);
 	for (lump = 0; lump < 1024; lump++)
 	{
 		gid_t16 gid = GID_MAKE(slot, lump);
