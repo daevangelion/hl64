@@ -27,11 +27,12 @@
 #include "engine/core/sys.h"
 #include "engine/render/gpu_fx.h"
 
-#define RING_PAIRS	1024		/* vertex pairs per frame */
-#define MAT_PAIRS	(int)(sizeof(T3DMat4FP) / sizeof(T3DVertPacked))
+#define RING_PAIRS	GPU_FX_RING_PAIRS	/* vertex pairs per frame */
+#define MAT_PAIRS	GPU_FX_MAT_PAIRS
 #define POINTS_MAX	HL64_FX_PARTICLES
 
-_Static_assert(sizeof(T3DMat4FP) % sizeof(T3DVertPacked) == 0, "frame matrix in ring pairs");
+_Static_assert(sizeof(T3DMat4FP) == GPU_FX_MAT_PAIRS * sizeof(T3DVertPacked),
+	"frame matrix in ring pairs");
 
 static T3DVertPacked	*ring;		/* 2 x RING_PAIRS, uncached */
 static TPXParticleS16	*pts;		/* 2 x POINTS_MAX / 2, uncached */
@@ -80,6 +81,7 @@ void gpu_fx_end(void)
 	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
 		| T3D_FLAG_NO_LIGHT | T3D_FLAG_CULL_FRONT);
 	gpu_state_lost();	/* alpha compare now off, whatever the world's cache says */
+	cur.pairs = (uint32_t)used;
 	done = cur;
 }
 
@@ -210,6 +212,7 @@ void gpu_fx_tris(const gpu_fx_vert_t *v, int nv, const uint8_t *idx, int ntri)
 	if (!frame || used + pairs > RING_PAIRS)
 	{
 		cur.calls[mode]++;	/* counted, not drawn: the frame's ring is full */
+		cur.drops++;
 		return;
 	}
 	p = &ring[half * RING_PAIRS + used];

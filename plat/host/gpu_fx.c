@@ -4,6 +4,9 @@
  * engine/render/gpu_fx.h): every effects call is counted per mode and
  * hashed (mode, RDP state, texture size, vertices, points), so a run is
  * comparable with itself; the last triangle batch is kept for the tests.
+ * The frame's vertex ring is accounted as the cart fills it (pairs per
+ * batch and frame matrix, GPU_FX_RING_PAIRS): what would not fit is
+ * dropped and counted here too.
  */
 #include <string.h>
 
@@ -15,6 +18,7 @@ static gpu_fx_vert_t	last_v[64];
 static int		last_n, last_mode = -1;
 static ren_mat_t	frame, last_frame;
 static int		framed, last_framed;
+static int		used, full;	/* ring pairs this frame; a frame matrix did not fit */
 
 static void mix(const void *p, uint32_t n)
 {
@@ -30,10 +34,12 @@ void gpu_fx_begin(void)
 	cur.hash = 2166136261u;
 	mode = -1;
 	framed = 0;
+	used = full = 0;
 }
 
 void gpu_fx_end(void)
 {
+	cur.pairs = (uint32_t)used;
 	done = cur;
 }
 
@@ -79,20 +85,36 @@ void gpu_fx_frame(const ren_mat_t *m)
 
 	mix(m ? m : &cam, sizeof(cam));
 	framed = m != NULL;
+	full = 0;
 	if (m)
+	{
 		frame = *m;
+		if (used + GPU_FX_MAT_PAIRS > GPU_FX_RING_PAIRS)
+			full = 1;
+		else
+			used += GPU_FX_MAT_PAIRS;
+	}
 }
 
 void gpu_fx_tris(const gpu_fx_vert_t *v, int nv, const uint8_t *idx, int ntri)
 {
-	if (mode < 0 || nv <= 0 || ntri <= 0)
+	int pairs = (nv + 1) / 2;
+
+	if (mode < 0 || nv <= 0 || ntri <= 0 || nv > 64)
 		return;
+	if (full || used + pairs > GPU_FX_RING_PAIRS)
+	{
+		cur.calls[mode]++;	/* as the cart: counted, not drawn */
+		cur.drops++;
+		return;
+	}
+	used += pairs;
 	mix(v, (uint32_t)nv * sizeof(*v));
 	mix(idx, (uint32_t)ntri * 3);
 	cur.calls[mode]++;
 	cur.tris += (uint32_t)ntri;
 	cur.verts += (uint32_t)nv;
-	last_n = nv > 64 ? 64 : nv;
+	last_n = nv;
 	memcpy(last_v, v, sizeof(*v) * (size_t)last_n);
 	last_mode = mode;
 	last_frame = frame;
