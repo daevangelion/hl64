@@ -17,6 +17,7 @@
 	X(RESTAB, "restab", HL64_RESTAB_KB, 0) \
 	X(SENTENCES, "sentences", HL64_SENTENCES_KB, 1) \
 	X(LIGHTSTYLE, "lightstyle", HL64_LIGHTSTYLE_KB, 0) \
+	X(CAMPAIGN, "campaign", HL64_CAMPAIGN_KB, 0) \
 	X(LAYER_DIRS, "layerdirs", HL64_LAYER_DIRS_KB, 0) \
 	X(POOL_RENDER, "render", HL64_POOL_RENDER_KB, 0) \
 	X(POOL_TEXTURE, "texture", HL64_POOL_TEXTURE_KB, 0) \
