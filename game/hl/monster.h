@@ -882,7 +882,6 @@ void	CBaseMonster_CallMonsterThink(int e);
 void	CBaseMonster_MonsterInitThink(int e);
 void	CBaseMonster_CorpseFallThink(int e);
 void	CBaseMonster_MonsterUse(int e, int activator, int caller, int useType, float value);
-void	CBaseMonster_CorpseUse(int e, int activator, int caller, int useType, float value);
 
 /* animation helpers over game/studio/anim.h */
 int	Mon_LookupActivity(int e, int act);
