@@ -72,10 +72,15 @@ static int trigger_type(gid_t16 gid)
 #define MM_BUSY			1	/* use disabled until every target fired */
 #define MM_CLONES		16
 
-/* rec_logic_t: a16 = m_index, a = m_hActivator, f = m_startTime. Thread
- * clones (SF_MULTIMAN_THREAD) are game-side, timer arg = clone + 1. */
+/* rec_logic_t: a16 = m_index, a = m_hActivator, f = m_startTime, b = the
+ * base manager's nextthink bits. Thread clones (SF_MULTIMAN_THREAD) are
+ * game-side; a record has one timer (rec_timer replaces), so it is kept at
+ * the earliest nextthink of the base and its clones, and each due one
+ * thinks when it fires (later ones already due this frame run in the same
+ * pass: think-and-time.md 5). */
 typedef struct {
 	float		m_startTime;
+	float		nextthink;	/* m_startTime + delay[m_index] (f32) */
 	ent_h		m_hActivator;
 	gid_t16		gid;		/* GID_NONE: free */
 	uint16_t	m_index;
@@ -105,7 +110,54 @@ static void CMultiManager_LogicSpawn(gid_t16 gid)
 	l->f = 0;
 }
 
-/* ManagerThink on the base record (clone < 0) or a clone */
+static float mm_base_next(rec_logic_t *l)
+{
+	union { int32_t i; float f; } u;
+
+	u.i = l->b;
+	return u.f;
+}
+
+static void mm_set_base_next(rec_logic_t *l, float t)
+{
+	union { int32_t i; float f; } u;
+
+	u.f = t;
+	l->b = u.i;
+}
+
+/* the record's timer at the earliest pending nextthink, or none */
+static void mm_schedule(gid_t16 gid)
+{
+	rec_logic_t *l = rec_logic(gid);
+	float best = 0;
+	int i, have = 0, act = -1;
+
+	if (l->flags & MM_BUSY)
+	{
+		best = mm_base_next(l);
+		act = EHGet((ent_h)l->a);
+		have = 1;
+	}
+	for (i = 0; i < MM_CLONES; i++)
+	{
+		if (mm_clones[i].gid != gid)
+			continue;
+		if (!have || mm_clones[i].nextthink < best)
+		{
+			best = mm_clones[i].nextthink;
+			act = EHGet(mm_clones[i].m_hActivator);
+		}
+		have = 1;
+	}
+	if (have)
+		rec_timer(gid, best, 0, act);
+	else
+		rec_timer_cancel(gid);
+}
+
+/* ManagerThink on the base record (clone < 0) or a clone: fires the due
+ * targets, stores the next f32 nextthink or ends the run */
 static void ManagerThink(gid_t16 gid, int clone)
 {
 	rec_logic_t *l = rec_logic(gid);
@@ -138,29 +190,34 @@ static void ManagerThink(gid_t16 gid, int clone)
 	if (index >= count)
 	{
 		if (c)
-		{
 			c->gid = GID_NONE;	/* UTIL_Remove(clone) */
-			return;
-		}
-		l->flags &= ~MM_BUSY;		/* SetUse(ManagerUse) */
+		else
+			l->flags &= ~MM_BUSY;	/* SetUse(ManagerUse) */
 		return;
 	}
 	rec_fire_entry(gid, index, &name, &delay);
-	rec_timer(gid, start + delay, (uint16_t)(clone + 1), EHGet(act));
+	if (c)
+		c->nextthink = start + delay;
+	else
+		mm_set_base_next(l, start + delay);
 }
 
 static void CMultiManager_LogicTimer(gid_t16 gid, uint16_t arg, int activator)
 {
+	rec_logic_t *l = rec_logic(gid);
+	float t = gtime();
+	int i;
+
+	(void)arg;
 	(void)activator;
-	if (arg)
-	{
-		if (arg > MM_CLONES || mm_clones[arg - 1].gid != gid)
-			return;
-		ManagerThink(gid, arg - 1);
-		return;
-	}
-	if (rec_logic(gid)->flags & MM_BUSY)
+	/* every think of this record due now, in slot order (base first) */
+	if ((l->flags & MM_BUSY) && mm_base_next(l) <= t)
 		ManagerThink(gid, -1);
+	for (i = 0; i < MM_CLONES && rec_state(gid) != REC_KILLED; i++)
+		if (mm_clones[i].gid == gid && mm_clones[i].nextthink <= t)
+			ManagerThink(gid, i);
+	if (rec_state(gid) != REC_KILLED)
+		mm_schedule(gid);
 }
 
 static void CMultiManager_LogicUse(gid_t16 gid, int activator, int caller, int use_type,
@@ -189,7 +246,8 @@ static void CMultiManager_LogicUse(gid_t16 gid, int activator, int caller, int u
 		mm_clones[i].m_hActivator = EHANDLE(activator);
 		mm_clones[i].m_index = 0;
 		mm_clones[i].m_startTime = t;
-		rec_timer(gid, t, (uint16_t)(i + 1), activator);
+		mm_clones[i].nextthink = t;
+		mm_schedule(gid);
 		return;
 	}
 	if (l->flags & MM_BUSY)
@@ -198,7 +256,8 @@ static void CMultiManager_LogicUse(gid_t16 gid, int activator, int caller, int u
 	l->a16 = 0;
 	l->f = t;
 	l->flags |= MM_BUSY;
-	rec_timer(gid, t, 0, activator);
+	mm_set_base_next(l, t);
+	mm_schedule(gid);
 }
 
 const game_class_t gc_MULTI_MANAGER = {
