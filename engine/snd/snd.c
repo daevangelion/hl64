@@ -101,7 +101,7 @@ typedef struct {
 	uint32_t	tables;		/* region bytes used by this file */
 	snd_stats_t	st;
 	uint32_t	frames;
-	uint64_t	us_sum;
+	uint64_t	us_sum, pump_sum;
 } snd_state_t;
 
 static snd_state_t	*S;
@@ -875,11 +875,12 @@ static int cmd_sound(const dbg_cmd_t *c)
 {
 	res_t r = (res_t)c->arg[0].u;
 	int e = c->arg[1].u ? (int)c->arg[1].u : SND_SELF;
+	int pitch = c->arg[2].u ? (int)c->arg[2].u : PITCH_NORM;
 
 	if (RES_KIND(r) == RES_K_SENTENCE)
-		snd_sentence(e, CHAN_VOICE, (uint16_t)RES_INDEX(r), 1.0f, ATTN_NORM, 0, PITCH_NORM);
+		snd_sentence(e, CHAN_VOICE, (uint16_t)RES_INDEX(r), 1.0f, ATTN_NORM, 0, pitch);
 	else if (RES_KIND(r) == RES_K_SOUND)
-		snd_emit(e, CHAN_AUTO, r, 1.0f, ATTN_NORM, 0, PITCH_NORM);
+		snd_emit(e, CHAN_AUTO, r, 1.0f, ATTN_NORM, 0, pitch);
 	else
 		return 1;
 	return 0;
@@ -966,7 +967,12 @@ void snd_frame(const float listener[3], const float right[3], double dt)
 			if (had && S->l[i].voice < 0)
 				snd_logf("snd %lu virtual L%d\n", (unsigned long)S->frame, i);
 		}
-	snd_hw_pump(dt);
+	{
+		uint64_t p0 = sys_time_us();
+
+		snd_hw_pump(dt);
+		S->pump_sum += sys_time_us() - p0;
+	}
 	S->last_dt = dt;
 	S->frame++;
 	S->st.voices = voices_busy();
@@ -994,6 +1000,7 @@ void snd_stats(snd_stats_t *s, int reset)
 	s->waves_open = (uint32_t)snd_waves_open();
 	s->frames = S->frames;
 	s->us = S->frames ? (uint32_t)(S->us_sum / S->frames) : 0;
+	s->pump_us = S->frames ? (uint32_t)(S->pump_sum / S->frames) : 0;
 	snd_hw_mem(&now, &peak);
 	s->mem = S->tables + now;
 	s->mem_peak = S->tables + peak;
@@ -1006,6 +1013,7 @@ void snd_stats(snd_stats_t *s, int reset)
 		S->st.waves_peak = s->waves_open;
 		S->st.us_max = 0;
 		S->us_sum = 0;
+		S->pump_sum = 0;
 		S->frames = 0;
 	}
 }
