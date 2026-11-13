@@ -117,7 +117,7 @@ name / multisource lists naming dropped lumps.
 - Classes: only `hle_classes[]` (what the native game spawns); others are
   dropped (`info_node`, `env_glow`, `env_beam`, `env_bubbles`,
   `infodecal`, `env_sound`, `trigger_autosave`, `func_tank*`,
-  `func_tracktrain`, `monster_miniturret`, `monster_rat`, …).
+  `func_tracktrain`, …).
 - Pruned: logic classes that act only when used and have no targetname
   (`multi_manager`, `trigger_relay`, `multisource`, `env_render`,
   `env_shake`, `env_fade`, `env_message`, `player_weaponstrip`,
