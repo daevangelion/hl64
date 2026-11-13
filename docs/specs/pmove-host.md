@@ -118,7 +118,7 @@ PM2, home-local leaves 2 (M2Close, measured).
 | trace texture (physent, start, end) | material code of the surface hit (trace-and-hulls.md 4.7) as the HLSDK texture-type character |
 | random long / float | engine random stream |
 | model type / bounds | from the resource table / submodel table |
-| info value for key | reads "slj" and similar physinfo keys: always empty |
+| info value for key | `PM_Info_ValueForKey` over the player's physics info string (the player block's `physinfo`, GoldSrc info-string form `\key\value…`, 32 bytes; the game writes it with `phy_player_set_physinfo`, HLSDK's `pfnSetPhysicsKeyValue`: `slj` 1 with the long jump module, `hl` 1); "" when absent |
 | console print | engine log |
 
 ## 4. Movevars (HL defaults, typed fields of `settings.h`)

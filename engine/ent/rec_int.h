@@ -42,7 +42,7 @@ enum {
  * against HL64_HLE_BLOBS_KB (tools/w64c/hleids.py, architecture.md 4.1). */
 #define REC_RT_BYTES		24	/* rrt_t, per record */
 #define REC_LOGIC_BYTES		16	/* rec_logic_t, per logic record */
-#define REC_TABLE_BYTES		16592	/* rec_init's tables before the slot heap */
+#define REC_TABLE_BYTES		16688	/* rec_init's tables before the slot heap */
 
 /* The id spaces an HLE1 chunk's typed ids are checked against. */
 typedef struct {
