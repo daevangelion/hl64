@@ -46,6 +46,7 @@ const float	(*ren_frustum(void))[3];
 typedef struct {
 	uint32_t	sectors, meshlets, verts, tris, binds;	/* drawn */
 	uint32_t	movers, relit, dlit, missing;
+	uint32_t	pool_verts, pool_tris;	/* flashlight pool (dlights.md 3) */
 	uint32_t	dropped;	/* over HL64_REN_VIS_MAX / HL64_REN_MOVERS_MAX */
 	uint32_t	leaf, r10;	/* eye leaf, floor(time x 10) used */
 	uint32_t	world_us;	/* CPU: list build + submit */
@@ -66,6 +67,7 @@ typedef struct {
 	double		die;		/* game time (f64 s); dead once die < time */
 	uint8_t		color[3];
 	uint8_t		world;		/* lights the world (elights do not) */
+	uint8_t		flash;		/* the local flashlight: the world pool pass, not vertices */
 	uint16_t	entity;		/* elight: the only model it lights (0: every model) */
 } ren_dlight_t;
 
