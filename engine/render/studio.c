@@ -133,6 +133,11 @@ static smodel_t		models[HL64_STUDIO_MODELS];
 static sanim_t		anims[HL64_STUDIO_ANIMS];
 static sreq_t		reqs[REQS];
 static sstep_t		steps[HL64_MAX_ENTITIES];
+/* Slots whose steps[] entry may be valid: studio_frame walks the live
+ * slots only and voids the entries of slots freed since (a reused slot
+ * starts over, whatever its serial). */
+#define STEP_WORDS	((HL64_MAX_ENTITIES + 31) / 32)
+static uint32_t		step_on[STEP_WORDS];
 static uint32_t		frame = 1;
 static studio_stats_t	st;
 static studio_view_t	view;
@@ -694,8 +699,8 @@ void studio_preload(void)
 
 	info_prefetch(1);
 	/* the live entities' models (the player's has no precache) */
-	for (e = 1; e < HL64_MAX_ENTITIES; e++)
-		if (ent_is_live(e) && RES_KIND(ent_rnd(e)->model) == RES_K_MODEL)
+	for (e = ent_next_live(0); e >= 0; e = ent_next_live(e))
+		if (RES_KIND(ent_rnd(e)->model) == RES_K_MODEL)
 			info_of(ent_rnd(e)->model);
 }
 
@@ -1046,19 +1051,22 @@ static int is_studio(int e)
 void studio_frame(void)
 {
 	double now = eng_time();
-	int e, i;
+	uint32_t live[STEP_WORDS];
+	int e, i, w;
 
 	frame++;
 	mem_pool_retire(&pool, frame);
 	info_prefetch(0);
 	anim_prefetch();
-	for (e = 1; e < HL64_MAX_ENTITIES; e++)
+	memset(live, 0, sizeof(live));
+	for (e = ent_next_live(0); e >= 0; e = ent_next_live(e))
 	{
 		const ent_rnd_t *r;
 		const col_ent_t *cv;
 		sstep_t *s = &steps[e];
 		int mi;
 
+		live[e >> 5] |= 1u << (e & 31);
 		if (!is_studio(e))
 		{
 			s->valid = 0;
@@ -1078,6 +1086,7 @@ void studio_frame(void)
 		if (!s->valid || s->serial != ent_idc(e)->serial)
 		{
 			s->valid = 1;
+			step_on[e >> 5] |= 1u << (e & 31);
 			s->serial = ent_idc(e)->serial;
 			for (i = 0; i < 2; i++)
 			{
@@ -1097,6 +1106,15 @@ void studio_frame(void)
 			memcpy(s->ang[1], cv->angles, sizeof(s->ang[1]));
 			s->t[1] = now;
 		}
+	}
+	for (w = 0; w < STEP_WORDS; w++)
+	{
+		uint32_t b = step_on[w] & ~live[w];
+
+		step_on[w] &= live[w];
+		for (i = w << 5; b; b >>= 1, i++)
+			if (b & 1)
+				steps[i].valid = 0;
 	}
 }
 
@@ -1460,7 +1478,7 @@ static void draw_other_layer(wld_layer_t *L, double time, const float eye[3])
 		}
 		list = wld_leaf_sectors(L, wld_point_leaf(L, eye_l), &cnt);
 	}
-	for (e = 2; e < HL64_MAX_ENTITIES; e++)
+	for (e = ent_next_live(1); e >= 0; e = ent_next_live(e))
 	{
 		const col_ent_t *cv;
 		uint8_t a;
@@ -1512,7 +1530,7 @@ void studio_draw(double time)
 		lay_list[li] = list;
 		lay_cnt[li] = cnt;
 		n = 0;
-		for (e = 2; e < HL64_MAX_ENTITIES; e++)
+		for (e = ent_next_live(1); e >= 0; e = ent_next_live(e))
 		{
 			const col_ent_t *cv;
 			uint8_t a;

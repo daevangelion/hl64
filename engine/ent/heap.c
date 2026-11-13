@@ -345,22 +345,20 @@ int ent_sets_next(int from, int all)
 	return -1;
 }
 
+/* The search starts at from's own bit: a dense live run costs one test
+ * per call, not a walk up from bit 0 of the word. */
 int ent_next_live(int after)
 {
-	int from = after < 0 ? 0 : after + 1, w;
+	int i = after < 0 ? 0 : after + 1, w = i >> 5;
+	uint32_t b;
 
-	if (from >= HL64_MAX_ENTITIES)
+	if (i >= HL64_MAX_ENTITIES)
 		return -1;
-	for (w = from >> 5; w < ENT_WORDS; w++)
+	b = H.live[w] >> (i & 31);
+	for (;;)
 	{
-		uint32_t b = H.live[w];
-
-		if (w == from >> 5)
-			b &= ~0u << (from & 31);
 		if (b)
 		{
-			int i = w << 5;
-
 			while (!(b & 1))
 			{
 				b >>= 1;
@@ -368,8 +366,11 @@ int ent_next_live(int after)
 			}
 			return i < HL64_MAX_ENTITIES ? i : -1;
 		}
+		if (++w == ENT_WORDS)
+			return -1;
+		b = H.live[w];
+		i = w << 5;
 	}
-	return -1;
 }
 
 int ent_movers_count(void)
