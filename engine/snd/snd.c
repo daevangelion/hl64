@@ -70,6 +70,7 @@ typedef struct {
 	uint8_t		wvol;
 	uint8_t		pad;
 	uint32_t	end_pos;	/* word end (sample), 0 = the wave's end */
+	float		gap;		/* s between the last word's end and this one, -1 */
 } voice_t;
 
 typedef struct {
@@ -444,6 +445,7 @@ static void voice_init(int v, int e, int chan, float vol, float attn, int pitch,
 	p->attn = attn > 0.0f ? attn : 0.0f;
 	p->wvol = 100;
 	p->wpitch = 100;
+	p->gap = -1.0f;
 	memcpy(p->org, org, sizeof(p->org));
 	p->seq = ++S->seq;
 }
@@ -471,8 +473,12 @@ static void sentence_next(int v, double gap)
 			? (uint32_t)((uint64_t)S->w[w].inf.len * wd->end / 100) : 0;
 		voice_start(v, w, 0, "word");
 		if (gap >= 0.0)
+		{
+			p->gap = (float)gap;
 			snd_logf("snd %lu gap v%d sent%u word%u gap_us=%lu\n", (unsigned long)S->frame,
-				v, (unsigned)p->sent, (unsigned)(p->word - 1), (unsigned long)(gap * 1e6 + 0.5));
+				v, (unsigned)p->sent, (unsigned)(p->word - 1),
+				(unsigned long)(gap * 1e6 + 0.5));
+		}
 		S->keep = -1;
 		return;
 	}
@@ -808,6 +814,44 @@ void snd_stop(int e, int chan)
 {
 	if (S)
 		stop_match(e, chan, 0, "stop");
+}
+
+void snd_voice_info(int v, snd_voice_info_t *o)
+{
+	const voice_t *p = &S->v[v];
+
+	memset(o, 0, sizeof(*o));
+	o->busy = p->busy;
+	o->loop = p->loop;
+	o->sent = p->sent;
+	o->gap = p->gap;
+	if (!p->busy)
+		return;
+	o->ent = p->ent == ENT_NONE ? -1 : p->ent;
+	o->chan = p->chan;
+	o->res = p->res;
+	o->seq = p->seq;
+	if (p->wave >= 0)
+	{
+		o->pos = snd_hw_pos(v);
+		o->rate = snd_pitch_rate(S->w[p->wave].inf.freq, p->pitch * p->wpitch / 100);
+		snd_gains(p->org, p->vol * p->wvol * 0.01f, p->attn, p->ent == SND_SELF, &o->left,
+			&o->right);
+	}
+}
+
+void snd_loop_info(int i, snd_loop_info_t *o)
+{
+	const loop_t *lp = &S->l[i];
+
+	memset(o, 0, sizeof(*o));
+	o->used = lp->used;
+	o->voice = lp->voice;
+	o->ent = lp->ent == ENT_NONE ? -1 : lp->ent;
+	o->chan = lp->chan;
+	o->res = lp->res;
+	o->vol = lp->vol;
+	o->pitch = lp->pitch;
 }
 
 void snd_entity_freed(int e)
