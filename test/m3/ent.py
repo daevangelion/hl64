@@ -19,8 +19,9 @@ test/m3/ent.c (`make enttest` -> hl64-ent):
          step-all equivalence (+ a control that must fail), private slabs.
   frames    two open layers: clip / query / delta in both frames.
 
-Usage: test/m3/ent.py --bin BUILD/host/hl64-ent [--content DIR]
-       [--fixtures DIR] [--maps a,b]
+Usage: PYTHONPATH=. test/m3/ent.py --bin BUILD/host/hl64-ent [--content DIR]
+       [--fixtures DIR] [--maps a,b] [--data VALVE] (repo root on PYTHONPATH:
+       the PVS check decodes the BSP vis lump with tools/w64c/w64check.py)
 Exit 0 when everything passes.
 """
 import argparse
@@ -329,6 +330,48 @@ def ksettle(binary, path):
     return fails, len(early)
 
 
+def pvs_check(binary, content, data, mp, n=4000):
+    """ent_point_in_pvs over the engine's VISR rows against the map's own
+    BSP vis lump (Valve data, decoded by tools/w64c/w64check.py): random
+    eye / point pairs in the world bounds (leaves are the engine's point
+    -> leaf). Needs the repo root on PYTHONPATH."""
+    import random
+    from pathlib import Path
+    from tools.w64c.w64check import Bsp
+
+    bsp = Bsp(Path(data) / "maps" / (mp + ".bsp"))
+    lo, hi = [float(x) for x in bsp.mraw[0][0:3]], [float(x) for x in bsp.mraw[0][3:6]]
+    rng = random.Random(mp)
+    # points in open leaves (the engine's point -> leaf), then random pairs
+    pts = [[rng.uniform(lo[k], hi[k]) for k in range(3)] for _ in range(6 * n)]
+    probe = ["pvs %s %s" % (mp, " ".join(fmt(x) for x in q + q)) for q in pts]
+    leaves = [int(l.split()[1]) for l in run(binary, probe, content) if l.startswith("pvs ")]
+    open_pts = [q for q, lf in zip(pts, leaves) if lf > 0]
+    if len(open_pts) < 2:
+        return [f"{len(open_pts)} points in open leaves"], 0, 0, 0
+    script = []
+    for _ in range(n):
+        e, p = rng.choice(open_pts), rng.choice(open_pts)
+        script.append("pvs %s %s" % (mp, " ".join(fmt(x) for x in e + p)))
+    out = [l.split() for l in run(binary, script, content) if l.startswith("pvs ")]
+    fails, rows, vis = [], 0, 0
+    for k, (_, le, lp, v) in enumerate(out):
+        le, lp, v = int(le), int(lp), int(v)
+        if lp <= 0:
+            want = 0
+        else:
+            row = bsp.pvs_row(le) if 0 < le <= bsp.visleafs else None
+            rows += row is not None
+            want = 1 if row is None or lp > bsp.visleafs else (row[(lp - 1) >> 3] >> ((lp - 1) & 7)) & 1
+        vis += v
+        if v != want:
+            fails.append(f"pair {k}: leaves {le} -> {lp} got {v} want {want}")
+            break
+    if len(out) != n:
+        fails.append(f"{len(out)} answers for {n} pairs")
+    return fails, n, rows, vis
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", required=True)
@@ -336,6 +379,8 @@ def main():
     ap.add_argument("--fixtures", default=os.path.join(
         os.environ.get("HL64_FIXTURES", "/scratch/hl64/fixtures"), "goldsrc"))
     ap.add_argument("--maps", default=MAPS)
+    ap.add_argument("--data", default="/scratch/hl1/valve",
+                    help="Valve data (maps/*.bsp: the PVS oracle)")
     a = ap.parse_args()
     tt = os.path.join(a.fixtures, "think-and-time")
     bad = 0
@@ -364,6 +409,11 @@ def main():
         out = run(a.bin, ["frames hldemo1 hldemo2"], a.content)
         print("\n".join(out))
         bad += not any(l.startswith("frames ok") for l in out)
+        for mp in ("hldemo1", "t0a0"):
+            f, n, rows, vis = pvs_check(a.bin, a.content, a.data, mp)
+            print(f"pvs {mp}: {n} pairs ({rows} with a vis row, {vis} visible) against the BSP "
+                  "vis lump" + (" FAIL " + "; ".join(f) if f else " ok"))
+            bad += bool(f)
     print(f"ent: K1-K3 {totals['think']} events + {totals['state']} nextthinks, K6 "
           f"{totals['alloc']} allocations + {totals['snap']} snapshots, K8 {totals['settle']} "
           f"frames on {len(a.maps.split(','))} maps: " + ("FAIL" if bad else "PASS"))

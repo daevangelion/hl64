@@ -121,8 +121,8 @@ class CookTest(Base):
                              files=self.files_with(sprites__glow_DOT_sc4=None))
         self.assertCookFails(r"res\.def:2: no file sound/weapons/click\.wav64",
                              files=self.files_with(sound__weapons__click_DOT_wav64=None))
-        self.assertCookFails(r"sentences\.txt:4 HG_ALERT0: no file sound/hgrunt/clik\.wav64",
-                             files=self.files_with(sound__hgrunt__clik_DOT_wav64=None))
+        # a sentence word without its sample is dropped with a warning
+        # (test_missing_word_sounds), not an error
         self.assertCookFails(r"no file maps/mapb\.w64",
                              files=self.files_with(maps__mapb_DOT_w64=None))
         self.assertCookFails(r"no file maps/mapb\.ent",
@@ -230,6 +230,28 @@ class CookTest(Base):
         ents = testdata.ENTS_A + (b'{\n"classname" "speaker"\n"message" "NOPE"\n'
                                   b'"preset" "2"\n}\n')
         self.cook(files=self.files_with(maps__mapa_DOT_ent=ents))  # preset: no group
+
+    def test_missing_word_sounds(self) -> None:
+        """GoldSrc skips a word whose sample is missing: the word goes, a
+        sentence without words goes, its group skips it"""
+        import contextlib
+        import io
+        f = self.files_with(sound__vox__hello_DOT_wav64=None)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            t = self.cook(files=f, defs=dict(testdata.DEFS, **{
+                "res.def": b"RES(GROUP, HG_ALERT, \"HG_ALERT\")\n"}))
+        self.assertIn("sentences.txt:2 SC_HELLO0: word vox/hello", err.getvalue())
+        self.assertEqual(t.sentence_names, ["SC_HELLO0", "HG_ALERT0"])
+        f0, c0 = t.sentences[0]
+        self.assertEqual([t.res_names[t.kind_first(rtb.KIND_SOUND) + rtb.res_index(w.res)]
+                          for w in t.words[f0:f0 + c0]], ["vox/_comma.wav", "vox/_period.wav"])
+        self.assertEqual(t.group_names, ["SC_HELLO", "HG_ALERT"])
+        # a res.def sentence that lost every word cannot get an id
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertCookFails("SENTENCE SC_HELLO1: none of its words", files=f)
+        self.assertIn("sentences.txt:3 SC_HELLO1: no word left", err.getvalue())
 
     def test_prepass_ids_equal_final(self) -> None:
         """the HLE1 id step's prepass: no campaign graph, no packages, same ids"""

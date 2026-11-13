@@ -567,82 +567,14 @@ int ent_next_class(int after, cls_t cls, int slot)
 	return -1;
 }
 
-/* ---- PVS (architecture.md 5.5): one decompressed row per layer ------------------- */
-
-#define PVS_ROW_MAX	1024		/* 8192 visleafs */
-
-typedef struct {
-	const wld_layer_t	*L;
-	uint16_t		map;
-	int32_t			leaf;		/* row cached for this leaf, -1 none */
-	int32_t			visleafs;	/* 0: no vis (all visible) */
-	uint8_t			row[PVS_ROW_MAX];
-} pvs_cache_t;
-static pvs_cache_t pvs[HL64_WORLD_LAYERS];
-
-static uint32_t be32(const uint8_t *p)
-{
-	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
-}
-
-/* The PVS row of leaf (decoded), NULL when everything is visible. */
-static const uint8_t *pvs_row(wld_layer_t *L, int leaf)
-{
-	pvs_cache_t *c = &pvs[L->slot];
-	const uint8_t *v, *src, *srcend;
-	uint32_t a, b, nbytes, o;
-
-	if (c->L != L || c->map != L->map)
-	{
-		c->L = L;
-		c->map = L->map;
-		c->leaf = -1;
-	}
-	if (L->dir->visr_chunk == W64_NONE || leaf <= 0)
-		return NULL;
-	if (c->leaf == leaf)
-		return c->visleafs ? c->row : NULL;
-	v = wld_chunk_sync(L, L->dir->visr_chunk);
-	c->leaf = leaf;
-	c->visleafs = (int32_t)(be32(v) / 4u) - 1;
-	nbytes = ((uint32_t)c->visleafs + 7u) >> 3;
-	if (leaf > c->visleafs || nbytes > PVS_ROW_MAX)
-	{
-		c->visleafs = 0;
-		return NULL;
-	}
-	a = be32(v + 4 * (leaf - 1));
-	b = be32(v + 4 * leaf);
-	if (a == b)
-	{
-		c->visleafs = 0;	/* no row: everything visible */
-		return NULL;
-	}
-	src = v + a;
-	srcend = v + b;
-	for (o = 0; o < nbytes && src < srcend; src++)
-	{
-		if (*src)
-			c->row[o++] = *src;
-		else if (src + 1 < srcend)
-		{
-			uint32_t n = *++src;
-
-			while (n-- && o < nbytes)
-				c->row[o++] = 0;
-		}
-	}
-	while (o < nbytes)
-		c->row[o++] = 0;
-	return c->row;
-}
+/* ---- PVS (architecture.md 5.5: the exact leaf row, engine/world's cache) -------- */
 
 /* Is map-local point p (layer's frame) in the PVS of map-local eye? */
 static int layer_pvs(int layer, const float eye[3], const float p[3])
 {
 	wld_layer_t *L;
 	const uint8_t *row;
-	int le, lp;
+	int le, lp, visleafs;
 
 	if (layer < 0 || layer >= HL64_WORLD_LAYERS || !(L = wld_layer(layer)))
 		return 1;
@@ -650,10 +582,8 @@ static int layer_pvs(int layer, const float eye[3], const float p[3])
 	lp = wld_point_leaf(L, p);
 	if (lp <= 0)
 		return 0;
-	row = pvs_row(L, le);
-	if (!row)
-		return 1;
-	if (lp > pvs[layer].visleafs)
+	row = wld_pvs_row(L, le, &visleafs);
+	if (!row || lp > visleafs)
 		return 1;
 	return (row[(lp - 1) >> 3] >> ((lp - 1) & 7)) & 1;
 }
