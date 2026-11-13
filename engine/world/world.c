@@ -1415,7 +1415,7 @@ void wld_open_step(wld_layer_t *L, uint32_t crc_budget)
 			int c = L->dir->coll_first + (int)i;
 
 			if (L->ch[c].state == WLD_CH_ABSENT)
-				request(L, c, WLD_CLS_OPEN);
+				request(L, c, WLD_CLS_LOAD);
 			all &= L->ch[c].state == WLD_CH_PINNED;
 		}
 		if (!all)
@@ -1428,7 +1428,7 @@ void wld_open_step(wld_layer_t *L, uint32_t crc_budget)
 			wld_chunk_t *ch = &L->ch[L->dir->ents_chunk];
 
 			if (ch->state == WLD_CH_ABSENT)
-				request(L, L->dir->ents_chunk, WLD_CLS_OPEN);
+				request(L, L->dir->ents_chunk, WLD_CLS_LOAD);
 			if (ch->state != WLD_CH_PINNED)
 				return;
 			scan_ents(L, ch->data);

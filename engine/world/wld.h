@@ -56,8 +56,11 @@ typedef struct {
 
 enum { WLD_CH_ABSENT, WLD_CH_LOADING, WLD_CH_RESIDENT, WLD_CH_PINNED };
 /* Residency classes, weakest first (architecture.md 5.3): a request
- * evicts only chunks of weaker classes (unwanted = NONE). */
-enum { WLD_CLS_NONE, WLD_CLS_PREFETCH, WLD_CLS_PIN, WLD_CLS_OPEN };
+ * evicts only chunks of weaker classes (unwanted = NONE). LOAD: a layer
+ * open's own reads (pinned hull 0, the ENTS scan), which may evict open
+ * chunks not drawn this frame or the last: a fragmented pool must not
+ * stall an open whose sum fits. */
+enum { WLD_CLS_NONE, WLD_CLS_PREFETCH, WLD_CLS_PIN, WLD_CLS_OPEN, WLD_CLS_LOAD };
 
 #define WLD_PATTERN_MAX	64
 
