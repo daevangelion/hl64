@@ -675,6 +675,30 @@ static const char *drop(int map, cls_t cls, const float *org)
 	return e < 0 ? "no free entity" : ok ? NULL : "the game refused the class";
 }
 
+/* Route look-ahead pin (route-bytecode.md, residency; architecture.md 5.3
+ * pin class): the next SETPOS destination, if its map is open, re-armed
+ * at every op start until it runs (pins lapse after 3 s). */
+static void lookahead_pin(void)
+{
+	uint32_t pc = rt.pc, i;
+
+	for (i = rt.op; i < rt.nops; i++)
+	{
+		const uint8_t *p = rt.buf + pc;
+
+		if (p[0] == OP_SETPOS)
+		{
+			float org[3] = { rdf(p + 4), rdf(p + 8), rdf(p + 12) };
+			wld_layer_t *L = wld_layer_of_map(rd16(p + 2));
+
+			if (L && wld_layer_ready(L) == 1)
+				wld_pin_point(rd16(p + 2), org);
+			return;
+		}
+		pc += 4u + 4u * (uint32_t)strlen(ops[p[0]].kinds);
+	}
+}
+
 void rt_frame(double time)
 {
 	while (rt_active())
@@ -697,6 +721,7 @@ void rt_frame(double time)
 			/* the name's records (checked at load) */
 			if (code == OP_WAIT_MOVED || code == OP_WAIT_GONE || (code == OP_LOOK_AT && !a))
 				tg_read(b, &rt.tg);
+			lookahead_pin();
 		}
 		switch (code)
 		{
@@ -767,6 +792,9 @@ void rt_frame(double time)
 				fail("home map differs");
 			if (phy_player_spawn((int)b, org, ang))
 				fail("setpos refused");
+			/* a test teleport is a map load: the destination's
+			 * records hydrate in the next frames (load I/O, 1 s) */
+			io_load_window(30);
 			break;
 		}
 		case OP_BUTTONS:
