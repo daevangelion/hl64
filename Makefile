@@ -36,6 +36,8 @@ ENGINE_SRC := \
 	engine/mem/carve.c engine/mem/heap.c engine/mem/pool.c \
 	engine/render/cam.c engine/render/dlight.c engine/render/world.c \
 	engine/world/style.c engine/world/world.c
+# engine/ent + engine/phys: entity slots, linked boxes, spatial grid, touches (M2)
+ENGINE_SRC += engine/ent/ent.c engine/ent/grid.c engine/ent/grid_bench.c engine/phys/touch.c
 N64_SRC := plat/n64/cart.c plat/n64/fpu_shim.c plat/n64/gpu.c plat/n64/main.c plat/n64/sys.c \
 	plat/n64/vid.c
 HOST_SRC := plat/host/gpu.c plat/host/heap_host.c plat/host/io_host.c plat/host/main.c \
@@ -59,7 +61,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit area cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -186,6 +188,14 @@ UNIT_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(UNIT_BIN): $(UNIT_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 unit: $(UNIT_BIN)
+
+# Area links / touches driver (test/m2/area.c, run by test/m2/area.py).
+AREA_BIN := $(BUILD_DIR)/host/hl64-area
+AREA_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m2/area.o
+$(AREA_BIN): $(AREA_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+area: $(AREA_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 

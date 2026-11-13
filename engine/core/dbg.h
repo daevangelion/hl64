@@ -35,7 +35,8 @@
 	X(MEM, "mem", "", 0) \
 	X(PROF, "prof", "u", 0)			/* 1 s roll-up on/off */ \
 	X(LOG_FLUSH, "flush", "", 0) \
-	X(QUIT, "quit", "u", 0)			/* exit code */
+	X(QUIT, "quit", "u", 0)			/* exit code */ \
+	X(BENCH, "bench", "u", 1)		/* 1 = spatial grid (engine/ent) */
 
 enum {
 #define DBG_ENUM(id, name, args, test) DBG_##id,

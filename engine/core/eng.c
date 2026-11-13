@@ -11,6 +11,7 @@
  * and 8, 10 are added by their modules (game, physics, entities, sound
  * M2-M3) at the marked places, with `now` advancing by dt after step 6.
  */
+#include "hl64/grid.h"
 #include "hl64/limits.h"
 #include "hl64/settings.h"
 #include "engine/core/dbg.h"
@@ -241,6 +242,7 @@ void eng_boot(const char *platform)
 	dbg_handler_set(DBG_PROF, cmd_prof);
 	dbg_handler_set(DBG_LOG_FLUSH, cmd_flush);
 	dbg_handler_set(DBG_QUIT, cmd_quit);
+	ent_init();
 	eng.world = (uint8_t)wld_init();
 	if (eng.world)
 	{
