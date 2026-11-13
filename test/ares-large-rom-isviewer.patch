@@ -1,0 +1,59 @@
+Large-ROM PI decode fix for the ares test harness (apply on top of
+ares-testharness.patch).
+
+Why: the patched ares force-enables the ISViewer debug channel at PI
+0x13ff0000 even when the cartridge image is bigger than 0x3ff0000
+(64 MiB - 64 KiB) — that is how a >64 MiB ROM still gets its log lines to
+stdout. ISViewer's 64 KiB window then swallows cart ROM data: every asset
+stored in ROM offsets 0x3ff0000-0x3ffffff reads back as ISViewer RAM (zeros),
+which shows up as e.g.
+
+  Sys_Error: Mod_LoadBrushModel: models/w_suit.mdl has wrong version number
+             (0 should be 29 or 30)
+
+(the model's IDST ident reads as 0). The test-harness peripheral at
+0x13fe0000 has the same problem for its 4 KiB window, and it is decoded even
+when ARES_TEST_HARNESS is unset.
+
+Fix: only the device *register* pages are taken from the device on reads; the
+rest of each window falls through to the cartridge when the ROM covers it.
+Device writes are untouched, so ISViewer logging and the harness protocol
+(TH_Present reads the magic at 0x13fe0010) keep working.
+
+Residual: 32 bytes of ROM are shadowed at each register page
+(0x13fe0000-0x13fe001f and 0x13ff0000-0x13ff001f). With the current content
+set those land inside models/v_shotgun.stb2 and models/w_shotgunt.mdl; they
+move with any content change, so keep ROM data the ROM polls out of them.
+
+diff --git a/ares/n64/pi/bus.hpp b/ares/n64/pi/bus.hpp
+--- a/ares/n64/pi/bus.hpp
++++ b/ares/n64/pi/bus.hpp
+@@ -45,10 +45,26 @@ inline auto PI::busRead(u32 address) -> u32 {
+     if(cartridge.flash) return cartridge.flash.read<Size>(address);
+     return unmapped;
+   }
+-  if(cartridge.isviewer.enabled() && address >= 0x13ff'0000 && address <= 0x13ff'ffff) {
++  //ISViewer (dev cart) lives at PI 0x13ff0000-0x13ffffff: registers at
++  //0x13ff0000-0x13ff001f, write-only buffer above. A cartridge image larger
++  //than 0x3ff0000 (64 MiB - 64 KiB) covers that range, and the
++  //harness/ARES_ISVIEWER path force-enables the device at any ROM size (so
++  //homebrew with a fat ROM can still log). Only the register reads may come
++  //from the device (libdragon probes the magic at +0x00, libultra reads the
++  //buffer pointers); the buffer half of the window is cart data, otherwise
++  //every asset stored there reads back as ISViewer RAM (zeros).
++  if(cartridge.isviewer.enabled()
++  && ((address >= 0x13ff'0000 && address <= 0x13ff'001f)
++   || (address >= 0x13ff'0020 && address <= 0x13ff'ffff
++    && address > 0x1000'0000 + cartridge.rom.size - 1))) {
+     return cartridge.isviewer.read<Size>(address);
+   }
+-  if(address >= 0x13fe'0000 && address <= 0x13fe'0fff) {
++  //Test harness: registers at 0x13fe0000-0x13fe001f (only +0x10 is readable),
++  //rest of the 4 KiB window is scratch. As with ISViewer above, a ROM larger
++  //than 64 MiB reaches into this window, so only the register block is taken
++  //from the device; the remaining bytes stay cart data.
++  if(address >= 0x13fe'0000 && address <= 0x13fe'0fff
++  && (address <= 0x13fe'001f || address > 0x1000'0000 + cartridge.rom.size - 1)) {
+     cartridge.testharness.load();  //idempotent; enables it on DD-only boots
+     if(cartridge.testharness.enabled()) {
+       if constexpr(Size == Word) return cartridge.testharness.readWord(address);

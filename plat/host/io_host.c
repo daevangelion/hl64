@@ -1,0 +1,225 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * io_host.c -- cart reads for the host build, imported from the old
+ * tree's n64/port/host/q64_io_host.c (audit entry CLEAN; its Sys_Error
+ * calls are now sys_error, its Quake string helpers snprintf, and it
+ * serves sys.h's sys_cart_* / sys_pi_* instead of the old R64_Cart*).
+ *
+ * On the cart, plat/n64/cart.c maps a loose DFS file to its PI address
+ * and DMAs from it; here each loose file under the cart root (the DFS
+ * image source, HL64_CONTENT) gets a range in a virtual PI address space
+ * and reads are pread()s from it. Same contract as the cart: 0 for
+ * anything that is not a loose file, 0 on out-of-range or odd-aligned
+ * transfers.
+ *
+ * Every transfer is charged the modelled PI cost (architecture 3.4: 195
+ * us/KB = 5.25 MB/s; HL64_HOST_PI_US_PER_KB overrides), which engine/io
+ * counts against the frame like the cart's DMA time.
+ */
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+#include "engine/core/log.h"
+#include "engine/core/sys.h"
+#include "plat/host/host.h"
+
+#define IO_MAX_FILES	512
+#define IO_PATH_MAX	256
+#define IO_ROM_BASE	0x10000000u	/* cart ROM domain, like the PI bus */
+#define IO_PI_US_PER_KB	195u
+
+typedef struct {
+	char		path[IO_PATH_MAX];
+	int		fd;
+	uint32_t	rom;
+	uint32_t	size;
+} io_file_t;
+
+static io_file_t	io_files[IO_MAX_FILES];
+static int		io_nfiles;
+static uint32_t		io_next_rom = IO_ROM_BASE;
+static char		io_root[IO_PATH_MAX] = ".";
+static uint32_t		io_us_per_kb = IO_PI_US_PER_KB;
+
+static struct {
+	uint64_t	calls;		/* transfers */
+	uint64_t	bytes;
+	uint64_t	frame_peak;	/* most bytes in one frame */
+	uint64_t	pi_us;		/* modelled PI time */
+	uint64_t	frame_bytes;
+} io_st;
+
+void host_io_init(const char *root)
+{
+	const char *e = getenv("HL64_HOST_PI_US_PER_KB");
+
+	if (root)
+		snprintf(io_root, sizeof(io_root), "%s", root);
+	if (e)
+		io_us_per_kb = (uint32_t)strtoul(e, NULL, 10);
+}
+
+/* "rom:/x" and DFS-relative "x" are cart-root relative. 0 if too long. */
+static int io_path(char *out, size_t outsz, const char *path)
+{
+	int n;
+
+	if (!strncmp(path, "rom:/", 5))
+		n = snprintf(out, outsz, "%s/%s", io_root, path + 5);
+	else if (path[0] == '/' || !strncmp(path, io_root, strlen(io_root)))
+		n = snprintf(out, outsz, "%s", path);
+	else
+		n = snprintf(out, outsz, "%s/%s", io_root, path);
+	return n >= 0 && (size_t)n < outsz;
+}
+
+uint32_t sys_cart_addr(const char *path, uint32_t *out_size)
+{
+	char full[IO_PATH_MAX];
+	struct stat st;
+	io_file_t *f;
+	int i, fd;
+
+	if (out_size)
+		*out_size = 0;
+	if (!path || !path[0])
+		return 0;
+	if (!io_path(full, sizeof(full), path))
+		return 0;
+	for (i = 0; i < io_nfiles; i++)
+		if (!strcmp(io_files[i].path, full))
+		{
+			if (out_size)
+				*out_size = io_files[i].size;
+			return io_files[i].rom;
+		}
+	fd = open(full, O_RDONLY);
+	if (fd < 0)
+		return 0;
+	if (fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_size <= 0)
+	{
+		close(fd);
+		return 0;
+	}
+	if (io_nfiles >= IO_MAX_FILES)
+		sys_error("io_host: more than %d cart files", IO_MAX_FILES);
+	f = &io_files[io_nfiles++];
+	snprintf(f->path, sizeof(f->path), "%s", full);
+	f->fd = fd;
+	f->size = (uint32_t)st.st_size;
+	f->rom = io_next_rom;
+	/* next file on a 2-byte boundary, like DFS's halfword-aligned files */
+	io_next_rom += (f->size + 1u) & ~1u;
+	if (out_size)
+		*out_size = f->size;
+	return f->rom;
+}
+
+/* The file holding PI address rom, or sys_error. */
+static io_file_t *io_file_at(uint32_t rom)
+{
+	int i;
+
+	for (i = 0; i < io_nfiles; i++)
+		if (rom >= io_files[i].rom && rom < io_files[i].rom + io_files[i].size)
+			return &io_files[i];
+	sys_error("io_host: unknown rom address 0x%08lx", (unsigned long)rom);
+}
+
+static void io_count(uint32_t n)
+{
+	io_st.calls++;
+	io_st.bytes += n;
+	io_st.pi_us += sys_pi_cost_us(n);
+	io_st.frame_bytes += n;
+}
+
+int sys_cart_read(void *dst, size_t dst_cap, uint32_t rom, uint32_t rom_size,
+	uint32_t off, uint32_t len)
+{
+	io_file_t *f;
+	uint32_t dma_len, src;
+
+	if (!dst || !rom || len == 0)
+		return 0;
+	if ((uint64_t)off + (uint64_t)len > (uint64_t)rom_size)
+		return 0;
+	dma_len = (len + 1u) & ~1u;
+	if ((size_t)dma_len > dst_cap)
+		return 0;
+	src = rom + off;
+	if (((uintptr_t)dst | (uintptr_t)src | (uintptr_t)dma_len) & 1u)
+		return 0;
+	f = io_file_at(rom);
+	/* the PI transfers the rounded halfword past a file's odd tail too */
+	if (off + dma_len > f->size)
+		dma_len = len;
+	if (pread(f->fd, dst, dma_len, (off_t)off) != (ssize_t)dma_len)
+		sys_error("io_host: short read %s @%lu", f->path, (unsigned long)off);
+	io_count(dma_len);
+	return 1;
+}
+
+/* ---- engine/io backend: a piece lands by the next pump ------------------- */
+
+static uint32_t io_pread(void *dst, uint32_t rom, uint32_t len)
+{
+	io_file_t *f = io_file_at(rom);
+	uint32_t off = rom - f->rom, n = len;
+
+	if (off + n > f->size)
+		n = f->size - off;
+	if (pread(f->fd, dst, n, (off_t)off) != (ssize_t)n)
+		sys_error("io_host: short read %s @%lu", f->path, (unsigned long)off);
+	io_count(n);
+	return n;
+}
+
+void sys_pi_launch(void *dst, uint32_t rom, uint32_t len)
+{
+	io_pread(dst, rom, len);
+}
+
+/* one pump interval models a piece's PI time */
+int sys_pi_busy(void)
+{
+	return 0;
+}
+
+uint32_t sys_pi_wait(void)
+{
+	return 0;
+}
+
+uint32_t sys_pi_read(void *dst, uint32_t rom, uint32_t len)
+{
+	return sys_pi_cost_us(io_pread(dst, rom, len));
+}
+
+uint32_t sys_pi_cost_us(uint32_t len)
+{
+	return (uint32_t)(((uint64_t)len * io_us_per_kb + 512u) / 1024u);
+}
+
+/* ---- PROFILE=1 counters -------------------------------------------------- */
+
+void sys_prof_frame(void)
+{
+	if (io_st.frame_bytes > io_st.frame_peak)
+		io_st.frame_peak = io_st.frame_bytes;
+	io_st.frame_bytes = 0;
+}
+
+void sys_prof_dump(unsigned nframes)
+{
+	unsigned nf = nframes ? nframes : 1;
+
+	log_printf("io host calls=%lu/f %luB/f pi=%luus/f frame_peak=%luB\n",
+		(unsigned long)(io_st.calls / nf), (unsigned long)(io_st.bytes / nf),
+		(unsigned long)(io_st.pi_us / nf), (unsigned long)io_st.frame_peak);
+	memset(&io_st, 0, sizeof(io_st));
+}

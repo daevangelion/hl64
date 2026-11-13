@@ -1,0 +1,39 @@
+Backport of upstream libdragon 43c67dcf598a11523435ff72edcc1c2b479f96d3
+("rspq: fix highpri REQUESTED-clear race (set signal before queueing the
+clear)", Christopher Bonhage, 2026-07-20) onto the pinned SDK rev bc24d3d5a.
+
+rspq_highpri_begin queued the WRITE_STATUS that clears
+SIG_HIGHPRI_REQUESTED before raising the signal. With the RSP already in
+highpri and caught up with the cursor (mixer_poll's VADPCM batches), it can
+run the clear before the set lands; the dangling REQUESTED then re-enters
+highpri on an empty queue after the final epilog and parks with
+SIG_HIGHPRI_RUNNING set, so rspq_highpri_sync times out (the PROFILE
+cart crash in the hldemo1-return garg fight: n64/port/HL_UPLINK.md).
+
+diff --git a/src/rspq/rspq.c b/src/rspq/rspq.c
+index 361012756e..81f9be64a0 100644
+--- a/src/rspq/rspq.c
++++ b/src/rspq/rspq.c
+@@ -1238,10 +1238,20 @@ void rspq_highpri_begin(void)
+     // add a command in case the previous epilog was skipped. Otherwise,
+     // a dummy SIG_HIGHPRI_REQUESTED could stay on and eventually highpri
+     // mode would enter once again.
+-    rspq_append1(rspq_cur_pointer, RSPQ_CMD_WRITE_STATUS,
+-        SP_WSTATUS_CLEAR_SIG_HIGHPRI_REQUESTED | SP_WSTATUS_SET_SIG_HIGHPRI_RUNNING);
++    // Set SIG_HIGHPRI_REQUESTED *before* writing the WRITE_STATUS command that
++    // clears it. If the RSP is already in highpri mode and caught up with the
++    // write cursor, it can execute the appended WRITE_STATUS within a few
++    // cycles of the append; with the old order (append first, then set), the
++    // clear could be consumed before the set landed, leaving a dangling
++    // REQUESTED that made the RSP re-enter highpri after the final epilog and
++    // park forever on the empty queue with SIG_HIGHPRI_RUNNING set (deadlocking
++    // rspq_highpri_sync). Setting the signal first closes the race: the RSP
++    // cannot execute the clear before it is written, which is after the set.
+     MEMORY_BARRIER();
+     *SP_STATUS = SP_WSTATUS_SET_SIG_HIGHPRI_REQUESTED;
++    MEMORY_BARRIER();
++    rspq_append1(rspq_cur_pointer, RSPQ_CMD_WRITE_STATUS,
++        SP_WSTATUS_CLEAR_SIG_HIGHPRI_REQUESTED | SP_WSTATUS_SET_SIG_HIGHPRI_RUNNING);
+     rspq_flush_internal();
+ }
+ 
