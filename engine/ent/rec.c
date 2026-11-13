@@ -134,6 +134,13 @@ typedef struct {
 	rtimer_t	tm;		/* t = remaining time */
 } rfrozen_t;
 
+_Static_assert(sizeof(rrt_t) == REC_RT_BYTES, "rrt_t");
+_Static_assert(sizeof(rec_logic_t) == REC_LOGIC_BYTES, "rec_logic_t");
+_Static_assert(((((REC_SLOTS * sizeof(rmap_t) + 15) & ~(size_t)15)
+	+ REC_TIMERS * (sizeof(rtimer_t) + sizeof(rfrozen_t)) + REC_DEFER * sizeof(rdefer_t)
+	+ REC_HOLDERS * sizeof(rhold_t) + 15) & ~(size_t)15) == REC_TABLE_BYTES,
+	"rec_init tables");
+
 static struct {
 	rmap_t		*map;		/* [REC_SLOTS] */
 	rtimer_t	*tm;		/* [REC_TIMERS] */
@@ -1158,7 +1165,9 @@ static int open_chunk(rmap_t *m, const wld_layer_t *L)
 	nrecs = h->magic == HLE_MAGIC ? h->numrecs : hle_sw16(h->numrecs);
 	if (nrecs > HLE_MAX_LUMP)
 		sys_error("%s: ENTS: %lu records", file, (unsigned long)nrecs);
-	/* chunk, runtime, logic blocks (bounded by records), pending list */
+	/* chunk, runtime, logic blocks (bounded by records), pending list;
+	 * the cook's region proof mirrors this and block_len below
+	 * (tools/w64c/hleids.py slot_bytes) */
 	need = ((len + 15) & ~15u) + nrecs * (uint32_t)sizeof(rrt_t)
 		+ nrecs * (uint32_t)sizeof(rec_logic_t) + 2 * nrecs + 16;
 	if ((at = heap_find(need)) == ~0u)

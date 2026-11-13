@@ -106,7 +106,14 @@ restab for the id spaces first (`restab.cook` with the map list and no
 packages: ids depend on names only) and `make cook` checks afterwards
 (`hleids --check`) that the final `campaign.rtb` gives every packaged chunk
 identical ids and that every `res_t` lies in the table and inside its cart
-file (precache-and-resources.md R2). The engine (`engine/ent/rec_hle.c`)
+file (precache-and-resources.md R2). The same check proves the HLE region
+(architecture.md 4.1): with engine/ent/rec.c's bytes (`REC_RT_BYTES`,
+`REC_LOGIC_BYTES`, `REC_TABLE_BYTES` in `engine/ent/rec_int.h`, asserted
+against the structs) it takes rec_init's tables + the largest open-time
+need (16-aligned chunk + records × (runtime + logic + 2) + 16) + the
+largest open block (chunk + runtime, logic blocks for logic records only) +
+2 × the largest runtime, each 16-aligned, prints it, and fails above
+`HL64_HLE_BLOBS_KB`. The engine (`engine/ent/rec_hle.c`)
 rejects a chunk without `HLE_F_IDS`, an id outside its space (classes,
 keys.def, patterns, global states, titles, each `res_t` kind's count,
 submodels of the layer), a lump map that disagrees with its record, and

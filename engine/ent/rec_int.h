@@ -37,6 +37,13 @@ enum {
 #define REC_BUDGET_HOST		8	/* HL64_TEST builds (host and cart): records
 					   per frame, deterministic (K10) */
 
+/* HLE region byte accounting (rec_init, open_chunk; rec.c asserts these
+ * against the structs). The cook reads the defines and proves the region
+ * against HL64_HLE_BLOBS_KB (tools/w64c/hleids.py, architecture.md 4.1). */
+#define REC_RT_BYTES		24	/* rrt_t, per record */
+#define REC_LOGIC_BYTES		16	/* rec_logic_t, per logic record */
+#define REC_TABLE_BYTES		16592	/* rec_init's tables before the slot heap */
+
 /* The id spaces an HLE1 chunk's typed ids are checked against. */
 typedef struct {
 	uint32_t	classes, patterns, globals, titles;
