@@ -1132,3 +1132,32 @@ int decal_info(int i, int *owner, int *nverts, float (*out)[3], int max)
 		world_of(&verts[i * HL64_FX_DECAL_VERTS + j], org, ax, out[j]);
 	return d->npieces;
 }
+
+#ifdef HL64_HOST
+_Static_assert(HL64_FX_DECAL_VERTS % 3 == 0 && HL64_FX_DECAL_VERTS / 3 <= PIECES,
+	"worst-case decal as fans of 3");
+
+int decal_test_fill_worst(int i)
+{
+	fxdecal_t src;
+	dvert_t v[3];
+	int j, k;
+
+	if (i < 0 || i >= HL64_FX_DECALS || !pool[i].live || pool[i].nverts < 3)
+		return -1;
+	src = pool[i];
+	memcpy(v, &verts[i * HL64_FX_DECAL_VERTS], sizeof(v));
+	for (j = 0; j < HL64_FX_DECALS; j++)
+	{
+		pool[j] = src;
+		pool[j].seq = ++seq;
+		pool[j].nverts = HL64_FX_DECAL_VERTS;
+		pool[j].npieces = HL64_FX_DECAL_VERTS / 3;
+		for (k = 0; k < PIECES; k++)
+			pool[j].piece[k] = k < HL64_FX_DECAL_VERTS / 3 ? 3 : 0;
+		for (k = 0; k < HL64_FX_DECAL_VERTS; k++)
+			verts[j * HL64_FX_DECAL_VERTS + k] = v[k % 3];
+	}
+	return HL64_FX_DECALS;
+}
+#endif

@@ -250,6 +250,10 @@ uint32_t	beam_dropped(int reset);
 int		sprite_test_inject(res_t r, uint8_t *bytes, uint32_t size);
 /* X2: the last translucent pass's items, back to front. */
 int		trans_last_order(uint8_t *kind, uint16_t *id, uint8_t *blend, int max);
+/* Tests: every decal pool slot a copy of live decal i at its worst
+ * (HL64_FX_DECAL_VERTS vertices, fans of 3): the vertex ring's worst
+ * case. Slots filled, or -1. */
+int		decal_test_fill_worst(int i);
 #endif
 
 #endif
