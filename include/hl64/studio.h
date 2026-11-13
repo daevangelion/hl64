@@ -25,6 +25,9 @@ const void	*studio_info(res_t model, uint32_t *size);
 /* Animation chunk of one sequence (D3(b)): resident or NULL; a NULL
  * chunk requests it (prefetch class) and the game holds the last pose. */
 const void	*studio_anim(res_t model, int sequence, uint32_t *size);
+/* Body combinations of the model (product of body-part model counts;
+ * GoldSrc ModelFrames for studio models), 1 when not resident yet. */
+int		studio_body_count(res_t model);
 /* Interest in a sequence's chunk ahead of use (scripted sequences). */
 void		studio_want(res_t model, int sequence);
 
