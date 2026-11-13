@@ -450,7 +450,7 @@ static void CFade_LogicUse(gid_t16 gid, int activator, int caller, int use_type,
 	/* CBaseEntity::SUB_UseTargets(this, USE_TOGGLE, 0) */
 	target = rec_key_name(gid, K_TARGET);
 	if (target != NAME_NONE)
-		rec_fire(target, -1, -1, gid, USE_TOGGLE, 0);
+		GameFire(target, -1, -1, gid, USE_TOGGLE, 0);
 }
 
 const game_class_t gc_ENV_FADE = { .LogicUse = CFade_LogicUse };
@@ -520,7 +520,7 @@ static void CMessage_LogicUse(gid_t16 gid, int activator, int caller, int use_ty
 	if (sf & SF_MESSAGE_ONCE)
 		rec_kill(gid);
 	if (target != NAME_NONE)
-		rec_fire(target, -1, -1, gid, USE_TOGGLE, 0);
+		GameFire(target, -1, -1, gid, USE_TOGGLE, 0);
 }
 
 const game_class_t gc_ENV_MESSAGE = {

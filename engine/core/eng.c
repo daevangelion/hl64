@@ -50,6 +50,8 @@
 const char *eng_route_path = "route.rbc";
 
 /* game/ (slices GameCore, GameMon, Items); skipped until it is linked */
+#pragma weak game_init
+#pragma weak game_prof_line
 #pragma weak game_new_campaign
 #pragma weak game_start_frame
 static struct {
@@ -323,6 +325,9 @@ void eng_boot(const char *platform)
 	}
 	in_init();
 	phy_player_init();
+	/* the game's tables and its dispatch hooks (phy_set_game_hooks) */
+	if (game_init)
+		game_init();
 	if (eng.world)
 	{
 		int r = rt_load(eng_route_path);
@@ -440,6 +445,8 @@ static void rollup(void)
 			(unsigned long)m.kind_us[PHY_K_PUSHSTEP] / n, (unsigned long)m.traces / n);
 	}
 	rec_prof_line();
+	if (game_prof_line)
+		game_prof_line();
 	{
 		snd_stats_t s;
 

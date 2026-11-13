@@ -27,7 +27,46 @@
  */
 #include <string.h>
 
+#include "engine/core/sys.h"
 #include "game/hl/util.h"
+
+/* ---- profile (prof game_us roll-up) ---------------------------------------- */
+
+/* Time inside the game's dispatch per frame (outermost calls only: a use
+ * fired from a think counts once; avg / max over the roll-up window's
+ * frames), and the window's totals of thinks, uses (entity + logic) and
+ * fires (rec_fire / rec_fire_at the game issues, game_fires). */
+static struct {
+	uint64_t	sum, max, frame, t0;
+	uint32_t	frames, thinks, uses;
+	int		depth;
+} gprof;
+uint32_t	game_fires;
+
+static void prof_enter(void)
+{
+	if (!gprof.depth++)
+		gprof.t0 = sys_time_us();
+}
+
+static void prof_leave(void)
+{
+	if (!--gprof.depth)
+		gprof.frame += sys_time_us() - gprof.t0;
+}
+
+void game_prof_line(void)
+{
+	unsigned long n = gprof.frames ? gprof.frames : 1;
+
+	log_printf("prof game_us avg=%lu max=%lu thinks=%lu uses=%lu fires=%lu\n",
+		(unsigned long)(gprof.sum / n), (unsigned long)gprof.max,
+		(unsigned long)gprof.thinks, (unsigned long)gprof.uses,
+		(unsigned long)game_fires);
+	gprof.sum = gprof.max = 0;
+	gprof.frames = gprof.thinks = gprof.uses = 0;
+	game_fires = 0;
+}
 
 /* ---- function table (funcs.def; fn_t = index + 1) ------------------------ */
 
@@ -175,10 +214,19 @@ void game_map_closing(int slot)
 
 void game_start_frame(void)
 {
+	/* the previous frame's dispatch time (its active set, touches, uses)
+	 * plus this frame's logic timers (step 4, before this call) */
+	gprof.sum += gprof.frame;
+	if (gprof.frame > gprof.max)
+		gprof.max = gprof.frame;
+	gprof.frame = 0;
+	gprof.frames++;
+	prof_enter();
 	if (game_mon_start_frame)
 		game_mon_start_frame();
 	if (game_items_start_frame)
 		game_items_start_frame();
+	prof_leave();
 }
 
 /* ---- spawn (DispatchSpawn) ----------------------------------------------------- */
@@ -279,7 +327,12 @@ void game_think(int e)
 			game_class_name(ent_idc(e)->cls), e);
 	gf = func_of(ent_tm(e)->think, FK_THINK, e);
 	if (gf)
+	{
+		gprof.thinks++;
+		prof_enter();
 		gf->fn.think(e);
+		prof_leave();
+	}
 }
 
 void game_touch(int e, int other)
@@ -290,7 +343,11 @@ void game_touch(int e, int other)
 		return;
 	gf = func_of(ent_tm(e)->touch, FK_TOUCH, e);
 	if (gf)
+	{
+		prof_enter();
 		gf->fn.touch(e, other);
+		prof_leave();
+	}
 }
 
 void game_blocked(int e, int other)
@@ -298,7 +355,11 @@ void game_blocked(int e, int other)
 	const game_func_t *gf = func_of(ent_tm(e)->blocked, FK_BLOCKED, e);
 
 	if (gf)
+	{
+		prof_enter();
 		gf->fn.touch(e, other);
+		prof_leave();
+	}
 }
 
 void game_use(int e, int activator, int caller, int use_type, float value)
@@ -309,7 +370,12 @@ void game_use(int e, int activator, int caller, int use_type, float value)
 		return;
 	gf = func_of(ent_tm(e)->use, FK_USE, e);
 	if (gf)
+	{
+		gprof.uses++;
+		prof_enter();
 		gf->fn.use(e, activator, caller, use_type, value);
+		prof_leave();
+	}
 }
 
 void game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float value)
@@ -317,7 +383,12 @@ void game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float 
 	const game_class_t *c = game_class(rec_class(gid));
 
 	if (c && c->LogicUse)
+	{
+		gprof.uses++;
+		prof_enter();
 		c->LogicUse(gid, activator, caller, use_type, value);
+		prof_leave();
+	}
 }
 
 void game_logic_timer(gid_t16 gid, uint16_t arg, int activator)
@@ -325,7 +396,12 @@ void game_logic_timer(gid_t16 gid, uint16_t arg, int activator)
 	const game_class_t *c = game_class(rec_class(gid));
 
 	if (c && c->LogicTimer)
+	{
+		gprof.thinks++;
+		prof_enter();
 		c->LogicTimer(gid, arg, activator);
+		prof_leave();
+	}
 }
 
 /* UTIL_IsMasterTriggered's lookup: the first record named master (a
