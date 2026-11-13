@@ -445,10 +445,26 @@ static int valid_movetype(int mt)
 	return mt == MOVETYPE_NONE || (mt >= MOVETYPE_WALK && mt <= MOVETYPE_PUSHSTEP);
 }
 
+/* Movetypes whose GoldSrc step runs the non-player water check
+ * (physics-movetypes.md 5). */
+static int water_checked(int mt)
+{
+	return mt == MOVETYPE_TOSS || mt == MOVETYPE_BOUNCE || mt == MOVETYPE_FLY
+		|| mt == MOVETYPE_FLYMISSILE || mt == MOVETYPE_BOUNCEMISSILE
+		|| mt == MOVETYPE_STEP || mt == MOVETYPE_PUSHSTEP;
+}
+
 void ent_set_movetype(int e, int movetype)
 {
 	if (!valid_movetype(movetype))
 		sys_error("ent %d (%s): bad movetype %d", e, ent_class_name(e), movetype);
+	/* GoldSrc's first step of such an entity sets watertype EMPTY even
+	 * when it rests, and a resting entity is never stepped here: start it
+	 * EMPTY [probe:measured P-push, P-rotate, K-pusher: resting crates 0 ->
+	 * -1 at frame 1]; other movetypes keep 0 [probe:measured K-think] */
+	if (water_checked(movetype) && !water_checked(ent_c.cv[e].movetype)
+		&& ent_c.phys[e].watertype == 0)
+		ent_c.phys[e].watertype = COL_EMPTY;
 	ent_c.cv[e].movetype = (uint8_t)movetype;
 	check_pair(e);
 	ent_sets_update(e);

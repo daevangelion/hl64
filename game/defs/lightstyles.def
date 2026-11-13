@@ -1,0 +1,24 @@
+//
+//	Copyright (c) 1996-2002, Valve LLC. All rights reserved.
+//	Half Life 1 SDK licence: game/LICENSE-HLSDK. hl64 game definitions.
+//
+// Standard lightstyles (HLSDK dlls/world.cpp CWorld::Precache):
+// LIGHTSTYLE(style, "pattern"); pattern id = line order of the LIGHTSTYLE
+// lines (docs/formats/rtb-format.md "Lightstyle patterns"). game/hl/world.c
+// sets them at New Game and when a worldspawn spawns; lights.c uses the
+// "m" (id 0) and "a" (id 13) patterns for switchable styles 32-62.
+// Append only.
+LIGHTSTYLE(0, "m")
+LIGHTSTYLE(1, "mmnmmommommnonmmonqnmmo")
+LIGHTSTYLE(2, "abcdefghijklmnopqrstuvwxyzyxwvutsrqponmlkjihgfedcba")
+LIGHTSTYLE(3, "mmmmmaaaaammmmmaaaaaabcdefgabcdefg")
+LIGHTSTYLE(4, "mamamamamama")
+LIGHTSTYLE(5, "jklmnopqrstuvwxyzyxwvutsrqponmlkj")
+LIGHTSTYLE(6, "nmonqnmomnmomomno")
+LIGHTSTYLE(7, "mmmaaaabcdefgmmmmaaaammmaamm")
+LIGHTSTYLE(8, "mmmaaammmaaammmabcdefaaaammmmabcdefmmmaaaa")
+LIGHTSTYLE(9, "aaaaaaaazzzzzzzz")
+LIGHTSTYLE(10, "mmamammmmammamamaaamammma")
+LIGHTSTYLE(11, "abcdefghijklmnopqrrqponmlkjihgfedcba")
+LIGHTSTYLE(12, "mmnnmmnnnmmnn")
+LIGHTSTYLE(63, "a")
