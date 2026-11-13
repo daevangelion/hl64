@@ -66,6 +66,16 @@ void gpu_bind_page(const w64_texp_t *p, uint8_t *state)
 	cur.binds++;
 }
 
+/* the recorder keeps no RDP state */
+void gpu_state_lost(void)
+{
+}
+
+void gpu_decal_depth(int on)
+{
+	mix(&on, sizeof(on));
+}
+
 void gpu_draw(const w64_vert_t *v, int nv, const int16_t *idx, int ni)
 {
 	int k, faces = 0;

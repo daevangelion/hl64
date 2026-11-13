@@ -196,6 +196,17 @@ void gpu_bind_page(const w64_texp_t *p, uint8_t *state)
 	cur.binds++;
 }
 
+void gpu_state_lost(void)
+{
+	fence = -1;
+}
+
+void gpu_decal_depth(int on)
+{
+	rdpq_mode_zbuf(true, !on);
+	rdpq_mode_zmode(on ? ZMODE_DECAL : ZMODE_STANDARD);
+}
+
 /* ---- meshlets --------------------------------------------------------------- */
 
 void gpu_draw(const w64_vert_t *v, int nv, const int16_t *idx, int ni)

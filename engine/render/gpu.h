@@ -43,6 +43,12 @@ void	gpu_matrix_pop(void);
 /* Bind a resident TEXP page; state = its WLD_PAGE_STATE bytes in the
  * layer (prebuilt RDP bind list, rebuilt when the page moves). */
 void	gpu_bind_page(const w64_texp_t *p, uint8_t *state);
+/* Another renderer (the effects pass) set the RDP alpha compare: the next
+ * gpu_bind_page applies its page's fence state whatever it was. */
+void	gpu_state_lost(void);
+/* Decal depth for the following draws (on: Z test against the coplanar
+ * base, no Z write; off: the world's opaque state). */
+void	gpu_decal_depth(int on);
 /* One meshlet: vertex pairs (nv vertices) and its encoded strip. */
 void	gpu_draw(const w64_vert_t *v, int nv, const int16_t *idx, int ni);
 /* Vertex bytes the CPU rewrote (recolour, dlight scratch). */

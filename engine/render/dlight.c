@@ -232,6 +232,7 @@ void ren_dlight_sources(double time)
 				memcpy(l->origin, p, sizeof(p));
 				l->radius = 80.0f;
 				l->die = time;
+				l->flash = 1;
 				l->color[0] = l->color[1] = l->color[2] = (uint8_t)(b * 255.0f + 0.5f);
 			}
 			else

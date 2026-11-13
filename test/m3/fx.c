@@ -700,9 +700,188 @@ placed:
 	return 0;
 }
 
+static uint32_t	wld_fr = 1;	/* wld_frame counter of the test's read pumps */
+
+/* The render chunks of every sector meeting box (local, grown by pad)
+ * resident: request, pump the reads. 0 when they landed. */
+static int make_resident(const int16_t box[6], float pad)
+{
+	int it, s, k, missing = 1;
+
+	for (it = 0; it < 400 && missing; it++)
+	{
+		missing = 0;
+		io_frame_begin(33333);
+		for (s = 0; s < L->dir->nsect; s++)
+		{
+			const int16_t *b = L->sects[s].bbox;
+
+			for (k = 0; k < 3; k++)
+				if (b[k] > box[k + 3] + pad || b[k + 3] < box[k] - pad)
+					break;
+			if (k == 3)
+				missing |= !wld_chunk_use(L, L->sects[s].rend_chunk);
+		}
+		io_pump();
+		wld_frame(wld_fr++);
+	}
+	return missing;
+}
+
+/* Oracle, independent of decal.c: a drawn world triangle (resident sector
+ * chunk) lies in the hit plane (1 u) along the hit normal, and the hit
+ * point falls inside it (0.5 u). Hits without one (clip-only hull,
+ * faces the cook dropped) cannot take a decal. */
+static int drawn_face_at(const float hit_g[3], const float n[3])
+{
+	unsigned stride = L->hdr.idx_stride ? L->hdr.idx_stride : 1, base = L->hdr.idx_base;
+	float q[3];
+	int s, i, j, k;
+
+	for (k = 0; k < 3; k++)
+		q[k] = hit_g[k] - L->gofs[k];
+	for (s = 0; s < L->dir->nsect; s++)
+	{
+		const w64_sector_t *sc = &L->sects[s];
+		const uint8_t *ch;
+		const w64_rend_t *r;
+		const w64_meshlet_t *m;
+
+		for (k = 0; k < 3; k++)
+			if (q[k] + 2 < sc->bbox[k] || q[k] - 2 > sc->bbox[k + 3])
+				break;
+		if (k < 3 || !(ch = wld_chunk_use(L, sc->rend_chunk)))
+			continue;
+		r = (const w64_rend_t *)ch;
+		m = (const w64_meshlet_t *)(ch + sizeof(w64_rend_t));
+		for (i = 0; i < r->nmeshlets; i++, m++)
+		{
+			const w64_vert_t *vp = (const w64_vert_t *)(ch + W64_MESHLET_VOFS(m));
+			const int16_t *idx = (const int16_t *)(ch + W64_MESHLET_IOFS(m));
+			int ni = W64_MESHLET_NI(m), nv = W64_MESHLET_NV(m), s0 = 0;
+
+			for (j = 0; j < ni; j++)
+			{
+				int t[3], e, inside = 1;
+				float p[3][3], e1[3], e2[3], fn[3], l;
+
+				if ((uint16_t)idx[j] & W64_IDX_RESTART)
+					s0 = j;
+				if (j - s0 < 2)
+					continue;
+				for (e = 0; e < 3; e++)
+				{
+					t[e] = (int)(((uint16_t)idx[j - 2 + e] & 0x3FFF) - base) / (int)stride;
+					if (t[e] < 0 || t[e] >= nv)
+						break;
+					for (k = 0; k < 3; k++)
+						p[e][k] = (t[e] & 1) ? vp[t[e] >> 1].posB[k] : vp[t[e] >> 1].posA[k];
+				}
+				if (e < 3)
+					continue;
+				for (k = 0; k < 3; k++)
+				{
+					e1[k] = p[1][k] - p[0][k];
+					e2[k] = p[2][k] - p[0][k];
+				}
+				fn[0] = e1[1] * e2[2] - e1[2] * e2[1];
+				fn[1] = e1[2] * e2[0] - e1[0] * e2[2];
+				fn[2] = e1[0] * e2[1] - e1[1] * e2[0];
+				if ((l = sqrtf(dot3(fn, fn))) < 1e-3f)
+					continue;
+				for (k = 0; k < 3; k++)
+					fn[k] /= l;
+				if (fabsf(dot3(fn, n)) < 0.9f)
+					continue;
+				for (k = 0; k < 3; k++)
+					e1[k] = q[k] - p[0][k];
+				if (fabsf(dot3(e1, fn)) > 1)
+					continue;
+				for (e = 0; e < 3 && inside; e++)
+				{
+					const float *a = p[e], *b = p[(e + 1) % 3], *c = p[(e + 2) % 3];
+					float ed[3], m2[3], dq, dc;
+
+					for (k = 0; k < 3; k++)
+						ed[k] = b[k] - a[k];
+					m2[0] = fn[1] * ed[2] - fn[2] * ed[1];
+					m2[1] = fn[2] * ed[0] - fn[0] * ed[2];
+					m2[2] = fn[0] * ed[1] - fn[1] * ed[0];
+					if ((l = sqrtf(dot3(m2, m2))) < 1e-6f)
+						break;
+					dq = (dot3(m2, q) - dot3(m2, a)) / l;
+					dc = (dot3(m2, c) - dot3(m2, a)) / l;
+					if (dc < 0)
+						dq = -dq;
+					inside = dq > -0.5f;
+				}
+				if (inside && e == 3)
+					return 1;
+			}
+		}
+	}
+	return 0;
+}
+
+/* Every traced hit on a drawn face takes a decal, whichever of the
+ * point's chunks holds the face (regression: the winding vote asked only
+ * the first chunk, so a face in another one rejected every triangle as
+ * facing away: 1010 of 3199 hits on hldemo1; ares: a glock at a corridor
+ * wall left no hole). Rays from the centre of every sector of the map
+ * (its neighbourhood made resident first): 24 yaws x 3 pitches, 256 u. */
+static int hits_test(char *note, int len)
+{
+	float hit[3], n[3];
+	int s, origins = 0, yaw, pitch, k, hits = 0, faceless = 0, waiting = 0, bad = 0;
+
+	for (s = 0; s < L->dir->nsect; s++)
+	{
+		const int16_t *b = L->sects[s].bbox;
+		float eg[3];
+
+		if (make_resident(b, 256 + 64))
+			continue;
+		origins++;
+		for (k = 0; k < 3; k++)
+			eg[k] = L->gofs[k] + 0.5f * (b[k] + b[k + 3]);
+		for (pitch = -30; pitch <= 30; pitch += 30)
+			for (yaw = 0; yaw < 360; yaw += 15)
+			{
+				float cp = cosf(pitch * 0.0174533f);
+				float d[3] = { cp * cosf(yaw * 0.0174533f), cp * sinf(yaw * 0.0174533f),
+					sinf(pitch * 0.0174533f) };
+				int r;
+
+				if (!ray(eg, d, 256, hit, n))
+					continue;
+				r = decal_place_now(hit, n, -1, 0);
+				if (r < 0)
+				{
+					waiting++;	/* a chunk not resident in this setup */
+					continue;
+				}
+				if (!drawn_face_at(hit, n))
+				{
+					faceless++;
+					continue;
+				}
+				hits++;
+				if (r == 0 && bad++ < 4)
+					CHECK(0, "sector %d yaw %d pitch %d: hit %g %g %g n %g %g %g took no decal",
+						s, yaw, pitch, (double)hit[0], (double)hit[1], (double)hit[2],
+						(double)n[0], (double)n[1], (double)n[2]);
+			}
+	}
+	CHECK(hits >= 100, "only %d rays hit drawn faces", hits);
+	CHECK(!bad, "%d of %d hits on drawn faces took no decal", bad, hits);
+	snprintf(note, (size_t)len, "%d hits on drawn faces from %d sectors all placed (%d faceless)",
+		hits, origins, faceless);
+	return bad ? -1 : 0;
+}
+
 static void test_x5(void)
 {
-	char note[160] = "";
+	char note[160] = "", hits[96] = "";
 	decal_stats_t ds;
 	float eg[3], d[3] = { 1, 0, 0 }, p[3], n[3];
 	int i, k;
@@ -711,6 +890,9 @@ static void test_x5(void)
 	fx_init();
 	corner_test(note, sizeof(note));
 	door_test();
+	fx_init();
+	hits_test(hits, sizeof(hits));
+	fx_init();
 	/* pool: 100 placements on one wall keep 96, oldest replaced */
 	for (k = 0; k < 3; k++)
 		eg[k] = L->start_org[k] + L->gofs[k];
@@ -787,6 +969,11 @@ static void test_x5(void)
 		draw();
 		gpu_fx_stats(&gs);
 		CHECK(gs.calls[GPU_FX_DECAL] >= 1, "decals redrawn after landing");
+	}
+	{
+		size_t l = strlen(note);
+
+		snprintf(note + l, sizeof(note) - l, "; %s", hits);
 	}
 	finish("X5", note);
 }
@@ -1068,8 +1255,51 @@ static void test_dlights(void)
 			ren_dlight(i)->die = 0;
 		ren_dlight_frame(t + 20, 0);
 	}
-	finish("DLIGHT", "D1 pool, D2 falloff grid + minlight, D4 brightness + trace end, model term "
-		"(dlights.md 4)");
+	/* flashlight pool (dlights.md 3): a flashlight 16 u off the wall ahead
+	 * of the start draws pool pieces and lights no vertex; the same light
+	 * as a plain dlight draws none */
+	{
+		float g[3], hit[3], n[3], d[3] = { 1, 0, 0 };
+		ren_stats_t rs;
+		uint32_t tris_flash, dlit_flash;
+		int k, pass;
+
+		for (k = 0; k < 3; k++)
+			g[k] = L->start_org[k] + L->gofs[k];
+		CHECK(ray(g, d, 4096, hit, n), "no wall ahead");
+		eye(g, 0, 0);
+		for (pass = 0; pass < 2; pass++)
+		{
+			ren_dlight_t *l = ren_dlight_alloc(1, t);
+
+			for (k = 0; k < 3; k++)
+				l->origin[k] = hit[k] + 16 * n[k];
+			l->radius = 80;
+			l->die = t + 1;
+			l->color[0] = l->color[1] = l->color[2] = 255;
+			l->flash = (uint8_t)!pass;
+			ren_frame(t);
+			ren_stats(&rs);
+			if (!pass)
+			{
+				tris_flash = rs.pool_tris;
+				dlit_flash = rs.dlit;
+				CHECK(rs.pool_tris > 0 && rs.pool_verts >= 3 * 8,
+					"flashlight pool tris %lu verts %lu", (unsigned long)rs.pool_tris,
+					(unsigned long)rs.pool_verts);
+			}
+			else
+				CHECK(rs.pool_tris == 0 && rs.dlit > dlit_flash,
+					"plain dlight: pool %lu dlit %lu (flash dlit %lu)",
+					(unsigned long)rs.pool_tris, (unsigned long)rs.dlit,
+					(unsigned long)dlit_flash);
+			l->die = 0;
+			ren_dlight_frame(t + 1, 0);
+		}
+		finish("DLIGHT", "D1 pool, D2 falloff grid + minlight, D4 brightness + trace end, model term "
+			"(dlights.md 4), flashlight pool pieces drawn, not vertex-lit");
+		(void)tris_flash;
+	}
 }
 
 /* ---- lightstyles (L1, L2, fx_lightstyle, model term) --------------------------------------- */
@@ -1151,7 +1381,6 @@ int main(int argc, char **argv)
 	{
 		const uint16_t *list;
 		int cnt, i, it, missing = 1;
-		uint32_t fr = 1;
 
 		wld_want_open(L, wld_point_leaf(L, L->start_org));
 		list = wld_leaf_sectors(L, wld_point_leaf(L, L->start_org), &cnt);
@@ -1165,7 +1394,7 @@ int main(int argc, char **argv)
 				if (L->subs[L->movers[i].sub].kind == W64_SUB_MOVR)
 					missing |= !wld_chunk_use(L, L->subs[L->movers[i].sub].chunk);
 			io_pump();
-			wld_frame(fr++);
+			wld_frame(wld_fr++);
 		}
 		if (missing)
 			printf("setup: start sectors not resident after %d frames\n", it);

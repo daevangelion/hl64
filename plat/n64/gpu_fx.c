@@ -73,6 +73,7 @@ void gpu_fx_end(void)
 	rdpq_mode_zbuf(true, true);
 	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
 		| T3D_FLAG_NO_LIGHT | T3D_FLAG_CULL_FRONT);
+	gpu_state_lost();	/* alpha compare now off, whatever the world's cache says */
 	done = cur;
 }
 
@@ -118,6 +119,7 @@ void gpu_fx_mode(int m, const uint8_t prim[4])
 	if (m == GPU_FX_POINT)
 		rdpq_mode_zoverride(true, 0, 0);
 	rdpq_mode_alphacompare(r->acompare);
+	gpu_state_lost();	/* a translucent brush's page bind re-applies its fence */
 	rdpq_mode_tlut(r->textured == 1 || r->textured == 3 ? TLUT_RGBA16 : TLUT_NONE);
 	rdpq_mode_filter(FILTER_BILINEAR);
 	rdpq_mode_persp(true);
