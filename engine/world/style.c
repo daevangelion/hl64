@@ -75,9 +75,9 @@ int wld_style_slot(const wld_layer_t *L, int s)
 	return s < 32 ? s : 32 + 32 * L->slot + (s - 32);
 }
 
-void wld_style_tick(uint64_t now_us)
+void wld_style_tick(double time)
 {
-	uint64_t t = now_us / 100000u;
+	uint64_t t = (uint64_t)(time * 10.0);
 	uint32_t next = epoch + 1;
 	int i, any = 0;
 

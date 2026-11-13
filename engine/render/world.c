@@ -512,7 +512,7 @@ static void draw_layer(wld_layer_t *L)
 	}
 }
 
-void ren_frame(uint64_t now_us)
+void ren_frame(double time)
 {
 	uint64_t t0 = sys_time_us();
 	gpu_view_t v;
@@ -521,7 +521,7 @@ void ren_frame(uint64_t now_us)
 	wld_layer_t *L;
 
 	memset(&st, 0, sizeof(st));
-	r10 = (uint32_t)(now_us / 100000u);
+	r10 = (uint32_t)(time * 10.0);
 	st.r10 = r10;
 	memcpy(eye_g, ren_cam.org, sizeof(eye_g));
 	ren_angle_axes(ren_cam.ang, v.fwd, v.right, v.up);

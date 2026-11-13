@@ -35,8 +35,9 @@ float	ren_fov_y(float fov_x);
 /* ---- frame ---------------------------------------------------------------- */
 
 void	ren_init(void);
-/* Draw the camera's view (between sys_frame_try_begin and sys_frame_end). */
-void	ren_frame(uint64_t now_us);
+/* Draw the camera's view (between sys_frame_try_begin and sys_frame_end)
+ * at game time `time` (f64 s; texture animation r10 = floor(time x 10)). */
+void	ren_frame(double time);
 
 typedef struct {
 	uint32_t	sectors, meshlets, verts, tris, binds;	/* drawn */
@@ -58,16 +59,17 @@ typedef struct {
 	float		radius;
 	float		minlight;
 	float		decay;		/* radius units per second */
-	uint64_t	die_us;
+	double		die;		/* game time (f64 s); dead once die < time */
 	uint8_t		color[3];
 	uint8_t		world;		/* lights the world (elights do not) */
 } ren_dlight_t;
 
 /* Light for key (reused), else the first dead light, else light 0;
  * cleared, world-lighting. */
-ren_dlight_t	*ren_dlight_alloc(int key, uint64_t now_us);
-/* Before drawing: kill lights past their die time, decay the rest. */
-void		ren_dlight_frame(uint64_t now_us, uint32_t dt_us);
+ren_dlight_t	*ren_dlight_alloc(int key, double time);
+/* Before drawing, at game time `time` after a frame of dt s: kill lights
+ * past their die time, decay the rest. */
+void		ren_dlight_frame(double time, double dt);
 int		ren_dlight_live(int i);
 ren_dlight_t	*ren_dlight(int i);
 /* World vertex falloff (dlights.md 3): contribution of one light at

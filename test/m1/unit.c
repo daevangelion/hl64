@@ -22,11 +22,6 @@ static int fails;
 #define CHECK(cond, ...) do { if (!(cond)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); \
 	printf(__VA_ARGS__); printf("\n"); } } while (0)
 
-static uint64_t us(double s)
-{
-	return (uint64_t)(s * 1e6 + 0.5);
-}
-
 /* W4: a 3-frame sequence (textures 0, 1, 2) with a 2-frame alternate
  * sequence (3, 4); world-surfaces.md 4 cooking rules. */
 static void test_w4(void)
@@ -58,7 +53,7 @@ static void test_w4(void)
 	for (i = 0; i < 5; i++)
 		for (s = 0; s < 3; s++)
 		{
-			uint32_t r10 = (uint32_t)(us(tm[i]) / 100000u);
+			uint32_t r10 = (uint32_t)(tm[i] * 10.0);
 			int got = ren_tex_anim(t, 5, s, 0, r10);
 
 			CHECK(got == want[i], "W4 t=%.2f from frame %d: frame %d, want %d", tm[i], s,
@@ -88,7 +83,7 @@ static void test_styles(void)
 	wld_style_set(1, az, 26);
 	for (i = 0; i < 26; i++)
 	{
-		wld_style_tick(us(i * 0.1 + 0.01));
+		wld_style_tick(i * 0.1 + 0.01);
 		CHECK(wld_style_value(1) == i * 22, "L1 letter %c = %u", 'a' + i, wld_style_value(1));
 	}
 	wld_style_set(1, az, 0);
@@ -99,7 +94,7 @@ static void test_styles(void)
 	wld_style_set(2, abc, 3);
 	for (i = 0; i < 5; i++)
 	{
-		wld_style_tick(us(tm[i]));
+		wld_style_tick(tm[i]);
 		CHECK(wld_style_value(2) == want[i] * 22, "L2 t=%.2f value %u want %d", tm[i],
 			wld_style_value(2), want[i] * 22);
 	}
@@ -107,16 +102,16 @@ static void test_styles(void)
 	/* L3: no change between ticks or for an unchanged value */
 	wld_style_reset();
 	wld_style_set(3, abc, 1);	/* "a": constant */
-	wld_style_tick(us(2.0));
+	wld_style_tick(2.0);
 	e = wld_style_epoch();
-	wld_style_tick(us(2.05));
-	wld_style_tick(us(2.3));
+	wld_style_tick(2.05);
+	wld_style_tick(2.3);
 	CHECK(wld_style_epoch() == e, "L3 epoch moved without a value change");
 	wld_style_set(4, abc, 3);
 	e = wld_style_epoch();
-	wld_style_tick(us(2.31));	/* same tick */
+	wld_style_tick(2.31);	/* same tick */
 	CHECK(wld_style_epoch() == e, "L3 epoch moved inside a tick");
-	wld_style_tick(us(2.4));
+	wld_style_tick(2.4);
 	CHECK(wld_style_epoch() == e + 1 && wld_style_changed(4) == e + 1
 		&& wld_style_changed(3) < e + 1, "L3 change stamp");
 }
@@ -126,36 +121,37 @@ static void test_dlights(void)
 	ren_dlight_t *a, *b, *c;
 	int i, n;
 
-	/* D1: key reuse, first dead reuse, decay to death, one-frame lights */
+	/* D1: key reuse, first dead reuse, decay to death, one-frame lights
+	 * (game clock, f64 s) */
 	for (i = 0; i < 32; i++)
 	{
-		a = ren_dlight_alloc(0, 0);
+		a = ren_dlight_alloc(0, 1.0);
 		a->radius = 100;
-		a->die_us = 10;
+		a->die = 1.5;
 	}
-	a = ren_dlight_alloc(7, 5);	/* all live at t=5 except none: light 0 */
+	a = ren_dlight_alloc(7, 1.25);	/* all live at 1.25: light 0 */
 	a->radius = 200;
-	a->die_us = 1000000;
+	a->die = 10.0;
 	CHECK(a == ren_dlight(0), "D1 no dead light: light 0");
-	b = ren_dlight_alloc(7, 5);
+	b = ren_dlight_alloc(7, 1.25);
 	CHECK(b == a, "D1 key reuse");
 	b->radius = 200;
-	b->die_us = 1000000;
-	c = ren_dlight_alloc(0, 20);	/* t=20: lights 1.. are past die */
+	b->die = 10.0;
+	c = ren_dlight_alloc(0, 2.0);	/* 2.0: lights 1.. are past die */
 	CHECK(c == ren_dlight(1), "D1 first dead light");
 	c->radius = 50;
 	c->decay = 100;
-	c->die_us = 5000000;
-	ren_dlight_frame(20, 250000);	/* 0.25 s: 50 - 25 */
+	c->die = 6.0;
+	ren_dlight_frame(2.0, 0.25);	/* 0.25 s: 50 - 25 */
 	CHECK(fabsf(c->radius - 25) < 1e-3f, "D1 decay radius %g", (double)c->radius);
-	ren_dlight_frame(30, 250000);
+	ren_dlight_frame(2.25, 0.25);
 	CHECK(!ren_dlight_live(1), "D1 decayed to death");
-	a = ren_dlight_alloc(9, 100);
+	a = ren_dlight_alloc(9, 3.0);
 	a->radius = 80;
-	a->die_us = 100;	/* this frame only */
-	ren_dlight_frame(100, 33000);
+	a->die = 3.0;	/* this frame only */
+	ren_dlight_frame(3.0, 1.0 / 30);
 	CHECK(ren_dlight_live((int)(a - ren_dlight(0))), "D1 one-frame light live in its frame");
-	ren_dlight_frame(133000, 33000);
+	ren_dlight_frame(3.0 + 1.0 / 30, 1.0 / 30);
 	CHECK(!ren_dlight_live((int)(a - ren_dlight(0))), "D1 one-frame light gone next frame");
 	for (i = n = 0; i < 32; i++)
 		n += ren_dlight_live(i);

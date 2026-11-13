@@ -12,7 +12,7 @@
 static ren_dlight_t	lights[HL64_DLIGHTS];
 static uint8_t		live[HL64_DLIGHTS];
 
-ren_dlight_t *ren_dlight_alloc(int key, uint64_t now_us)
+ren_dlight_t *ren_dlight_alloc(int key, double time)
 {
 	int i, pick = 0;
 
@@ -28,7 +28,7 @@ ren_dlight_t *ren_dlight_alloc(int key, uint64_t now_us)
 		}
 	}
 	for (i = 0; i < HL64_DLIGHTS; i++)
-		if (!live[i] || lights[i].die_us < now_us)
+		if (!live[i] || lights[i].die < time)
 		{
 			pick = i;
 			break;
@@ -41,7 +41,7 @@ out:
 	return &lights[pick];
 }
 
-void ren_dlight_frame(uint64_t now_us, uint32_t dt_us)
+void ren_dlight_frame(double time, double dt)
 {
 	int i;
 
@@ -51,12 +51,12 @@ void ren_dlight_frame(uint64_t now_us, uint32_t dt_us)
 
 		if (!live[i])
 			continue;
-		if (l->die_us < now_us)
+		if (l->die < time)
 		{
 			live[i] = 0;
 			continue;
 		}
-		l->radius -= l->decay * (float)dt_us * 1e-6f;
+		l->radius -= l->decay * (float)dt;
 		if (l->radius <= 0)
 			live[i] = 0;
 	}

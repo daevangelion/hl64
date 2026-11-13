@@ -164,8 +164,9 @@ void		wld_style_reset(void);
 void		wld_style_set(int slot, const uint8_t *letters, int len);
 /* Global slot of style s (0-63) of layer L; -1 for an invalid style. */
 int		wld_style_slot(const wld_layer_t *L, int s);
-/* 100 ms tick on the game clock: recompute values, stamp changes. */
-void		wld_style_tick(uint64_t now_us);
+/* 100 ms tick on the game clock (f64 s, think-and-time.md 1): recompute
+ * values at index floor(time x 10), stamp changes. */
+void		wld_style_tick(double time);
 uint16_t	wld_style_value(int slot);
 /* Epoch of the slot's last value change; the current epoch. */
 uint32_t	wld_style_changed(int slot);

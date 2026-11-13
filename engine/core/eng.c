@@ -11,8 +11,11 @@
  * pad -> usercmd at step 2 once the player exists (the free camera flies
  * before), the player move at step 5, the player's view as the camera at
  * step 11 and the route VM at step 13. Steps 4, 6, 8 and 10 are added by
- * their modules (game, entities, sound M3-M4), with `now` advancing by dt
- * after step 6.
+ * their modules (game, entities, sound M3-M4). The game clock (f64 s from
+ * 1.0, think-and-time.md 1) advances by dt after step 6; the player, the
+ * world effects (lightstyles, dynamic lights), the draw, the view and the
+ * route all run on it. Integer microseconds remain only for engine-internal
+ * timing (dt from the VI clock, I/O, pacing, profiling).
  */
 #include "hl64/grid.h"
 #include "hl64/limits.h"
@@ -36,7 +39,6 @@ const char *eng_route_path = "route.rbc";
 static struct {
 	uint32_t	frame;		/* frames completed */
 	double		time;		/* game clock, f64 s from 1.0 (think-and-time.md 1) */
-	uint64_t	now_us;		/* engine timing of the M1 world effects (lightstyles, dlights, draw) */
 	uint32_t	last_vi;
 	float		timescale;
 	uint32_t	fixed_dt_us;	/* test builds; 0 = VI clock */
@@ -52,7 +54,7 @@ static struct {
 
 typedef struct {
 	uint32_t	frame;
-	uint64_t	now_us;
+	double		time;		/* game clock */
 	unsigned	heap_free_kb, heap_largest_kb;
 	unsigned	heap_live_kb, heap_peak_kb, heap_fails;
 	uint32_t	io_queued, io_blocked_max_us, io_budget_over;
@@ -66,7 +68,7 @@ static void stats_fill(stats_t *s)
 	unsigned total_mal, total_fr, live_n;
 
 	s->frame = eng.frame;
-	s->now_us = eng.now_us;
+	s->time = eng.time;
 	s->heap_free_kb = (unsigned)(mem_heap_free_total() / 1024u);
 	s->heap_largest_kb = (unsigned)(mem_heap_probe_largest(HL64_RDRAM_BYTES) / 1024u);
 	mem_heap_lifetime(&total_mal, &total_fr, &s->heap_fails, &live_n,
@@ -163,7 +165,7 @@ static int cmd_stats(const dbg_cmd_t *c)
 	log_printf("stats %lu frame=%lu t=%lu heap=%u/%uKB live=%uKB peak=%uKB "
 		"fails=%u ioq=%lu blkmax=%luus over=%lu fpu=%lu stack=%d %s\n",
 		(unsigned long)c->arg[0].u, (unsigned long)s.frame,
-		(unsigned long)(s.now_us / 1000u), s.heap_free_kb, s.heap_largest_kb,
+		(unsigned long)(s.time * 1000.0), s.heap_free_kb, s.heap_largest_kb,
 		s.heap_live_kb, s.heap_peak_kb, s.heap_fails,
 		(unsigned long)s.io_queued, (unsigned long)s.io_blocked_max_us,
 		(unsigned long)s.io_budget_over, (unsigned long)s.fpu_traps,
@@ -289,7 +291,6 @@ void eng_boot(const char *platform)
 
 	eng.frame = 0;
 	eng.time = 1.0;
-	eng.now_us = 0;
 	eng.timescale = 1.0f;
 	eng.fixed_dt_us = 0;
 #ifdef HL64_PROFILE
@@ -328,14 +329,20 @@ static void rollup(void)
 	eng.rollup_world_max = 0;
 	if (phy_player_active())
 	{
+		unsigned long n;
 		phy_player_prof_t p;
 
 		phy_player_prof(&p, 1);
+		n = p.frames ? p.frames : 1;
 		log_printf("prof pmove_us avg=%lu max=%lu frames=%lu physents_max=%lu "
-			"overflow=%lu sounds=%lu\n",
-			(unsigned long)(p.frames ? p.us_sum / p.frames : 0), (unsigned long)p.us_max,
+			"overflow=%lu sounds=%lu trace_us=%lu traces=%lu clips=%lu "
+			"contents_us=%lu contents=%lu\n",
+			(unsigned long)p.us_sum / n, (unsigned long)p.us_max,
 			(unsigned long)p.frames, (unsigned long)p.physents_max,
-			(unsigned long)p.overflow, (unsigned long)p.sounds);
+			(unsigned long)p.overflow, (unsigned long)p.sounds,
+			(unsigned long)p.trace_us / n, (unsigned long)p.traces / n,
+			(unsigned long)p.clips / n, (unsigned long)p.contents_us / n,
+			(unsigned long)p.contents / n);
 	}
 #ifdef HL64_PROFILE
 	sys_prof_dump(eng.rollup_frames);
@@ -375,13 +382,12 @@ void eng_frame(void)
 	phy_player_frame(&cmd, eng.time);
 	/* the clock advances by dt (f64) after step 6 */
 	eng.time += (double)dt * 1e-6;
-	eng.now_us += dt;
 	/* 7-10 world, hydration, residency, sound (M1-M4) */
 	if (eng.world)
 	{
 		wld_frame(eng.frame);
-		wld_style_tick(eng.now_us);
-		ren_dlight_frame(eng.now_us, dt);
+		wld_style_tick(eng.time);
+		ren_dlight_frame(eng.time, (double)dt * 1e-6);
 	}
 
 	/* 11-12 render into a free framebuffer; submit for paced present */
@@ -393,7 +399,7 @@ void eng_frame(void)
 		ren_stats_t r;
 
 		ren_view_frame(eng.time, (double)dt * 1e-6);
-		ren_frame(eng.now_us);
+		ren_frame(eng.time);
 		ren_stats(&r);
 		eng.rollup_world_us += r.world_us;
 		if (r.world_us > eng.rollup_world_max)
