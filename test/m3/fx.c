@@ -102,7 +102,7 @@ static void kill_all(void)
 
 /* ---- a cooked sprite (.sc4, tools/cook/hl_sprite_cook.py layout) ---------- */
 
-static uint8_t sc4[256] __attribute__((aligned(16)));
+static uint8_t sc4[1024] __attribute__((aligned(16)));
 static res_t test_spr;
 
 static void be16(uint8_t *p, unsigned v)
@@ -117,28 +117,41 @@ static void be32(uint8_t *p, uint32_t v)
 	be16(p + 2, v & 0xFFFF);
 }
 
+/* v2: entity frame 0 = image 0; frame 1 = a group of images 1-3 with
+ * cumulative interval ends 100, 300, 600 ms; 16 x 16 units each */
 static void make_sprite(int type)
 {
+	static const uint16_t ends[4] = { 0, 100, 300, 600 };
 	int i;
 
 	memset(sc4, 0, sizeof(sc4));
 	be32(sc4, 0x53433431u);
-	be16(sc4 + 4, 1);
-	be16(sc4 + 6, 1);
+	be16(sc4 + 4, 2);
+	be16(sc4 + 6, 2);
 	sc4[8] = (uint8_t)type;
+	be16(sc4 + 14, 4);
 	for (i = 0; i < 16; i++)
 		be16(sc4 + 16 + 2 * i, 0xFFFF);
-	/* frame: left -8, up 8, 16 x 16 units, CI4 16 x 16 at 96 */
-	be16(sc4 + 80, (unsigned)(uint16_t)-8);
-	be16(sc4 + 82, 8);
-	be16(sc4 + 84, 16);
-	be16(sc4 + 86, 16);
-	sc4[88] = 16;
-	sc4[89] = 16;
-	be32(sc4 + 92, 96);
+	for (i = 0; i < 4; i++)
+	{
+		uint8_t *f = sc4 + 80 + 16 * i;
+
+		be16(f, (unsigned)(uint16_t)-8);
+		be16(f + 2, 8);
+		be16(f + 4, 16);
+		be16(f + 6, 16);
+		f[8] = 16;
+		f[9] = 16;
+		be32(f + 12, 160 + 128 * (uint32_t)i);
+		be16(sc4 + 152 + 2 * i, ends[i]);
+	}
+	be16(sc4 + 144, 0);
+	be16(sc4 + 146, 1);
+	be16(sc4 + 148, 1);
+	be16(sc4 + 150, 3);
 	/* a sprite id no cooked file uses: past the table's sprites */
 	test_spr = RES_MAKE(RES_K_SPRITE, 8000);
-	if (sprite_test_inject(test_spr, sc4, 96 + 128))
+	if (sprite_test_inject(test_spr, sc4, 160 + 4 * 128))
 	{
 		printf("setup FAIL sprite inject\n");
 		exit(1);
@@ -462,6 +475,18 @@ static void test_x4(void)
 
 	begin();
 	make_sprite(FX_SPR_PARALLEL);
+	/* render-fx.md 3: group frames pick by time in the group's intervals */
+	{
+		const fx_sprite_t *sp = sprite_get(test_spr);
+		/* the cycle runs on the clock: 6.0 s = 10 cycles of 0.6 s */
+		static const double at[6] = { 6.05, 6.15, 6.35, 6.59, 6.61, 7.35 };
+		static const int want[6] = { 1, 2, 3, 3, 1, 2 };
+
+		CHECK(sp && sp->nframes == 2 && sprite_image(sp, 0, 10.2) == 0, "single frame");
+		for (i = 0; sp && i < 6; i++)
+			CHECK(sprite_image(sp, 1, at[i]) == want[i], "group at %g: %d", at[i],
+				sprite_image(sp, 1, at[i]));
+	}
 	s0 = glow_size(ds[0]);
 	CHECK(s0 > 0, "glow not drawn");
 	for (i = 1; i < 5; i++)
