@@ -184,6 +184,7 @@ static int CStomp_Spawn(int e, gid_t16 gid)
 const game_class_t gc_GARG_STOMP = {
 	.size = sizeof(CStomp),
 	.Spawn = CStomp_Spawn,
+	.save = &sv_Transient,
 };
 
 static void StompCreate(int owner, const float origin[3], const float end[3], float speed)
@@ -242,6 +243,7 @@ static int CSpiral_Spawn(int e, gid_t16 gid)
 const game_class_t gc_STREAK_SPIRAL = {
 	.size = sizeof(CBaseEntity),
 	.Spawn = CSpiral_Spawn,
+	.save = &sv_Transient,
 };
 
 /* CSpiral::Create; the radius is kept in max_health (pev->scale) */
@@ -300,6 +302,7 @@ static int CSmoker_Spawn(int e, gid_t16 gid)
 const game_class_t gc_ENV_SMOKER = {
 	.size = sizeof(CBaseEntity),
 	.Spawn = CSmoker_Spawn,
+	.save = &sv_Transient,
 };
 
 /* ---- CGargantua ---------------------------------------------------------------------- */
@@ -923,9 +926,51 @@ static const mon_vt_t ga_mvt = {
 	.PrescheduleThink = Ga_PrescheduleThink,
 };
 
+/* HLSDK CGargantua::m_SaveData; the flame beams are effects (HLSDK saves
+ * the beam entities): gone with the release, none after a restore */
+static void CGargantua_released(int e)
+{
+	CGargantua *g = GARG(e);
+	int i;
+
+	for (i = 0; i < 4; i++)
+		if (g->m_pFlame[i] >= 0)
+		{
+			fx_beam_kill(g->m_pFlame[i]);
+			g->m_pFlame[i] = -1;
+		}
+}
+
+static void CGargantua_restored(int e)
+{
+	CGargantua *g = GARG(e);
+	int i;
+
+	for (i = 0; i < 4; i++)
+		g->m_pFlame[i] = -1;
+	g->m_flameOn = 0;
+}
+
+static const sv_field_t f_CGargantua[] = {
+	SVF(CGargantua, m_eyeOn, SV_U8, 0),
+	SVF(CGargantua, m_eyeRenderamt, SV_U8, 0),
+	SVF(CGargantua, m_explosions, SV_U8, 0),
+	SVF(CGargantua, m_eyeBrightness, SV_I32, 0),
+	SVF(CGargantua, m_seeTime, SV_TIME, 0),
+	SVF(CGargantua, m_flameTime, SV_TIME, 0),
+	SVF(CGargantua, m_painSoundTime, SV_TIME, 0),
+	SVF(CGargantua, m_streakTime, SV_TIME, 0),
+	SVF(CGargantua, m_flameX, SV_F32, 0),
+	SVF(CGargantua, m_flameY, SV_F32, 0),
+	SVF(CGargantua, m_dieTime, SV_TIME, 0),
+};
+static const sv_table_t sv_CGargantua = SV_TABLE(&sv_CBaseMonster, f_CGargantua,
+	.released = CGargantua_released, .restored = CGargantua_restored);
+
 const game_class_t gc_MONSTER_GARGANTUA = {
 	.size = sizeof(CGargantua),
 	.Spawn = CGargantua_Spawn,
 	.vt = &ga_vt,
 	.ext = &ga_mvt,
+	.save = &sv_CGargantua,
 };

@@ -462,9 +462,36 @@ static const game_vt_t CAmbientGeneric_vt = {
 	.ObjectCaps = NoTransition_ObjectCaps,
 };
 
+/* HLSDK CAmbientGeneric::m_SaveData; Precache on restore restarts an
+ * active sound (the fresh spawn may have started or not: set it as saved). */
+static void CAmbientGeneric_restored(int e)
+{
+	CAmbientGeneric *p = PRIV(CAmbientGeneric, e);
+
+	if (p->message == RES_NONE)
+		return;
+	if (!p->m_fActive)
+	{
+		ambient_emit(e, 0, 0, SND_STOP, 0);
+		return;
+	}
+	ambient_emit(e, (float)(p->m_dpv.vol * 0.01), p->m_flAttenuation, SND_SPAWNING,
+		p->m_dpv.pitch);
+	ThinkIn(e, 0.1f);
+}
+
+static const sv_field_t f_CAmbientGeneric[] = {
+	SVF(CAmbientGeneric, m_flAttenuation, SV_F32, SVK),
+	SVF(CAmbientGeneric, m_fActive, SV_U8, 0),
+	SVF(CAmbientGeneric, m_fLooping, SV_U8, SVK),
+	SVF(CAmbientGeneric, m_dpv, SV_I32, 0),
+};
+static const sv_table_t sv_CAmbientGeneric = SV_TABLE(&sv_CBaseEntity, f_CAmbientGeneric,
+	.restored = CAmbientGeneric_restored);
+
 const game_class_t gc_AMBIENT_GENERIC = {
 	.size = sizeof(CAmbientGeneric), .Spawn = CAmbientGeneric_Spawn,
-	.vt = &CAmbientGeneric_vt,
+	.vt = &CAmbientGeneric_vt, .save = &sv_CAmbientGeneric,
 };
 
 /* ---- speaker (CSpeaker) ------------------------------------------------------ */
@@ -570,6 +597,12 @@ static int CSpeaker_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+static const sv_field_t f_CSpeaker[] = {
+	SVF(CSpeaker, m_preset, SV_I32, SVK),
+};
+static const sv_table_t sv_CSpeaker = SV_TABLE(&sv_CBaseEntity, f_CSpeaker);
+
 const game_class_t gc_SPEAKER = {
 	.size = sizeof(CSpeaker), .Spawn = CSpeaker_Spawn, .vt = &CAmbientGeneric_vt,
+	.save = &sv_CSpeaker,
 };

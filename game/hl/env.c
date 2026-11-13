@@ -179,8 +179,16 @@ static const game_vt_t CSprite_vt = {
 	.ObjectCaps = NoTransition_ObjectCaps,
 };
 
+/* HLSDK CSprite::m_SaveData */
+static const sv_field_t f_CSprite[] = {
+	SVF(CSprite, m_lastTime, SV_TIME, 0),
+	SVF(CSprite, m_maxFrame, SV_F32, SVK),
+};
+static const sv_table_t sv_CSprite = SV_TABLE(&sv_CBaseEntity, f_CSprite);
+
 const game_class_t gc_ENV_SPRITE = {
 	.size = sizeof(CSprite), .Spawn = CSprite_Spawn, .vt = &CSprite_vt,
+	.save = &sv_CSprite,
 };
 
 /* ---- env_glow (CGlow) ------------------------------------------------------ */
@@ -234,8 +242,16 @@ static const game_vt_t CGlow_vt = {
 	.ObjectCaps = NoTransition_ObjectCaps,
 };
 
+/* HLSDK CGlow::m_SaveData */
+static const sv_field_t f_CGlow[] = {
+	SVF(CGlow, m_lastTime, SV_TIME, 0),
+	SVF(CGlow, m_maxFrame, SV_F32, SVK),
+};
+static const sv_table_t sv_CGlow = SV_TABLE(&sv_CBaseEntity, f_CGlow);
+
 const game_class_t gc_ENV_GLOW = {
 	.size = sizeof(CGlow), .Spawn = CGlow_Spawn, .vt = &CGlow_vt,
+	.save = &sv_CGlow,
 };
 
 /* ---- spark_shower (CShower) --------------------------------------------- */
@@ -305,6 +321,7 @@ static const game_vt_t CShower_vt = {
 
 const game_class_t gc_SPARK_SHOWER = {
 	.size = sizeof(CBaseEntity), .Spawn = CShower_Spawn, .vt = &CShower_vt,
+	.save = &sv_Transient,
 };
 
 /* ---- env_explosion (CEnvExplosion) ---------------------------------------- */
@@ -458,11 +475,14 @@ static void CEnvExplosion_LogicTimer(gid_t16 gid, uint16_t arg, int activator)
 		rec_kill(gid);
 }
 
+/* a runtime explosion (ExplosionCreate) is a transient; map env_explosions
+ * are logic records */
 const game_class_t gc_ENV_EXPLOSION = {
 	.size = sizeof(CEnvExplosion), .Spawn = CEnvExplosion_Spawn,
 	.LogicSpawn = CEnvExplosion_LogicSpawn,
 	.LogicUse = CEnvExplosion_LogicUse,
 	.LogicTimer = CEnvExplosion_LogicTimer,
+	.save = &sv_Transient,
 };
 
 /* ---- env_shake (CShake) ---------------------------------------------------- */
@@ -750,8 +770,16 @@ static int CEnvBeverage_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+/* HLSDK CEnvBeverage has no m_SaveData (CBaseDelay's; cans left in
+ * health, a can in the chute in frags) */
+static const sv_field_t f_CEnvBeverage[] = {
+	SVF(CEnvBeverage, frags, SV_F32, 0),
+};
+static const sv_table_t sv_CEnvBeverage = SV_TABLE(&sv_CBaseDelay, f_CEnvBeverage);
+
 const game_class_t gc_ENV_BEVERAGE = {
 	.size = sizeof(CEnvBeverage), .Spawn = CEnvBeverage_Spawn,
+	.save = &sv_CEnvBeverage,
 };
 
 void CItemSoda_CanThink(int e)

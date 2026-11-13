@@ -503,9 +503,21 @@ static const mon_vt_t slv_mvt = {
 	.GetIdealState = CSquadMonster_GetIdealState,
 };
 
+/* HLSDK CISlave::m_SaveData; its beams are effects (HLSDK saves the beam
+ * entities): cleared with the release, none after a restore (m_iBeams 0
+ * from the spawn) */
+static const sv_field_t f_CISlave[] = {
+	SVF(CISlave, m_iBravery, SV_I32, 0),
+	SVF(CISlave, slv_flNextAttack, SV_TIME, 0),
+	SVF(CISlave, m_voicePitch, SV_I32, 0),
+};
+static const sv_table_t sv_CISlave = SV_TABLE(&sv_CSquadMonster, f_CISlave,
+	.released = Slv_ClearBeams);
+
 const game_class_t gc_MONSTER_ALIEN_SLAVE = {
 	.size = sizeof(CISlave),
 	.Spawn = CISlave_Spawn,
 	.vt = &slv_vt,
 	.ext = &slv_mvt,
+	.save = &sv_CISlave,
 };

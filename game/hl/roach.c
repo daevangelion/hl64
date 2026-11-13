@@ -320,9 +320,19 @@ static const mon_vt_t roach_mvt = {
 	.StartMonster = Roach_StartMonster,
 };
 
+/* HLSDK CRoach has no m_SaveData: the members of our layout */
+static const sv_field_t f_CRoach[] = {
+	SVF(CRoach, m_flLastLightLevel, SV_F32, 0),
+	SVF(CRoach, m_flNextSmellTime, SV_TIME, 0),
+	SVF(CRoach, m_fLightHacked, SV_U8, 0),
+	SVF(CRoach, m_iMode, SV_I16, 0),
+};
+static const sv_table_t sv_CRoach = SV_TABLE(&sv_CBaseMonster, f_CRoach);
+
 const game_class_t gc_MONSTER_COCKROACH = {
 	.size = sizeof(CRoach),
 	.Spawn = CRoach_Spawn,
 	.vt = &roach_vt,
 	.ext = &roach_mvt,
+	.save = &sv_CRoach,
 };

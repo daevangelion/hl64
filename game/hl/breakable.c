@@ -473,8 +473,21 @@ static int CBreakable_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+/* HLSDK CBreakable::m_SaveData */
+static const sv_field_t f_CBreakable[] = {
+	SVF(CBreakable, m_Material, SV_I32, SVK),
+	SVF(CBreakable, m_Explosion, SV_I32, SVK),
+	SVF(CBreakable, m_idShard, SV_RES, SVK),
+	SVF(CBreakable, m_iszGibModel, SV_RES, SVK),
+	SVF(CBreakable, m_angle, SV_F32, SVK),
+	SVF(CBreakable, m_iszSpawnObject, SV_U16, SVK),
+	SVF(CBreakable, m_iExplodeMagnitude, SV_I32, SVK),
+};
+static const sv_table_t sv_CBreakable = SV_TABLE(&sv_CBaseDelay, f_CBreakable);
+
 const game_class_t gc_FUNC_BREAKABLE = {
 	.size = sizeof(CBreakable), .Spawn = CBreakable_Spawn, .vt = &CBreakable_vt,
+	.save = &sv_CBreakable,
 };
 
 /* ---- func_pushable ------------------------------------------------------ */
@@ -664,6 +677,15 @@ static int CPushable_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+/* HLSDK CPushable::m_SaveData */
+static const sv_field_t f_CPushable[] = {
+	SVF(CPushable, m_lastSound, SV_I32, 0),
+	SVF(CPushable, m_maxSpeed, SV_F32, SVK),
+	SVF(CPushable, m_soundTime, SV_TIME, 0),
+};
+static const sv_table_t sv_CPushable = SV_TABLE(&sv_CBreakable, f_CPushable);
+
 const game_class_t gc_FUNC_PUSHABLE = {
 	.size = sizeof(CPushable), .Spawn = CPushable_Spawn, .vt = &CPushable_vt,
+	.save = &sv_CPushable,
 };

@@ -1123,4 +1123,7 @@ extern const float VEC_VIEW[3];
 /* skill-dependent values (HLSDK skill.h / skill.cfg values for the monsters) */
 float	mon_skill(const float v[3]);
 
+/* level state (levelstate.c): the monster class levels' save tables */
+extern const sv_table_t	sv_CBaseMonster, sv_CSquadMonster, sv_CTalkMonster;
+
 #endif

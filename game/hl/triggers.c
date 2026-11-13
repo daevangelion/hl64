@@ -21,12 +21,16 @@
  * triggers.cpp (multi_manager, trigger_relay, trigger_auto) and buttons.cpp
  * (multisource, env_global) are records without entities: logic.c.
  *
- * M3 has no seams (architecture.md 17): trigger_changelevel fires its
- * targets and its changetarget as HLSDK does and logs
- * `changelevel: <map> landmark <name> (<touch|use>)`; the crossing itself
- * is M4's.
+ * trigger_changelevel (M4, architecture.md 5.4): after HLSDK's transition
+ * volume check it hands the crossing to the engine's seam
+ * (seam_changelevel), fires its own targets and logs
+ * `changelevel: <map> landmark <name> (<touch|use>)`; the seam fires the
+ * changetarget in the destination map, as HLSDK's CFireAndDie does after
+ * the transition.
  */
 #include <string.h>
+
+#include "hl64/seam.h"
 
 #include "engine/in/in.h"
 #include "engine/phys/player.h"
@@ -52,19 +56,18 @@ typedef struct {
 	float		pain_finished;
 } CBaseTrigger;
 
-/* CChangeLevel */
+/* CChangeLevel (the changetarget and its delay are the seam's: it reads
+ * them from the record) */
 typedef struct {
 	CBASEENTITY_FIELDS
 	CBASEDELAY_FIELDS
 	CBASEANIMATING_FIELDS
 	CBASETOGGLE_FIELDS
 	float		pain_finished;
-	float		m_changeTargetDelay;
-	name_t		m_changeTarget;		/* in this map, NAME_NONE otherwise */
 	name_t		m_landmark;		/* landmark (cooked into message) */
+	uint16_t	pad;
 	char		m_szMapName[32];
 	char		m_szLandmarkName[32];
-	char		m_szChangeTarget[32];
 } CChangeLevel;
 
 static void copy_key(gid_t16 gid, int k, char *out, int n)
@@ -114,6 +117,12 @@ static int CBaseTrigger_ObjectCaps(int e)
 static const game_vt_t CBaseTrigger_vt = {
 	.ObjectCaps = CBaseTrigger_ObjectCaps,
 };
+
+/* CBaseTrigger level of our layout (HLSDK keeps pain_finished in entvars) */
+static const sv_field_t f_CBaseTrigger[] = {
+	SVF(CBaseTrigger, pain_finished, SV_TIME, 0),
+};
+static const sv_table_t sv_CBaseTrigger = SV_TABLE(&sv_CBaseToggle, f_CBaseTrigger);
 
 void CBaseTrigger_ToggleUse(int e, int activator, int caller, int use_type, float value)
 {
@@ -195,9 +204,11 @@ static int CTriggerOnce_Spawn(int e, gid_t16 gid)
 
 const game_class_t gc_TRIGGER_MULTIPLE = {
 	.size = sizeof(CBaseTrigger), .Spawn = CTriggerMultiple_Spawn, .vt = &CBaseTrigger_vt,
+	.save = &sv_CBaseTrigger,
 };
 const game_class_t gc_TRIGGER_ONCE = {
 	.size = sizeof(CBaseTrigger), .Spawn = CTriggerOnce_Spawn, .vt = &CBaseTrigger_vt,
+	.save = &sv_CBaseTrigger,
 };
 
 /* ---- trigger_counter ------------------------------------------------------ */
@@ -244,6 +255,7 @@ static int CTriggerCounter_Spawn(int e, gid_t16 gid)
 
 const game_class_t gc_TRIGGER_COUNTER = {
 	.size = sizeof(CBaseTrigger), .Spawn = CTriggerCounter_Spawn, .vt = &CBaseTrigger_vt,
+	.save = &sv_CBaseTrigger,
 };
 
 /* ---- trigger_hurt ------------------------------------------------------------- */
@@ -326,6 +338,7 @@ static int CTriggerHurt_Spawn(int e, gid_t16 gid)
 
 const game_class_t gc_TRIGGER_HURT = {
 	.size = sizeof(CBaseTrigger), .Spawn = CTriggerHurt_Spawn, .vt = &CBaseTrigger_vt,
+	.save = &sv_CBaseTrigger,
 };
 
 /* ---- trigger_push ------------------------------------------------------------- */
@@ -404,6 +417,7 @@ static int CTriggerPush_Spawn(int e, gid_t16 gid)
 
 const game_class_t gc_TRIGGER_PUSH = {
 	.size = sizeof(CBaseTrigger), .Spawn = CTriggerPush_Spawn, .vt = &CBaseTrigger_vt,
+	.save = &sv_CBaseTrigger,
 };
 
 /* ---- trigger_teleport ---------------------------------------------------- */
@@ -461,6 +475,7 @@ static int CTriggerTeleport_Spawn(int e, gid_t16 gid)
 
 const game_class_t gc_TRIGGER_TELEPORT = {
 	.size = sizeof(CBaseTrigger), .Spawn = CTriggerTeleport_Spawn, .vt = &CBaseTrigger_vt,
+	.save = &sv_CBaseTrigger,
 };
 
 /* ---- func_ladder ------------------------------------------------------------ */
@@ -480,6 +495,7 @@ static int CLadder_Spawn(int e, gid_t16 gid)
 
 const game_class_t gc_FUNC_LADDER = {
 	.size = sizeof(CBaseTrigger), .Spawn = CLadder_Spawn, .vt = &CBaseTrigger_vt,
+	.save = &sv_CBaseTrigger,
 };
 
 /* ---- trigger_transition (CTriggerVolume) ------------------------------------ */
@@ -522,7 +538,13 @@ static int InTransitionVolume(int ent, name_t volume)
 	return in;
 }
 
-static void ChangeLevelNow(int e, int activator, const char *how)
+/* HLSDK ChangeLevelNow; CHANGE_LEVEL is the seam's (seam_changelevel: the
+ * switch happens in seam_frame this frame or when the eye crosses, and the
+ * changetarget fires in the destination map, CFireAndDie's job). A
+ * changelevel no seam takes (none for the link, or the after-switch window
+ * that ignores touches) does nothing, as GoldSrc ignores a changelevel
+ * while the new level settles. */
+static void ChangeLevelNow(int e, int activator, int use)
 {
 	CChangeLevel *p = PRIV(CChangeLevel, e);
 	float t = gtime();
@@ -536,18 +558,12 @@ static void ChangeLevelNow(int e, int activator, const char *how)
 			p->m_szLandmarkName);
 		return;
 	}
-	/* CFireAndDie: changetarget after changedelay (always crosses; the
-	 * name is in the next map, so M4's seam delivers it there) */
-	if (p->m_changeTarget != NAME_NONE)
-		GameFireAt(t + p->m_changeTargetDelay, p->m_changeTarget, NAME_NONE, -1, -1,
-			USE_TOGGLE, 0);
-	else if (p->m_szChangeTarget[0])
-		log_printf("changelevel: changetarget %s (delay %g) is in %s: delivered by the "
-			"crossing (M4)\n", p->m_szChangeTarget, (double)p->m_changeTargetDelay,
-			p->m_szMapName);
+	if (ent_idc(e)->gid == GID_NONE || !seam_changelevel(ent_idc(e)->gid, use))
+		return;
 	p->m_hActivator = EHANDLE(activator);
 	SUB_UseTargets(e, activator, USE_TOGGLE, 0);
-	log_printf("changelevel: %s landmark %s (%s)\n", p->m_szMapName, p->m_szLandmarkName, how);
+	log_printf("changelevel: %s landmark %s (%s)\n", p->m_szMapName, p->m_szLandmarkName,
+		use ? "use" : "touch");
 }
 
 void CChangeLevel_UseChangeLevel(int e, int activator, int caller, int use_type, float value)
@@ -555,14 +571,14 @@ void CChangeLevel_UseChangeLevel(int e, int activator, int caller, int use_type,
 	(void)caller;
 	(void)use_type;
 	(void)value;
-	ChangeLevelNow(e, activator, "use");
+	ChangeLevelNow(e, activator, 1);
 }
 
 void CChangeLevel_TouchChangeLevel(int e, int other)
 {
 	if (!IsPlayer(other))
 		return;
-	ChangeLevelNow(e, other, "touch");
+	ChangeLevelNow(e, other, 0);
 }
 
 static int CChangeLevel_Spawn(int e, gid_t16 gid)
@@ -572,10 +588,7 @@ static int CChangeLevel_Spawn(int e, gid_t16 gid)
 	CBaseTrigger_KeyValue(e, gid);
 	copy_key(gid, K_MAP, p->m_szMapName, sizeof p->m_szMapName);
 	copy_key(gid, K_MESSAGE, p->m_szLandmarkName, sizeof p->m_szLandmarkName);
-	copy_key(gid, K_CHANGETARGET, p->m_szChangeTarget, sizeof p->m_szChangeTarget);
 	p->m_landmark = gid == GID_NONE ? NAME_NONE : rec_key_name(gid, K_MESSAGE);
-	p->m_changeTarget = gid == GID_NONE ? NAME_NONE : rec_key_name(gid, K_CHANGETARGET);
-	p->m_changeTargetDelay = KeyF(gid, K_CHANGEDELAY, 0);
 	if (!p->m_szMapName[0])
 		log_printf("game: a trigger_changelevel doesn't have a map\n");
 	if (!p->m_szLandmarkName[0])
@@ -589,8 +602,17 @@ static int CChangeLevel_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+/* HLSDK CChangeLevel::m_SaveData (map and landmark names) */
+static const sv_field_t f_CChangeLevel[] = {
+	SVF(CChangeLevel, m_landmark, SV_NAME, SVK),
+	SVF(CChangeLevel, m_szMapName, SV_U8, SVK),
+	SVF(CChangeLevel, m_szLandmarkName, SV_U8, SVK),
+};
+static const sv_table_t sv_CChangeLevel = SV_TABLE(&sv_CBaseTrigger, f_CChangeLevel);
+
 const game_class_t gc_TRIGGER_CHANGELEVEL = {
 	.size = sizeof(CChangeLevel), .Spawn = CChangeLevel_Spawn, .vt = &CBaseTrigger_vt,
+	.save = &sv_CChangeLevel,
 };
 
 /* ---- trigger_endsection ----------------------------------------------------- */
@@ -661,7 +683,13 @@ static int CTriggerEndSection_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+static const sv_field_t f_CTriggerEndSection[] = {
+	SVF(CTriggerEndSection, section, SV_U8, SVK),
+};
+static const sv_table_t sv_CTriggerEndSection = SV_TABLE(&sv_CBaseToggle,
+	f_CTriggerEndSection);
+
 const game_class_t gc_TRIGGER_ENDSECTION = {
 	.size = sizeof(CTriggerEndSection), .Spawn = CTriggerEndSection_Spawn,
-	.vt = &CBaseTrigger_vt,
+	.vt = &CBaseTrigger_vt, .save = &sv_CTriggerEndSection,
 };

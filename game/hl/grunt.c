@@ -1337,11 +1337,27 @@ static const mon_vt_t hg_mvt = {
 	.GetIdealState = CSquadMonster_GetIdealState,
 };
 
+/* HLSDK CHGrunt::m_SaveData */
+static const sv_field_t f_CHGrunt[] = {
+	SVF(CHGrunt, m_flNextGrenadeCheck, SV_TIME, 0),
+	SVF(CHGrunt, m_flNextPainTime, SV_TIME, 0),
+	SVF(CHGrunt, m_vecTossVelocity, SV_VEC, 0),
+	SVF(CHGrunt, m_fThrowGrenade, SV_U8, 0),
+	SVF(CHGrunt, m_fStanding, SV_U8, 0),
+	SVF(CHGrunt, m_fFirstEncounter, SV_U8, 0),
+	SVF(CHGrunt, m_iSentence, SV_U8, 0),
+	SVF(CHGrunt, m_cClipSize, SV_I32, SVK),
+	SVF(CHGrunt, m_voicePitch, SV_I32, 0),
+	SVF(CHGrunt, m_weapons, SV_I32, SVK),
+};
+static const sv_table_t sv_CHGrunt = SV_TABLE(&sv_CSquadMonster, f_CHGrunt);
+
 const game_class_t gc_MONSTER_HUMAN_GRUNT = {
 	.size = sizeof(CHGrunt),
 	.Spawn = CHGrunt_Spawn,
 	.vt = &hg_vt,
 	.ext = &hg_mvt,
+	.save = &sv_CHGrunt,
 };
 
 /* ---- monster_grunt_repel (CHGruntRepel) ---------------------------------------------------- */
@@ -1442,4 +1458,5 @@ const game_class_t gc_MONSTER_HGRUNT_DEAD = {
 	.Spawn = CDeadHGrunt_Spawn,
 	.vt = &deadhg_vt,
 	.ext = &deadhg_mvt,
+	.save = &sv_CBaseMonster,
 };

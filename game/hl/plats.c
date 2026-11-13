@@ -260,8 +260,22 @@ static const game_vt_t CPlatTrigger_vt = {
 	.ObjectCaps = CPlatTrigger_ObjectCaps,
 };
 
+/* FCAP_DONT_SAVE (HLSDK): the plat makes it again at its spawn; it goes
+ * with its plat (CBasePlatTrain_released), never alone while that lives */
+static int CPlatTrigger_quiet(int e)
+{
+	return EHGet(PRIV(CPlatTrigger, e)->m_pPlatform) >= 0 ? 0 : -1;
+}
+
+static const sv_field_t f_CPlatTrigger[] = {
+	SVF(CPlatTrigger, m_pPlatform, SV_EH, 0),
+};
+static const sv_table_t sv_CPlatTrigger = SV_TABLE(&sv_CBaseEntity, f_CPlatTrigger,
+	.quiet = CPlatTrigger_quiet);
+
 const game_class_t gc_PLAT_TRIGGER = {
 	.size = sizeof(CPlatTrigger), .Spawn = CPlatTrigger_Spawn, .vt = &CPlatTrigger_vt,
+	.save = &sv_CPlatTrigger,
 };
 
 static void PlatSpawnInsideTrigger(int plat)
@@ -344,8 +358,31 @@ static const game_vt_t CBasePlatTrain_vt = {
 	.GetDelay = CBasePlatTrain_GetDelay,
 };
 
+/* HLSDK CBasePlatTrain / CFuncTrain m_SaveData; message is the next path
+ * corner's name (CFuncTrain). A released plat takes its trigger along. */
+static void CBasePlatTrain_released(int e)
+{
+	int t = -1;
+
+	while ((t = ent_next_class(t, CLS_PLAT_TRIGGER, ent_idc(e)->layer)) >= 0)
+		if (EHGet(PRIV(CPlatTrigger, t)->m_pPlatform) == e)
+			ent_destroy(t);
+}
+
+static const sv_field_t f_CBasePlatTrain[] = {
+	SVF(CBasePlatTrain, m_volume, SV_F32, SVK),
+	SVF(CBasePlatTrain, m_bMoveSnd, SV_U8, SVK),
+	SVF(CBasePlatTrain, m_bStopSnd, SV_U8, SVK),
+	SVF(CBasePlatTrain, m_activated, SV_U8, 0),
+	SVF(CBasePlatTrain, m_pevCurrentTarget, SV_EH, 0),
+	SVF(CBasePlatTrain, m_sounds, SV_I32, SVK),
+};
+static const sv_table_t sv_CBasePlatTrain = SV_TABLE(&sv_CBaseToggle, f_CBasePlatTrain,
+	.flags = SVT_MSG_NAME, .released = CBasePlatTrain_released);
+
 const game_class_t gc_FUNC_PLAT = {
 	.size = sizeof(CBasePlatTrain), .Spawn = CFuncPlat_Spawn, .vt = &CBasePlatTrain_vt,
+	.save = &sv_CBasePlatTrain,
 };
 
 /* ---- func_train ---------------------------------------------------------- */
@@ -529,6 +566,7 @@ static const game_vt_t CFuncTrain_vt = {
 
 const game_class_t gc_FUNC_TRAIN = {
 	.size = sizeof(CBasePlatTrain), .Spawn = CFuncTrain_Spawn, .vt = &CFuncTrain_vt,
+	.save = &sv_CBasePlatTrain,
 };
 
 /* ---- func_guntarget (CGunTarget) ------------------------------------------ */
@@ -716,6 +754,16 @@ static const game_vt_t CGunTarget_vt = {
 	.GetDelay = CBasePlatTrain_GetDelay,
 };
 
+/* HLSDK CGunTarget::m_SaveData (+ m_hTargetEnt: HLSDK keeps it in its
+ * CBaseMonster base); message is the next path corner's name */
+static const sv_field_t f_CGunTarget[] = {
+	SVF(CGunTarget, m_hTargetEnt, SV_EH, 0),
+	SVF(CGunTarget, m_on, SV_U8, 0),
+};
+static const sv_table_t sv_CGunTarget = SV_TABLE(&sv_CBaseToggle, f_CGunTarget,
+	.flags = SVT_MSG_NAME);
+
 const game_class_t gc_FUNC_GUNTARGET = {
 	.size = sizeof(CGunTarget), .Spawn = CGunTarget_Spawn, .vt = &CGunTarget_vt,
+	.save = &sv_CGunTarget,
 };

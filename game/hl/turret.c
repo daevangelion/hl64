@@ -748,9 +748,36 @@ static const mon_vt_t tur_mvt = {
 	.GibMonster = Tur_GibMonster,
 };
 
+/* HLSDK CBaseTurret::m_SaveData (the eye glow is an effect of ours) */
+static const sv_field_t f_CBaseTurret[] = {
+	SVF(CBaseTurret, m_flMaxSpin, SV_F32, SVK),
+	SVF(CBaseTurret, m_iSpin, SV_I32, 0),
+	SVF(CBaseTurret, m_eyeBrightness, SV_I32, 0),
+	SVF(CBaseTurret, m_iDeployHeight, SV_I32, SVK),
+	SVF(CBaseTurret, m_iRetractHeight, SV_I32, SVK),
+	SVF(CBaseTurret, m_iMinPitch, SV_I32, SVK),
+	SVF(CBaseTurret, m_iBaseTurnRate, SV_I32, SVK),
+	SVF(CBaseTurret, m_fTurnRate, SV_F32, 0),
+	SVF(CBaseTurret, m_iOrientation, SV_I32, SVK),
+	SVF(CBaseTurret, m_iOn, SV_I32, 0),
+	SVF(CBaseTurret, m_fBeserk, SV_I32, 0),
+	SVF(CBaseTurret, m_iAutoStart, SV_I32, SVK),
+	SVF(CBaseTurret, m_vecLastSight, SV_POS, 0),
+	SVF(CBaseTurret, m_flLastSight, SV_TIME, 0),
+	SVF(CBaseTurret, m_flMaxWait, SV_F32, SVK),
+	SVF(CBaseTurret, m_iSearchSpeed, SV_I32, SVK),
+	SVF(CBaseTurret, m_flStartYaw, SV_F32, SVK),
+	SVF(CBaseTurret, m_vecCurAngles, SV_VEC, 0),
+	SVF(CBaseTurret, m_vecGoalAngles, SV_VEC, 0),
+	SVF(CBaseTurret, m_flPingTime, SV_TIME, 0),
+	SVF(CBaseTurret, m_flSpinUpTime, SV_TIME, 0),
+};
+static const sv_table_t sv_CBaseTurret = SV_TABLE(&sv_CBaseMonster, f_CBaseTurret);
+
 const game_class_t gc_MONSTER_MINITURRET = {
 	.size = sizeof(CBaseTurret),
 	.Spawn = CMiniTurret_Spawn,
 	.vt = &tur_vt,
 	.ext = &tur_mvt,
+	.save = &sv_CBaseTurret,
 };

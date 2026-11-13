@@ -42,5 +42,8 @@ int	CGrenade_ShootContact(int owner, const float start[3], const float vel[3]);
 void	CGrenade_Explode(int e, const col_trace_t *tr, int bits);
 /* CGrenade::Killed -> Detonate */
 void	CGrenade_KilledVt(int e, int attacker, int gib);
+/* CGrenade's save level (tripmines build on it; thrown grenades are
+ * transients) */
+extern const sv_table_t	sv_CGrenade;
 
 #endif

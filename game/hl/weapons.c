@@ -818,6 +818,15 @@ typedef struct {
 	uint16_t	pad;
 } CBasePlayerItem;
 
+/* HLSDK CBasePlayerItem / CBasePlayerWeapon m_SaveData of a weapon lying in
+ * the world (m_iId, its default ammo and clip) */
+static const sv_field_t f_CBasePlayerItem[] = {
+	SVF(CBasePlayerItem, m_iId, SV_I16, SVK),
+	SVF(CBasePlayerItem, m_iDefaultAmmo, SV_I16, 0),
+	SVF(CBasePlayerItem, m_iClip, SV_I16, 0),
+};
+static const sv_table_t sv_CBasePlayerItem = SV_TABLE(&sv_CBaseAnimating, f_CBasePlayerItem);
+
 #define ITEM(e)		((CBasePlayerItem *)ent_priv(e))
 
 void CBasePlayerItem_FallThink(int e)
@@ -902,7 +911,8 @@ static int weapon_spawn(int e, gid_t16 gid, int id)
 
 #define WEAPON_CLASS(IDENT, ID) \
 	static int IDENT##_Spawn(int e, gid_t16 gid) { return weapon_spawn(e, gid, ID); } \
-	const game_class_t gc_##IDENT = { .size = sizeof(CBasePlayerItem), .Spawn = IDENT##_Spawn };
+	const game_class_t gc_##IDENT = { .size = sizeof(CBasePlayerItem), .Spawn = IDENT##_Spawn, \
+		.save = &sv_CBasePlayerItem };
 
 WEAPON_CLASS(WEAPON_CROWBAR, WEAPON_CROWBAR)
 WEAPON_CLASS(WEAPON_9MMHANDGUN, WEAPON_GLOCK)
@@ -938,6 +948,7 @@ static int WEAPON_TRIPMINE_Spawn(int e, gid_t16 gid)
 const game_class_t gc_WEAPON_TRIPMINE = {
 	.size = sizeof(CBasePlayerItem),
 	.Spawn = WEAPON_TRIPMINE_Spawn,
+	.save = &sv_CBasePlayerItem,
 };
 
 /* ---- ammo (CBasePlayerAmmo) ----------------------------------------------------------- */
@@ -947,6 +958,14 @@ typedef struct {
 	int16_t		ammo, give, max;
 	uint16_t	pad;
 } CBasePlayerAmmo;
+
+/* CBasePlayerAmmo of our layout (HLSDK keeps them in the class's code) */
+static const sv_field_t f_CBasePlayerAmmo[] = {
+	SVF(CBasePlayerAmmo, ammo, SV_I16, SVK),
+	SVF(CBasePlayerAmmo, give, SV_I16, 0),
+	SVF(CBasePlayerAmmo, max, SV_I16, SVK),
+};
+static const sv_table_t sv_CBasePlayerAmmo = SV_TABLE(&sv_CBaseEntity, f_CBasePlayerAmmo);
 
 void CBasePlayerAmmo_DefaultTouch(int e, int other)
 {
@@ -986,7 +1005,8 @@ static int ammo_spawn(int e, res_t model, int ammo, int give, int max)
 #define AMMO_CLASS(IDENT, MODEL, AMMO, GIVE, MAX) \
 	static int IDENT##_Spawn(int e, gid_t16 gid) \
 	{ (void)gid; return ammo_spawn(e, RESID(MODEL), AMMO, GIVE, MAX); } \
-	const game_class_t gc_##IDENT = { .size = sizeof(CBasePlayerAmmo), .Spawn = IDENT##_Spawn };
+	const game_class_t gc_##IDENT = { .size = sizeof(CBasePlayerAmmo), .Spawn = IDENT##_Spawn, \
+		.save = &sv_CBasePlayerAmmo };
 
 AMMO_CLASS(AMMO_9MMCLIP, W_W_9MMCLIP, AMMO_9MM, AMMO_GLOCKCLIP_GIVE, _9MM_MAX_CARRY)
 AMMO_CLASS(AMMO_9MMAR, W_W_9MMARCLIP, AMMO_9MM, AMMO_MP5CLIP_GIVE, _9MM_MAX_CARRY)
@@ -1012,6 +1032,15 @@ typedef struct {
 	uint8_t		m_rgiszAmmo[WEAPONBOX_AMMO_SLOTS];
 	int16_t		m_rgAmmo[WEAPONBOX_AMMO_SLOTS];
 } CWeaponBox;
+
+/* HLSDK CWeaponBox::m_SaveData (weapons as id bits + clips, ammo slots) */
+static const sv_field_t f_CWeaponBox[] = {
+	SVF(CWeaponBox, weapons, SV_U16, 0),
+	SVF(CWeaponBox, clip, SV_I16, 0),
+	SVF(CWeaponBox, m_rgiszAmmo, SV_U8, 0),
+	SVF(CWeaponBox, m_rgAmmo, SV_I16, 0),
+};
+static const sv_table_t sv_CWeaponBox = SV_TABLE(&sv_CBaseEntity, f_CWeaponBox);
 
 /* the HLSDK ammo names a map's weaponbox keys carry (keys.def) and the
  * game's ammo type of each; AMMO_NONE: no weapon of the game uses it */
@@ -1158,4 +1187,5 @@ static int CWeaponBox_Spawn(int e, gid_t16 gid)
 const game_class_t gc_WEAPONBOX = {
 	.size = sizeof(CWeaponBox),
 	.Spawn = CWeaponBox_Spawn,
+	.save = &sv_CWeaponBox,
 };

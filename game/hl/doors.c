@@ -533,11 +533,35 @@ static int CBaseDoor_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+/* HLSDK CBaseDoor::m_SaveData (+ its locksound_t members) */
+static const sv_field_t f_CBaseDoor[] = {
+	SVF(CBaseDoor, m_ls.sLockedSound, SV_RES, SVK),
+	SVF(CBaseDoor, m_ls.sLockedSentence, SV_RES, SVK),
+	SVF(CBaseDoor, m_ls.sUnlockedSound, SV_RES, SVK),
+	SVF(CBaseDoor, m_ls.sUnlockedSentence, SV_RES, SVK),
+	SVF(CBaseDoor, m_ls.iLockedSentence, SV_I16, 0),
+	SVF(CBaseDoor, m_ls.iUnlockedSentence, SV_I16, 0),
+	SVF(CBaseDoor, m_ls.flwaitSound, SV_TIME, 0),
+	SVF(CBaseDoor, m_ls.flwaitSentence, SV_TIME, 0),
+	SVF(CBaseDoor, m_ls.bEOFLocked, SV_U8, 0),
+	SVF(CBaseDoor, m_ls.bEOFUnlocked, SV_U8, 0),
+	SVF(CBaseDoor, m_bHealthValue, SV_U8, SVK),
+	SVF(CBaseDoor, m_bMoveSnd, SV_U8, SVK),
+	SVF(CBaseDoor, m_bStopSnd, SV_U8, SVK),
+	SVF(CBaseDoor, m_bLockedSound, SV_U8, SVK),
+	SVF(CBaseDoor, m_bLockedSentence, SV_U8, SVK),
+	SVF(CBaseDoor, m_bUnlockedSound, SV_U8, SVK),
+	SVF(CBaseDoor, m_bUnlockedSentence, SV_U8, SVK),
+};
+static const sv_table_t sv_CBaseDoor = SV_TABLE(&sv_CBaseToggle, f_CBaseDoor);
+
 const game_class_t gc_FUNC_DOOR = {
 	.size = sizeof(CBaseDoor), .Spawn = CBaseDoor_Spawn, .vt = &CBaseDoor_vt,
+	.save = &sv_CBaseDoor,
 };
 const game_class_t gc_FUNC_WATER = {
 	.size = sizeof(CBaseDoor), .Spawn = CBaseDoor_Spawn, .vt = &CBaseDoor_vt,
+	.save = &sv_CBaseDoor,
 };
 
 /* ---- func_door_rotating ----------------------------------------------------- */
@@ -578,6 +602,7 @@ static int CRotDoor_Spawn(int e, gid_t16 gid)
 
 const game_class_t gc_FUNC_DOOR_ROTATING = {
 	.size = sizeof(CBaseDoor), .Spawn = CRotDoor_Spawn, .vt = &CRotDoor_vt,
+	.save = &sv_CBaseDoor,
 };
 
 /* ---- momentary_door ----------------------------------------------------------- */
@@ -665,4 +690,5 @@ static const game_vt_t CMomentaryDoor_vt = {
 
 const game_class_t gc_MOMENTARY_DOOR = {
 	.size = sizeof(CBaseDoor), .Spawn = CMomentaryDoor_Spawn, .vt = &CMomentaryDoor_vt,
+	.save = &sv_CBaseDoor,
 };

@@ -570,14 +570,48 @@ static const game_vt_t cine_vt = {
 	.Activate = CCineMonster_Activate,
 };
 
+/* HLSDK CCineMonster::m_SaveData (+ m_hTargetEnt, HLSDK's CBaseMonster
+ * member, and the sequence lookup cache of our layout). A sequence bound
+ * to a monster (playing or waiting) is not quiescent. */
+static int CCineMonster_quiet(int e)
+{
+	return EHGet(CINE(e)->m_hTargetEnt) < 0;
+}
+
+static const sv_field_t f_CCineMonster[] = {
+	SVF(CCineMonster, m_hTargetEnt, SV_EH, 0),
+	SVF(CCineMonster, m_iszIdle, SV_U8, SVK),
+	SVF(CCineMonster, m_iszPlay, SV_U8, SVK),
+	SVF(CCineMonster, m_iszEntity, SV_NAME, SVK),
+	SVF(CCineMonster, m_clsEntity, SV_U16, SVK),
+	SVF(CCineMonster, m_seqModel, SV_RES, 0),
+	SVF(CCineMonster, m_seqIdle, SV_I16, 0),
+	SVF(CCineMonster, m_seqPlay, SV_I16, 0),
+	SVF(CCineMonster, m_fMoveTo, SV_I32, SVK),
+	SVF(CCineMonster, m_iFinishSchedule, SV_I32, SVK),
+	SVF(CCineMonster, m_flRadius, SV_F32, SVK),
+	SVF(CCineMonster, m_flRepeat, SV_F32, SVK),
+	SVF(CCineMonster, m_iDelay, SV_I32, 0),
+	SVF(CCineMonster, m_startTime, SV_TIME, 0),
+	SVF(CCineMonster, m_saved_movetype, SV_I32, 0),
+	SVF(CCineMonster, m_saved_solid, SV_I32, 0),
+	SVF(CCineMonster, m_saved_effects, SV_I32, 0),
+	SVF(CCineMonster, m_interruptable, SV_U8, 0),
+	SVF(CCineMonster, m_ai, SV_U8, SVK),
+};
+static const sv_table_t sv_CCineMonster = SV_TABLE(&sv_CBaseToggle, f_CCineMonster,
+	.quiet = CCineMonster_quiet);
+
 const game_class_t gc_SCRIPTED_SEQUENCE = {
 	.size = sizeof(CCineMonster),
 	.Spawn = CCineMonster_Spawn,
 	.vt = &cine_vt,
+	.save = &sv_CCineMonster,
 };
 
 const game_class_t gc_AISCRIPTED_SEQUENCE = {
 	.size = sizeof(CCineMonster),
 	.Spawn = CCineMonster_Spawn,
 	.vt = &cine_vt,
+	.save = &sv_CCineMonster,
 };
