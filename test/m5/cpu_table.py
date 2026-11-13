@@ -97,6 +97,8 @@ def parse(lines):
         if m and win is not None:
             d = kv(m.group(2))
             win["zones"][m.group(1)] = d.get("max", 0)
+            if m.group(1) == "mon":
+                win["mon_avg"] = d.get("avg", 0)
             if cur:
                 if m.group(1) == "studio" and "pool_peak" in d:
                     cur.peak("studio_pool", d["pool_peak"])
@@ -175,6 +177,19 @@ def main():
                        if x > 10000)
         out.append("| %.1f | %d %s | %d | %d | %s | %s |" % (mx / 1000.0, v.k, v.map, w["at"], w["line"],
                                                            dominant(w["zones"]), zs))
+    monw = [(v, w) for _, v, w in allw
+            if (w["over50"] and dominant(w["zones"]) == "mon") or w["zones"].get("mon", 0) > 50000]
+    monw.sort(key=lambda t: t[1]["at"])
+    out += ["", "#### windows with frames > 50 ms where mon dominates, or with a mon frame > 50 ms "
+            "(%d windows, %d frames > 50 ms)" % (len(monw), sum(w["over50"] for _, w in monw)), "",
+            "| visit | ~frames | log line | frames > 50 ms | mon max ms | mon avg ms | dominant | zones > 10 ms |",
+            "|---|---|---:|---:|---:|---:|---|---|"]
+    for v, w in monw:
+        zs = ", ".join("%s %.0f" % (k, x / 1000.0) for k, x in sorted(w["zones"].items(), key=lambda t: -t[1])
+                       if x > 10000)
+        out.append("| %d %s | %d-%d | %d | %d | %.1f | %.1f | %s | %s |" % (
+            v.k, v.map, w["at"], w["at"] + w["frames"] - 1, w["line"], w["over50"],
+            w["zones"].get("mon", 0) / 1000.0, w.get("mon_avg", 0) / 1000.0, dominant(w["zones"]), zs))
     out += ["", "#### memory per map visit (peaks of its stats records / roll-ups)", "",
             "| # | map | render KB | texture KB | coll KB | rec live | dehydrate store B | studio pool B | "
             "snd mem B |", "|---:|---|---:|---:|---:|---:|---:|---:|---:|"]
