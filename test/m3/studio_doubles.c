@@ -6,6 +6,7 @@
  * studio_test_bind, effects and sounds are dropped. A real definition in
  * the link overrides each one.
  */
+#include "engine/core/eng.h"
 #include "hl64/fx.h"
 #include "hl64/rec.h"
 #include "hl64/snd.h"
@@ -47,4 +48,10 @@ __attribute__((weak)) void snd_ambient(const float org[3], res_t sound, float vo
 	(void)attn;
 	(void)flags;
 	(void)pitch;
+}
+
+/* engine/core/eng.c's frame counter (engine/world/seam.c stamps switches) */
+__attribute__((weak)) uint32_t eng_frame_count(void)
+{
+	return 0;
 }
