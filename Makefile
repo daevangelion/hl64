@@ -4,7 +4,9 @@
 #
 #   make rom      $(BUILD_DIR)/hl64.z64 (libdragon n64.mk + t3d.mk, banked libdragon)
 #   make host     $(BUILD_DIR)/host/hl64-host (HOST_M32=1 default: -m32)
-#   make cook     restab over the staged content (HL64_CONTENT)
+#   make cook     HL64_DATA (the player's .../Half-Life/valve) -> HL64_CONTENT
+#                 [MAPS='hldemo* t0a0*'] [HL64_REF_PALETTE=<palette.lmp>], then
+#                 restab; without HL64_DATA: restab over HL64_CONTENT only
 #   make routes   test/routes/*.route -> $(BUILD_DIR)/routes/*.rbc
 #   make test-host / test-ares / provcheck
 #
@@ -20,6 +22,9 @@ export N64_INST N64_GCCPREFIX
 T3D_INST ?= $(N64_INST)
 HOST_M32 ?= 1
 HL64_CONTENT ?=
+HL64_DATA ?=
+HL64_REF_PALETTE ?=
+MAPS ?=
 
 # Sources. engine/ and plat/ build with the strict flags below.
 ENGINE_SRC := \
@@ -154,8 +159,18 @@ host: $(HOST_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 
-cook:
-	@if [ -z "$(HL64_CONTENT)" ]; then echo "usage: make cook HL64_CONTENT=<staged content dir>" >&2; exit 2; fi
+# Host cook tool (native, not HOST_M32): BSP30 entity lump -> HLE1 + HLN1.
+HLECOOK := $(BUILD_DIR)/tools/hlecook
+$(HLECOOK): tools/w64c/hlecook.c tools/w64c/hl_entcook.h tools/w64c/hl_nodecook.h \
+		tools/hlsdk/hl_nodegraph.h
+	@mkdir -p $(@D)
+	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -Werror -ffp-contract=off -o $@ tools/w64c/hlecook.c -lm
+
+cook: $(HLECOOK)
+	@if [ -z "$(HL64_CONTENT)" ]; then echo "usage: make cook HL64_DATA=<.../Half-Life/valve> HL64_CONTENT=<dir> [MAPS='glob ...'] [HL64_REF_PALETTE=<palette.lmp>]" >&2; exit 2; fi
+	$(if $(HL64_DATA),python3 -m tools.cook.stage --data '$(HL64_DATA)' --content '$(HL64_CONTENT)' \
+		--hlecook $(HLECOOK) $(if $(MAPS),--maps $(foreach m,$(MAPS),'$(m)')) \
+		$(if $(HL64_REF_PALETTE),--ref-palette '$(HL64_REF_PALETTE)'))
 	python3 -m tools.restab.restab --content $(HL64_CONTENT) --defs game/defs -o $(HL64_CONTENT)/campaign.rtb
 
 ROUTES := $(wildcard test/routes/*.route)
@@ -167,9 +182,12 @@ routes: cook
 			-o $(BUILD_DIR)/routes/$$(basename $$r .route).rbc || exit 1; \
 	done
 
-test-host:
+test-host: $(HLECOOK)
 	BUILD_DIR=$(BUILD_DIR) test/run/m0.sh
 	python3 -m unittest tools.restab.test_restab tools.routec.test_routec
+	HL64_HLECOOK=$(HLECOOK) python3 -m unittest tools.cook.test_cook tools.cook.test_hl_campaign \
+		tools.w64c.test_w64c tools.w64c.test_w64check tools.w64c.test_w64seam \
+		tools.w64c.test_hlecook
 
 test-ares:
 	BUILD_DIR=$(BUILD_DIR) test/run/m0.sh --ares

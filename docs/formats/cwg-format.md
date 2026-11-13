@@ -4,10 +4,11 @@ Imported from the quakegeneric tree (`n64/docs/cwg-format.md`, audit entry
 CLEAN, docs/provenance-audit.md); the runtime fallback is restated as an
 hl64 requirement. Runtime: architecture.md 5.4.
 
-`tools/hl_campaign.py` discovers the graph from BSP entity lumps and writes
-`maps/campaign.cwg` with empty seam tables. After `.w64` packaging,
+`tools/cook/hl_campaign.py` discovers the graph from BSP entity lumps and
+writes `maps/campaign.cwg` with empty seam tables. After `.w64` packaging,
 `tools/w64c/w64seam.py` rewrites that graph with certified closed switches,
-or OPEN seams where no closed switch point exists.
+or OPEN seams where no closed switch point exists (both run by `make cook`,
+`tools/cook/stage.py`).
 Nothing depends on map names. CWG1 and CWG2 are rejected (clean cutover).
 
 All numbers are big-endian; tables are packed without alignment padding.

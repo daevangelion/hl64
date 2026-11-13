@@ -80,14 +80,16 @@ endian; the cart fixes the order once when the chunk is opened.
   `info_teleport_destination` whose name no key in the map references
   (fixed point). Names are kept even when nothing
   in this map fires them: a neighbouring map's `changetarget` may.
-- Keys: entvars fields (`hle_fields[]`) and the non-field keys the game
-  reads (`hle_xkeys[]`); `_*` keys and `""`/`"0"`/`"0 0 0"` values dropped;
-  `angle` → `angles 0 a 0`, `light` → `light_lev`, `\n` escapes expanded.
-  The loader rejects a record whose key names an index outside the
-  keyname table; the game's spawn reads only the keys its class declares.
-- Rewrites: `monster_zombie` → `monster_zombie_hl`; trigger_changelevel
-  `landmark` → `message`; info_landmark targetname also as `message`;
-  multi_manager non-field keys → fire list (`name#n` → `name`).
+- Keys: the entvars fields the game fills from entity keys (`hle_fields[]`:
+  HLSDK `gEntvarsDescription`, set by `DispatchKeyValue`) and the keys
+  HLSDK classes read in their own `KeyValue` (`hle_xkeys[]`); `_*` keys and
+  `""`/`"0"`/`"0 0 0"` values dropped; `angle` → `angles 0 a 0`, `\n`
+  escapes expanded. The loader rejects a record whose key names an index
+  outside the keyname table; the game's spawn reads only the keys its class
+  declares.
+- Rewrites: trigger_changelevel `landmark` → `message`; info_landmark
+  targetname also as `message`; multi_manager non-field keys → fire list
+  (`name#n` → `name`).
 - Pre-resolved: name → records (lump order); multisource inputs (entities
   whose `target` names it, then multi_managers listing it — GoldSrc
   `CMultiSource::Register` order); multi_manager fire lists (stable sort by

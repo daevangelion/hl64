@@ -30,8 +30,8 @@ header (`include/hl64/` / `engine/world`, retargeted from the old
 0      w64_header_t (64 B)
 64     layer directory (dir_size B)
 ...    chunks, each 16-aligned, in this order:
-       REND × nsect, MOVR × movers, TEXP × npages, COLL × ncoll, ENTS, VISR,
-       then the optional companions ZONE, DRYS, STRM
+       REND × nsect, MOVR × movers, TEXP × npages, COLL × ncoll, ENTS, VISR
+       (old-tree packages may add ZONE, DRYS, STRM; see below)
 ```
 
 ### `w64_header_t` (64 B)
@@ -122,7 +122,11 @@ index or `0xFFFF`).
   vertex, [world-surfaces.md](../specs/world-surfaces.md) 1–2; mono =
   max(R,G,B) of the BSP30 RGB lightmap, × style0 >> 8, × light scale + 0.5,
   clamp 255; 255 for water / unlit faces) in R, G, B and alpha 0xFF; `st` =
-  s10.5 texel coordinates rebased per face by whole texture periods; `norm`
+  s10.5 texel coordinates rebased per face by whole texture periods: per
+  axis, with the face's s (or t) of world-surfaces.md 1, the page scale
+  `k` = the `.wci4` 16.16 page/source scale ÷ 65536 and the period `P` =
+  page side ÷ `k`, base = floor(min over the face's vertices of s ÷ P) × P
+  and `st` = trunc((s − base) × k × 32), all in float32; `norm`
   = the face normal (`t3d_vert_pack_normal` 5.6.5, unused by the RSP with
   `T3D_FLAG_NO_LIGHT`, used by the CPU dynamic-light pass).
 - **Indices**: one zig-zag strip per face (`0, 1, n-1, 2, n-2, …`: n indices,
@@ -175,9 +179,12 @@ alpha compare for fence pages. Pages hold a single texture (vertex alpha
 0xFF, `alpha_to_tile` off); only pages some cooked face can bind are
 emitted.
 
-Texel source is the map's `.wci4` (`tools/world_tex_bake`), not the old
-`.wats` atlas sheets (re-quantised and downsampled to 32 px; not used by
-hl64).
+Texel source is the map's `.wci4` (`tools/cook/bake_world_tex.py`: the
+BSP's embedded miptex and the WAD3 textures its worldspawn `wad` key
+lists, quantised on each texture's own palette, or with `--ref-palette` on
+a given palette — the old tree's palette reproduces the old cook's bytes),
+not the old `.wats` atlas sheets (re-quantised and downsampled to 32 px; not
+used by hl64).
 
 ## Collision
 
@@ -331,8 +338,8 @@ and `.stream` (Q64S) files, little-endian as those formats are; the chunk
 appears at most once, after `VISR`; the directory has no index for them
 (found by fourcc), so packages without them keep the same layout and
 version. hl64 does not use them (the zone system is dropped,
-architecture.md 16.3): readers skip them, the cook stops emitting them when
-`w64c` is rewritten.
+architecture.md 16.3): the hl64 cook (`tools/w64c/w64c.py`) does not emit
+them and readers skip them.
 
 ## Sectors (cook)
 
@@ -397,20 +404,25 @@ cell's collision set (pinned / lists / submodels), grid sizes.
 ## Tools
 
 ```
-make -C tools/w64c                       # builds tools/w64c/hlecook
-tools/w64c/hlecook <map.bsp> <out.hle>   # HLE1 entity blob (ENTS input)
-tools/w64c/w64c.py <map.bsp> <map.wci4> <out.w64> [--hle map.hle]
-                   [--zones map.zones] [--dry map.dry] [--stream map.stream]
-                   [--json report.json] [--no-budget]
-tools/w64c/w64check.py <map.w64> <map.bsp> [--hle map.hle] [--zones f]
-                   [--dry f] [--stream f] [--points N] [--segments N]
-                   [--submodels N] [--seed S]
+make cook ...                         # builds $(BUILD_DIR)/tools/hlecook
+$(BUILD_DIR)/tools/hlecook <map.bsp> <out.hle>       # HLE1 + HLN1 (ENTS input)
+python3 -m tools.cook.bake_world_tex <map.bsp> -o <map.wci4> [--wad-dir DIR]
+                   [--ref-palette palette.lmp]
+python3 -m tools.w64c.w64c <map.bsp> <map.wci4> <out.w64> --hle <map.hle>
+                   [--materials sound/materials.txt] [--json report.json]
+                   [--no-budget]
+python3 -m tools.w64c.w64check <map.w64> <map.bsp> [--hle map.hle]
+                   [--points N] [--segments N] [--submodels N] [--seed S]
+python3 -m tools.w64c.w1 --fixtures DIR --data DIR [--hlecook PATH] [--w64c-only]
 ```
 
-The content staging (imported `tools/hl_stage_content.py`, retargeted to the
-hl64 layout) builds `hlecook`, cooks every staged map's intermediates
-(`.wci4`, `.hle`) and runs `w64c.py --hle` into the content directory: an
-HL map ships only its `.w64`.
+The content staging (`tools/cook/stage.py`, run by `make cook`) cooks every
+staged map's intermediates (`.wci4`, `.hle`) into its staging directory and
+runs `w64c --hle` into the content directory: an HL map ships only its
+`.w64` (plus `maps/<map>.ent`, restab's input). `tools.w64c.w1` is the W1
+test (world-surfaces.md 5): the packages, `.wci4` and `.hle` byte-equal to
+the old tree's tools on all 10 Uplink/Hazard maps (fixtures made once from
+the old tree with `--make-fixtures`).
 
 `w64check.py` is the cook-side exactness proof (exit 1 on any mismatch):
 header / directory / chunk CRCs and bounds, meshlet and strip encoding,
@@ -427,6 +439,5 @@ every hull 1–3 node a box-pruned walk of the cell reaches is in its list;
 2000 random segments ≤ 192 u give the same trace result
 (fraction, flags, visited path) on the encoding as on the BSP and visit
 only pinned or 3 × 3 × 3 neighbourhood chunks; `VISR` rows decompress to
-the BSP rows; `ENTS` equals the `hlecook` blob; every chunk is a known kind,
-the companions appear at most once with their Q64Z / DRY1 / Q64S magic and
-equal the `--zones` / `--dry` / `--stream` files.
+the BSP rows; `ENTS` equals the `hlecook` blob; every chunk is a known kind
+(old-tree ZONE / DRYS / STRM companions are skipped, at most once each).

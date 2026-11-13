@@ -22,12 +22,15 @@ Compare (default):
       [--hlecook PATH] [--w64c-only] [--maps m1,m2]
 
   cooks every map with the NEW tools into a temporary directory:
-  tools.cook.bake_world_tex --ref-palette DIR/palette.lmp, hlecook when
-  --hlecook is given (else the fixture .hle), tools.w64c.w64c; byte-compares
-  .wci4 / .hle / .w64 with the fixtures. --w64c-only cooks only the .w64,
-  from the fixture .wci4 and .hle. A .w64 mismatch names the first differing
-  part: header, directory table, or chunk (fourcc, index). Exit 1 on any
-  mismatch or failed tool.
+  tools.cook.bake_world_tex --ref-palette DIR/palette.lmp and
+  tools.w64c.w64c (from the fixture .hle, so ENTS is the old blob and every
+  other part is W1's), byte-comparing .wci4 / .w64 with the fixtures; with
+  --hlecook PATH also the new hlecook, whose HLN1 node graph tail must equal
+  the fixture's (its HLE1 part differs on purpose: the HLSDK entvars
+  retarget, hle-format-v1.md "Cook rules"; reported, not counted).
+  --w64c-only cooks only the .w64, from the fixture .wci4 and .hle. A .w64
+  mismatch names the first differing part: header, directory table, or
+  chunk (fourcc, index). Exit 1 on any mismatch or failed tool.
 """
 from __future__ import annotations
 
@@ -128,6 +131,17 @@ def w64_first_diff(new: bytes, old: bytes) -> str:
     return "trailing bytes"
 
 
+def hle_split(b: bytes):
+    """(HLE1 part, HLN1 tail) of an hlecook blob (hle-format-v1.md: the node
+    graph starts at align16 of the HLE1 header's little-endian size)."""
+    if len(b) < 12 or b[:4] != b"HLE1":
+        raise RuntimeError("not an HLE1 blob")
+    size = struct.unpack_from("<I", b, 8)[0]
+    if size > len(b):
+        raise RuntimeError("HLE1 size past the blob")
+    return b[:size], b[(size + 15) & ~15:]
+
+
 def make_fixtures(a) -> int:
     old = Path(a.old_tree).expanduser()
     oc = Path(a.old_cook)
@@ -204,11 +218,12 @@ def compare_map(a, fx: Path, td: Path, m: str):
             res.append("wci4 " + ("identical" if same else "DIFFERS"))
             bad += not same
             if a.hlecook:
-                hle = td / f"{m}.hle"
-                run([a.hlecook, bsp, hle], f"{m}: hlecook")
-                same = hle.read_bytes() == (fx / f"{m}.hle").read_bytes()
-                res.append("hle " + ("identical" if same else "DIFFERS"))
-                bad += not same
+                new_hle = td / f"{m}.hle"
+                run([a.hlecook, bsp, new_hle], f"{m}: hlecook")
+                (n1, n2), (o1, o2) = hle_split(new_hle.read_bytes()), hle_split(hle.read_bytes())
+                res.append("hln " + ("identical" if n2 == o2 else "DIFFERS"))
+                bad += n2 != o2
+                res.append("hle1 " + ("identical" if n1 == o1 else "differs (entvars retarget)"))
         out = td / f"{m}.w64"
         run([sys.executable, "-m", "tools.w64c.w64c", bsp, wci4, out, "--hle", hle,
              "--materials", mats], f"{m}: w64c")
