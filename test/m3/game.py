@@ -8,7 +8,8 @@ in lump order. Checks, per record:
   - every entity record's class spawns: a refusal is a failure of the
     class's owner (classes.def owner comments) unless the game logged it
     with a reason (`spawn: CLASS map S lump L refused: REASON`) and the
-    reason is an HLSDK spawn-time removal, not "class not implemented";
+    reason is an HLSDK spawn-time removal, not "class not implemented" or
+    a Spawn that gave no reason (game/hl/cbase.h SpawnRefuse);
   - P15: no live entity is SOLID_BSP without MOVETYPE_PUSH (the engine
     also stops on it: a driver exit != 0 is a failure);
   - no refusal without a logged reason.
@@ -30,6 +31,8 @@ MOVETYPE_PUSH = 7
 # refusal reasons that mean a missing implementation (game/hl/dispatch.c)
 UNIMPLEMENTED = ("class not implemented", "logic class has no entity spawn",
                  "no logic class", "game private slab full")
+# a Spawn refused or removed itself without its HLSDK reason (dispatch.c WHY_*)
+REASONLESS = ("Spawn refused with no reason", "Spawn removed itself with no reason")
 CLASSES_DEF = os.path.join(os.path.dirname(__file__), "..", "..", "game", "defs", "classes.def")
 
 
@@ -117,10 +120,10 @@ def check(name, rc, lines, err, own, fails):
             if lump not in refusals:
                 fails.append(f"{name}: lump {lump} {cn} ({owner}): {state} with no logged reason")
                 ok = False
-    # a refusal for a missing implementation fails, logged or not (entity and
-    # logic records alike)
+    # a refusal for a missing implementation or without its reason fails,
+    # logged or not (entity and logic records alike)
     for lump, (cn, why) in sorted(refusals.items()):
-        if why in UNIMPLEMENTED:
+        if why in UNIMPLEMENTED or why.startswith(REASONLESS):
             fails.append(f"{name}: lump {lump} {cn} ({own.get(cn, '?')}): refused: {why}")
             ok = False
     print(f"{name}: {'PASS' if ok else 'FAIL'} records={done} "
