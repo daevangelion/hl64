@@ -219,6 +219,15 @@ typedef struct {
 	int		nv, np, dropped_verts;
 } place_t;
 
+/* A chunk's bytes once its read has landed (a LOADING chunk already owns
+ * its block, but the DMA has not filled it); re-validated at every use. */
+static uint8_t *landed(wld_layer_t *L, int c)
+{
+	const wld_chunk_t *ch = &L->ch[c];
+
+	return ch->state == WLD_CH_RESIDENT || ch->state == WLD_CH_PINNED ? ch->data : NULL;
+}
+
 static void vpos(const w64_vert_t *vp, int i, float o[3])
 {
 	const w64_vert_t *pr = &vp[i >> 1];
@@ -365,7 +374,25 @@ static void tri(place_t *P, const w64_vert_t *vp, int i0, int i1, int i2)
 }
 
 /* Walk the meshlets of one resident chunk near the point. */
-static void walk_chunk(place_t *P, const wld_layer_t *L, const uint8_t *ch)
+/* The meshlet's vertices and strip lie inside the chunk's bytes. */
+static int meshlet_ok(const w64_meshlet_t *m, uint32_t size)
+{
+	uint32_t vofs = W64_MESHLET_VOFS(m), iofs = W64_MESHLET_IOFS(m);
+	uint32_t nv = (uint32_t)W64_MESHLET_NV(m), ni = (uint32_t)W64_MESHLET_NI(m);
+
+	return vofs <= size && (nv + 1) / 2 * sizeof(w64_vert_t) <= size - vofs && iofs <= size
+		&& ni * 2u <= size - iofs && !(vofs & 3) && !(iofs & 1);
+}
+
+static int chunk_ok(const uint8_t *ch, uint32_t size)
+{
+	const w64_rend_t *r = (const w64_rend_t *)ch;
+
+	return size >= sizeof(w64_rend_t)
+		&& r->nmeshlets <= (size - sizeof(w64_rend_t)) / sizeof(w64_meshlet_t);
+}
+
+static void walk_chunk(place_t *P, const wld_layer_t *L, const uint8_t *ch, uint32_t size)
 {
 	const w64_rend_t *r = (const w64_rend_t *)ch;
 	const w64_meshlet_t *m = (const w64_meshlet_t *)(ch + sizeof(w64_rend_t));
@@ -373,11 +400,16 @@ static void walk_chunk(place_t *P, const wld_layer_t *L, const uint8_t *ch)
 	float reach = sqrtf(P->reach2);
 	int i, k;
 
+	if (!chunk_ok(ch, size))
+		return;
 	for (i = 0; i < r->nmeshlets; i++, m++)
 	{
 		const w64_vert_t *vp = (const w64_vert_t *)(ch + W64_MESHLET_VOFS(m));
 		const int16_t *idx = (const int16_t *)(ch + W64_MESHLET_IOFS(m));
 		int ni = W64_MESHLET_NI(m), nv = W64_MESHLET_NV(m), s0 = 0, j;
+
+		if (!meshlet_ok(m, size))
+			continue;
 
 		for (k = 0; k < 3; k++)
 			if (P->q[k] + reach < m->bbox[k] || P->q[k] - reach > m->bbox[k + 3])
@@ -461,18 +493,23 @@ static void reset_out(place_t *P)
 
 /* Winding sign: the hit face (coplanar with the point, normal along the
  * hit normal) decides whether strip winding gives outward normals. */
-static int winding_sign(const place_t *P, const wld_layer_t *L, const uint8_t *ch)
+static int winding_sign(const place_t *P, const wld_layer_t *L, const uint8_t *ch, uint32_t size)
 {
 	const w64_rend_t *r = (const w64_rend_t *)ch;
 	const w64_meshlet_t *m = (const w64_meshlet_t *)(ch + sizeof(w64_rend_t));
 	unsigned stride = L->hdr.idx_stride ? L->hdr.idx_stride : 1, base = L->hdr.idx_base;
 	int i, j, k, votes = 0;
 
+	if (!chunk_ok(ch, size))
+		return 1;
 	for (i = 0; i < r->nmeshlets; i++, m++)
 	{
 		const w64_vert_t *vp = (const w64_vert_t *)(ch + W64_MESHLET_VOFS(m));
 		const int16_t *idx = (const int16_t *)(ch + W64_MESHLET_IOFS(m));
 		int ni = W64_MESHLET_NI(m), nv = W64_MESHLET_NV(m), s0 = 0;
+
+		if (!meshlet_ok(m, size))
+			continue;
 
 		for (k = 0; k < 3; k++)
 			if (P->q[k] + 1 < m->bbox[k] || P->q[k] - 1 > m->bbox[k + 3])
@@ -571,7 +608,7 @@ static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
 		{
 			uint8_t *ch;
 
-			if (!(ch = L->ch[sb->chunk].data) || L->reencode)
+			if (!(ch = landed(L, sb->chunk)) || L->reencode)
 				return -1;
 			gm = eng_layer_origin(ent_idc(e)->layer);
 			ren_angle_axes(ent_cv(e)->angles, f, rt, up);
@@ -583,8 +620,8 @@ static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
 			P.n[0] = dot(n_g, f);
 			P.n[1] = -dot(n_g, rt);
 			P.n[2] = dot(n_g, up);
-			P.sign = P.facing ? winding_sign(&P, L, ch) : 1;
-			walk_chunk(&P, L, ch);
+			P.sign = P.facing ? winding_sign(&P, L, ch, L->chunks[sb->chunk].size) : 1;
+			walk_chunk(&P, L, ch, L->chunks[sb->chunk].size);
 			placed = commit(&P, L->slot, L->map, sb->chunk, owner) ? P.np + 1 : 0;
 			st.dropped += P.dropped_verts ? 1 : 0;
 			return placed;
@@ -622,7 +659,7 @@ static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
 					break;
 			if (k < nch || nch >= MAX_CHUNKS)
 				continue;
-			if (!L->ch[c].data)
+			if (!landed(L, c))
 			{
 				wld_chunk_use(L, c);	/* ask for it; retry later */
 				missing = 1;
@@ -634,15 +671,20 @@ static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
 			return -1;
 		for (k = 0; k < nch && P.facing && !sign; k++)
 		{
-			int v = winding_sign(&P, L, L->ch[chunks[k]].data);
+			const uint8_t *ch = landed(L, chunks[k]);
 
-			sign = v;
+			if (ch)
+				sign = winding_sign(&P, L, ch, L->chunks[chunks[k]].size);
 		}
 		P.sign = sign ? sign : 1;
 		for (k = 0; k < nch; k++)
 		{
+			const uint8_t *ch = landed(L, chunks[k]);
+
+			if (!ch)
+				return -1;
 			reset_out(&P);
-			walk_chunk(&P, L, L->ch[chunks[k]].data);
+			walk_chunk(&P, L, ch, L->chunks[chunks[k]].size);
 			if (commit(&P, L->slot, L->map, chunks[k], 0))
 				placed++;
 		}
@@ -775,7 +817,7 @@ static int frame_of(const fxdecal_t *d, float org[3], float ax[3][3])
 	const wld_layer_t *L = wld_layer(d->layer);
 	int k;
 
-	if (!L || L->map != d->map || !L->ch[d->chunk].data)
+	if (!L || L->map != d->map || !landed((wld_layer_t *)L, d->chunk))
 		return 0;
 	memset(ax, 0, 9 * sizeof(float));
 	if (d->owner)
