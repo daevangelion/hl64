@@ -59,6 +59,7 @@ static plan_t		plan[IO_TEST_PIECES];
 static int		nplan, plan_cur;	/* entries; first one with bytes to launch */
 static plan_t		*act_p;			/* the entry owning the piece in flight */
 static uint32_t		life_late_frames, life_late_pieces;
+static uint32_t		fr_pumps, fr_pumps_busy;	/* this frame's pumps; with a piece in flight */
 
 static plan_t *PlanOf(const io_req_t *r)
 {
@@ -189,8 +190,11 @@ static void Drain(int audio);
  * late (blocked I/O of the closing frame, logged and counted). */
 static void PlanFinish(void)
 {
-	uint32_t pieces = 0, bytes = 0;
+	uint32_t pieces = 0, bytes = 0, total = 0;
 	int i;
+
+	for (i = 0; i < nplan; i++)
+		total += plan[i].r ? plan[i].n : 0;
 
 	Retire();
 	for (i = 0; i < nplan; i++)
@@ -219,9 +223,10 @@ static void PlanFinish(void)
 		return;
 	life_late_frames++;
 	life_late_pieces += pieces;
-	log_printf("io: frame %lu late: %lu pieces %lu B of its plan (%d requests) finished at the "
-		"frame boundary\n", (unsigned long)life_frames, (unsigned long)pieces,
-		(unsigned long)bytes, nplan);
+	log_printf("io: frame %lu late: %lu pieces %lu B of its plan (%d requests, %lu B) finished "
+		"at the frame boundary; %lu pumps, %lu found a piece in flight\n",
+		(unsigned long)life_frames, (unsigned long)pieces, (unsigned long)bytes, nplan,
+		(unsigned long)total, (unsigned long)fr_pumps, (unsigned long)fr_pumps_busy);
 }
 
 /* Then the plan's completions, in plan order: the requests' done / state
@@ -379,6 +384,7 @@ void io_frame_begin(uint32_t frame_us)
 	/* the closing frame's completions first, then the new frame's plan */
 	PlanPublish();
 	PlanFrame();
+	fr_pumps = fr_pumps_busy = 0;
 #endif
 }
 
@@ -437,8 +443,12 @@ static void Pump(uint32_t max)
 	uint32_t at, n;
 
 	Retire();
+	fr_pumps++;
 	if (act)
+	{
+		fr_pumps_busy++;
 		return;
+	}
 	while (plan_cur < nplan && (!plan[plan_cur].r || plan[plan_cur].moved >= plan[plan_cur].n))
 		plan_cur++;
 	if (plan_cur == nplan)

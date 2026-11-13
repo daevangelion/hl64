@@ -320,6 +320,7 @@ static int ents_hash(uint32_t *out, uint32_t label)
 		{
 			const ent_id_t *id = ent_idc(e);
 			const ent_rnd_t *r = ent_rnd(e);
+			const col_ent_t *cv = ent_cv(e);
 			uint32_t ph[ENT_PARTS];
 
 			for (p = 0; p < ENT_PARTS; p++)
@@ -332,6 +333,15 @@ static int ents_hash(uint32_t *out, uint32_t label)
 				(unsigned long)ph[4], (unsigned long)ph[5], (unsigned long)r->model,
 				(unsigned)r->sequence, (double)r->frame, (unsigned)r->effects,
 				(unsigned)r->body, (unsigned)r->renderamt);
+			/* the collision view's fields (cv= above) */
+			log_printf("stats %lu entcv %d org=%.9g,%.9g,%.9g ang=%.9g,%.9g,%.9g "
+				"box=%.9g,%.9g,%.9g/%.9g,%.9g,%.9g fl=%lx solid=%u mt=%u\n",
+				(unsigned long)label, e, (double)cv->origin[0], (double)cv->origin[1],
+				(double)cv->origin[2], (double)cv->angles[0], (double)cv->angles[1],
+				(double)cv->angles[2], (double)cv->mins[0], (double)cv->mins[1],
+				(double)cv->mins[2], (double)cv->maxs[0], (double)cv->maxs[1],
+				(double)cv->maxs[2], (unsigned long)cv->flags, (unsigned)cv->solid,
+				(unsigned)cv->movetype);
 			log_flush();	/* 200 lines overrun the log ring */
 		}
 	}
