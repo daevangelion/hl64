@@ -102,3 +102,7 @@ use the same keys with `pe` = physent index. Entities (`ent`) are
   must do the same (lists in `meta`).
 - A5 needs a map brush model that does not fill its bounds: found in the
   Uplink maps (an angled `trigger_once`), not in the Hazard Course.
+- Reruns with the same capture list are byte-identical. A different list
+  (e.g. `run.sh PM-bot` alone) shifts the game time (`t`, `pmt`) and the
+  probe entities' indices, because each capture starts where the previous
+  one ended; positions, velocities and flags stay the same.
