@@ -51,7 +51,7 @@ GAME_SRC := game/pm/pm_shared.c game/pm/pm_math.c game/pm/pm_host.c game/hl/play
 # (merges stay trivial; local://M3-contract.md).
 ENGINE_SRC_ENT := engine/ent/heap.c engine/ent/pass.c engine/ent/priv.c
 ENGINE_SRC_PHYS :=
-ENGINE_SRC_REC :=
+ENGINE_SRC_REC := engine/ent/rec.c engine/ent/rec_hle.c engine/res/res.c engine/res/rtb.c
 ENGINE_SRC_STUDIO :=
 ENGINE_SRC_SND :=
 ENGINE_SRC_FX :=
@@ -98,7 +98,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest area pmtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest area pmtest rectest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -257,6 +257,14 @@ PM_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(PM_BIN): $(PM_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 pmtest: $(PM_BIN)
+
+# Records / resources driver (test/m3/rec_test.c, run by test/m3/rec.py).
+REC_BIN := $(BUILD_DIR)/host/hl64-rec
+REC_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/rec_test.o
+$(REC_BIN): $(REC_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+rectest: $(REC_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 
