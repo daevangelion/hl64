@@ -40,6 +40,7 @@
 #include "engine/mem/carve.h"
 #include "engine/render/fx_int.h"
 #include "engine/render/ren.h"
+#include "engine/render/trans.h"
 #include "engine/world/wld.h"
 
 #define SHEET_MAGIC	0x44493402u	/* 'DI4' 2: HLSDK decals.h order */
@@ -92,9 +93,11 @@ static struct {
 	int		map;			/* layer map the slot follows; -1 none */
 	uint32_t	due;			/* frame its sheet may be read */
 	uint8_t		loaded, n;
+	uint32_t	peak;			/* largest sheet read into it, bytes */
 } slots[HL64_WORLD_LAYERS];
 static uint8_t		*slot_base;		/* region + align16(global sheet) */
 static uint32_t		slot_bytes, frames, spent_us;
+static uint32_t		sheet_bytes, vert_bytes, region_bytes;
 static fxdecal_t	pool[HL64_FX_DECALS];
 static dvert_t		*verts;			/* HL64_FX_DECALS x HL64_FX_DECAL_VERTS */
 static pend_t		queue[HL64_FX_DECAL_QUEUE];
@@ -151,10 +154,14 @@ void decal_init(void)
 	ntex = 0;
 	seq = 0;
 	frames = spent_us = 0;
+	sheet_bytes = 0;
+	vert_bytes = vbytes;
+	region_bytes = cap;
 	for (s = 0; s < HL64_WORLD_LAYERS; s++)
 	{
 		slots[s].map = -1;
 		slots[s].loaded = slots[s].n = 0;
+		slots[s].peak = 0;
 	}
 	if (vbytes > cap)
 		sys_error("fx: decal vertices %lu B > decal region", (unsigned long)vbytes);
@@ -172,12 +179,25 @@ void decal_init(void)
 	if ((n = load_sheet(region, size, tex)) < 0)
 		sys_error("gsfx/decals.i4: bad sheet (rule %d)", -n);
 	ntex = n;
+	sheet_bytes = size;
 	gbytes = (size + 15) & ~15u;
 	slot_base = region + gbytes;
 	slot_bytes = ((cap - vbytes - gbytes) / HL64_WORLD_LAYERS) & ~15u;
-	log_printf("mem fx: decals sheet=%lu slots=%dx%lu verts=%lu region=%lu decals=%d\n",
-		(unsigned long)size, HL64_WORLD_LAYERS, (unsigned long)slot_bytes,
-		(unsigned long)vbytes, (unsigned long)cap, ntex);
+	decal_mem_line();
+}
+
+void decal_mem_line(void)
+{
+	uint32_t peak = sheet_bytes + vert_bytes;
+	int s;
+
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+		peak += slots[s].peak;
+	log_printf("mem fx: decals sheet=%lu slots=%dx%lu slot_peak=%lu,%lu verts=%lu region=%lu "
+		"decals=%d peak=%lu\n", (unsigned long)sheet_bytes, HL64_WORLD_LAYERS,
+		(unsigned long)slot_bytes, (unsigned long)slots[0].peak,
+		(unsigned long)slots[HL64_WORLD_LAYERS - 1].peak, (unsigned long)vert_bytes,
+		(unsigned long)region_bytes, ntex, (unsigned long)peak);
 }
 
 /* Slot s follows layer s: a new map drops the decals and placements that
@@ -218,6 +238,8 @@ static void slot_sync(int s)
 		return;
 	}
 	io_read_sync(slot_base + (uint32_t)s * slot_bytes, L->rom + L->chunks[c].ofs, L->chunks[c].size);
+	if (L->chunks[c].size > slots[s].peak)
+		slots[s].peak = L->chunks[c].size;
 	if ((r = load_sheet(slot_base + (uint32_t)s * slot_bytes, L->chunks[c].size, &tex[lo])) < 0)
 	{
 		memset(&tex[lo], 0, SHEET_MAX * sizeof(tex[0]));
@@ -976,6 +998,7 @@ void decal_stats(decal_stats_t *s, int reset)
 {
 	st.live = (uint16_t)decal_count();
 	*s = st;
+	s->region_peak = sheet_bytes + vert_bytes + slots[0].peak + slots[HL64_WORLD_LAYERS - 1].peak;
 	if (reset)
 	{
 		uint16_t live = st.live, pending = st.pending;

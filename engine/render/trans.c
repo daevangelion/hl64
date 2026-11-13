@@ -482,7 +482,7 @@ void fx_draw_particles(void)
 	tent_draw_studio();
 	gpu_fx_state_lost();
 	part_draw();
-	fx_add_us((uint32_t)(sys_time_us() - t0));
+	fx_add_us(FX_US_PART, (uint32_t)(sys_time_us() - t0));
 }
 
 void fx_draw_trans(void)
@@ -511,7 +511,7 @@ void fx_draw_trans(void)
 	fx_s.st.trans_drawn += (uint32_t)(nitems + ncuts);
 	fx_s.st.trans_dropped += ds.dropped;
 	ds.us = (uint32_t)(sys_time_us() - t0);
-	fx_add_us(ds.us);
+	fx_add_us(FX_US_TRANS, ds.us);
 }
 
 void fx_draw_decals(void)
@@ -529,7 +529,7 @@ void fx_draw_decals(void)
 		log_printf("fx: effects vertex ring full: %lu batches dropped (%lu of %d pairs)\n",
 			(unsigned long)g.drops, (unsigned long)g.pairs, GPU_FX_RING_PAIRS);
 	prev_drops = g.drops;
-	fx_add_us((uint32_t)(sys_time_us() - t0));
+	fx_add_us(FX_US_DECAL, (uint32_t)(sys_time_us() - t0));
 	last = ds;
 }
 

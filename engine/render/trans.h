@@ -39,5 +39,8 @@ typedef struct {
 } fx_draw_stats_t;
 /* Last drawn frame. */
 void	fx_draw_stats(fx_draw_stats_t *s);
+/* The mem command's `mem fx: decals` line: sheet, slots, verts and the
+ * decal region's peak (sheet + verts + the largest sheet each slot held). */
+void	decal_mem_line(void);
 
 #endif
