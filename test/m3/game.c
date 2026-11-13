@@ -56,6 +56,9 @@ int main(int argc, char **argv)
 		fprintf(stderr, "hl64-game: no map %s\n", argv[3]);
 		return 2;
 	}
+	/* boot opened the start map for the free camera: one map per run */
+	if (map != wld_start_map())
+		wld_close(wld_open(wld_start_map()));
 	game_new_campaign();
 	rec_new_campaign(map);
 	slot = wld_open(map)->slot;
@@ -66,7 +69,7 @@ int main(int argc, char **argv)
 		const char *cn;
 
 		if (kind < 0)
-			break;
+			continue;	/* a lump the cook dropped */
 		n++;
 		cn = cname(rec_class(gid));
 		if (kind == REC_KIND_LOGIC || kind == REC_KIND_POINT)

@@ -175,9 +175,57 @@ void	world_lightstyles(void);
 
 static const phy_game_hooks_t game_hooks = { game_think, game_touch, game_blocked };
 
+/* The client effects' sounds and sprites (fx.h FX_A_* sets): ricochets
+ * weapons/ric1-5 (HLSDK world.cpp W_Precache), the func_break.cpp
+ * material debris sounds, and the shipped valve files named for the other
+ * roles (weapons/explode3-5, player/pl_shell1-3, weapons/sshell1-3,
+ * sprites/richo1.spr, sprites/muzzleflash1-3 for flash type % 10 0-2). */
+static void fx_asset_set(int set, const int *defs, int n)
+{
+	res_t ids[FX_ASSET_MAX];
+	int i;
+
+	for (i = 0; i < n; i++)
+		ids[i] = res_def(defs[i]);
+	fx_assets(set, ids, n);
+}
+
+static void game_fx_assets(void)
+{
+	static const int ric[] = { R_WEAPONS_RIC1, R_WEAPONS_RIC2, R_WEAPONS_RIC3,
+		R_WEAPONS_RIC4, R_WEAPONS_RIC5 };
+	static const int expl[] = { R_WEAPONS_EXPLODE3, R_WEAPONS_EXPLODE4, R_WEAPONS_EXPLODE5 };
+	static const int shell[] = { R_PLAYER_PL_SHELL1, R_PLAYER_PL_SHELL2, R_PLAYER_PL_SHELL3 };
+	static const int sshell[] = { R_WEAPONS_SSHELL1, R_WEAPONS_SSHELL2, R_WEAPONS_SSHELL3 };
+	static const int glass[] = { R_DEBRIS_GLASS1, R_DEBRIS_GLASS2, R_DEBRIS_GLASS3 };
+	static const int metal[] = { R_DEBRIS_METAL1, R_DEBRIS_METAL2, R_DEBRIS_METAL3 };
+	static const int flesh[] = { R_DEBRIS_FLESH1, R_DEBRIS_FLESH2, R_DEBRIS_FLESH3,
+		R_DEBRIS_FLESH5, R_DEBRIS_FLESH6, R_DEBRIS_FLESH7 };
+	static const int wood[] = { R_DEBRIS_WOOD1, R_DEBRIS_WOOD2, R_DEBRIS_WOOD3 };
+	static const int concrete[] = { R_DEBRIS_CONCRETE1, R_DEBRIS_CONCRETE2,
+		R_DEBRIS_CONCRETE3 };
+	static const int richo[] = { R_SPR_RICHO1 };
+	static const int muzzle[] = { R_SPR_MUZZLEFLASH1, R_SPR_MUZZLEFLASH2,
+		R_SPR_MUZZLEFLASH3 };
+#define SET(s, a)	fx_asset_set(s, a, (int)(sizeof(a) / sizeof(a[0])))
+	SET(FX_A_RICOCHET_SND, ric);
+	SET(FX_A_EXPLODE_SND, expl);
+	SET(FX_A_SHELL_SND, shell);
+	SET(FX_A_SHOTSHELL_SND, sshell);
+	SET(FX_A_GLASS_SND, glass);
+	SET(FX_A_METAL_SND, metal);
+	SET(FX_A_FLESH_SND, flesh);
+	SET(FX_A_WOOD_SND, wood);
+	SET(FX_A_CONCRETE_SND, concrete);
+	SET(FX_A_RICOCHET_SPR, richo);
+	SET(FX_A_MUZZLE_SPR, muzzle);
+#undef SET
+}
+
 void game_init(void)
 {
 	phy_set_game_hooks(&game_hooks);
+	game_fx_assets();
 	if (game_mon_init)
 		game_mon_init();
 	if (game_items_init)
