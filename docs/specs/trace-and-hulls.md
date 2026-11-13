@@ -13,10 +13,18 @@ and brush-entity contents come only from entities). CLIP and ORIGIN never
 appear in cooked leaves.
 
 - **Point contents** at p (`pfnPointContents`): the hull-0 leaf contents of
-  the world at p, with CURRENT_* reported as WATER. **True point contents**
-  keeps CURRENT_*. Brush entities do not contribute (GoldSrc's point
-  contents is world-only; pmove adds its own physent contents,
-  pmove-host.md) **[probe]**.
+  the world at p, with CURRENT_* reported as WATER — except that a point
+  inside a `func_ladder` brush entity (SOLID_NOT, `skin` = CONTENTS_LADDER;
+  inside = in a SOLID leaf of the entity's hull-0 model at its origin)
+  returns LADDER (−16) whatever the world contents there
+  **[probe:measured T-points]** (702 samples inside ladders; the world
+  there was EMPTY 689 / WATER 13). Other contents brushes (`func_water`)
+  are not yet measured and are expected to behave the same way **[probe]**.
+  Mechanism: each open layer keeps the short list of its contents brush
+  entities; a point tests their linked boxes, then their hull 0.
+- **True point contents** (pmove's `PM_TruePointContents`) stays
+  world-only and keeps CURRENT_* **[probe:measured PM-bot]**; pmove adds
+  physent contents itself (pmove-host.md).
 - A point inside no open layer's global box is SOLID.
 - Tree walk rule: at a node with plane (n, d) the signed distance is
   `n·p − d` (axial nodes: `p[axis] − d`); ≥ 0 → front child, < 0 → back
@@ -63,7 +71,10 @@ Impact rules (behaviour; the mechanism is free):
   sub-segment being split — fraction `(t1 − ε)/(t1 − t2)` for a start in
   front, `(t1 + ε)/(t1 − t2)` behind, clamped to [0, 1], interpolated
   into the whole segment's fraction. This stand-off is what keeps
-  players 1/32 u off walls.
+  players 1/32 u off walls. GoldSrc itself occasionally lands closer
+  (3 of 26 890 world impacts at 0.0023–0.0197 u; cause not established)
+  **[probe:measured T-segments]**; the rule above is expected to reproduce
+  them, and T3 states how they are compared.
 - If that point still classifies SOLID (acute corners), it moves back in
   steps of 0.1 of the sub-segment until it does not, never past the start.
 - Non-solid leaf changes (EMPTY ↔ WATER) are not impacts.
@@ -85,14 +96,22 @@ impact wins, ties to the lower slot.
 Hull k by 2 from the moving box, placed at `o = origin + (hull.mins −
 moving.mins)`.
 
-- Unrotated: local = world − o; end point = local end + o; plane distance
-  += normal·o.
+- Unrotated: local = world − o; end point = local end + o (world space);
+  the plane normal is the model-frame normal (equal to world space here);
+  **the plane distance is not translated** — it stays the distance in the
+  brush model's own frame (a door face at world x = −1264 reports
+  d = −204) **[probe:measured T-entities]** (4699 unrotated brush-entity
+  impacts).
 - Rotated (any angle non-zero): with forward/right/up of `angles`, world p
   → local `((p−o)·forward, −(p−o)·right, (p−o)·up)` (rotation about o, so a
   box with its origin at its feet keeps its expansion along the model's
   axes); after an impact, end point = `start + fraction·(end − start)` in
-  world space, normal rotated back (`n.x·forward − n.y·right + n.z·up`),
-  plane distance = local distance + normal·o **[probe T-rotated]**.
+  world space, normal rotated back to world space (`n.x·forward −
+  n.y·right + n.z·up`), plane distance = the model-frame (local) distance,
+  untranslated and unrotated **[probe:measured T-rotated]** (25 616 rotated
+  impacts). Consequence for callers: for brush-entity hits, `vecPlaneNormal
+  · vecEndPos − flPlaneDist` is not the stand-off; HLSDK game code only
+  uses the normal and end point.
 - `pHit` = the entity if fraction < 1 or start solid.
 
 ### 4.3 Box entities (SOLID_BBOX, SOLID_SLIDEBOX)
@@ -145,13 +164,13 @@ materials"; HLSDK `TEXTURETYPE` letters).
 | # | property | data |
 |---|---|---|
 | T0 | cooked COLL walks equal BSP clipnode walks (contents, path) for every point/segment of the old cook proof | self-contained on the player's BSPs (w64check rules) |
-| T1 | point contents and true point contents equal GoldSrc | probe T-points: 20 000 points per map, ¼ on the 1/16 u lattice |
+| T1 | point contents equals GoldSrc, including LADDER inside every `func_ladder` (702 samples) whatever the world contents there; true point contents (pmove) stays world-only | **[probe:measured T-points]**, PM-bot |
 | T2 | segment traces equal GoldSrc: flags exact, fraction ±1e-5, end ±0.001 u, normal exact, distance ±1e-4 | probe T-segments: 2000 segments ≤ 192 u per map per hull + 200 ≤ 4096 u |
-| T3 | non-solid impacts with fraction in (0,1) and no back-off: plane distance of the end point ∈ [1/32 ± 1e-3] | self-contained |
+| T3 | world impacts with fraction in (0,1): `normal·end − dist` ∈ [1/32 − 1e-3, 1/32 + 1e-3], except where the GoldSrc fixture for the same segment is itself short — GoldSrc has 3 of 26 890 such impacts (stand-off 0.0023–0.0197). Rule: a short impact passes only if T-segments has the same segment and hl64's end point equals GoldSrc's within T2's tolerance; any other short impact fails; the count of short impacts must not exceed GoldSrc's on the same inputs. Brush-entity impacts are excluded (their distance is model-frame, 4.2) | **[probe:measured T-segments]** + self-contained |
 | T4 | end points never classify SOLID in the traced hull | self-contained |
-| T5 | box entities, filters, missile ±15, owner skips, ignore-glass | probe T-entities |
+| T5 | box entities, filters, missile ±15, owner skips, ignore-glass; unrotated brush-entity impacts: end point and normal world space, distance model-frame (4699 impacts) | **[probe:measured T-entities]** |
 | T6 | hull selection for sizes {0, 8, 8.01, 32, 36, 36.01, 64} × z {18, 36, 36.01, 72} | probe T-entities (entities of those sizes traced against a door) |
-| T7 | rotated brushes at yaw 0/30/90/135° and pitched with a feet-origin box | probe T-rotated |
+| T7 | rotated brushes at yaw 0/30/90/135° and pitched with a feet-origin box: end point and normal world space, distance model-frame (25 616 impacts) | **[probe:measured T-rotated]** |
 | T8 | layers: outside every layer is SOLID; a B-layer trace in global coordinates equals the B-local trace + `g_B` | self-contained |
 | T9 | all-solid result fields | probe T-allsolid |
 | T10 | hitboxes: head/chest/leg shots on scientist, barney, hgrunt, zombie at 4 poses give GoldSrc's hitgroups and end points ±0.01 u | probe T-hitbox |

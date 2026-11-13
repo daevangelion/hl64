@@ -50,7 +50,7 @@ In order of authority:
 
 1. **GoldSrc probe** (decision D10). Valve's Linux dedicated server
    (steamcmd app 90, anonymous download) running a game DLL built from the
-   HLSDK in `test/goldsrc-probe/` (HLSDK licence) on the player's Uplink /
+   HLSDK in `test/oracle/` (HLSDK licence) on the player's Uplink /
    Hazard maps. The probe creates entities and calls engine functions
    (`pfnTraceLine`, `pfnTraceHull`, `pfnTraceModel`, `pfnPointContents`,
    `pfnSetOrigin`, `pfnWalkMove`, `pfnDropToFloor`, movetypes and
@@ -72,7 +72,10 @@ In order of authority:
 
 A property marked **[probe]** is calibrated or confirmed by an oracle-1
 capture before its milestone; until then the stated value is the expected
-GoldSrc behaviour.
+GoldSrc behaviour. A property marked **[probe:measured <capture>]** states
+what that capture measured (`$HL64_FIXTURES/goldsrc/<spec>/<capture>/`);
+where a measurement contradicted an earlier expectation, the measurement
+replaced it.
 
 ## Tests and fixtures
 
@@ -92,7 +95,7 @@ Captures owed before the milestone that needs them:
 | capture | oracle | for |
 |---|---|---|
 | T-points, T-segments, T-entities, T-rotated, T-hitbox, T-allsolid | probe | trace-and-hulls.md (M2) |
-| A-touch, A-shape | probe | area-links-and-touch.md (M2) |
+| A-touch, A-shape (taken); A-order (trigger pair touch order, owed before M3) | probe | area-links-and-touch.md (M2, A-order M3) |
 | P-toss, P-bounce, P-step, P-push, P-rotate, P-pushable, P-walkmove | probe | physics-movetypes.md (M3) |
 | K-think, K-pusher, K-alloc, K-settle | probe | think-and-time.md (M3) |
 | PM-bot runs (walk, run, jump, duck, ladder, water, stairs) | probe | pmove-host.md (M2) |

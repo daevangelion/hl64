@@ -67,7 +67,8 @@ here).
 
 | service | semantics |
 |---|---|
-| point contents (p) | world true contents at p (CURRENT_* kept, pm_shared maps them) unless a physent with a contents skin contains p (box test then hull 0 of its model), whose skin then wins; also returns the "true" contents |
+| point contents (p) | `PM_PointContents`: world contents at p unless a physent with a contents skin contains p (box test then hull 0 of its model), whose skin then wins; the "true" output is the world's |
+| true point contents (p) | `PM_TruePointContents`: world contents only, CURRENT_* kept; brush entities, ladders included, never contribute **[probe:measured PM-bot]** |
 | hull point contents (hull, node, p) | walk a hull handle from node (trace-and-hulls.md 1); the handle is opaque to the game except for the root field pm_shared reads |
 | hull for bsp (physent, offset out) | the hull of that physent's model for the current `usehull` (0 → hull 1, 1 → hull 3, 2 → hull 0, 3 → hull 2), and the offset as trace-and-hulls.md 4.2 |
 | player trace (start, end, flags, ignore physent) | trace the player box for `usehull` against every physent in index order (flags: studio-ignore, glass-ignore, world-only per HLSDK `pm_defs.h`), combined as trace-and-hulls.md 4.4 step 5; **then if allsolid, set startsolid; if startsolid, fraction := 0** (the pmove rule, unlike server traces); `ent` = physent index, −1 none |
@@ -101,7 +102,9 @@ mistakes. All on flat ground unless stated.
 - Ducking takes 0.4 s to switch hulls on the ground (eyes ease down) and
   is instant in the air (feet lift 18 u).
 - Standing up is refused where the standing hull does not fit.
-- Ladder: pressing forward while facing the ladder climbs at 200 u/s.
+- Ladder (pm_shared `PM_LadderMove`): holding forward on a ladder climbs at
+  200 u/s with a level view and 282.84 u/s (200·√2) looking 45° up
+  (pitch −45) **[probe:measured PM-bot]**.
 - Water: waterlevel 1/2/3 by feet/waist/eyes; swimming speed ≤ 0.8 ×
   maxspeed; no gravity at waterlevel ≥ 2.
 - Started inside solid: pm_shared's stuck test nudges the player out, as
@@ -129,3 +132,4 @@ from the probe runs.
 | PM6 | riding: standing on a moving lift keeps the player on it (pushed by the lift; FL_ONGROUND kept; no velocity added) | synthetic |
 | PM7 | caps: 70 crates around the player keep the 64 nearest, log once | synthetic |
 | PM8 | compiled route `m2-walk` in hldemo1 (stairs, duck crawl under pipes, ladder, drop) passes its `WAIT_NEAR` checks | route |
+| PM9 | ladder climb speed: 200 u/s at pitch 0 and 282.84 u/s at pitch −45 (±0.01), constant over the climb | **[probe:measured PM-bot]** ladder runs |
