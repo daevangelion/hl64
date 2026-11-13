@@ -678,13 +678,14 @@ static void rollup(void)
 
 		studio_stats(&ss, 1);
 		log_printf("prof studio_us avg=%lu max=%lu drawn=%lu bones_us=%lu draw_us=%lu "
-			"pool=%lu pool_peak=%lu sync=%lu models=%lu anims=%lu culled=%lu pending=%lu "
-			"nofit=%lu dropped=%lu\n",
+			"pool=%lu pool_peak=%lu want_peak=%lu soft=%lu sync=%lu models=%lu anims=%lu "
+			"culled=%lu pending=%lu nofit=%lu dropped=%lu\n",
 			(unsigned long)(ss.frames ? ss.us_sum / ss.frames : 0), (unsigned long)ss.us_max,
 			(unsigned long)(ss.frames ? ss.drawn / ss.frames : 0),
 			(unsigned long)(ss.frames ? ss.bones_us / ss.frames : 0),
 			(unsigned long)(ss.frames ? ss.draw_us / ss.frames : 0),
 			(unsigned long)ss.pool_used, (unsigned long)ss.pool_peak,
+			(unsigned long)ss.want_peak, (unsigned long)ss.soft,
 			(unsigned long)ss.sync_loads, (unsigned long)ss.models, (unsigned long)ss.anims,
 			(unsigned long)ss.culled, (unsigned long)ss.pending, (unsigned long)ss.nofit,
 			(unsigned long)ss.dropped);

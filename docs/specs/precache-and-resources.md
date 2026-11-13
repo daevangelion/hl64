@@ -38,9 +38,18 @@ Conventions: [README.md](README.md).
 - Using a resource that was not precached works (it streams on first use)
   and logs once in debug builds; GoldSrc would error — not reachable by the
   shipped game, and the debug log keeps the game honest.
-- The studio pool's eviction classes (SA2 §8.1) apply: models of live
-  entities, the player and the view model are pinned; client-visible and
-  home-map interests are soft; others cold.
+- The studio pool's eviction classes (SA2 §8.1; engine/render/studio.c
+  `soft_residency`): pinned = the models of live entities of every open
+  map (the player's included) and the view model (info, mesh, every
+  animation), reads in flight; kept = every info (a record's hydration
+  reads its model's info: the map-open and ring precache keep them) and a
+  small model's prefetched animations while it has interest; soft = the
+  meshes and other animations of models no live entity uses (neighbour-
+  and home-map precache entries, prefetches), freed once unused for 5 s.
+  The LRU still evicts kept and soft blocks (never pinned ones) when an
+  allocation finds no room. `prof studio_us` reports `want_peak` (pinned
+  models' info + mesh, animations in use, reads in flight) beside the
+  resident `pool_peak`; the gate's region rule takes the resident peak.
 
 ## 3. Carried weapons
 

@@ -10,7 +10,9 @@
  *    first visible, recorded once by the platform) and the per-sequence
  *    animation chunks (read asynchronously when a sequence is wanted;
  *    studio_anim returns NULL meanwhile and the pose holds); LRU eviction
- *    of what the current frame does not use;
+ *    of what the current frame does not use when an allocation finds no
+ *    room, and soft residency (soft_residency: the meshes and animations
+ *    of models no live entity uses are freed after 5 s unused);
  *  - the draw of the visible studio entities: the eye leaf's sector list
  *    and the view frustum against the entity's linked box, bones from
  *    game_studio_setup_bones into the platform's double-buffered matrix
@@ -70,6 +72,8 @@
  * entities) never read an animation synchronously. */
 #define SMALL_ANIMS	(32 * 1024)
 #define PF_FREE_REQS	8	/* the prefetch leaves this many read slots free */
+#define SOFT_GRACE_S	5.0f	/* a soft block unused this long is freed (soft_residency) */
+#define TIME_RING	256	/* studio frames whose eng_time is kept (age_s) */
 
 enum { U_ABSENT, U_LOADING, U_LANDED, U_RESIDENT, U_BAD };
 
@@ -139,6 +143,7 @@ static sstep_t		steps[HL64_MAX_ENTITIES];
 #define STEP_WORDS	((HL64_MAX_ENTITIES + 31) / 32)
 static uint32_t		step_on[STEP_WORDS];
 static uint32_t		frame = 1;
+static float		ftime[TIME_RING];	/* eng_time of studio frame f at [f % TIME_RING] */
 static studio_stats_t	st;
 static studio_view_t	view;
 static int		view_set;
@@ -487,8 +492,9 @@ static int evict_one(void)
 	if (kind == 2)
 	{
 		mem_pool_free(&pool, anims[idx].blk, 0);
+		anims[idx].blk = NULL;
 		anims[idx].model = 0;
-		anims[idx].st = U_ABSENT;
+		anims[idx].st = U_BAD;	/* a used slot: anim_slot probes past it */
 	}
 	else if (kind == 1)
 	{
@@ -1047,7 +1053,84 @@ static int is_studio(int e)
 	return ent_is_live(e) && RES_KIND(ent_rnd(e)->model) == RES_K_MODEL;
 }
 
-/* Step 9: pins, wanted chunks, STEP placements (after the entity pass). */
+/* Seconds since studio frame f (the time ring; older than it: long ago). */
+static float age_s(uint32_t f, double now)
+{
+	if (frame - f >= TIME_RING)
+		return 1e30f;
+	return (float)(now - ftime[f % TIME_RING]);
+}
+
+/* Soft residency (the old tree's studio eviction classes, stream-arch-v2
+ * 6.8 note): pinned = the models of live entities (either map) and the
+ * view model (info, mesh, every animation), in-flight reads, the infos
+ * (a record's hydration reads its model's info: the records' and the
+ * ring's precache keep them; the LRU evicts them under pressure); a
+ * small model's prefetched animations while it has residency interest
+ * (the temp-entity / view paths never read them synchronously). Soft:
+ * the meshes and the other animations of models no live entity uses,
+ * neighbour-map precache entries and 5 s-grace prefetches included:
+ * freed once unused for SOFT_GRACE_S instead of filling the pool until
+ * an allocation fails. The want (pinned and in use: pinned models'
+ * info + mesh, animations used this frame or the last, in-flight reads)
+ * peaks into st.want_peak. */
+static void soft_residency(double now)
+{
+	uint32_t want = 0;
+	int i;
+
+	for (i = 0; i < HL64_STUDIO_ANIMS; i++)
+	{
+		sanim_t *a = &anims[i];
+		const smodel_t *m;
+
+		if (!a->model || !a->blk || a->st < U_LOADING || a->st > U_RESIDENT)
+			continue;
+		m = &models[a->model - 1];
+		if (a->st != U_RESIDENT || a->used + 1 >= frame)
+			want += a->blk->size;
+		else if (m->pinned != frame && age_s(a->used, now) > SOFT_GRACE_S
+			&& !(m->asize <= SMALL_ANIMS && res_interest(RES_MAKE(RES_K_MODEL, a->model - 1))))
+		{
+			mem_pool_free(&pool, a->blk, 0);
+			a->blk = NULL;
+			a->model = 0;
+			a->st = U_BAD;		/* a used slot: anim_slot probes past it */
+			st.soft++;
+		}
+	}
+	for (i = 0; i < HL64_STUDIO_MODELS; i++)
+	{
+		smodel_t *m = &models[i];
+
+		if (m->mesh_st == U_LOADING || m->mesh_st == U_LANDED)
+			want += m->mesh_blk->size;
+		if (m->pinned == frame)
+		{
+			if (m->info_st == U_RESIDENT)
+				want += m->info_blk->size;
+			if (m->mesh_st == U_RESIDENT)
+				want += m->mesh_blk->size;
+		}
+		else if (m->mesh_st == U_RESIDENT && age_s(m->mesh_used, now) > SOFT_GRACE_S)
+		{
+			gpu_studio_release(m->gstate);
+			mem_pool_free(&spool, m->gstate_blk, 0);
+			mem_pool_free(&pool, m->mesh_blk, 0);
+			m->mesh = NULL;
+			m->mesh_st = U_ABSENT;
+			st.soft++;
+		}
+	}
+	for (i = 0; i < ILOADS; i++)
+		if (iloads[i].idx >= 0 && iloads[i].phase == 2)
+			want += models[iloads[i].idx].info_blk->size;
+	if (want > st.want_peak)
+		st.want_peak = want;
+}
+
+/* Step 9: pins, wanted chunks, STEP placements (after the entity pass),
+ * soft residency. */
 void studio_frame(void)
 {
 	double now = eng_time();
@@ -1055,6 +1138,7 @@ void studio_frame(void)
 	int e, i, w;
 
 	frame++;
+	ftime[frame % TIME_RING] = (float)now;
 	mem_pool_retire(&pool, frame);
 	info_prefetch(0);
 	anim_prefetch();
@@ -1116,6 +1200,9 @@ void studio_frame(void)
 			if (b & 1)
 				steps[i].valid = 0;
 	}
+	if (view_set && (i = model_index(view.model)) >= 0)
+		models[i].pinned = frame;
+	soft_residency(now);
 }
 
 /* Placement drawn for e (map-local): STEP entities between their last
@@ -1902,12 +1989,14 @@ void studio_stats(studio_stats_t *s, int reset)
 	if (reset)
 	{
 		uint32_t models_n = st.models, peak = st.pool_peak, anims_n = st.anims;
-		uint32_t play = st.sync_play;
+		uint32_t play = st.sync_play, want = st.want_peak, soft = st.soft;
 
 		memset(&st, 0, sizeof(st));
 		st.models = models_n;
 		st.pool_peak = peak;
 		st.anims = anims_n;
 		st.sync_play = play;
+		st.want_peak = want;
+		st.soft = soft;
 	}
 }

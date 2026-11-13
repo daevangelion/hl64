@@ -88,9 +88,13 @@ typedef struct {
 	uint32_t	drawn, bones_us, draw_us, us_max;
 	uint32_t	frames, us_sum, culled, pending, nofit, dropped;
 	uint32_t	sync_play;	/* since boot: sync reads outside load I/O */
+	uint32_t	want_peak;	/* since boot: pinned + in-use bytes (live entities' and the
+					 * view model's info + mesh, animations in use, reads in
+					 * flight) at once; pool_peak is what was resident */
+	uint32_t	soft;		/* since boot: soft blocks freed after their grace */
 } studio_stats_t;
-/* Counters since the last reset (pool fields: now / peak; sync_play is
- * never reset). */
+/* Counters since the last reset (pool fields: now / peak; sync_play,
+ * want_peak and soft are never reset). */
 void		studio_stats(studio_stats_t *s, int reset);
 
 #ifdef HL64_HOST
