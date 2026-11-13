@@ -179,7 +179,7 @@ from the probe runs.
 | PM5 | touch list: walking into a crate calls crate.touch once per frame; walking into a trigger calls trigger.touch through linking | synthetic |
 | PM6 | riding: standing on a moving lift keeps the player on it (pushed by the lift; FL_ONGROUND kept; no velocity added) | synthetic |
 | PM7 | caps: 70 crates around the player keep the 64 nearest, log once | synthetic |
-| PM8 | compiled route `m2-walk` in hldemo1 (stairs, duck crawl under pipes, ladder, drop) passes its `WAIT_NEAR` checks | route |
+| PM8 | compiled route `m2-walk` in hldemo1 (start corridor, stairs up, standing and running jump, duck and duck-walk, run down the stairs with a drop) passes its `WAIT_NEAR` checks on the host and the cart at a fixed 1/30 s frame time, the cart's player records identical to the host's (`test/run/m2.sh`); the ladder segment joins in M3 with the maps' func_ladder records | route |
 | PM9 | ladder climb speed: 200 u/s at pitch 0 and 282.84 u/s at pitch −45 (±0.01), constant over the climb | **[probe:measured PM-bot]** ladder runs |
 | PM10 | duck finish on the ground on the 41st move after the press at msec 10 and the 13th at msec 33 (timer strictly below 600 ms; not at exactly 600); msec 50 (9th move) follows from the rule | **[probe:measured PM-bot]** duck runs (msec 10, 33) + self-contained (msec 50) |
 | PM11 | ground entity unchanged while airborne (jump, fall), FL_ONGROUND cleared; updated on landing | **[probe:measured PM-bot]** jump runs |

@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: MIT
+# M2 gate walk (docs/architecture.md 17 M2; route syntax and semantics:
+# docs/formats/route-bytecode.md). The player alone on hldemo1, moved by
+# held buttons through pm_shared: the start corridor south from the intro
+# teleport destination (info_teleport_destination tele_init_destination),
+# up the stairs to the dome hall, a standing jump, a running jump, a duck,
+# a duck-walk, the stand-up and a run back down the stairs that leaves the
+# steps (a drop to the corridor floor). No entities before M3: doors,
+# movers and triggers are not there, only the world. Positions are map-local; the
+# 0.01 u checkpoints are the host's positions at a fixed 1/30 s frame time
+# (test/run/m2.sh), which the cart must reproduce bit for bit.
+#
+# Ladder segment: added in M3, on a ladder map (hldemo2/hldemo3/t0a0*),
+# once the map's func_ladder exists as a real record; until then ladders
+# are covered by PM9 against the GoldSrc PM-bot fixtures.
+waitmap hldemo1 10
+# the corridor: tele_init_destination (-2048 744 0) + 37, facing south
+setpos -2048 744 37 0 270
+waitnear -2048 744 36.03125 0.01 1
+stats start
+wait 0.1
++forward
+waitnear -2048 -300 36.03125 24 5
+stats corridor
+waitnear -2048 -288.889313 36.03125 0.01 1
+# the stairs climb 160 u to the dome hall (steps of <= 18 u: no jump)
+waitnear -2048 -700 196.03125 24 5
+-forward
+wait 1
+stats stairs
+waitnear -2048 -738.201233 196.03125 0.01 1
+wait 0.1
+# standing jump in the hall: apex 45 u up (sv_gravity 800), back on the floor
+setpos -2048 -800 197 0 0
+waitnear -2048 -800 196.03125 0.01 1
++jump
+wait 0.1
+-jump
+waitnear -2048 -800 241 1.5 2
+waitnear -2048 -800 196.03125 0.01 2
+stats jump
+wait 0.1
+# running jump east along the hall (checked in the air 0.3 s after the
+# take-off), then on to the east wall
++forward
+wait 0.5
++jump
+wait 0.1
+-jump
+wait 0.2
+stats runjump
+waitnear -1764.86902 -800 239.562836 0.01 1
+waitnear -1688.03125 -800 196.03125 0.01 5
+-forward
+stats wall
+wait 0.1
+# duck: hull 1 (origin 18 u down), duck-walk west at a third of the speed,
+# stand up
++duck
+waitnear -1688.03125 -800 178.03125 0.01 2
+look 0 180
++forward
+wait 1
+-forward
+wait 0.5
+stats duckwalk
+waitnear -1804.18542 -800 178.03125 0.01 1
+-duck
+waitnear -1804.18542 -800 196.03125 0.01 1
+wait 0.5
+stats duckend
+# back down the stairs at a run: the player leaves the steps and drops
+# (airborne 0.4 s after the start), lands on the corridor floor
+setpos -2048 -760 197 0 90
+waitnear -2048 -760 196.03125 0.01 1
++forward
+wait 0.4
+stats drop
+waitnear -2048 -624.71051 182.963242 0.01 1
+waitnear -2048 -300 36.03125 24 5
+-forward
+wait 1
+stats end
+waitnear -2048 -259.878723 36.03125 0.01 1
+wait 0.2
+pass
