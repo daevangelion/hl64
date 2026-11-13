@@ -105,7 +105,7 @@ hl64/
     hud/                  HUD, view
     defs/                 classes.def, funcs.def, res.def (read by the cook)
   tools/                  MIT cook tools; tools/hlsdk/ HLSDK-licensed parts
-  test/  routes/ (text sources) fixtures/ goldsrc-probe/ (HLSDK, 15) run/
+  test/  routes/ (text sources) fixtures/ oracle/ (GoldSrc probe, HLSDK, 15) run/
   docs/  architecture.md PROVENANCE.md provenance-audit.md specs/ formats/
 ```
 
