@@ -343,11 +343,15 @@ static Cmd MakeCmd( const Run &r, int f )
 // ---------------------------------------------------------------- logging
 
 static char s_pmInfo[2048];
+static int s_peInfo[MAX_PHYSENTS], s_npe;
 
 static void PMBot_Post( playermove_t *pm )
 {
 	int l = snprintf( s_pmInfo, sizeof( s_pmInfo ), "\"hull\":%d,\"pmt\":%.9g,\"onground\":%d,\"oldbuttons\":%d,\"pe\":[",
 		pm->usehull, (double)pm->time, pm->onground, pm->oldbuttons );
+	s_npe = 0;
+	for ( int i = 0; i < pm->numphysent && i < MAX_PHYSENTS; i++ )
+		s_peInfo[s_npe++] = pm->physents[i].info;
 	for ( int i = 0; i < pm->numphysent && l < (int)sizeof( s_pmInfo ) - 64; i++ )
 		l += snprintf( s_pmInfo + l, sizeof( s_pmInfo ) - l, "%s[%d,%d,%d]", i ? "," : "", pm->physents[i].info, pm->physents[i].solid, pm->physents[i].skin );
 	l += snprintf( s_pmInfo + l, sizeof( s_pmInfo ) - l, "],\"me\":[" );
@@ -370,6 +374,36 @@ static void PrPlayer( edict_t *b )
 		(double)gpGlobals->time, VA( v->origin ), VA( v->velocity ), VA( v->basevelocity ), v->flags, VA( v->view_ofs ),
 		v->waterlevel, v->watertype, Probe_Idx( v->groundentity ), v->bInDuck, v->flDuckTime, (double)v->flFallVelocity,
 		VA( v->punchangle ), v->movetype, VA( v->mins ), VA( v->maxs ) );
+}
+
+// Non-brush physents (studio / box entities) are not on the brush_ents line:
+// print each the first time it is a physent in a run and again whenever its
+// state changed, before the frame that uses it.
+static bool s_entSeen[2048];
+static Vector s_entO[2048], s_entMins[2048], s_entMaxs[2048];
+static int s_entSolid[2048];
+
+static void PrPhysentEnts( int run )
+{
+	bool any = false;
+	for ( int i = 0; i < s_npe; i++ )
+	{
+		int idx = s_peInfo[i];
+		if ( idx <= 0 || idx >= 2048 ) continue;
+		edict_t *e = INDEXENT( idx );
+		if ( !e || e->free || ( e->v.model && STRING( e->v.model )[0] == '*' ) ) continue;
+		if ( s_entSeen[idx] && s_entO[idx] == e->v.origin && s_entMins[idx] == e->v.mins && s_entMaxs[idx] == e->v.maxs && s_entSolid[idx] == e->v.solid )
+			continue;
+		s_entSeen[idx] = true;
+		s_entO[idx] = e->v.origin;
+		s_entMins[idx] = e->v.mins;
+		s_entMaxs[idx] = e->v.maxs;
+		s_entSolid[idx] = e->v.solid;
+		fprintf( s_f, any ? "," : "{\"run\":%d,\"ents\":[", run );
+		Probe_PrEnt( s_f, e );
+		any = true;
+	}
+	if ( any ) fprintf( s_f, "]}\n" );
 }
 
 // ---------------------------------------------------------------- capture
@@ -452,12 +486,15 @@ bool Cap_PMBot( int step )
 		PrPlayer( bot );
 		fprintf( s_f, "}}\n" );
 		frame = 0;
+		memset( s_entSeen, 0, sizeof( s_entSeen ) );
 	}
 	Cmd c = MakeCmd( r, frame );
 	s_pmInfo[0] = 0;
+	s_npe = 0;
 	g_probePmPost = PMBot_Post;
 	Probe_BotMove( c.ang, c.fwd, c.side, c.up, c.buttons, r.msec );
 	g_probePmPost = NULL;
+	PrPhysentEnts( run );
 	fprintf( s_f, "{\"run\":%d,\"f\":%d,\"cmd\":{\"a\":" VF ",\"fm\":%.9g,\"sm\":%.9g,\"um\":%.9g,\"b\":%d,\"ms\":%d},",
 		run, frame, VA( c.ang ), (double)c.fwd, (double)c.side, (double)c.up, c.buttons, r.msec );
 	PrPlayer( bot );
@@ -468,4 +505,15 @@ bool Cap_PMBot( int step )
 		run++;
 	}
 	return false;
+}
+
+// World stairs for other captures (P-walkmove): the PM-bot finder on
+// candidates drawn from `capture`'s own seed. `start` is a standing player
+// origin (hull 1) at the foot of the stairs.
+bool Probe_FindStairs( const char *capture, Vector &start, float &yaw, char *where )
+{
+	static Vector cand[600], nrm[600];
+	s_rng.Seed( Probe_Map(), capture );
+	int n = FloorCandidates( cand, nrm, 600 );
+	return FindStairs( cand, nrm, n, start, yaw, where );
 }

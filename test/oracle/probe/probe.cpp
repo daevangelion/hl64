@@ -35,6 +35,8 @@ extern "C" void PM_Move( struct playermove_s *ppmove, int server );
 FILE *g_probeTouchLog;
 const char *g_probePhase = "";
 int g_probeCase;
+bool g_probeLive;
+ProbeTouchFn g_probeTouchFn;
 Vector g_probeWorldMins, g_probeWorldMaxs;
 int g_probeFrame;
 float g_probeScale = 1.0f;
@@ -42,18 +44,36 @@ ProbePmFn g_probePmPre, g_probePmPost;
 
 static char s_outDir[512] = "/scratch/hl64/fixtures";
 
-struct ProbeCapture { const char *name; const char *spec; ProbeStepFn fn; };
+// Groups: m2 and m3 captures run with map triggers disabled; live captures
+// keep map triggers linked as the map left them (touches are logged and not
+// dispatched) and must run in a server of their own.
+enum { G_M2, G_M3, G_LIVE };
+struct ProbeCapture { const char *name; const char *spec; ProbeStepFn fn; int group; };
 static const ProbeCapture s_caps[] =
 {
-	{ "T-points",   "trace-and-hulls",      Cap_TPoints },
-	{ "T-segments", "trace-and-hulls",      Cap_TSegments },
-	{ "T-allsolid", "trace-and-hulls",      Cap_TAllsolid },
-	{ "T-entities", "trace-and-hulls",      Cap_TEntities },
-	{ "T-rotated",  "trace-and-hulls",      Cap_TRotated },
-	{ "T-hitbox",   "trace-and-hulls",      Cap_THitbox },
-	{ "A-touch",    "area-links-and-touch", Cap_ATouch },
-	{ "A-shape",    "area-links-and-touch", Cap_AShape },
-	{ "PM-bot",     "pmove-host",           Cap_PMBot },
+	{ "T-points",   "trace-and-hulls",      Cap_TPoints, G_M2 },
+	{ "T-segments", "trace-and-hulls",      Cap_TSegments, G_M2 },
+	{ "T-allsolid", "trace-and-hulls",      Cap_TAllsolid, G_M2 },
+	{ "T-entities", "trace-and-hulls",      Cap_TEntities, G_M2 },
+	{ "T-rotated",  "trace-and-hulls",      Cap_TRotated, G_M2 },
+	{ "T-hitbox",   "trace-and-hulls",      Cap_THitbox, G_M2 },
+	{ "A-touch",    "area-links-and-touch", Cap_ATouch, G_M2 },
+	{ "A-shape",    "area-links-and-touch", Cap_AShape, G_M2 },
+	{ "PM-bot",     "pmove-host",           Cap_PMBot, G_M2 },
+	{ "K-settle",   "think-and-time",       Cap_KSettle, G_M3 },
+	{ "K-alloc",    "think-and-time",       Cap_KAlloc, G_M3 },
+	{ "K-think",    "think-and-time",       Cap_KThink, G_M3 },
+	{ "K-pusher",   "think-and-time",       Cap_KPusher, G_M3 },
+	{ "P-toss",     "physics-movetypes",    Cap_PToss, G_M3 },
+	{ "P-bounce",   "physics-movetypes",    Cap_PBounce, G_M3 },
+	{ "P-step",     "physics-movetypes",    Cap_PStep, G_M3 },
+	{ "P-push",     "physics-movetypes",    Cap_PPush, G_M3 },
+	{ "P-rotate",   "physics-movetypes",    Cap_PRotate, G_M3 },
+	{ "P-pushable", "physics-movetypes",    Cap_PPushable, G_M3 },
+	{ "P-walkmove", "physics-movetypes",    Cap_PWalkmove, G_M3 },
+	{ "W-water",    "trace-and-hulls",      Cap_WWater, G_M3 },
+	{ "L-illum",    "lightstyles",          Cap_LIllum, G_M3 },
+	{ "A-order",    "area-links-and-touch", Cap_AOrder, G_LIVE },
 };
 #define NUM_CAPS ( (int)( sizeof( s_caps ) / sizeof( s_caps[0] ) ) )
 
@@ -62,7 +82,13 @@ static bool s_prepared, s_quitWhenDone;
 static float s_startAt;
 static edict_t *s_bot;
 static Vector s_botPark;
-static char s_removed[4096], s_disabled[4096];
+static char s_removed[4096], s_disabled[4096], s_live[4096];
+
+// The map's entity lump (Probe_Prepare): one record per block, worldspawn 0.
+struct LumpEnt { char cls[48]; char model[16]; char tn[48]; Vector o; bool hasO; };
+static LumpEnt *s_lump;
+static int s_nlump;
+static void ParseLump( const byte *bsp, int len );
 
 // ---------------------------------------------------------------- rng
 
@@ -150,12 +176,13 @@ FILE *Probe_Open( const char *spec, const char *capture, const ProbeRng *rng )
 		"\"seed\":%u,\"time\":%.9g,\"frametime\":%.9g,\"host_framerate\":%.9g,"
 		"\"sv_gravity\":%.9g,\"sv_maxspeed\":%.9g,\"sv_stepsize\":%.9g,\"maxclients\":%d,"
 		"\"world_mins\":" VF ",\"world_maxs\":" VF ","
-		"\"removed_monsters\":[%s],\"disabled_triggers\":[%s]}}\n",
+		"\"removed_monsters\":[%s],\"disabled_triggers\":[%s]%s%s%s}}\n",
 		capture, spec, Probe_Map(), PROBE_VERSION, rng ? rng->s : 0u,
 		(double)gpGlobals->time, (double)gpGlobals->frametime, (double)CVAR_GET_FLOAT( "host_framerate" ),
 		(double)CVAR_GET_FLOAT( "sv_gravity" ), (double)CVAR_GET_FLOAT( "sv_maxspeed" ),
 		(double)CVAR_GET_FLOAT( "sv_stepsize" ), gpGlobals->maxClients,
-		VA( g_probeWorldMins ), VA( g_probeWorldMaxs ), s_removed, s_disabled );
+		VA( g_probeWorldMins ), VA( g_probeWorldMaxs ), s_removed, s_disabled,
+		g_probeLive ? ",\"live_triggers\":[" : "", g_probeLive ? s_live : "", g_probeLive ? "]" : "" );
 	Probe_PrBrushEnts( f );
 	return f;
 }
@@ -226,6 +253,7 @@ void CProbeEnt::Touch( CBaseEntity *pOther )
 			"\"self_solid\":%d,\"other_solid\":%d,\"other_o\":" VF "}\n",
 			g_probeCase, g_probePhase, g_probeFrame, (double)gpGlobals->time, entindex(), pOther ? pOther->entindex() : -1,
 			pev->solid, pOther ? pOther->pev->solid : -1, VA( pOther ? pOther->pev->origin : g_vecZero ) );
+	if ( g_probeTouchFn ) g_probeTouchFn( edict(), pOther ? pOther->edict() : NULL );
 	switch ( m_touchMode )
 	{
 	case PT_SELF_NOT:
@@ -239,6 +267,67 @@ void CProbeEnt::Touch( CBaseEntity *pOther )
 		if ( pOther && !pOther->IsPlayer() ) UTIL_Remove( pOther );
 		break;
 	}
+}
+
+// Think as the engine called it: time is the time the engine set for the
+// think, ltime the pusher clock, nextthink already cleared by the engine.
+void CProbeEnt::Think( void )
+{
+	if ( g_probeTouchLog )
+		fprintf( g_probeTouchLog, "{\"ev\":\"think\",\"case\":%d,\"frame\":%d,\"t\":%.9g,\"ft\":%.9g,\"self\":%d,\"ltime\":%.9g,\"nt\":%.9g,\"o\":" VF ",\"v\":" VF "}\n",
+			g_probeCase, g_probeFrame, (double)gpGlobals->time, (double)gpGlobals->frametime, entindex(),
+			(double)pev->ltime, (double)pev->nextthink, VA( pev->origin ), VA( pev->velocity ) );
+	m_tag++;
+	switch ( m_thinkMode )
+	{
+	case TH_RESCHED:
+		if ( m_thinkCount == 0 || m_tag < m_thinkCount )
+			pev->nextthink = ( pev->movetype == MOVETYPE_PUSH ? pev->ltime : gpGlobals->time ) + m_period;
+		break;
+	case TH_SET_OTHER:
+		if ( (CBaseEntity *)m_other )
+		{
+			m_other->pev->nextthink = gpGlobals->time;
+			if ( g_probeTouchLog )
+				fprintf( g_probeTouchLog, "{\"ev\":\"set_nextthink\",\"case\":%d,\"frame\":%d,\"self\":%d,\"other\":%d,\"nt\":%.9g}\n",
+					g_probeCase, g_probeFrame, entindex(), m_other->entindex(), (double)gpGlobals->time );
+		}
+		break;
+	case TH_STOP:
+		pev->velocity = pev->avelocity = g_vecZero;
+		break;
+	}
+}
+
+void CProbeEnt::Blocked( CBaseEntity *pOther )
+{
+	if ( g_probeTouchLog )
+		fprintf( g_probeTouchLog, "{\"ev\":\"blocked\",\"case\":%d,\"frame\":%d,\"t\":%.9g,\"self\":%d,\"other\":%d,\"ltime\":%.9g,\"o\":" VF ",\"other_o\":" VF "}\n",
+			g_probeCase, g_probeFrame, (double)gpGlobals->time, entindex(), pOther ? pOther->entindex() : -1,
+			(double)pev->ltime, VA( pev->origin ), VA( pOther ? pOther->pev->origin : g_vecZero ) );
+}
+
+void CProbeEnt::Use( CBaseEntity *pActivator, CBaseEntity *pCaller, USE_TYPE useType, float value )
+{
+	if ( g_probeTouchLog )
+		fprintf( g_probeTouchLog, "{\"ev\":\"use\",\"case\":%d,\"frame\":%d,\"t\":%.9g,\"self\":%d,\"target\":\"%s\",\"caller\":%d,\"caller_class\":\"%s\",\"type\":%d}\n",
+			g_probeCase, g_probeFrame, (double)gpGlobals->time, entindex(), STRING( pev->targetname ),
+			pCaller ? pCaller->entindex() : -1, pCaller ? STRING( pCaller->pev->classname ) : "", (int)useType );
+}
+
+// Live captures: a touch of a map entity is logged and swallowed, so no
+// map logic (level change, damage, teleport, item pickup) ever runs.
+bool Probe_Touch( edict_t *touched, edict_t *other )
+{
+	if ( !g_probeLive || !touched || FClassnameIs( touched, "probe_ent" ) )
+		return false;
+	if ( g_probeTouchLog )
+		fprintf( g_probeTouchLog, "{\"ev\":\"touch\",\"case\":%d,\"phase\":\"%s\",\"frame\":%d,\"t\":%.9g,\"self\":%d,\"other\":%d,"
+			"\"self_solid\":%d,\"other_solid\":%d,\"other_o\":" VF "}\n",
+			g_probeCase, g_probePhase, g_probeFrame, (double)gpGlobals->time, ENTINDEX( touched ), other ? ENTINDEX( other ) : -1,
+			touched->v.solid, other ? other->v.solid : -1, VA( other ? other->v.origin : g_vecZero ) );
+	if ( g_probeTouchFn ) g_probeTouchFn( touched, other );
+	return true;
 }
 
 CProbeEnt *Probe_Ent( int solid, int movetype, const Vector &mins, const Vector &maxs, const Vector &org )
@@ -324,6 +413,122 @@ bool Probe_FloorBelow( const Vector &p, int hull, float maxDrop, Vector &origin,
 	return true;
 }
 
+bool Probe_FloorSpot( ProbeRng &rng, float radius, float height, Vector &out )
+{
+	for ( int tries = 0; tries < 400000; tries++ )
+	{
+		Vector p( rng.Uni( g_probeWorldMins.x, g_probeWorldMaxs.x ), rng.Uni( g_probeWorldMins.y, g_probeWorldMaxs.y ),
+			rng.Uni( g_probeWorldMins.z, g_probeWorldMaxs.z ) );
+		p = Vector( floorf( p.x ), floorf( p.y ), floorf( p.z ) );
+		if ( POINT_CONTENTS( p ) != CONTENTS_EMPTY ) continue;
+		TraceResult tr;
+		TRACE_LINE( p, p - Vector( 0, 0, 2048 ), ignore_monsters, NULL, &tr );
+		if ( tr.fStartSolid || tr.flFraction == 1.0f || Probe_Idx( tr.pHit ) != 0 || tr.vecPlaneNormal.z < 0.999f ) continue;
+		Vector f( p.x, p.y, tr.vecEndPos.z - 0.03125f );	// a vertical trace stops 1/32 above the plane
+		if ( POINT_CONTENTS( f + Vector( 0, 0, 1 ) ) != CONTENTS_EMPTY ) continue;
+		TRACE_HULL( f + Vector( 0, 0, 33 ), f + Vector( 0, 0, height - 32 ), ignore_monsters, 2, NULL, &tr );
+		if ( tr.fStartSolid || tr.flFraction < 1.0f ) continue;
+		bool ok = true;
+		for ( int a = 0; a < 8 && ok; a++ )
+		{
+			float r = a * ( M_PI / 4 );
+			Vector o = f + Vector( cosf( r ) * radius, sinf( r ) * radius, 0 );
+			TRACE_LINE( f + Vector( 0, 0, 8 ), o + Vector( 0, 0, 8 ), ignore_monsters, NULL, &tr );
+			ok = tr.flFraction == 1.0f && !tr.fStartSolid;
+			if ( !ok ) break;
+			TRACE_LINE( o + Vector( 0, 0, 8 ), o - Vector( 0, 0, 8 ), ignore_monsters, NULL, &tr );
+			ok = tr.flFraction < 1.0f && Probe_Idx( tr.pHit ) == 0 && fabsf( tr.vecEndPos.z - 0.03125f - f.z ) <= 0.01f;
+			if ( !ok ) break;
+			TRACE_HULL( o + Vector( 0, 0, 37 ), o + Vector( 0, 0, 37 ), ignore_monsters, 1, NULL, &tr );
+			ok = !tr.fStartSolid;
+		}
+		if ( !ok ) continue;
+		Vector lo = f - Vector( radius + 32, radius + 32, 32 ), hi = f + Vector( radius + 32, radius + 32, height + 32 );
+		for ( int i = 1; i < gpGlobals->maxEntities && ok; i++ )
+		{
+			edict_t *e = INDEXENT( i );
+			if ( !e || e->free || e->v.solid == SOLID_NOT || ( e->v.flags & FL_CLIENT ) ) continue;
+			ok = e->v.absmin.x > hi.x || e->v.absmin.y > hi.y || e->v.absmin.z > hi.z ||
+				e->v.absmax.x < lo.x || e->v.absmax.y < lo.y || e->v.absmax.z < lo.z;
+		}
+		if ( !ok ) continue;
+		out = f;
+		return true;
+	}
+	return false;
+}
+
+void Probe_PrDyn( FILE *f, edict_t *e )
+{
+	entvars_t *v = &e->v;
+	fprintf( f, "{\"i\":%d,\"o\":" VF ",\"a\":" VF ",\"v\":" VF ",\"av\":" VF ",\"bv\":" VF ",\"fl\":%d,\"ge\":%d,\"lt\":%.9g,\"nt\":%.9g,"
+		"\"wl\":%d,\"wt\":%d,\"solid\":%d,\"mt\":%d,\"mins\":" VF ",\"maxs\":" VF ",\"absmin\":" VF ",\"absmax\":" VF "}",
+		ENTINDEX( e ), VA( v->origin ), VA( v->angles ), VA( v->velocity ), VA( v->avelocity ), VA( v->basevelocity ), v->flags,
+		Probe_Idx( v->groundentity ), (double)v->ltime, (double)v->nextthink, v->waterlevel, v->watertype, v->solid, v->movetype,
+		VA( v->mins ), VA( v->maxs ), VA( v->absmin ), VA( v->absmax ) );
+}
+
+// K-settle: from map load until the captures start, every StartFrame's
+// time and frametime and the state of every item (item_*, weapon_*, ammo_*)
+// for the first EARLY_FRAMES frames; the capture writes it out.
+#define EARLY_FRAMES 40
+static char *s_early;
+static size_t s_earlyLen, s_earlyCap;
+static int s_earlyFrames;
+static double s_precacheTime;
+
+static void EarlyAppend( const char *fmt, ... )
+{
+	if ( !s_early ) { s_earlyCap = 1 << 20; s_early = (char *)malloc( s_earlyCap ); s_earlyLen = 0; }
+	if ( s_earlyLen + 1024 >= s_earlyCap ) return;
+	va_list ap;
+	va_start( ap, fmt );
+	int n = vsnprintf( s_early + s_earlyLen, s_earlyCap - s_earlyLen, fmt, ap );
+	va_end( ap );
+	if ( n > 0 && s_earlyLen + n < s_earlyCap ) s_earlyLen += n;
+}
+
+static bool IsItem( edict_t *e )
+{
+	const char *c = STRING( e->v.classname );
+	return !strncmp( c, "item_", 5 ) || !strncmp( c, "weapon_", 7 ) || !strncmp( c, "ammo_", 5 );
+}
+
+static void EarlyFrame( void )
+{
+	if ( s_earlyFrames >= EARLY_FRAMES ) return;
+	EarlyAppend( "{\"early\":%d,\"frame\":%d,\"t\":%.9g,\"ft\":%.9g,\"items\":[", s_earlyFrames, g_probeFrame,
+		(double)gpGlobals->time, (double)gpGlobals->frametime );
+	bool first = true;
+	for ( int i = 1; i < gpGlobals->maxEntities; i++ )
+	{
+		edict_t *e = INDEXENT( i );
+		if ( !e || e->free || !IsItem( e ) ) continue;
+		entvars_t *v = &e->v;
+		EarlyAppend( "%s{\"i\":%d,\"class\":\"%s\",\"o\":" VF ",\"v\":" VF ",\"fl\":%d,\"ge\":%d,\"mt\":%d,\"solid\":%d,\"nt\":%.9g}",
+			first ? "" : ",", i, STRING( v->classname ), VA( v->origin ), VA( v->velocity ), v->flags,
+			Probe_Idx( v->groundentity ), v->movetype, v->solid, (double)v->nextthink );
+		first = false;
+	}
+	EarlyAppend( "]}\n" );
+	s_earlyFrames++;
+}
+
+void Probe_WriteEarly( FILE *f )
+{
+	fprintf( f, "{\"precache_time\":%.9g,\"early_frames\":%d}\n", s_precacheTime, s_earlyFrames );
+	if ( s_early ) fwrite( s_early, 1, s_earlyLen, f );
+	// items as the map file placed them, for the drop distance
+	for ( int i = 1; i < gpGlobals->maxEntities; i++ )
+	{
+		edict_t *e = INDEXENT( i );
+		if ( !e || e->free || !IsItem( e ) ) continue;
+		int l = Probe_LumpIndex( e, NULL, 0 );
+		fprintf( f, "{\"item\":%d,\"class\":\"%s\",\"lump\":%d,\"lump_o\":" VF ",\"o\":" VF ",\"fl\":%d}\n", i, STRING( e->v.classname ), l,
+			VA( l >= 0 ? s_lump[l].o : g_vecZero ), VA( e->v.origin ), e->v.flags );
+	}
+}
+
 // The brush model (of any map entity) whose size is in range and which
 // best fills its bounds; ties go to the model whose bounds centre is nearest
 // its origin (an origin brush), so rotations stay local.
@@ -391,8 +596,9 @@ static void Probe_Prepare( void )
 			g_probeWorldMaxs = Vector( m[3], m[4], m[5] );
 		}
 	}
+	ParseLump( bsp, len );
 	if ( bsp ) FREE_FILE( bsp );
-	s_removed[0] = s_disabled[0] = 0;
+	s_removed[0] = s_disabled[0] = s_live[0] = 0;
 	for ( int i = gpGlobals->maxClients + 1; i < gpGlobals->maxEntities; i++ )
 	{
 		edict_t *e = INDEXENT( i );
@@ -404,6 +610,8 @@ static void Probe_Prepare( void )
 			if ( ent ) Probe_Free( ent );
 			else REMOVE_ENTITY( e );
 		}
+		else if ( e->v.solid == SOLID_TRIGGER && g_probeLive )
+			AppendIdx( s_live, sizeof( s_live ), i, STRING( e->v.classname ) );	// left linked as the map left it
 		else if ( e->v.solid == SOLID_TRIGGER )
 		{
 			AppendIdx( s_disabled, sizeof( s_disabled ), i, STRING( e->v.classname ) );
@@ -411,6 +619,80 @@ static void Probe_Prepare( void )
 			SET_ORIGIN( e, e->v.origin );
 		}
 	}
+}
+
+// ---------------------------------------------------------------- map entity lump
+
+static void ParseLump( const byte *bsp, int len )
+{
+	free( s_lump );
+	s_lump = NULL;
+	s_nlump = 0;
+	if ( !bsp || len < 8 ) return;
+	const int *hdr = (const int *)bsp;
+	int ofs = hdr[1], size = hdr[2];	// LUMP_ENTITIES
+	if ( ofs <= 0 || size <= 0 || ofs + size > len ) return;
+	int cap = 4096;
+	s_lump = (LumpEnt *)calloc( cap, sizeof( LumpEnt ) );
+	const char *p = (const char *)bsp + ofs, *end = p + size;
+	LumpEnt *cur = NULL;
+	while ( p < end && *p )
+	{
+		if ( *p == '{' ) { if ( s_nlump < cap ) cur = &s_lump[s_nlump++]; p++; continue; }
+		if ( *p == '}' ) { cur = NULL; p++; continue; }
+		if ( *p != '"' ) { p++; continue; }
+		char key[64], val[256];
+		char *dst[2] = { key, val };
+		size_t dsz[2] = { sizeof( key ), sizeof( val ) };
+		for ( int k = 0; k < 2; k++ )
+		{
+			while ( p < end && *p != '"' ) p++;
+			p++;
+			size_t n = 0;
+			while ( p < end && *p != '"' ) { if ( n + 1 < dsz[k] ) dst[k][n++] = *p; p++; }
+			dst[k][n] = 0;
+			p++;
+		}
+		if ( !cur ) continue;
+		if ( !strcmp( key, "classname" ) ) strncpy( cur->cls, val, sizeof( cur->cls ) - 1 );
+		else if ( !strcmp( key, "model" ) ) strncpy( cur->model, val, sizeof( cur->model ) - 1 );
+		else if ( !strcmp( key, "targetname" ) ) strncpy( cur->tn, val, sizeof( cur->tn ) - 1 );
+		else if ( !strcmp( key, "origin" ) )
+		{
+			float x = 0, y = 0, z = 0;
+			cur->hasO = sscanf( val, "%f %f %f", &x, &y, &z ) == 3;
+			cur->o = Vector( x, y, z );
+		}
+	}
+}
+
+int Probe_LumpIndex( edict_t *e, char *tn, int tnsize )
+{
+	const char *model = e->v.model ? STRING( e->v.model ) : "";
+	const char *cls = STRING( e->v.classname );
+	int best = -1;
+	float bestD = 1e30f;
+	for ( int i = 0; i < s_nlump; i++ )
+	{
+		const LumpEnt &l = s_lump[i];
+		if ( model[0] == '*' )
+		{
+			if ( strcmp( l.model, model ) ) continue;
+			best = i;
+			break;
+		}
+		if ( strcmp( l.cls, cls ) || !l.hasO ) continue;
+		// items drop to the floor after spawn: the plane distance decides, height breaks ties
+		float dx = l.o.x - e->v.origin.x, dy = l.o.y - e->v.origin.y, dz = l.o.z - e->v.origin.z;
+		float d = dx * dx + dy * dy + 0.001f * dz * dz;
+		if ( d < bestD ) { bestD = d; best = i; }
+	}
+	if ( tn && tnsize > 0 )
+	{
+		tn[0] = 0;
+		if ( best >= 0 ) strncpy( tn, s_lump[best].tn, tnsize - 1 ), tn[tnsize - 1] = 0;
+	}
+	return best;
 }
 
 // ---------------------------------------------------------------- fake client
@@ -503,19 +785,32 @@ extern "C" void Probe_PM_Move( struct playermove_s *ppmove, int server )
 static void Cmd_ProbeRun( void )
 {
 	s_numQueued = 0;
+	int live = 0;
 	for ( int a = 1; a < CMD_ARGC(); a++ )
 	{
 		const char *n = CMD_ARGV( a );
 		for ( int c = 0; c < NUM_CAPS; c++ )
 		{
-			bool m2 = !strcmp( n, "m2" ) || !strcmp( n, "all" );
-			if ( ( m2 || !strcmp( n, s_caps[c].name ) ) && s_numQueued < 32 )
+			int g = s_caps[c].group;
+			bool grp = ( !strcmp( n, "m2" ) && g == G_M2 ) || ( !strcmp( n, "m3" ) && g == G_M3 ) ||
+				( !strcmp( n, "live" ) && g == G_LIVE ) || ( !strcmp( n, "all" ) && g != G_LIVE );
+			if ( ( grp || !strcmp( n, s_caps[c].name ) ) && s_numQueued < 32 )
+			{
 				s_queue[s_numQueued++] = c;
+				live += g == G_LIVE;
+			}
 		}
 	}
+	if ( live && live != s_numQueued )
+	{
+		Probe_Log( "probe: live captures need a server of their own; nothing queued\n" );
+		s_numQueued = 0;
+	}
+	g_probeLive = live > 0;
 	s_cur = -1;
 	s_prepared = false;
 	s_startAt = gpGlobals->time + 2.0f;
+	EarlyAppend( "{\"probe_run\":%d,\"t\":%.9g}\n", g_probeFrame, (double)gpGlobals->time );
 	Probe_Log( "probe: %d captures queued on %s, start at %.2f\n", s_numQueued, Probe_Map(), s_startAt );
 }
 
@@ -546,11 +841,17 @@ void Probe_Precache( void )
 	s_cur = -1;
 	g_probePmPre = g_probePmPost = NULL;
 	g_probeTouchLog = NULL;
+	g_probeTouchFn = NULL;
+	g_probeLive = false;
+	s_earlyLen = 0;
+	s_earlyFrames = 0;
+	s_precacheTime = gpGlobals->time;
 }
 
 void Probe_StartFrame( void )
 {
 	g_probeFrame++;
+	EarlyFrame();
 	if ( s_numQueued == 0 || gpGlobals->time < s_startAt ) return;
 	if ( !s_prepared )
 	{
@@ -570,6 +871,7 @@ void Probe_StartFrame( void )
 	{
 		Probe_Log( "probe: %s done on %s after %d steps\n", c.name, Probe_Map(), s_step );
 		g_probeTouchLog = NULL;
+		g_probeTouchFn = NULL;
 		g_probePmPre = g_probePmPost = NULL;
 		Probe_BotPark();
 		s_cur++;

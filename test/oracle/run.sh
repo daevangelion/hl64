@@ -6,10 +6,13 @@
 # HLSDK probe DLL (Makefile, hlsdk-hooks.patch, probe/), installs it as the
 # `hl64probe` game directory next to `valve`, copies the player's maps into
 # it, and runs every requested capture on every requested map, one HLDS
-# process per map. Fixtures go to $HL64_FIXTURES/goldsrc/<spec>/<capture>/
-# <map>.jsonl; they derive from Valve data and are never committed.
+# process per map and batch. Fixtures go to $HL64_FIXTURES/goldsrc/<spec>/
+# <capture>/<map>.jsonl; they derive from Valve data and are never committed.
 #
-# usage: test/oracle/run.sh [capture|m2 ...]       (default: m2)
+# usage: test/oracle/run.sh [capture|m2|m3|live|all ...]   (default: m2)
+#        m2: M2 captures; m3: M3 captures (map triggers disabled, as m2);
+#        live: A-order (map triggers left live; a server of its own);
+#        all: m2 m3 live. Live captures always run in a separate batch.
 # env:   HL64_MAPS        maps to run (default: Uplink + Hazard Course)
 #        HL64_FIXTURES    output root (default /scratch/hl64/fixtures)
 #        HL64_HL_DATA     player's valve dir to copy maps from
@@ -71,8 +74,9 @@ for m in $MAPS; do cp -u "$HL64_HL_DATA/maps/$m.bsp" "$mod/maps/"; done
 # server.cfg runs after the game DLL is loaded on every map spawn: retail
 # single-player movevars (valve/spserver.cfg and engine defaults; HLDS's
 # valve/server.cfg would set sv_maxspeed 270 and sv_clienttrace 3.5), then
-# the captures.
-cat >"$mod/server.cfg" <<EOF
+# the captures of the batch.
+write_cfg() {
+	cat >"$mod/server.cfg" <<EOF
 sv_maxspeed 320
 sv_clienttrace 1
 sv_gravity 800
@@ -89,22 +93,40 @@ sv_maxvelocity 2000
 mp_footsteps 1
 sv_allow_autoaim 1
 probe_quit 1
-probe_run $CAPS
+probe_run $1
 EOF
+}
 
-# 4. captures, one server per map
-fail=0
-for m in $MAPS; do
-	log=$HL64_FIXTURES/goldsrc/logs/$m.log
-	echo "== $m: $CAPS"
-	( cd "$HLDS_DIR" && HOME=$steam_home LD_LIBRARY_PATH=$HLDS_DIR HL64_PROBE_OUT=$HL64_FIXTURES \
-		timeout 1800 ./hlds_linux -game hl64probe -norestart -insecure +sv_lan 1 +maxplayers 1 \
-		+deathmatch 0 +coop 0 +sys_ticrate 10000 +host_framerate 0.01 +map "$m" \
-		</dev/null >"$log" 2>&1 ) || true
-	if grep -q "probe: all captures done on $m" "$log"; then
-		grep -E '^probe: .* done' "$log" | sed 's/^/   /'
-	else
-		echo "   FAILED (see $log)"; tail -5 "$log" | sed 's/^/   /'; fail=1
-	fi
+# 4. captures: batches, one server per map and batch. `all` runs m2, m3 and
+# live in servers of their own, so each group's fixtures do not depend on
+# the others (time, entity slots and the engine's random stream carry over
+# within one server); live captures always run apart.
+normal=() m3=() live=()
+for c in $CAPS; do
+	case $c in
+	live|A-order) live+=("$c") ;;
+	all) normal+=(m2); m3+=(m3); live+=(live) ;;
+	*) normal+=("$c") ;;
+	esac
 done
+fail=0
+run_batch() {	# caps log-suffix
+	write_cfg "$1"
+	for m in $MAPS; do
+		log=$HL64_FIXTURES/goldsrc/logs/$m$2.log
+		echo "== $m: $1"
+		( cd "$HLDS_DIR" && HOME=$steam_home LD_LIBRARY_PATH=$HLDS_DIR HL64_PROBE_OUT=$HL64_FIXTURES \
+			timeout 1800 ./hlds_linux -game hl64probe -norestart -insecure +sv_lan 1 +maxplayers 1 \
+			+deathmatch 0 +coop 0 +sys_ticrate 10000 +host_framerate 0.01 +map "$m" \
+			</dev/null >"$log" 2>&1 ) || true
+		if grep -q "probe: all captures done on $m" "$log"; then
+			grep -E '^probe: .* done' "$log" | sed 's/^/   /'
+		else
+			echo "   FAILED (see $log)"; tail -5 "$log" | sed 's/^/   /'; fail=1
+		fi
+	done
+}
+(( ${#normal[@]} )) && run_batch "${normal[*]}" ""
+(( ${#m3[@]} )) && run_batch "${m3[*]}" "-m3"
+(( ${#live[@]} )) && run_batch "${live[*]}" "-live"
 exit $fail

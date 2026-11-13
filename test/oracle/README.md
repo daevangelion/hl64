@@ -17,7 +17,7 @@ physics and touches of probe entities).
 | path | licence | what |
 |---|---|---|
 | `probe/*.cpp`, `probe/*.h` | Half Life 1 SDK LICENSE (`LICENSE-HLSDK`) | probe module compiled into the HLSDK game DLL |
-| `hlsdk-hooks.patch` | Half Life 1 SDK LICENSE | four hooks into HLSDK `dlls/` (GameDLLInit, StartFrame, CWorld::Precache, the `pfnPM_Move` table entry) |
+| `hlsdk-hooks.patch` | Half Life 1 SDK LICENSE | five hooks into HLSDK `dlls/` (GameDLLInit, StartFrame, CWorld::Precache, the `pfnPM_Move` table entry, DispatchTouch) |
 | `run.sh`, `Makefile`, `tools/summarize.py`, this file | MIT | install, build, capture, report |
 
 No Valve binary, map, model or fixture is committed. Fixtures derive from
@@ -27,6 +27,9 @@ Valve data and stay in `$HL64_FIXTURES` (default `/scratch/hl64/fixtures`).
 
 ```
 test/oracle/run.sh            # all M2 captures on the Uplink + Hazard Course maps
+test/oracle/run.sh all        # M2, M3 and live captures (three servers per map)
+test/oracle/run.sh m3         # M3 captures (P-*, K-*, W-water, L-illum)
+test/oracle/run.sh live       # A-order (map triggers left live)
 test/oracle/run.sh T-points   # one capture; names below
 HL64_MAPS="hldemo1" HL64_PROBE_SCALE=0.1 test/oracle/run.sh m2   # quick
 test/oracle/tools/summarize.py   # coverage per spec test id + spec checks
@@ -40,9 +43,12 @@ revision `b1b5cf5892918535619b2937bb927e46cb097ba1` into
 `/scratch/hl64/builds/oracle`, installs the game directory
 `$HLDS_DIR/hl64probe` (`liblist.gam`, `dlls/probe.so`, the maps copied from
 the player's data, default `/scratch/hl1/valve`, and a `server.cfg`), then
-runs one server per map. Each server exits by itself when its captures are
-done; logs go to `$HL64_FIXTURES/goldsrc/logs/<map>.log`. The full M2 set
-on ten maps takes about three minutes.
+runs one server per map and batch. Each server exits by itself when its
+captures are done; logs go to `$HL64_FIXTURES/goldsrc/logs/<map>[-m3|-live].log`.
+Batches: the named captures and groups (`m2`, `m3`) in one server; `all`
+runs `m2`, `m3` and `live` in servers of their own; live captures always
+run apart (the probe refuses to mix them). The full M2 set on ten maps
+takes about three minutes, M3 about two, live a few seconds.
 
 Build needs gcc-multilib (32-bit C runtime) and the 32-bit `libstdc++.so.6`
 (linked by path; g++-multilib is not required).
@@ -65,6 +71,11 @@ Build needs gcc-multilib (32-bit C runtime) and the 32-bit `libstdc++.so.6`
   map logic); both lists are in each file's `meta`. Doors, trains and other
   brush entities stay in their spawn state; every file's second line lists
   them (`brush_ents`: index, model, origin, angles, bounds, solid, skin).
+- Live captures (`A-order`) instead leave map triggers linked exactly as
+  the map left them (listed as `live_triggers` in `meta`): the probe's
+  `DispatchTouch` hook logs every touch of a map entity and does not
+  dispatch it, so no level change, damage, teleport or pickup ever runs.
+  Monsters are removed as above.
 - World bounds are read from the map file (BSP model 0).
 - Random inputs come from an xorshift generator seeded with
   (map, capture), so a rerun reproduces the inputs exactly.
@@ -92,6 +103,10 @@ use the same keys with `pe` = physent index. Entities (`ent`) are
 | `area-links-and-touch/A-touch` | A1, A3, A4, A7 | `{"linkbox",ent}`: linked boxes read back for box entities of each solid type, with Quake's FL_ITEM bit (256; HLSDK has no FL_ITEM), yawed, and a brush entity unrotated / yaw 30 / pitch 20 / trigger yaw 30. Then a box trigger T (±32) and a mover M (MOVETYPE_FLY, (−16,−16,−36)…(16,16,36), zero velocity): per case `{"case","name","kind","axis","gap"}`, `{"ev":"placed"|"after",…}`, and every touch `{"ev":"touch","case","phase","self","other",…}` where `phase` is `set_origin` (during `pfnSetOrigin`), `physics` (the engine's physics frame that follows) or `pmove` (the fake client's `pfnRunPlayerMove`). Gap = distance between the real boxes. Kinds: fly, item (bit 256 set), not, trigger, none (MOVETYPE_NONE), toss, bot (fake client). `_order` cases add two more overlapping triggers (`{"setup":"order"}`). Cases ≥ 1000: impact scenarios (fly into a box, toucher sets itself SOLID_NOT, SOLID_NOT mover, toss onto, bounce into, target removes mover, mover removes itself) with per-frame mover state (`ev` `a`) for 40 frames. |
 | `area-links-and-touch/A-shape` | A5 | `{"candidate",…,"fill"}` for every map brush model (fraction of interior lattice points inside the brush), `{"source"}` = the chosen non-box model (triggers first), then per variant (trigger unrotated, trigger yaw 30) `{"variant","trigger"}` and 320 sample points `{"case","p","in_hull0","in_hull1","in_hull1_unrotated","box_overlap"}` followed by the fake client's touches (phase `pmove`, after a 1 ms zero command at that origin, `{"ev":"bot","after"}`) and the physics mover's touches (phase `physics`). The source map entity is set SOLID_NOT. |
 | `pmove-host/PM-bot` | PM2 (and §5) | Finder lines (`{"finder",…,"found":false}`, `{"step",…}` for the step brushes), then per run a header `{"run","kind","msec","start","yaw","where","reset"}` and 300 frames `{"run","f","cmd":{"a","fm","sm","um","b","ms"},"t","o","v","bv","fl","vo","wl","wt","ge","ind","dt","fv","pa","mt","mins","maxs","hull","pmt","onground","oldbuttons","pe":[[info,solid,skin]…],"me":[…],"touch":[…]}` — the command sent and the player state after `pfnRunPlayerMove`; `hull`…`touch` are read from `playermove_t` right after `PM_Move`. Kinds: stand, walk (150), run (400), strafe (400/400, turning), jump, standjump, duck, duckjump on level floor at msec 10 (run/jump/duck/duckjump also at 33, run/jump at 50); step18/step19 (a box brush sunk into the floor so its top is 18 or 19 u up, 64 u ahead); stairs (found by step-up search), ladder (pitch −45) and ladder_level (pitch 0), water (enter from 4 u above the surface, swim, then jump), slope; the varying kinds at msec 10 and 33. Command schedules are in milliseconds (`probe_pmove.cpp` `MakeCmd`). |
+| `area-links-and-touch/A-order` | A9, 3.1 | Live. `{"trigger":{"i","class","model","targetname","lump","start_off","o","a","mins","maxs","absmin","absmax","solid","spawnflags"}}` per SOLID_TRIGGER entity (and per SOLID_NOT `trigger_hurt` / `trigger_push` / `trigger_monsterjump`, `start_off`); `lump` = block index in the map's entity lump (worldspawn 0), brush entities matched by model, point entities (items) by classname and nearest origin. Per pair of triggers whose linked boxes are within 64 u and per mover hull (0: 2 u cube, 1: 32×32×72, 3: 32×32×36, 2: 64 cube) `{"pair","phase","hull","mover","found","candidates","p"}`: origins where a mover touches both (box overlap, origin inside each brush trigger's clip hull, trigger angles ignored). Then per placement `{"place","phase","pair","hull","mover","p","after","touched":[…],"order":[first,second]}`: a FLY mover of that hull set there by `pfnSetOrigin`, `touched` = every trigger its next physics link touched, in order; `mover` `bot` = the fake client's 1 ms zero move at the hull-1 origin. Phases: 1 static (map triggers never relinked); 2 runtime (`{"runtime"}` lines: probe trigger B created, then A in a slot freed 0.6 s earlier, both inside map trigger `map_trigger`); 3 start-off triggers turned on as HLSDK `CBaseTrigger::ToggleUse` (`{"enabled"}` lines, then their pairs); 4 toggle: per phase-1 pair, `{"toggle"}` = the trigger touched first turned off and on (ToggleUse twice; toggles accumulate), then the pair re-measured (`after_toggle`). |
+| `think-and-time/K-settle` | K8 | `{"precache_time","early_frames"}`, then `{"probe_run"}` and the first 40 StartFrames from map load `{"early","frame","t","ft","items":[{"i","class","o","v","fl","ge","mt","solid","nt"}…]}` (every `item_*`, `weapon_*`, `ammo_*`), then `{"item","class","lump","lump_o","o","fl"}`: each item's map-file origin and where it rests. |
+| `think-and-time/K-alloc` | K6 | Raw `pfnCreateEntity` edicts (classname `hl64_raw` after the allocation is recorded): `{"snapshot"}` = every freed slot `[index, freetime, serial]` (the edict array read directly; `INDEXENT` hides free edicts); `{"alloc","t","i","serial","freetime","o","fl","classname","solid"}` (fields as allocated). Fillers take every reusable slot, then E0–E5; frame 1 frees E1, E3 (`pfnRemoveEntity`) and flags E5 FL_KILLME; one allocation at frames 2, 3, 26, 50–53, 61, 70. |
+| `think-and-time/K-think`, `K-pusher`; `physics-movetypes/P-toss`, `P-bounce`, `P-step`, `P-push`, `P-rotate`, `P-pushable`, `P-walkmove`; `trace-and-hulls/W-water`; `lightstyles/L-illum` | K1–K5, P1–P12, 5, W, L | Scenario files. Line 3 `{"floor","radius","height"}`: a level world floor spot (probe placements are relative to it). Per scenario `{"scenario","name","frames","t"}` (or `{"scenario","skipped"}`), setup lines `{"sc",…}` (platforms, pushers, schedules, water spots, walk-move and drop-to-floor results), `{"sc","ents":[ent…]}`, then one line per server frame `{"sc","f","t","ft","e":[{"i","o","a","v","av","bv","fl","ge","lt","nt","wl","wt","solid","mt","mins","maxs","absmin","absmax"}…]}` (state after `f` physics frames), and events with `"case"` = scenario: `{"ev":"touch"…}`, `{"ev":"think","t","ft","self","ltime","nt","o","v"}` (time as the engine set it for the think), `{"ev":"blocked","self","other","ltime"}`, `{"ev":"use","self","target","caller","type"}`, `{"ev":"schedule"|"set_nextthink"|"pusher_start"|"push"|"fire"…}`. Platforms, pushers and blockers are probe copies of map brush models that fill their bounds (MOVETYPE_PUSH: the engine refuses SOLID_BSP without it). K-think changes `host_framerate` (1/30, 0.1) for some scenarios; the runner restores it. W-water spawns a `func_water` through the game DLL (none in these maps). L-illum samples `pfnGetEntityIllum` at 48 floor points every frame. |
 
 ## Limits
 
@@ -105,4 +120,11 @@ use the same keys with `pe` = physent index. Entities (`ent`) are
 - Reruns with the same capture list are byte-identical. A different list
   (e.g. `run.sh PM-bot` alone) shifts the game time (`t`, `pmt`) and the
   probe entities' indices, because each capture starts where the previous
-  one ended; positions, velocities and flags stay the same.
+  one ended; positions, velocities and flags stay the same. The engine's
+  random stream also carries over: `human_grunt` `skin` in T-hitbox
+  differs when M3 captures share the server (hence separate batches).
+- PM-bot writes `{"run","ents":[ent…]}` before a frame whenever a non-brush
+  physent (an item, a pushable box) first appears in the run or changed.
+- M3 scenarios that need a feature the map lacks are skipped and say so:
+  water (only hldemo3, t0a0, t0a0b, t0a0b1, t0a0b2 have world water), map
+  `func_pushable`s, a brush model whose rotation sweep fits a floor spot.

@@ -26,5 +26,8 @@ void Probe_Init( void );		// GameDLLInit: register the probe commands
 void Probe_Precache( void );	// CWorld::Precache: models the captures spawn
 void Probe_StartFrame( void );	// StartFrame: drive the scheduled captures
 extern "C" void Probe_PM_Move( struct playermove_s *ppmove, int server );	// wraps PM_Move
+// DispatchTouch: true when the probe consumed the touch (live captures log
+// touches of map entities and do not dispatch them, so map logic never runs).
+bool Probe_Touch( struct edict_s *touched, struct edict_s *other );
 
 #endif

@@ -1,5 +1,5 @@
 diff --git a/dlls/cbase.cpp b/dlls/cbase.cpp
-index a77605d..4029687 100644
+index a77605d..00e1fae 100644
 --- a/dlls/cbase.cpp
 +++ b/dlls/cbase.cpp
 @@ -26,6 +26,7 @@ void EntvarsKeyvalue( entvars_t *pev, KeyValueData *pkvd );
@@ -19,6 +19,15 @@ index a77605d..4029687 100644
  	PM_Init,					//pfnPM_Init				Server version of player movement initialization
  	PM_FindTextureType,			//pfnPM_FindTextureType
  	
+@@ -207,6 +208,8 @@ void DispatchTouch( edict_t *pentTouched, edict_t *pentOther )
+ {
+ 	if ( gTouchDisabled )
+ 		return;
++	if ( Probe_Touch( pentTouched, pentOther ) )	// hl64 probe: live captures mute map touches
++		return;
+ 
+ 	CBaseEntity *pEntity = (CBaseEntity *)GET_PRIVATE(pentTouched);
+ 	CBaseEntity *pOther = (CBaseEntity *)GET_PRIVATE( pentOther );
 diff --git a/dlls/client.cpp b/dlls/client.cpp
 index e2f30b7..3380167 100644
 --- a/dlls/client.cpp
