@@ -169,8 +169,18 @@ static int CFuncConveyor_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+/* the speed (reversed by Use) drives the engine's conveyor table */
+static void CFuncConveyor_restored(int e)
+{
+	CFuncConveyor_UpdateSpeed(e, CBase(e)->speed);
+}
+
+static const sv_table_t sv_CFuncConveyor = { .base = &sv_CBaseEntity,
+	.restored = CFuncConveyor_restored };
+
 const game_class_t gc_FUNC_CONVEYOR = {
 	.size = sizeof(CBaseEntity), .Spawn = CFuncConveyor_Spawn, .vt = &bmodel_vt,
+	.save = &sv_CFuncConveyor,
 };
 
 /* ---- func_illusionary --------------------------------------------------- */
@@ -187,6 +197,7 @@ static int CFuncIllusionary_Spawn(int e, gid_t16 gid)
 
 const game_class_t gc_FUNC_ILLUSIONARY = {
 	.size = sizeof(CBaseToggle), .Spawn = CFuncIllusionary_Spawn, .vt = &bmodel_vt,
+	.save = &sv_CBaseToggle,
 };
 
 /* ---- func_rotating ---------------------------------------------------------- */
@@ -416,8 +427,30 @@ static int CFuncRotating_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+/* HLSDK CFuncRotating::m_SaveData; Precache on restore: a turning fan
+ * spins up again (its sound). */
+static void CFuncRotating_restored(int e)
+{
+	if (!VecIsZero(ent_mot(e)->avelocity))
+	{
+		SetThink(e, FN_CFuncRotating_SpinUp);
+		ThinkInLtime(e, 1.5f);
+	}
+}
+
+static const sv_field_t f_CFuncRotating[] = {
+	SVF(CFuncRotating, m_flFanFriction, SV_F32, SVK),
+	SVF(CFuncRotating, m_flAttenuation, SV_F32, SVK),
+	SVF(CFuncRotating, m_flVolume, SV_F32, 0),
+	SVF(CFuncRotating, m_pitch, SV_F32, 0),
+	SVF(CFuncRotating, m_sounds, SV_I32, SVK),
+};
+static const sv_table_t sv_CFuncRotating = SV_TABLE(&sv_CBaseEntity, f_CFuncRotating,
+	.flags = SVT_STEADY, .restored = CFuncRotating_restored);
+
 const game_class_t gc_FUNC_ROTATING = {
 	.size = sizeof(CFuncRotating), .Spawn = CFuncRotating_Spawn, .vt = &bmodel_vt,
+	.save = &sv_CFuncRotating,
 };
 
 /* ---- func_pendulum ------------------------------------------------------------ */
@@ -591,6 +624,21 @@ static int CPendulum_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+/* HLSDK CPendulum::m_SaveData */
+static const sv_field_t f_CPendulum[] = {
+	SVF(CPendulum, m_accel, SV_F32, SVK),
+	SVF(CPendulum, m_distance, SV_F32, SVK),
+	SVF(CPendulum, m_time, SV_TIME, 0),
+	SVF(CPendulum, m_damp, SV_F32, SVK),
+	SVF(CPendulum, m_maxSpeed, SV_F32, SVK),
+	SVF(CPendulum, m_dampSpeed, SV_F32, 0),
+	SVF(CPendulum, m_center, SV_VEC, SVK),
+	SVF(CPendulum, m_start, SV_VEC, SVK),
+};
+static const sv_table_t sv_CPendulum = SV_TABLE(&sv_CBaseEntity, f_CPendulum,
+	.flags = SVT_STEADY);
+
 const game_class_t gc_FUNC_PENDULUM = {
 	.size = sizeof(CPendulum), .Spawn = CPendulum_Spawn, .vt = &bmodel_vt,
+	.save = &sv_CPendulum,
 };

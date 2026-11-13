@@ -138,10 +138,28 @@ static int CWallHealth_Spawn(int e, gid_t16 gid)
 	return charger_spawn(e, gid, gSkillData.healthchargerCapacity);
 }
 
+/* HLSDK CWallHealth / CRecharge m_SaveData; a charger in use (its loop
+ * sound running) waits until it is off */
+static int charger_quiet(int e)
+{
+	return PRIV(CWallCharger, e)->m_iOn == 0;
+}
+
+static const sv_field_t f_CWallCharger[] = {
+	SVF(CWallCharger, m_flNextCharge, SV_TIME, 0),
+	SVF(CWallCharger, m_iReactivate, SV_I32, 0),
+	SVF(CWallCharger, m_iJuice, SV_I32, 0),
+	SVF(CWallCharger, m_iOn, SV_I32, 0),
+	SVF(CWallCharger, m_flSoundTime, SV_TIME, 0),
+};
+static const sv_table_t sv_CWallCharger = SV_TABLE(&sv_CBaseToggle, f_CWallCharger,
+	.quiet = charger_quiet);
+
 const game_class_t gc_FUNC_HEALTHCHARGER = {
 	.size = sizeof(CWallCharger),
 	.Spawn = CWallHealth_Spawn,
 	.vt = &charger_vt,
+	.save = &sv_CWallCharger,
 };
 
 /* ---- func_recharge (CRecharge) ------------------------------------------------------ */
@@ -232,4 +250,5 @@ const game_class_t gc_FUNC_RECHARGE = {
 	.size = sizeof(CWallCharger),
 	.Spawn = CRecharge_Spawn,
 	.vt = &charger_vt,
+	.save = &sv_CWallCharger,
 };

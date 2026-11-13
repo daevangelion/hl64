@@ -70,9 +70,19 @@ static int CWorld_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+/* the map's worldspawn lives while its map is open (closing destroys it) */
+static int CWorld_quiet(int e)
+{
+	(void)e;
+	return 0;
+}
+
+static const sv_table_t sv_CWorld = { .base = &sv_CBaseEntity, .quiet = CWorld_quiet };
+
 const game_class_t gc_WORLDSPAWN = {
 	.size = sizeof(CBaseEntity),
 	.Spawn = CWorld_Spawn,
+	.save = &sv_CWorld,
 };
 
 /* ---- CPointEntity ---------------------------------------------------------- */
@@ -121,10 +131,19 @@ static const game_vt_t CPathCorner_vt = {
 	.GetDelay = CPathCorner_GetDelay,
 };
 
+/* HLSDK CPathCorner::m_SaveData; message is a name (fired by trains,
+ * cleared by fire-once corners) */
+static const sv_field_t f_CPathCorner[] = {
+	SVF(CPathCorner, m_flWait, SV_F32, SVK),
+};
+static const sv_table_t sv_CPathCorner = SV_TABLE(&sv_CBaseEntity, f_CPathCorner,
+	.flags = SVT_MSG_NAME);
+
 const game_class_t gc_PATH_CORNER = {
 	.size = sizeof(CPathCorner),
 	.Spawn = CPathCorner_Spawn,
 	.vt = &CPathCorner_vt,
+	.save = &sv_CPathCorner,
 };
 
 /* ---- path_track (pathcorner.cpp CPathTrack): no func_tracktrain is kept
@@ -166,10 +185,17 @@ static int CPathTrack_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+/* HLSDK CPathTrack::m_SaveData (no next / alt path: see above) */
+static const sv_field_t f_CPathTrack[] = {
+	SVF(CPathTrack, m_length, SV_F32, 0),
+};
+static const sv_table_t sv_CPathTrack = SV_TABLE(&sv_CBaseEntity, f_CPathTrack);
+
 const game_class_t gc_PATH_TRACK = {
 	.size = sizeof(CPathTrack),
 	.Spawn = CPathTrack_Spawn,
 	.vt = &CPointEntity_vt,
+	.save = &sv_CPathTrack,
 };
 
 /* ---- info_* points (subs.cpp / triggers.cpp CPointEntity): cooked point

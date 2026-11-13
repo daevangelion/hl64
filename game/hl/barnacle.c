@@ -361,9 +361,22 @@ static const mon_vt_t bcl_mvt = {
 	.HandleAnimEvent = Bcl_HandleAnimEvent,
 };
 
+/* HLSDK CBarnacle::m_SaveData */
+static const sv_field_t f_CBarnacle[] = {
+	SVF(CBarnacle, m_flAltitude, SV_F32, 0),
+	SVF(CBarnacle, m_flKillVictimTime, SV_TIME, 0),
+	SVF(CBarnacle, m_cGibs, SV_I32, 0),
+	SVF(CBarnacle, m_fTongueExtended, SV_U8, 0),
+	SVF(CBarnacle, m_fLiftingPrey, SV_U8, 0),
+	SVF(CBarnacle, m_seqAttack1, SV_I16, SVK),
+	SVF(CBarnacle, m_flTongueAdj, SV_F32, 0),
+};
+static const sv_table_t sv_CBarnacle = SV_TABLE(&sv_CBaseMonster, f_CBarnacle);
+
 const game_class_t gc_MONSTER_BARNACLE = {
 	.size = sizeof(CBarnacle),
 	.Spawn = CBarnacle_Spawn,
 	.vt = &bcl_vt,
 	.ext = &bcl_mvt,
+	.save = &sv_CBarnacle,
 };

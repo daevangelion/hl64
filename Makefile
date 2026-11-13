@@ -73,9 +73,11 @@ GAME_SRC_ITEMS := game/hl/weapons.c game/hl/weapon_crowbar.c game/hl/weapon_gloc
 	game/hl/weapon_handgrenade.c game/hl/items.c game/hl/chargers.c game/hl/grenade.c \
 	game/hl/tripmine.c game/hl/weapon_tripmine.c game/hud/hud.c
 GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
+# M4 GameLS: level state (dehydrate / rehydrate, twins, carry, cut refs)
+GAME_SRC_LS := game/hl/levelstate.c
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
 	$(ENGINE_SRC_SND) $(ENGINE_SRC_FX) $(ENGINE_SRC_D2)
-GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO)
+GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO) $(GAME_SRC_LS)
 # HLSDK sources kept as Valve wrote them: their unused locals, MSVC
 # pragmas and array-parameter styles are not ours to fix; HLSDK builds
 # them without strict aliasing (mathlib.h IS_NAN)
@@ -117,7 +119,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest sndtest gamelstest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -375,6 +377,17 @@ SND_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(SND_BIN): $(SND_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 sndtest: $(SND_BIN)
+
+# Level-state driver (test/m4/gamels.c, run by test/m4/gamels.py: dehydrate
+# / rehydrate round trips, quiescence, twins, carry, cut refs). The record
+# layer's canonical-reference calls and seam_changelevel are the driver's.
+GAMELS_BIN := $(BUILD_DIR)/host/hl64-gamels
+GAMELS_WRAP := rec_runtime_id rec_ref_entity rec_twin_of seam_changelevel
+GAMELS_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m4/gamels.o
+$(GAMELS_BIN): $(GAMELS_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) $(foreach f,$(GAMELS_WRAP),-Wl,--wrap=$(f))
+gamelstest: $(GAMELS_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 

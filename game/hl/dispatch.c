@@ -356,6 +356,7 @@ static int spawn(cls_t cls, gid_t16 gid, int e)
 	}
 	if (c->vt && c->vt->Activate)
 		c->vt->Activate(e);
+	sv_spawned(e);
 	return 0;
 }
 

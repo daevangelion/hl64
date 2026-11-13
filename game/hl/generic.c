@@ -70,6 +70,7 @@ const game_class_t gc_MONSTER_GENERIC = {
 	.Spawn = CGenericMonster_Spawn,
 	.vt = &generic_vt,
 	.ext = &generic_mvt,
+	.save = &sv_CBaseMonster,
 };
 
 /* ---- monster_gman (CGMan) --------------------------------------------------------- */
@@ -198,9 +199,18 @@ static const mon_vt_t gman_mvt = {
 	.PlayScriptedSentence = CGMan_PlayScriptedSentence,
 };
 
+/* HLSDK CGMan::m_SaveData (+ m_hPlayer of our layout) */
+static const sv_field_t f_CGMan[] = {
+	SVF(CGMan, m_hPlayer, SV_EH, 0),
+	SVF(CGMan, m_hTalkTarget, SV_EH, 0),
+	SVF(CGMan, m_flTalkTime, SV_TIME, 0),
+};
+static const sv_table_t sv_CGMan = SV_TABLE(&sv_CBaseMonster, f_CGMan);
+
 const game_class_t gc_MONSTER_GMAN = {
 	.size = sizeof(CGMan),
 	.Spawn = CGMan_Spawn,
 	.vt = &gman_vt,
 	.ext = &gman_mvt,
+	.save = &sv_CGMan,
 };

@@ -46,6 +46,7 @@
 #ifndef HL64_GAME_CBASE_H
 #define HL64_GAME_CBASE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "hl64/coll.h"
@@ -311,6 +312,123 @@ typedef struct game_vt {
 	void	(*EyePosition)(int e, float out[3]);
 } game_vt_t;
 
+/* ---- level state: save tables (HLSDK TYPEDESCRIPTION / m_SaveData;
+ * game/hl/levelstate.c) ---------------------------------------------------- */
+
+/* Field types (HLSDK FIELD_*). Positions are map-local in the entity's
+ * frame; times are f32 game-clock seconds, stored relative to the clock
+ * at dehydration (HLSDK FIELD_TIME: frozen while the entity is away). */
+enum {
+	SV_F32,		/* FIELD_FLOAT */
+	SV_TIME,	/* FIELD_TIME (0 = unset) */
+	SV_VEC,		/* FIELD_VECTOR */
+	SV_POS,		/* FIELD_POSITION_VECTOR: a twin adds the seam delta */
+	SV_I32,		/* FIELD_INTEGER / FIELD_BOOLEAN as int */
+	SV_U32,		/* bit words */
+	SV_I16,
+	SV_U16,
+	SV_U8,		/* FIELD_CHARACTER / byte booleans */
+	SV_FN,		/* FIELD_FUNCTION: funcs.def id */
+	SV_RES,		/* FIELD_MODELNAME / FIELD_SOUNDNAME: res_t (submodels re-slot) */
+	SV_NAME,	/* FIELD_STRING naming entities: name_t of the entity's map */
+	SV_GID,		/* a record of the entity's map (monstermaker of a child) */
+	SV_EH,		/* FIELD_EHANDLE / FIELD_CLASSPTR: ent_h (EH_NONE) */
+	SV_IX16,	/* FIELD_EDICT as a u16 slot (owner, ground): COL_NONE */
+	SV_IX32,	/* FIELD_EDICT as an int slot: -1 */
+	SV_NTYPES
+};
+#define SVSZ_SV_F32	4
+#define SVSZ_SV_TIME	4
+#define SVSZ_SV_VEC	12
+#define SVSZ_SV_POS	12
+#define SVSZ_SV_I32	4
+#define SVSZ_SV_U32	4
+#define SVSZ_SV_I16	2
+#define SVSZ_SV_U16	2
+#define SVSZ_SV_U8	1
+#define SVSZ_SV_FN	2
+#define SVSZ_SV_RES	2
+#define SVSZ_SV_NAME	2
+#define SVSZ_SV_GID	2
+#define SVSZ_SV_EH	4
+#define SVSZ_SV_IX16	2
+#define SVSZ_SV_IX32	4
+
+/* field flags */
+#define SVK		1	/* spawn constant (keys / spawn): a twin keeps its own */
+#define SVR		2	/* reset by the class's restored hook (not round-trip state) */
+
+typedef struct {
+	uint16_t	ofs;		/* in the private block */
+	uint8_t		type;		/* SV_* */
+	uint8_t		n;		/* elements (arrays) */
+	uint8_t		flags;		/* SVK, SVR */
+} sv_field_t;
+
+/* SVF(struct, member, SV_type, flags): the element count from the member. */
+#define SVF(T, m, ty, fl)	{ (uint16_t)offsetof(T, m), ty, \
+				  (uint8_t)(sizeof(((T *)0)->m) / SVSZ_##ty), fl }
+
+/* One class level's table (HLSDK IMPLEMENT_SAVERESTORE chain): base first.
+ * Hooks (NULL = none) run for every level of the chain that has one:
+ *   quiet     1 quiescent, 0 refuse (not now), -1 transient (the game
+ *             frees it: gibs, projectiles, effects);
+ *   released  after a successful dehydrate (fx beams, helper entities);
+ *   restored  after game_rehydrate (HLSDK Restore / Precache on restore);
+ *   twin      extra twin state (game_twin_copy), d = to - from origin;
+ *   cut       after game_cut_refs cleared a reference of e (slot closing). */
+typedef struct sv_table {
+	const struct sv_table	*base;
+	const sv_field_t	*f;
+	uint16_t		nf;
+	uint16_t		flags;		/* SVT_* */
+	int	(*quiet)(int e);
+	void	(*released)(int e);
+	void	(*restored)(int e);
+	void	(*twin)(int from, int to, const float d[3]);
+	void	(*cut)(int e, int slot);
+} sv_table_t;
+
+#define SVT_MSG_NAME		1	/* CBaseEntity message is a name_t (paths, trains) */
+#define SVT_STEADY		2	/* a pusher in steady motion is quiescent (fans) */
+
+#define SV_TABLE(basep, fields, ...) \
+	{ .base = (basep), .f = (fields), .nf = sizeof(fields) / sizeof((fields)[0]), __VA_ARGS__ }
+
+/* Base levels (levelstate.c). */
+extern const sv_table_t	sv_CBaseEntity, sv_CBaseDelay, sv_CBaseAnimating, sv_CBaseToggle;
+/* Transients (gibs, grenades, explosions, garg stomps / streaks / smoke):
+ * game_dehydrate frees them; their CBaseEntity references are cut. */
+extern const sv_table_t	sv_Transient;
+/* The default quiescence rules (levelstate.c "Quiescence"). */
+int		sv_quiet_default(int e);
+/* The table of e's class (NULL: not dehydratable), an element's size. */
+const sv_table_t *sv_table_of(int e);
+int		sv_elem_size(int type);
+/* dispatch.c, after a successful spawn: the record entity's pristine form. */
+void		sv_spawned(int e);
+/* Per class: deltas written (pristine ones included), their bytes and
+ * largest, refusals, transients freed, rehydrations (host tests, reports). */
+typedef struct {
+	uint32_t	dehydrated, pristine, bytes, bytes_max;
+	uint32_t	refused, transient, rehydrated;
+} sv_class_stats_t;
+const sv_class_stats_t *sv_stats(cls_t cls);
+void		sv_stats_reset(void);
+/* The class's restored hooks on e (game_rehydrate runs them). */
+void		sv_restored(int e);
+#ifdef HL64_TEST
+/* Host tests: rehydrate without the restored hooks (state equality), and
+ * the delta of e as game_dehydrate would write it (no quiescence test, no
+ * pristine form, no side effects). */
+void		sv_test_restore_hooks(int on);
+int		sv_test_encode(int e, void *buf, uint32_t max);
+/* the first differing field of two deltas of e's class (level 0 =
+ * components: field index; else the member's offset), -1 none */
+int		sv_test_diff(int e, const uint8_t *a, int na, const uint8_t *b, int nb,
+			int *level, int *ofs);
+#endif
+
 /* One class (classes.def line IDENT): gc_<IDENT>. */
 typedef struct game_class {
 	uint16_t	size;		/* private block bytes; 0 = none */
@@ -328,6 +446,10 @@ typedef struct game_class {
 	int	(*LogicIsTriggered)(gid_t16 gid, int activator);	/* masters */
 	/* slice extension: GameMon's monster table, Items' item info, ... */
 	const void	*ext;
+	/* Level state (levelstate.c): the save table of the private block's
+	 * most derived level; NULL = sv_CBaseEntity when size is at most a
+	 * CBaseEntity, else the class does not dehydrate (refuses). */
+	const sv_table_t	*save;
 } game_class_t;
 
 #define GC_MASTER		1	/* FCAP_MASTER logic class (multisource) */

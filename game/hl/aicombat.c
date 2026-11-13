@@ -309,6 +309,7 @@ void CGib_BounceGibTouch(int e, int other)
 const game_class_t gc_GIB = {
 	.size = sizeof(CGib),
 	.Spawn = CGib_SpawnEntry,
+	.save = &sv_Transient,
 };
 
 
