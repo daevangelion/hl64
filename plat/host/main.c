@@ -8,7 +8,8 @@
  *   hl64-host [--root DIR] [--frames N] [--route FILE.rbc]
  *             [--cmd "[@FRAME] NAME ARGS..."]... [--write-cmds FILE]
  *
- * --root        cart root (the DFS image source); default "."
+ * --root        cart root (the DFS image source; mounted like the cart's
+ *               DFS, plat/host/host.h); default "." with no DFS
  * --frames      quit 0 after N frames (same as --cmd "@N quit 0")
  * --cmd         one debug command (engine/core/dbg.h names); run at frame
  *               FRAME (default 1). Settings may be named: "set gravity 600".
@@ -20,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "hl64/limits.h"
 #include "hl64/settings.h"
@@ -28,6 +30,22 @@
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "plat/host/host.h"
+
+/* Files the cart's DFS carries besides the root's own: the commands as
+ * dbg.cmd (Makefile HL64_CMDS) and a --route as route.rbc (test/run/m3.sh
+ * copies it into the ROM's content), unless the root already holds one. */
+static unsigned extra_files(const char *root, int ncmds, int route)
+{
+	char path[1024];
+	struct stat st;
+	unsigned n = 0;
+
+	snprintf(path, sizeof(path), "%s/dbg.cmd", root);
+	n += ncmds > 0 && stat(path, &st) != 0;
+	snprintf(path, sizeof(path), "%s/route.rbc", root);
+	n += route && stat(path, &st) != 0;
+	return n;
+}
 
 static int usage(void)
 {
@@ -129,7 +147,7 @@ int main(int argc, char **argv)
 {
 	dbg_cmd_t cmds[HL64_DBG_QUEUE];
 	const char *root = NULL, *out = NULL;
-	int i, ncmds = 0;
+	int i, ncmds = 0, route = 0;
 
 	for (i = 1; i < argc; i++)
 	{
@@ -148,7 +166,10 @@ int main(int argc, char **argv)
 		else if (!strcmp(argv[i], "--write-cmds") && i + 1 < argc)
 			out = argv[++i];
 		else if (!strcmp(argv[i], "--route") && i + 1 < argc)
+		{
 			eng_route_path = argv[++i];
+			route = 1;
+		}
 		else
 			return usage();
 		if (!cmd)
@@ -170,7 +191,7 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	host_io_init(root);
+	host_io_init_files(root, root ? extra_files(root, ncmds, route) : 0);
 	eng_boot("host");
 	for (i = 0; i < ncmds; i++)
 		if (dbg_push(&cmds[i]))

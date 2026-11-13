@@ -238,6 +238,25 @@ $(BUILD_DIR)/host/%.o: %.c
 $(addprefix $(BUILD_DIR)/host/,game/pm/pm_shared.o game/pm/pm_math.o): HOST_CFLAGS += $(HLSDK_CFLAGS)
 $(BUILD_DIR)/host/game/hl/%.o: HOST_CFLAGS += -fno-strict-aliasing
 
+# The host heap is the heap an HL64_TEST cart has left after its boot carve
+# (plat/host/heap_host.c, include/hl64/limits.h HL64_CART_*), which starts
+# where that cart's image ends: link the HL64_TEST ELF (the host's PROFILE
+# setting) in $(BUILD_DIR)/host-cart and take its __bss_end. Needs the N64
+# SDK; without it the host build fails here.
+HOST_CART_DIR := $(BUILD_DIR)/host-cart
+HOST_CART_H := $(BUILD_DIR)/host/cart_image.h
+.PHONY: FORCE
+$(HOST_CART_H): FORCE
+	@mkdir -p $(dir $@)
+	$(MAKE) --no-print-directory BUILD_DIR=$(HOST_CART_DIR) HL64_TEST=1 HL64_CONTENT= HL64_CMDS= elf
+	@e=$$($(N64_NM) $(HOST_CART_DIR)/hl64.elf | sed -n 's/^\([0-9a-f]*\) [A-Za-z] __bss_end$$/\1/p'); \
+	[ -n "$$e" ] || { echo "no __bss_end in $(HOST_CART_DIR)/hl64.elf" >&2; exit 1; }; \
+	printf '/* generated: __bss_end of %s */\n#define HL64_CART_BSS_END 0x%su\n' \
+		'$(HOST_CART_DIR)/hl64.elf' "$$e" >$@.tmp; \
+	if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv $@.tmp $@; fi
+$(BUILD_DIR)/host/plat/host/heap_host.o: $(HOST_CART_H)
+$(BUILD_DIR)/host/plat/host/heap_host.o: HOST_CFLAGS += -I$(BUILD_DIR)/host
+
 $(HOST_BIN): $(HOST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 

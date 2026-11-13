@@ -16,6 +16,7 @@
  * us/KB = 5.25 MB/s; HL64_HOST_PI_US_PER_KB overrides), which engine/io
  * counts against the frame like the cart's DMA time.
  */
+#include <dirent.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,14 +58,65 @@ static struct {
 	uint64_t	frame_bytes;
 } io_st;
 
-void host_io_init(const char *root)
+/* Regular files under dir, recursively, but *.ent: what the Makefile
+ * packs into the ROM's DFS (find . -type f ! -name '*.ent'). */
+static unsigned io_count_files(const char *dir)
+{
+	char path[1024];
+	DIR *d = opendir(dir);
+	struct dirent *e;
+	struct stat st;
+	unsigned n = 0;
+	size_t len;
+
+	if (!d)
+		sys_error("io: cannot list %s", dir);
+	while ((e = readdir(d)))
+	{
+		if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
+			continue;
+		if (snprintf(path, sizeof(path), "%s/%s", dir, e->d_name) >= (int)sizeof(path))
+			sys_error("io: path too long under %s", dir);
+		if (lstat(path, &st))
+			sys_error("io: cannot stat %s", path);
+		len = strlen(e->d_name);
+		if (S_ISDIR(st.st_mode))
+			n += io_count_files(path);
+		else if (S_ISREG(st.st_mode) && !(len >= 4 && !strcmp(e->d_name + len - 4, ".ent")))
+			n++;
+	}
+	closedir(d);
+	return n;
+}
+
+/* the cart's DFS mount blocks, held for the whole run as on the cart
+ * (volatile: GCC deletes a malloc whose block is never read) */
+static void *volatile io_dfs_lookup, *volatile io_dfs_prefix;
+
+void host_io_init_files(const char *root, unsigned extra_files)
 {
 	const char *e = getenv("HL64_HOST_PI_US_PER_KB");
+	unsigned n;
 
-	if (root)
-		snprintf(io_root, sizeof(io_root), "%s", root);
 	if (e)
 		io_us_per_kb = (uint32_t)strtoul(e, NULL, 10);
+	if (!root)
+		return;
+	snprintf(io_root, sizeof(io_root), "%s", root);
+	/* libdragon dfs_init: malloc of the ROM's lookup table (mkdfs: 8 B +
+	 * 16 B per file), then attach_filesystem's copy of "rom:/", which
+	 * costs a 24 B chunk on the cart (limits.h HL64_CART_*, measured) */
+	n = io_count_files(io_root) + extra_files;
+	io_dfs_lookup = malloc(8u + 16u * n);
+	io_dfs_prefix = malloc(20u);
+	if (!io_dfs_lookup || !io_dfs_prefix)
+		sys_error("io: DFS mount of %u files does not fit the heap", n);
+	log_printf("io: DFS %u files\n", n);
+}
+
+void host_io_init(const char *root)
+{
+	host_io_init_files(root, 0);
 }
 
 /* "rom:/x" and DFS-relative "x" are cart-root relative. 0 if too long. */

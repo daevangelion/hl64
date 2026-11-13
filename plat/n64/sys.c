@@ -111,9 +111,16 @@ uint32_t sys_fpu_traps(void)
 
 /* ---- memory --------------------------------------------------------------- */
 
+/* malloc + 15 and align by hand, not memalign: memalign's lead / tail
+ * give-back depends on where the heap top happens to sit, which moved
+ * the heap left after the carve by up to 24 B between builds; this block
+ * always costs bytes + 24 B (dlmalloc chunk), so the host's mirror of
+ * the heap left (limits.h HL64_CART_BOOT_BYTES) is exact. */
 void *sys_carve_alloc(uint32_t bytes)
 {
-	return memalign(16, bytes);
+	char *p = malloc((size_t)bytes + 15u);
+
+	return p ? (void *)(((uintptr_t)p + 15u) & ~(uintptr_t)15u) : NULL;
 }
 
 uint32_t sys_image_bytes(void)

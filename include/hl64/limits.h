@@ -22,18 +22,26 @@
 #define HL64_HEAP_MIN_KB		256
 
 /*
- * Host heap arena (plat/host/heap_host.c): the cart's free heap after the
- * carve, measured from the HL64_TEST ROM's "mem: heap free" boot line in
- * ares, so post-boot allocations fit or fail as on the cart. The host
- * runs with cooked content, so it mirrors a ROM carrying it: image, carve
- * and libdragon's DFS lookup table (malloc'd at mount, ~16 B per file: 20
- * KB for the ~1230-file Uplink + Hazard cook). main 9b3b5a0, m3-a PROFILE
- * ROM: image 1475 KB, carve 3118 KB -> 2778 KB (at a7c1783's image 1462
- * KB it was 2791, PROFILE or not). The M0 ROM has no DFS: 20 KB more
- * there (m0.sh's drift note). Code growth moves it: test/run/m3.sh --ares
- * fails when host and cart differ, naming the cart's value.
+ * The cart's heap after the boot carve, which the host heap arena
+ * (plat/host/heap_host.c) mirrors so post-boot allocations fit or fail as
+ * on the cart. libdragon's heap runs from the image end (__bss_end of the
+ * linked ELF) to RDRAM top less its stack; boot then takes:
+ *   - HL64_CART_BOOT_BYTES: libdragon's init (display, rdpq, audio, t3d,
+ *     rba banks) and the engine before the carve, image-independent;
+ *   - the carve block (sys_carve_alloc: carve total + 15 B, one dlmalloc
+ *     chunk);
+ *   - with content, the DFS mount: 16 N + 40 B for N files (the lookup
+ *     table 8 + 16 N B plus the "rom:/" prefix's 24 B chunk).
+ * Measured (ares, HL64_TEST ROMs of 403070a, "mem: heap free ... free N
+ * B"): no content 2866008 B at __bss_end 0x801709f8; N = 10 / 501 / 1230:
+ * 200 / 8056 / 19720 B less; PROFILE + 1230 files, __bss_end 0x80170da8:
+ * 2845344 B -- every value exact. The host build reads __bss_end from
+ * its HL64_TEST cart ELF (Makefile, cart_image.h) and plat/host/io_host.c
+ * mounts the same table for its content root. test/run/m3.sh --ares
+ * asserts host == cart to the byte.
  */
-#define HL64_HOST_HEAP_KB		2778
+#define HL64_CART_STACK_BYTES		0x10000		/* libdragon STACK_SIZE */
+#define HL64_CART_BOOT_BYTES		754328
 
 /* Image (code + data + bss) budget, 4.1 first row; boot logs the size. */
 #define HL64_IMAGE_BUDGET_KB		900

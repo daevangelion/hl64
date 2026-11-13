@@ -41,7 +41,7 @@ void mem_carve_log(void)
 
 void mem_boot_carve(void)
 {
-	uint32_t free_kb, largest_kb, image;
+	uint32_t free_b, free_kb, largest_kb, image;
 	int i;
 
 	total_kb = 0;
@@ -55,10 +55,12 @@ void mem_boot_carve(void)
 		sys_error("carve: %lu KB do not fit the heap", (unsigned long)total_kb);
 	mem_carve_log();
 
-	free_kb = (uint32_t)(mem_heap_free_total() / 1024u);
+	free_b = (uint32_t)mem_heap_free_total();
+	free_kb = free_b / 1024u;
 	largest_kb = (uint32_t)(mem_heap_probe_largest(HL64_RDRAM_BYTES) / 1024u);
-	log_printf("mem: heap free %lu KB largest %lu KB (min %u)\n",
-		(unsigned long)free_kb, (unsigned long)largest_kb, HL64_HEAP_MIN_KB);
+	log_printf("mem: heap free %lu KB largest %lu KB (min %u) free %lu B\n",
+		(unsigned long)free_kb, (unsigned long)largest_kb, HL64_HEAP_MIN_KB,
+		(unsigned long)free_b);
 	image = sys_image_bytes();
 	if (image)
 		log_printf("mem: image %lu KB (budget %u)\n",
