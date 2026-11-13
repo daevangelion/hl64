@@ -30,14 +30,17 @@ wait 1
 stats stairs
 waitnear -2048 -738.201233 196.03125 0.01 1
 wait 0.1
-# standing jump in the hall: apex 45 u up (sv_gravity 800), back on the floor
-setpos -2048 -800 197 0 0
-waitnear -2048 -800 196.03125 0.01 1
+# standing jump in the hall: apex 45 u up (sv_gravity 800), back on the floor.
+# The hall segments run along y -760: the dome scene (fired by the corridor
+# walk) brings barney to -2024 -816 and the scientist to -1968 -800, solid
+# boxes the player stops at (pmove-host.md PM14).
+setpos -2048 -760 197 0 0
+waitnear -2048 -760 196.03125 0.01 1
 +jump
 wait 0.1
 -jump
-waitnear -2048 -800 241 1.5 2
-waitnear -2048 -800 196.03125 0.01 2
+waitnear -2048 -760 241 1.5 2
+waitnear -2048 -760 196.03125 0.01 2
 stats jump
 wait 0.1
 # running jump east along the hall (checked in the air 0.3 s after the
@@ -49,24 +52,24 @@ wait 0.1
 -jump
 wait 0.2
 stats runjump
-waitnear -1764.86902 -800 239.562836 0.01 1
-waitnear -1688.03125 -800 196.03125 0.01 5
+waitnear -1764.86902 -760 239.562836 0.01 1
+waitnear -1688.03125 -760 196.03125 0.01 5
 -forward
 stats wall
 wait 0.1
 # duck: hull 1 (origin 18 u down), duck-walk west at a third of the speed,
 # stand up
 +duck
-waitnear -1688.03125 -800 178.03125 0.01 2
+waitnear -1688.03125 -760 178.03125 0.01 2
 look 0 180
 +forward
 wait 1
 -forward
 wait 0.5
 stats duckwalk
-waitnear -1804.18542 -800 178.03125 0.01 1
+waitnear -1804.18542 -760 178.03125 0.01 1
 -duck
-waitnear -1804.18542 -800 196.03125 0.01 1
+waitnear -1804.18542 -760 196.03125 0.01 1
 wait 0.5
 stats duckend
 # back down the stairs at a run: the player leaves the steps and drops

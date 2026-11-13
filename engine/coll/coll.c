@@ -967,8 +967,10 @@ void col_move(const float start[3], const float mins[3], const float maxs[3], co
 			continue;		/* a box never meets a point entity */
 		if (pass && (e->owner == pass->index || pass->owner == e->index))
 			continue;
-		if ((e->flags & COL_FL_MONSTERCLIP) && !mclip)
-			continue;		/* func_monsterclip stops monsters only */
+		/* func_monsterclip stops monsters only; the flag on a monster
+		 * (hits monster clips) leaves it solid (trace-and-hulls.md 4.4) */
+		if ((e->flags & COL_FL_MONSTERCLIP) && e->solid == COL_SOLID_BSP && !mclip)
+			continue;
 		/* candidates of another layer: into this frame */
 		moved = ent_frame_delta(e->index, d);
 		if (lo[0] > e->absmax[0] + d[0] || lo[1] > e->absmax[1] + d[1]

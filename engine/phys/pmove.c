@@ -514,9 +514,11 @@ static void build_physents(uint32_t dt_us)
 		const col_ent_t *e = ent_get(idx[i]);
 
 		/* func_monsterclip blocks monsters only: never a player physent
-		 * [probe:measured PM-bot] */
+		 * [probe:measured PM-bot]. The flag marks a clip only on a brush
+		 * (pmove-host.md 2): on a monster (SF_MONSTER_HITMONSTERCLIP) it
+		 * means "stopped by monster clips", and the monster stays solid. */
 		if (!e || e->index == ENT_PLAYER || e->owner == ENT_PLAYER
-			|| (e->flags & COL_FL_MONSTERCLIP))
+			|| ((e->flags & COL_FL_MONSTERCLIP) && e->solid == COL_SOLID_BSP))
 			continue;
 		if (e->solid == COL_SOLID_NOT && e->skin == COL_LADDER)
 		{
