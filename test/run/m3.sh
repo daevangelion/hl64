@@ -6,17 +6,20 @@
 #
 #   host:  earlier gates' host parts (test/run/m0.sh, m1.sh, m2.sh with
 #          coll.sh inside it), every M3 slice suite (the table below; a
-#          test/m3 entry point missing from it fails the gate), the route
+#          test/m3 entry point missing from it fails the gate; the monster
+#          sweep must pass on all 10 maps), the route
 #          VM op tests (test/m3/gate_ops.sh), then route m3-a on hl64-host
 #          at a fixed 1/30 s frame time: `route PASS`, the game's
 #          `changelevel: hldemo2` line, and K9: a second run with every
 #          live entity stepped every frame (`stepall 1`) gives the same
 #          route ops, player records and entity-state hashes.
 #   ares:  m3-a on a PROFILE HL64_TEST ROM: `route PASS`, route ops and
-#          stats records (player, ents) identical to the host's (K10); the
+#          stats records (player, ents) identical to the host's (K10), the
+#          host's heap after the carve equal to the cart's; the
 #          per-subsystem CPU / memory table from the 1 s `prof <zone>_us`
 #          roll-ups and the `mem` lines (test/m3/gate_table.py) into the
-#          gate log.
+#          gate log; a carve region above 90% use or with peak x 1.25 over
+#          its size fails (architecture 4.1; components exempt).
 #
 # Usage: test/run/m3.sh [--ares]
 # Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content: campaign.rtb,
@@ -92,10 +95,21 @@ suite game.py gametest python3 test/m3/game.py --bin "$B/hl64-game" --content "$
 suite studio_test.py studiotest python3 test/m3/studio_test.py --bin "$B/hl64-studiotest" \
 	--content "$CONTENT"
 suite snd.sh - test/m3/snd.sh all
+suite fx.py fxtest python3 test/m3/fx.py "$BUILD_DIR" "$CONTENT"
+suite mon.sh - test/m3/mon.sh
+if [[ -e "$ROOT/test/m3/mon.sh" ]]; then
+	# the monster sweep covers the 10 Uplink + Hazard maps (mon_sweep.py MAPS)
+	ML="$OUT/suite-mon.log"
+	mp="$(grep -cE '^mon-sweep [a-z0-9]+ PASS classes=' "$ML" || true)"
+	mn="$(grep -cE '^mon-sweep [a-z0-9]+ (PASS|FAIL) classes=' "$ML" || true)"
+	[[ "$mp" -eq 10 && "$mn" -eq 10 ]] || fail "monster sweep: $mp of $mn maps PASS, 10 required"
+	say "mon sweep: $mp/10 maps PASS"
+fi
 suite gate_ops.sh - test/m3/gate_ops.sh
 # every entry point of test/m3 runs here (ares ones in the ares part;
-# rec.py is rec.sh's, gate_table.py the table below)
-RAN+="snd_ares.sh rec.py gate_table.py "
+# rec.py is rec.sh's, mon_sweep.py and mon-dome.route are mon.sh's,
+# gate_table.py the table below)
+RAN+="snd_ares.sh rec.py mon_sweep.py mon-dome.route gate_table.py "
 for f in "$ROOT"/test/m3/*.py "$ROOT"/test/m3/*.sh; do
 	[[ "$RAN" == *" $(basename "$f") "* ]] || fail "test/m3/$(basename "$f") is not wired into test/run/m3.sh"
 done
@@ -167,6 +181,13 @@ grep -q '^changelevel: hldemo2 ' "$OUT/ares-a.log" || fail "m3-a (ares): no 'cha
 diff <(records "$OUT/host-a.log") <(records "$OUT/ares-a.log") >"$OUT/k10.diff" \
 	|| { head -20 "$OUT/k10.diff" >&2; fail "K10: the cart's route ops / stats records differ from the host's"; }
 say "m3-a: route PASS (ares), route ops and player / entity records identical to the host (K10)"
+# the host arena is the cart's heap after the carve (limits.h HL64_HOST_HEAP_KB)
+heapfree() { sed -n 's/^mem: heap free \([0-9]*\) KB.*/\1/p' "$1" | head -1; }
+HH="$(heapfree "$OUT/host-a.log")"
+CH="$(heapfree "$OUT/ares-a.log")"
+[[ -n "$HH" && "$HH" == "$CH" ]] \
+	|| fail "heap after carve: host ${HH:-?} KB, cart ${CH:-?} KB (set HL64_HOST_HEAP_KB to the cart's)"
+say "heap after carve: host $HH KB = cart $CH KB"
 
 if [[ -e "$ROOT/test/m3/snd_ares.sh" ]]; then
 	BUILD_DIR="$BUILD_DIR" HL64_CONTENT="$CONTENT" ARES_BIN="$ARES_BIN" "$ROOT/test/m3/snd_ares.sh" \
