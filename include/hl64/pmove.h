@@ -103,6 +103,10 @@ typedef struct {
 	int8_t		watertype;
 	uint8_t		dead;
 	uint8_t		pad[3];
+	/* the client's physics info string (GoldSrc info-string form
+	 * "\key\value..."; pfnSetPhysicsKeyValue writes it, pm_shared reads
+	 * it through PM_Info_ValueForKey) */
+	char		physinfo[HL64_PM_PHYSINFO];
 } ent_player_t;
 
 /* ---- one move (spec 1 step 5) -------------------------------------------- */
@@ -166,5 +170,12 @@ void		phy_pm_sound(int channel, const char *sample, float volume, float attenuat
  * ranges: [lo, hi] inclusive). */
 int32_t		hl64_rand_long(int32_t lo, int32_t hi);
 float		hl64_rand_float(float lo, float hi);
+/* pfnSetPhysicsKeyValue on the player: key's value in its physics info
+ * string (an existing key is replaced; an empty value removes it; a pair
+ * that would not fit, or a '\' in key or value, leaves the key out). */
+void		phy_player_set_physinfo(const char *key, const char *value);
+/* PM_Info_ValueForKey: key's value in info string s, "" when absent (the
+ * result lives until the next call). */
+const char	*phy_pm_info_value(const char *s, const char *key);
 
 #endif

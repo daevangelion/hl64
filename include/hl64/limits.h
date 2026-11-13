@@ -61,10 +61,13 @@
 /* World chunk reads in flight or queued at once (engine/world). */
 #define HL64_WORLD_REQS			16
 
-/* Player move (specs/pmove-host.md 2, D2): physents, ladders, touch list. */
+/* Player move (specs/pmove-host.md 2, D2): physents, ladders, touch list,
+ * the player's physics info string (HLSDK MAX_PHYSINFO_STRING is 256; the
+ * HL game sets "\slj\N\hl\1"). */
 #define HL64_PM_PHYSENTS		64
 #define HL64_PM_MOVEENTS		8
 #define HL64_PM_TOUCH			32
+#define HL64_PM_PHYSINFO		32
 
 /* ---- renderer (9) ------------------------------------------------------ */
 

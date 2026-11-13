@@ -433,7 +433,8 @@ static const struct { const char *name; uint16_t flags; } hle_classes[] = {
 	{"ammo_ARgrenades", 0}, {"ammo_mp5grenades", 0},
 	{"weapon_crowbar", 0}, {"weapon_9mmhandgun", 0}, {"weapon_glock", 0},
 	{"weapon_357", 0}, {"weapon_shotgun", 0}, {"weapon_9mmAR", 0},
-	{"weapon_mp5", 0}, {"weapon_handgrenade", 0},
+	{"weapon_mp5", 0}, {"weapon_handgrenade", 0}, {"weapon_tripmine", 0},
+	{"weaponbox", 0},
 	{"player_weaponstrip", HLE_CF_LOGIC},
 	/* sound / fx (env_glow, env_beam, env_laser are dropped: no N64 beam
 	 * renderer, and a glow would cost an entity each) */
@@ -544,6 +545,12 @@ static const struct { const char *name; uint16_t kind; } hle_xkeys[] = {
 	/* monster_miniturret (CBaseTurret::KeyValue) */
 	{"orientation",HLE_KF}, {"maxsleep",HLE_KF}, {"searchspeed",HLE_KF},
 	{"turnrate",HLE_KF},
+	/* weaponbox (CWeaponBox::KeyValue: every key an ammo name, PackAmmo
+	 * of its count): the HLSDK ammo names of weapons.cpp / GetItemInfo */
+	{"9mm",HLE_KF}, {"357",HLE_KF}, {"buckshot",HLE_KF}, {"bolts",HLE_KF},
+	{"rockets",HLE_KF}, {"uranium",HLE_KF}, {"Hornets",HLE_KF},
+	{"Hand Grenade",HLE_KF}, {"Satchel Charge",HLE_KF}, {"Trip Mine",HLE_KF},
+	{"Snarks",HLE_KF}, {"ARgrenades",HLE_KF},
 	{NULL, 0}
 };
 

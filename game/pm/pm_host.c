@@ -38,6 +38,9 @@
 
 qboolean PM_AddToTouched(pmtrace_t tr, vec3_t impactvelocity);
 
+/* the player block's physics info string is copied whole */
+typedef char pm_physinfo_size[MAX_PHYSINFO_STRING == HL64_PM_PHYSINFO ? 1 : -1];
+
 /* A physent's model pointer: the record entry it came from. */
 struct model_s
 {
@@ -250,6 +253,7 @@ void game_pm_init(void)
 		VectorCopy(phy_pm_maxs[i], pm.player_maxs[i]);
 	}
 	pm.movevars = &mv;
+	pm.PM_Info_ValueForKey = phy_pm_info_value;
 	pm.PM_TestPlayerPosition = svc_test_position;
 	pm.Con_DPrintf = svc_print;
 	pm.Con_Printf = svc_print;
@@ -367,6 +371,7 @@ void game_pm_move(phy_pm_t *rec)
 	pm.watertype = pl->watertype;
 	pm.maxspeed = settings.maxspeed;
 	pm.clientmaxspeed = pl->maxspeed;
+	memcpy(pm.physinfo, pl->physinfo, sizeof(pm.physinfo));
 
 	memset(&pm.cmd, 0, sizeof(pm.cmd));
 	pm.cmd.msec = rec->cmd.msec;

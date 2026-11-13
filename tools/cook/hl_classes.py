@@ -77,6 +77,8 @@ CLASS_MODEL: Dict[str, str] = {
     "weapon_9mmar": "w_9mmar",
     "weapon_mp5": "w_9mmar",
     "weapon_handgrenade": "w_grenade",
+    "weapon_tripmine": "v_tripmine",
+    "weaponbox": "w_weaponbox",
 }
 
 # Classes whose studio model is the entity's own `model` key.

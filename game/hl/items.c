@@ -89,9 +89,8 @@ static int MyTouch(int e, CItem *it)
 			return 0;
 		if (p->weapons & (1u << WEAPON_SUIT))
 		{
-			/* player now has longjump module ("slj" physics key: the
-			 * player block has no physinfo yet; see player.h) */
-			p->m_fLongJump = 1;
+			p->m_fLongJump = 1;	/* player now has longjump module */
+			phy_player_set_physinfo("slj", "1");
 			Player_SuitSound(RESID(SEN_HEV_A1));
 			hud_pickup(HIST_ITEM, ITEMK_LONGJUMP, 1);
 			return 1;
