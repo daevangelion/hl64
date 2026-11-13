@@ -44,9 +44,11 @@
 
 enum { POOL_RENDER, POOL_TEXTURE, POOL_COLL, NPOOLS };
 
+/* block descriptors per pool: measured peaks on the m4 route (render 145,
+ * texture 198, collision 231) x 1.25 */
 #define DESC_RENDER	192
-#define DESC_TEXTURE	160
-#define DESC_COLL	128
+#define DESC_TEXTURE	256
+#define DESC_COLL	288
 #define DESC_LAYERS	8
 
 typedef struct {
@@ -183,7 +185,7 @@ int wld_init(void)
 	}
 	if (size < 32 || size > cap)
 		bad(path, 0, "size");
-	io_read_sync(b, rom, (size + 1) & ~1u);
+	io_read_sync(b, rom, (size + 1) & ~1u, "cwg");
 	if (be32(b) != 0x43574733u || be16(b + 4) != 3)
 		bad(path, 0, "not CWG3");
 	nmaps = be16(b + 8);
@@ -942,15 +944,18 @@ uint8_t *wld_chunk_sync(wld_layer_t *L, int c)
 	uint32_t size = (ck->size + 15) & ~15u;
 	io_req_t *r;
 
+	/* named by the target set but not landed yet, or wanted by nobody
+	 * (wld_chunk_use, just before, queued it) */
 	if (ch->state == WLD_CH_LOADING && (r = req_of(L, c)))
-		io_finish(r);	/* req_done lands it */
+		io_finish(r, ch->want == wld_tgen ? "coll chunk (wanted, loading)"
+			: "coll chunk (not wanted)");	/* req_done lands it */
 	if (ch->state == WLD_CH_ABSENT)
 	{
 		while (!(ch->blk = mem_pool_alloc(&pools[POOL_COLL], size, &ch->data)))
 			if (!evict_one(POOL_COLL, WLD_CLS_OPEN))
 				sys_error("world: %s: COLL chunk %d does not fit the collision pool",
 					maps[L->map].name, c);
-		io_read_sync(ch->data, L->rom + ck->ofs, size);
+		io_read_sync(ch->data, L->rom + ck->ofs, size, "coll chunk");
 		ch->state = WLD_CH_RESIDENT;
 		st.loads++;
 		landed(L, c, ch->data);
@@ -1501,10 +1506,10 @@ wld_layer_t *wld_open(int map)
 		uint8_t stage = o->stage;
 
 		if (o->req.state == IO_QUEUED || o->req.state == IO_ACTIVE)
-			io_finish(&o->req);
+			io_finish(&o->req, "layer open");
 		for (i = 0; i < HL64_WORLD_REQS; i++)
 			if (reqs[i].user >= 0)
-				io_finish(&reqs[i]);
+				io_finish(&reqs[i], "layer open");
 		wld_open_step(L, 0);
 		spins = o->stage == stage ? spins + 1 : 0;
 		if (spins > OPEN_TRIES + 2)
@@ -1517,6 +1522,8 @@ wld_layer_t *wld_open(int map)
 	return L;
 }
 
+static void pvs_close(int slot);
+
 void wld_close(wld_layer_t *L)
 {
 	open_t *o;
@@ -1525,6 +1532,7 @@ void wld_close(wld_layer_t *L)
 	if (!L || !L->open)
 		return;
 	o = &opens[L->slot];
+	pvs_close(L->slot);
 	if (o->req.state == IO_QUEUED || o->req.state == IO_ACTIVE)
 		io_cancel(&o->req);
 	for (c = 0; L->ch && c < L->dir->nchunks; c++)
@@ -1645,32 +1653,243 @@ const uint16_t *wld_leaf_sectors(const wld_layer_t *L, int leaf, int *count)
 
 /* ---- PVS rows (architecture.md 5.5; w64-format.md VISR) ---------------------- */
 
-/* One decoded row per layer slot; only the offset pair and the row's own
- * compressed bytes are read (synchronously, counted as blocked I/O), the
- * VISR chunk itself is never resident. */
+/* The VISR chunk is never resident. The stream names the rows the player's
+ * eye will need (wld_pvs_want: its leaf, the leaves ahead along its
+ * velocity, point pin and seam arrival eyes); their offset pair and then
+ * their compressed bytes land asynchronously in a small row cache, so the
+ * eye entering a named leaf reads nothing. A row nobody named is read
+ * synchronously on use (counted as blocked I/O). One decoded row per layer
+ * slot is kept. */
 #define PVS_ROW_MAX	1024		/* BSP30: at most 8192 visleafs */
+#define PVS_ENTS	24		/* cached compressed rows, every layer */
+#define PVS_RAW		160		/* an entry's read: the row + 16 B line alignment */
 typedef struct {
 	uint8_t		set;		/* map and visleafs valid */
 	uint8_t		all;		/* the cached leaf has no row */
+	uint8_t		hdr;		/* the visleafs read is queued */
 	uint16_t	map;
 	int32_t		leaf;		/* cached leaf, -1 none */
 	int32_t		visleafs;	/* 0: no vis */
+	io_req_t	hreq;		/* the visleafs read (hbuf) */
 	uint8_t		row[PVS_ROW_MAX];
 } pvs_cache_t;
-static pvs_cache_t pvs[HL64_WORLD_LAYERS];
-/* PI destination: whole 16 B lines (architecture.md 4.3) */
+enum { PE_FREE, PE_OFS, PE_ROW, PE_READY };
+typedef struct {
+	uint8_t		state, slot, all;
+	uint16_t	map, skew;	/* the bytes start skew into the entry's data */
+	uint16_t	gen;		/* wld_tgen that last named it */
+	int32_t		leaf;
+	uint32_t	len;		/* row bytes */
+	uint32_t	used;		/* wld_frame_no named / used (LRU) */
+	io_req_t	req;
+} pvs_ent_t;
+static pvs_cache_t	pvs[HL64_WORLD_LAYERS];
+static pvs_ent_t	pents[PVS_ENTS];
+/* PI destinations: whole 16 B lines (architecture.md 4.3) */
 static uint8_t pvs_buf[PVS_ROW_MAX + 64] __attribute__((aligned(16)));
+static uint8_t pdata[PVS_ENTS][PVS_RAW] __attribute__((aligned(16)));
+static uint8_t hbuf[HL64_WORLD_LAYERS][16] __attribute__((aligned(16)));
 
-/* Bytes [off, off + len) of L's VISR chunk. */
-static const uint8_t *visr_read(const wld_layer_t *L, uint32_t off, uint32_t len)
+/* Bytes [off, off + len) of L's VISR chunk: the 16 B-aligned PI range
+ * (*a0 its start, n its length); sys_error when outside the chunk. */
+static uint32_t visr_range(const wld_layer_t *L, uint32_t off, uint32_t len, uint32_t *a0)
 {
 	const w64_chunk_t *ck = &L->chunks[L->dir->visr_chunk];
-	uint32_t a = ck->ofs + off, a0 = a & ~15u, n = (a - a0 + len + 15) & ~15u;
+	uint32_t a = ck->ofs + off;
 
-	if (off > ck->size || len > ck->size - off || n > sizeof(pvs_buf))
+	if (off > ck->size || len > ck->size - off)
 		bad(maps[L->map].name, a, "VISR row");
-	io_read_sync(pvs_buf, L->rom + a0, n);
-	return pvs_buf + (a - a0);
+	*a0 = a & ~15u;
+	return (a - *a0 + len + 15) & ~15u;
+}
+
+/* Bytes [off, off + len) of L's VISR chunk, read now. */
+static const uint8_t *visr_read(const wld_layer_t *L, uint32_t off, uint32_t len)
+{
+	uint32_t a0, n = visr_range(L, off, len, &a0);
+
+	if (n > sizeof(pvs_buf))
+		bad(maps[L->map].name, a0, "VISR row");
+	io_read_sync(pvs_buf, L->rom + a0, n, "visr");
+	return pvs_buf + (L->chunks[L->dir->visr_chunk].ofs + off - a0);
+}
+
+static void pvs_set(wld_layer_t *L, pvs_cache_t *c, const uint8_t *hdr)
+{
+	c->set = 1;
+	c->map = L->map;
+	c->leaf = -1;
+	c->visleafs = 0;
+	if (hdr)
+	{
+		c->visleafs = (int32_t)(be32(hdr) / 4u) - 1;
+		if (c->visleafs < 0 || (uint32_t)(c->visleafs + 7) >> 3 > PVS_ROW_MAX)
+			bad(maps[L->map].name, L->chunks[L->dir->visr_chunk].ofs, "VISR visleafs");
+	}
+}
+
+/* Queue entry e's read of VISR bytes [off, off + len) at class cls; 0 when
+ * the 16 B lines do not fit the entry (a row only a sync read takes). */
+static int pent_read(wld_layer_t *L, pvs_ent_t *e, uint32_t off, uint32_t len, int cls)
+{
+	uint32_t a0, n = visr_range(L, off, len, &a0);
+
+	if (n > PVS_RAW)
+		return 0;
+	memset(&e->req, 0, sizeof(e->req));
+	e->skew = (uint16_t)(L->chunks[L->dir->visr_chunk].ofs + off - a0);
+	e->req.rom = L->rom + a0;
+	e->req.dst = pdata[e - pents];
+	e->req.len = n;
+	e->req.prio = (uint8_t)cls_prio(cls);
+	e->req.front = 1;	/* a missing row blocks the game's PVS test */
+	io_submit(&e->req);
+	return 1;
+}
+
+static void pent_free(pvs_ent_t *e)
+{
+	if (e->req.state == IO_QUEUED || e->req.state == IO_ACTIVE)
+		io_cancel(&e->req);
+	e->state = PE_FREE;
+}
+
+static pvs_ent_t *pent_find(const wld_layer_t *L, int leaf)
+{
+	int i;
+
+	for (i = 0; i < PVS_ENTS; i++)
+		if (pents[i].state != PE_FREE && pents[i].slot == L->slot && pents[i].map == L->map
+			&& pents[i].leaf == leaf)
+			return &pents[i];
+	return NULL;
+}
+
+void wld_pvs_want(wld_layer_t *L, int leaf, int cls)
+{
+	pvs_cache_t *c;
+	pvs_ent_t *e, *v = NULL;
+	int i;
+
+	if (!L || L->dir->visr_chunk == W64_NONE || leaf <= 0)
+		return;
+	c = &pvs[L->slot];
+	if (c->set && c->map != L->map)
+		c->set = 0;
+	if (!c->set && !c->hdr)
+	{
+		uint32_t a0, n = visr_range(L, 0, 4, &a0);
+
+		memset(&c->hreq, 0, sizeof(c->hreq));
+		c->hreq.rom = L->rom + a0;
+		c->hreq.dst = hbuf[L->slot];
+		c->hreq.len = n;
+		c->hreq.prio = (uint8_t)cls_prio(cls);
+		c->hreq.front = 1;
+		io_submit(&c->hreq);
+		c->hdr = 1;
+	}
+	if ((c->set && leaf > c->visleafs) || 4u * (uint32_t)leaf + 4u
+		> L->chunks[L->dir->visr_chunk].size)
+		return;
+	if ((e = pent_find(L, leaf)))
+	{
+		e->gen = wld_tgen;
+		e->used = wld_frame_no;
+		if (e->state != PE_READY)
+			io_promote(&e->req, cls_prio(cls));
+		return;
+	}
+	/* a free entry, else the least recently named one outside this
+	 * generation whose read is not in flight */
+	for (i = 0; i < PVS_ENTS; i++)
+	{
+		pvs_ent_t *x = &pents[i];
+
+		if (x->state == PE_FREE)
+		{
+			v = x;
+			break;
+		}
+		if (x->gen != wld_tgen && x->req.state != IO_ACTIVE && (!v || x->used < v->used))
+			v = x;
+	}
+	if (!v)
+		return;
+	pent_free(v);
+	v->slot = (uint8_t)L->slot;
+	v->map = (uint16_t)L->map;
+	v->leaf = leaf;
+	v->gen = wld_tgen;
+	v->used = wld_frame_no;
+	if (pent_read(L, v, 4u * (uint32_t)(leaf - 1), 8, cls))
+		v->state = PE_OFS;
+}
+
+void wld_pvs_step(void)
+{
+	int i;
+
+	for (i = 0; i < HL64_WORLD_LAYERS; i++)
+	{
+		wld_layer_t *L = wld_layer(i);
+		pvs_cache_t *c = &pvs[i];
+
+		if (c->hdr && c->hreq.state == IO_DONE)
+		{
+			c->hdr = 0;
+			if (L && !c->set)
+				pvs_set(L, c, hbuf[i] + (L->chunks[L->dir->visr_chunk].ofs & 15u));
+		}
+	}
+	for (i = 0; i < PVS_ENTS; i++)
+	{
+		pvs_ent_t *e = &pents[i];
+		wld_layer_t *L;
+		const uint8_t *p;
+		uint32_t a, b;
+
+		if ((e->state != PE_OFS && e->state != PE_ROW) || e->req.state != IO_DONE)
+			continue;
+		L = wld_layer(e->slot);
+		if (!L || L->map != e->map)
+		{
+			e->state = PE_FREE;
+			continue;
+		}
+		if (e->state == PE_ROW)
+		{
+			e->state = PE_READY;
+			continue;
+		}
+		p = pdata[i] + e->skew;
+		a = be32(p);
+		b = be32(p + 4);
+		if (b < a || b > L->chunks[L->dir->visr_chunk].size)
+			bad(maps[L->map].name, L->chunks[L->dir->visr_chunk].ofs, "VISR row order");
+		e->all = a == b;
+		e->len = b - a;
+		if (e->all)
+			e->state = PE_READY;
+		else if (pent_read(L, e, a, b - a, prio_cls(e->req.prio)))
+			e->state = PE_ROW;
+		else
+			e->state = PE_FREE;	/* longer than an entry: read on use */
+	}
+}
+
+/* wld_close: the slot's queued row reads go. */
+static void pvs_close(int slot)
+{
+	int i;
+
+	for (i = 0; i < PVS_ENTS; i++)
+		if (pents[i].state != PE_FREE && pents[i].slot == slot)
+			pent_free(&pents[i]);
+	if (pvs[slot].hdr)
+		io_cancel(&pvs[slot].hreq);
+	pvs[slot].hdr = 0;
+	pvs[slot].set = 0;
 }
 
 const uint8_t *wld_pvs_row(wld_layer_t *L, int leaf, int *visleafs)
@@ -1678,36 +1897,47 @@ const uint8_t *wld_pvs_row(wld_layer_t *L, int leaf, int *visleafs)
 	pvs_cache_t *c = &pvs[L->slot];
 	const uint8_t *src, *end;
 	uint32_t a, b, nbytes, o;
+	pvs_ent_t *e;
 
 	if (!c->set || c->map != L->map)
 	{
-		c->set = 1;
-		c->map = L->map;
-		c->leaf = -1;
-		c->visleafs = 0;
-		if (L->dir->visr_chunk != W64_NONE)
-		{
-			c->visleafs = (int32_t)(be32(visr_read(L, 0, 4)) / 4u) - 1;
-			if (c->visleafs < 0 || (uint32_t)(c->visleafs + 7) >> 3 > PVS_ROW_MAX)
-				bad(maps[L->map].name, L->chunks[L->dir->visr_chunk].ofs, "VISR visleafs");
-		}
+		if (c->hdr && c->hreq.state != IO_DONE)
+			io_finish(&c->hreq, "visr");
+		if (c->hdr && c->hreq.state == IO_DONE)
+			pvs_set(L, c, hbuf[L->slot] + (L->chunks[L->dir->visr_chunk].ofs & 15u));
+		else
+			pvs_set(L, c, L->dir->visr_chunk != W64_NONE ? visr_read(L, 0, 4) : NULL);
+		c->hdr = 0;
 	}
 	*visleafs = c->visleafs;
 	if (!c->visleafs || leaf <= 0 || leaf > c->visleafs)
 		return NULL;
 	if (c->leaf == leaf)
 		return c->all ? NULL : c->row;
-	src = visr_read(L, 4u * (uint32_t)(leaf - 1), 8);
-	a = be32(src);
-	b = be32(src + 4);
+	if ((e = pent_find(L, leaf))
+		&& (e->state == PE_READY || (e->state == PE_ROW && e->req.state == IO_DONE)))
+	{
+		e->state = PE_READY;
+		e->used = wld_frame_no;
+		a = 0;
+		b = e->all ? 0 : e->len;
+		src = pdata[e - pents] + e->skew;
+	}
+	else
+	{
+		src = visr_read(L, 4u * (uint32_t)(leaf - 1), 8);
+		a = be32(src);
+		b = be32(src + 4);
+		if (b < a)
+			bad(maps[L->map].name, L->chunks[L->dir->visr_chunk].ofs, "VISR row order");
+		if (a != b)
+			src = visr_read(L, a, b - a);
+	}
 	c->leaf = leaf;
 	c->all = a == b;
 	if (c->all)
 		return NULL;
-	if (b < a)
-		bad(maps[L->map].name, L->chunks[L->dir->visr_chunk].ofs, "VISR row order");
 	nbytes = ((uint32_t)c->visleafs + 7u) >> 3;
-	src = visr_read(L, a, b - a);
 	end = src + (b - a);
 	/* a non-zero byte is 8 literal bits; zero + count = that many zeros */
 	for (o = 0; o < nbytes && src < end; src++)

@@ -64,7 +64,7 @@ static const pre_t pre[] = {
 	M(MONSTER_GMAN, MON_GMAN_MDL),
 	M(MONSTER_GARGANTUA, MON_GARG_MDL), M(MONSTER_GARGANTUA, GA_BEAM_SPR),
 	M(MONSTER_GARGANTUA, GA_EYE_SPR), M(MONSTER_GARGANTUA, MDL_METALPLATEGIBS),
-	M(MONSTER_GARGANTUA, SPR_SMOKE),
+	M(MONSTER_GARGANTUA, SPR_SMOKE), D(MONSTER_GARGANTUA, ENV_EXPLOSION),
 	M(MONSTER_BARNACLE, MON_BARNACLE_MDL),
 	M(MONSTER_HUMAN_GRUNT, MON_HGRUNT_MDL), M(MONSTER_HUMAN_GRUNT, W_SHELL),
 	M(MONSTER_HUMAN_GRUNT, W_SHOTGUNSHELL), D(MONSTER_HUMAN_GRUNT, WEAPON_9MMAR),
@@ -102,8 +102,11 @@ static const pre_t pre[] = {
 	M(WEAPONBOX, W_W_WEAPONBOX),
 	/* projectiles, effects, spawners */
 	M(GRENADE, MDL_GRENADE), M(GRENADE, SPR_FIREBALL), M(GRENADE, SPR_SMOKE),
-	M(GRENADE, SPR_WXPLO1),
+	M(GRENADE, SPR_WXPLO1), D(GRENADE, SPARK_SHOWER),
 	M(ENV_EXPLOSION, SPR_FIREBALL), M(ENV_EXPLOSION, SPR_SMOKE),
+	D(ENV_EXPLOSION, SPARK_SHOWER),
+	/* spark_shower (env.c CShower_Spawn): a never-drawn grenade model */
+	M(SPARK_SHOWER, MDL_GRENADE),
 	D(ENV_BEVERAGE, ITEM_SODACAN), M(ITEM_SODACAN, MDL_CAN),
 	M(GIBSHOOTER, MON_HGIBS),
 };
@@ -149,6 +152,9 @@ static void precache_record(gid_t16 gid, cls_t cls)
 	case CLS_FUNC_PUSHABLE:
 		Breakable_Precache(Breakable_Material(gid), rec_key_res(gid, K_GIBMODEL));
 		precache_class(Breakable_SpawnObject((int)KeyF(gid, K_SPAWNOBJECT, 0)));
+		/* breakable.c Die: ExplosionCreate when it has a magnitude */
+		if ((int)KeyF(gid, K_EXPLODEMAGNITUDE, 0))
+			precache_class(CLS_ENV_EXPLOSION);
 		break;
 	case CLS_WORLD_ITEMS:
 		/* CWorldItem::Spawn: 44 battery, 45 suit (42 / 43 not in the game) */

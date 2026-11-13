@@ -1107,40 +1107,28 @@ int col_material(uint16_t model, const float origin[3], const float angles[3],
 
 /* ---- residency (architecture.md 5.3) ------------------------------------------------ */
 
-/* The collision window: the player box + COL_WINDOW (global) and the
- * brush models it touches go to the stream as target-set inputs; the
- * stream names their COLL chunks (OPEN, + v * 0.5 s prefetch) only when
- * the window's grid cells or the model set changed. */
-void col_want(const float mins[3], const float maxs[3])
+/* The brush models a global box touches: solid ones and triggers (a touch
+ * tests the mover against the trigger brush's hull: engine/phys/touch.c)
+ * from the grid (a query in the caller's frame), contents ones here
+ * (their linked boxes + g_M); slot << 16 | submodel, at most max. */
+int col_models_box(const float lo[3], const float hi[3], uint32_t *out, int max)
 {
-	static uint32_t models[64];
-	float lo[3], hi[3];
+	const float *f = eng_layer_origin(eng_frame_layer());
+	float flo[3], fhi[3];
 	int k, n, i, nm = 0;
 
 	for (k = 0; k < 3; k++)
 	{
-		lo[k] = mins[k] - COL_WINDOW;
-		hi[k] = maxs[k] + COL_WINDOW;
+		flo[k] = lo[k] - f[k];
+		fhi[k] = hi[k] - f[k];
 	}
-	/* brushes the window touches: solid ones from the grid (a query in the
-	 * caller's frame), contents ones here (their linked boxes + g_M) */
-	{
-		const float *f = eng_layer_origin(eng_frame_layer());
-		float flo[3], fhi[3];
-
-		for (k = 0; k < 3; k++)
-		{
-			flo[k] = lo[k] - f[k];
-			fhi[k] = hi[k] - f[k];
-		}
-		n = col_ents_box(flo, fhi, cand, HL64_MAX_ENTITIES);
-	}
-	for (i = 0; i < n && nm < 64; i++)
-		if (cand[i]->solid == COL_SOLID_BSP && cand[i]->model != COL_NONE
-			&& wld_layer(COL_MODEL_SLOT(cand[i]->model)))
-			models[nm++] = (uint32_t)COL_MODEL_SLOT(cand[i]->model) << 16
+	n = col_ents_box(flo, fhi, cand, HL64_MAX_ENTITIES);
+	for (i = 0; i < n && nm < max; i++)
+		if ((cand[i]->solid == COL_SOLID_BSP || cand[i]->solid == COL_SOLID_TRIGGER)
+			&& cand[i]->model != COL_NONE && wld_layer(COL_MODEL_SLOT(cand[i]->model)))
+			out[nm++] = (uint32_t)COL_MODEL_SLOT(cand[i]->model) << 16
 				| COL_MODEL_SUB(cand[i]->model);
-	for (i = 0; i < ncbrush && nm < 64; i++)
+	for (i = 0; i < ncbrush && nm < max; i++)
 	{
 		const col_ent_t *e = cbrush[i];
 		const float *gm = eng_layer_origin(ent_idc(e->index)->layer);
@@ -1149,9 +1137,27 @@ void col_want(const float mins[3], const float maxs[3])
 			if (e->absmin[k] + gm[k] > hi[k] || e->absmax[k] + gm[k] < lo[k])
 				break;
 		if (k == 3 && wld_layer(COL_MODEL_SLOT(e->model)))
-			models[nm++] = (uint32_t)COL_MODEL_SLOT(e->model) << 16 | COL_MODEL_SUB(e->model);
+			out[nm++] = (uint32_t)COL_MODEL_SLOT(e->model) << 16 | COL_MODEL_SUB(e->model);
 	}
-	wld_stream_coll(lo, hi, models, nm);
+	return nm;
+}
+
+/* The collision window: the player box + COL_WINDOW (global) and the
+ * brush models it touches go to the stream as target-set inputs; the
+ * stream names their COLL chunks (OPEN, + v * 0.5 s prefetch) only when
+ * the window's grid cells or the model set changed. */
+void col_want(const float mins[3], const float maxs[3])
+{
+	static uint32_t models[64];
+	float lo[3], hi[3];
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		lo[k] = mins[k] - COL_WINDOW;
+		hi[k] = maxs[k] + COL_WINDOW;
+	}
+	wld_stream_coll(lo, hi, models, col_models_box(lo, hi, models, 64));
 }
 
 void col_stats(col_stats_t *s)

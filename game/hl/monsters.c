@@ -589,6 +589,19 @@ static CSound *base_PBestScent(int e)
 
 /* ---- think ------------------------------------------------------------------ */
 
+/* The attack sequences a think can switch to and pose at once (a frame-0
+ * event: islave ZAP_POWERUP's arm beams read attachments on the new
+ * sequence): their animation is requested while the monster lives, ahead
+ * of the think that picks one, so the server pose finds it resident
+ * instead of reading it synchronously. Residency only. */
+static void mon_want_attacks(int e)
+{
+	static const int acts[] = { ACT_RANGE_ATTACK1, ACT_RANGE_ATTACK2, ACT_MELEE_ATTACK1,
+		ACT_MELEE_ATTACK2, ACT_SPECIAL_ATTACK1, ACT_SPECIAL_ATTACK2 };
+
+	gs_want_activities(ent_rnd(e)->model, acts, (int)(sizeof(acts) / sizeof(acts[0])));
+}
+
 void CBaseMonster_MonsterThink(int e)
 {
 	CBaseMonster	*m = MON(e);
@@ -598,6 +611,8 @@ void CBaseMonster_MonsterThink(int e)
 	uint32_t	us;
 
 	ThinkIn(e, 0.1f);
+	if (m->m_MonsterState != MONSTERSTATE_DEAD)
+		mon_want_attacks(e);
 	Mon_RunAI(e);
 	if (!ent_is_live(e) || MON(e) != m)
 		goto out;
@@ -672,6 +687,20 @@ int Mon_FRouteClear(int e)
 	CBaseMonster *m = MON(e);
 
 	return m->m_Route[m->m_iRouteIndex].iType == 0 || m->m_movementGoal == MOVEGOAL_NONE;
+}
+
+/* include/hl64/game.h: the waypoint the monster is moving to */
+int game_move_goal(int e, float goal[3])
+{
+	CBaseMonster *m;
+
+	if (e == ENT_PLAYER || !mon_is_monster(e))
+		return 0;
+	m = MON(e);
+	if (m->m_iRouteIndex < 0 || m->m_iRouteIndex >= ROUTE_SIZE || Mon_FRouteClear(e))
+		return 0;
+	VecCopy(m->m_Route[m->m_iRouteIndex].vecLocation, goal);
+	return 1;
 }
 
 int Mon_FRefreshRoute(int e)

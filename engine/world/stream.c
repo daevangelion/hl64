@@ -32,6 +32,7 @@
 #include <string.h>
 
 #include "hl64/ent.h"
+#include "hl64/game.h"
 #include "hl64/limits.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
@@ -56,6 +57,21 @@
 #define MOVER_LEAD_S	0.5f		/* a moving brush entity's box swept this far ahead */
 #define MOVER_MARGIN	128.0f		/* ... and grown this much (a door about to move) */
 #define POPIN_LOGS	16		/* `stream: popin` lines logged at most */
+#define PVS_STEP	16.0f		/* u between the eye path's PVS row samples */
+#define PVS_SAMPLES	24		/* ... at most (1 s ahead) */
+#define PVS_NEAR	24.0f		/* u around the eye whose leaves' rows are named */
+#define PVS_STEPUP	20.0f		/* ... and above it (a stair step: 18 u) */
+#define DUCK_DZ		16.0f		/* standing eye - ducked eye (view offsets 28 / 12) */
+#define ENT_WINDOWS	64		/* moving entities with a collision window */
+#define ENT_LEAD_S	0.5f		/* an entity's window + v * 0.5 s */
+#define EW_MODELS	12		/* brush models of an entity's window */
+#define EW_REQUERY	30		/* frames between a window's model queries */
+#define GOAL_SPAN	1024.0f		/* a route span is prefetched this far at most */
+#define GOAL_MARGIN	40.0f		/* ... around the hull (a step up and down: 2 x 18 u) */
+#define SPAWN_WANTS	24		/* hydration windows per layer (wld_stream_spawns) */
+#define SPAWN_MARGIN	32.0f		/* around a record's spawn box */
+#define TELE_PINS	4		/* teleport destinations pinned at once */
+#define SEEN_MODELS	64		/* brush entities' hulls named in the eye's sectors */
 
 typedef struct {
 	uint8_t		on, win, movr_wait;
@@ -70,6 +86,27 @@ typedef struct {
 	float		org[3];
 	double		t0;
 } point_pin_t;
+
+/* an entity's collision window (ent_window): grid cell ranges per layer
+ * slot (cell_range; [0] > [3]: none) of its box and route span, and its
+ * brush models */
+typedef struct {
+	int16_t		e, slot;
+	int32_t		r[HL64_WORLD_LAYERS][6], g[HL64_WORLD_LAYERS][6];
+	int32_t		nm;
+	uint32_t	m[EW_MODELS];
+} ewin_t;
+
+typedef struct {
+	int16_t		slot, pad;
+	float		org[3];		/* the player origin it gives (map-local) */
+} tele_pin_t;
+
+/* a hydration candidate's spawn window (spawn_cells) */
+typedef struct {
+	int32_t		r[6];
+	int32_t		sub;		/* its own brush model, -1 none */
+} spawn_want_t;
 
 static struct {
 	/* inputs of the standing target set */
@@ -90,6 +127,18 @@ static struct {
 	uint32_t	cmodel[COLL_MODELS];
 	int		ncmodel;
 	uint32_t	coll_gen;
+	/* moving entities' collision windows, in entity order (ent_scan) */
+	ewin_t		ew[ENT_WINDOWS];
+	int		nwin;
+	/* hydration windows per layer (wld_stream_spawns) */
+	spawn_want_t		spawn[HL64_WORLD_LAYERS][SPAWN_WANTS];
+	int		nspawn[HL64_WORLD_LAYERS];
+	/* reachable teleport destinations (ent_scan) */
+	tele_pin_t	tele[TELE_PINS];
+	int		ntele;
+	/* hulls of the brush entities the home eye leaf sees (ent_scan) */
+	uint32_t	seen[SEEN_MODELS];
+	int		nseen;
 	/* pins */
 	seam_pin_t	seam[HL64_WORLD_LAYERS];
 	point_pin_t	point[POINT_PINS];
@@ -102,6 +151,8 @@ static struct {
 	uint32_t	popin_logs;
 	wld_stream_stats_t st;
 } S;
+
+static float len3(const float v[3]);
 
 /* ---- naming helpers --------------------------------------------------------- */
 
@@ -285,14 +336,12 @@ static void cell_range(const wld_layer_t *L, const float lo[3], const float hi[3
 	}
 }
 
-/* COLL lists of the grid cells a map-local box meets. */
-static void name_box(wld_layer_t *L, const float lo[3], const float hi[3], int cls)
+/* COLL lists of the grid cells in range r (cell_range). */
+static void name_cells(wld_layer_t *L, const int32_t r[6], int cls)
 {
 	const w64_grid_t *g = L->grid;
-	int32_t r[6];
 	int x, y, z, i;
 
-	cell_range(L, lo, hi, r);
 	for (z = r[2]; z <= r[5]; z++)
 		for (y = r[1]; y <= r[4]; y++)
 			for (x = r[0]; x <= r[3]; x++)
@@ -302,6 +351,216 @@ static void name_box(wld_layer_t *L, const float lo[3], const float hi[3], int c
 				for (i = 1; i <= v[0]; i++)
 					name(L, L->dir->coll_first + v[i], cls);
 			}
+}
+
+/* COLL lists of the grid cells a map-local box meets. */
+static void name_box(wld_layer_t *L, const float lo[3], const float hi[3], int cls)
+{
+	int32_t r[6];
+
+	cell_range(L, lo, hi, r);
+	name_cells(L, r, cls);
+}
+
+/* A global box of L's map-local [lo, hi] (col_models_box). */
+static int models_of(const wld_layer_t *L, const float lo[3], const float hi[3], uint32_t *out,
+	int max)
+{
+	float a[3], b[3];
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		a[k] = lo[k] + L->gofs[k];
+		b[k] = hi[k] + L->gofs[k];
+	}
+	return col_models_box(a, b, out, max);
+}
+
+/* Entity e's collision window (architecture.md 5.3: cells of moving
+ * monsters and projectiles, hulls of the brush entities in their box)
+ * into w: its linked box + COL_WIN and + v * ENT_LEAD_S, and a moving
+ * monster's route span (game_move_goal: the box swept to its waypoint,
+ * at most GOAL_SPAN, + GOAL_MARGIN), as grid cell ranges of every open
+ * layer; the brush models of both (from prev while its ranges are
+ * prev's, a fresh query every EW_REQUERY frames). A moving pusher: its
+ * own hull (a push tests the entities it meets against it). Toss
+ * entities at rest too (a pusher shoves them through triggers). 0: no
+ * window (a point traces hull 0, pinned). */
+static int ent_window(int e, wld_layer_t *L, const ewin_t *prev, ewin_t *w)
+{
+	const col_ent_t *cv = ent_cv(e);
+	const float *v = ent_mot(e)->velocity, *av = ent_mot(e)->avelocity;
+	float lo[3], hi[3], glo[3], ghi[3], goal[3], d[3], len;
+	int k, s, span = 0;
+
+	switch (cv->movetype)
+	{
+	case MOVETYPE_PUSH:
+		if ((v[0] == 0 && v[1] == 0 && v[2] == 0 && av[0] == 0 && av[1] == 0 && av[2] == 0)
+			|| cv->model == COL_NONE || COL_MODEL_SLOT(cv->model) != L->slot)
+			return 0;
+		memset(w, 0, sizeof(*w));
+		w->e = (int16_t)e;
+		w->slot = (int16_t)L->slot;
+		for (s = 0; s < HL64_WORLD_LAYERS; s++)
+			w->r[s][0] = w->g[s][0] = 1;	/* no cells */
+		w->nm = 1;
+		w->m[0] = (uint32_t)L->slot << 16 | COL_MODEL_SUB(cv->model);
+		return 1;
+	case MOVETYPE_WALK: case MOVETYPE_STEP: case MOVETYPE_FLY: case MOVETYPE_TOSS:
+	case MOVETYPE_BOUNCE: case MOVETYPE_FLYMISSILE: case MOVETYPE_BOUNCEMISSILE:
+	case MOVETYPE_PUSHSTEP:
+		break;
+	default:
+		return 0;
+	}
+	for (k = 0; k < 3 && cv->mins[k] == 0 && cv->maxs[k] == 0; k++)
+		;
+	if (k == 3)
+		return 0;
+	memset(w, 0, sizeof(*w));
+	w->e = (int16_t)e;
+	w->slot = (int16_t)L->slot;
+	for (k = 0; k < 3; k++)
+	{
+		float dv = v[k] * ENT_LEAD_S;
+
+		lo[k] = cv->origin[k] + cv->mins[k] + (dv < 0 ? dv : 0) - COL_WIN;
+		hi[k] = cv->origin[k] + cv->maxs[k] + (dv > 0 ? dv : 0) + COL_WIN;
+	}
+	if (game_move_goal(e, goal))
+	{
+		for (k = 0; k < 3; k++)
+			d[k] = goal[k] - cv->origin[k];
+		len = len3(d);
+		for (k = 0; k < 3; k++)
+		{
+			float end = cv->origin[k] + (len > GOAL_SPAN ? d[k] * GOAL_SPAN / len : d[k]);
+
+			glo[k] = (end < cv->origin[k] ? end : cv->origin[k]) + cv->mins[k] - GOAL_MARGIN;
+			ghi[k] = (end > cv->origin[k] ? end : cv->origin[k]) + cv->maxs[k] + GOAL_MARGIN;
+		}
+		span = 1;
+	}
+	/* every open layer's cells (a world trace walks each layer whose box
+	 * meets the move: a monster by a seam traces the neighbour map) */
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+	{
+		const wld_layer_t *O = wld_layer(s);
+		float a[3], b[3];
+
+		w->r[s][0] = w->g[s][0] = 1;	/* none */
+		if (!O)
+			continue;
+		for (k = 0; k < 3; k++)
+		{
+			a[k] = lo[k] + L->gofs[k] - O->gofs[k];
+			b[k] = hi[k] + L->gofs[k] - O->gofs[k];
+		}
+		cell_range(O, a, b, w->r[s]);
+		if (!span)
+			continue;
+		for (k = 0; k < 3; k++)
+		{
+			a[k] = glo[k] + L->gofs[k] - O->gofs[k];
+			b[k] = ghi[k] + L->gofs[k] - O->gofs[k];
+		}
+		cell_range(O, a, b, w->g[s]);
+	}
+	/* the brush models: queried again when a range changed, and every
+	 * EW_REQUERY frames (brush entities hydrate and release) */
+	if (prev && prev->e == e && prev->slot == w->slot && !memcmp(prev->r, w->r, sizeof(w->r))
+		&& !memcmp(prev->g, w->g, sizeof(w->g)) && (wld_frame_no + (uint32_t)e) % EW_REQUERY)
+	{
+		w->nm = prev->nm;
+		memcpy(w->m, prev->m, sizeof(w->m));
+		return 1;
+	}
+	w->nm = models_of(L, lo, hi, w->m, EW_MODELS);
+	if (span && w->nm < EW_MODELS)
+	{
+		uint32_t gm[EW_MODELS];
+		int n = models_of(L, glo, ghi, gm, EW_MODELS), i, j;
+
+		for (i = 0; i < n && w->nm < EW_MODELS; i++)
+		{
+			for (j = 0; j < w->nm && w->m[j] != gm[i]; j++)
+				;
+			if (j == w->nm)
+				w->m[w->nm++] = gm[i];
+		}
+	}
+	return 1;
+}
+
+/* Once per frame, every live entity but the player: the moving ones'
+ * collision windows (ent_window); the hulls of the brush entities
+ * (triggers, pushers) in the sectors the home eye leaf sees (a door used,
+ * a gib shoved through a trigger: their first move reads them before a
+ * window could name them); the destinations of the trigger_teleports
+ * there (architecture.md 5.3 pin class: reachable teleport
+ * destinations). A change bumps coll_gen / pin_gen. */
+static void ent_scan(wld_layer_t *H, const float eye[3])
+{
+	static ewin_t nw[ENT_WINDOWS];
+	uint32_t ns[SEEN_MODELS];
+	tele_pin_t nt[TELE_PINS];
+	const uint16_t *list = NULL;
+	int e, n = 0, nsn = 0, ntl = 0, p = 0, cnt = 0, leaf;
+
+	if (H && (leaf = wld_point_leaf(H, eye)) > 0)
+		list = wld_leaf_sectors(H, leaf, &cnt);
+	memset(nt, 0, sizeof(nt));
+	for (e = ENT_PLAYER + 1; e < HL64_MAX_ENTITIES; e++)
+	{
+		const col_ent_t *cv;
+		wld_layer_t *L;
+
+		if (!ent_is_live(e) || !(L = wld_layer(ent_idc(e)->layer)))
+			continue;
+		cv = ent_cv(e);
+		if (L == H && list && cv->model != COL_NONE && COL_MODEL_SLOT(cv->model) == L->slot
+			&& (cv->solid == COL_SOLID_TRIGGER || cv->movetype == MOVETYPE_PUSH)
+			&& box_seen(H, cv->absmin, cv->absmax, list, cnt))
+		{
+			float org[3];
+
+			if (nsn < SEEN_MODELS)
+				ns[nsn++] = (uint32_t)L->slot << 16 | COL_MODEL_SUB(cv->model);
+			if (cv->solid == COL_SOLID_TRIGGER && ntl < TELE_PINS && game_teleport_dest(e, org))
+			{
+				nt[ntl].slot = (int16_t)L->slot;
+				memcpy(nt[ntl].org, org, sizeof(org));
+				ntl++;
+			}
+		}
+		if (cv->solid == COL_SOLID_TRIGGER || n >= ENT_WINDOWS)
+			continue;
+		/* S.ew is in entity order: the previous window of e */
+		while (p < S.nwin && S.ew[p].e < e)
+			p++;
+		if (ent_window(e, L, p < S.nwin ? &S.ew[p] : NULL, &nw[n]))
+			n++;
+	}
+	if (n != S.nwin || memcmp(nw, S.ew, (size_t)n * sizeof(nw[0])))
+	{
+		memcpy(S.ew, nw, (size_t)n * sizeof(nw[0]));
+		S.nwin = n;
+		S.coll_gen++;
+	}
+	if (nsn != S.nseen || memcmp(ns, S.seen, (size_t)nsn * sizeof(ns[0])))
+	{
+		memcpy(S.seen, ns, (size_t)nsn * sizeof(ns[0]));
+		S.nseen = nsn;
+		S.coll_gen++;
+	}
+	if (ntl != S.ntele || memcmp(nt, S.tele, sizeof(nt)))
+	{
+		memcpy(S.tele, nt, sizeof(nt));
+		S.ntele = ntl;
+		S.pin_gen++;
+	}
 }
 
 /* The collision window (global) shifted by d, in L's frame. */
@@ -330,14 +589,34 @@ static void name_model_coll(wld_layer_t *L, unsigned sub, int cls)
 		name(L, L->dir->coll_first + (int)(m->coll_first + c), cls);
 }
 
-/* A point pin's eye leaf set and its collision window (map-local org). */
+/* COLL chunks of brush models (slot << 16 | submodel). */
+static void name_models(const uint32_t *m, int n, int cls)
+{
+	int i;
+
+	for (i = 0; i < n; i++)
+	{
+		wld_layer_t *L = wld_layer((int)(m[i] >> 16));
+
+		if (L)
+			name_model_coll(L, m[i] & 0xFFFF, cls);
+	}
+}
+
+/* A point pin's eye leaf set and its collision window (map-local org):
+ * the grid cells and the brush models live there (a destination's
+ * triggers and doors; records not yet hydrated have none). */
 static void name_point(wld_layer_t *L, const float org[3], int cls)
 {
 	float eye[3] = { org[0], org[1], org[2] + EYE_Z }, lo[3], hi[3];
+	uint32_t m[COLL_MODELS];
 	int k, leaf = wld_point_leaf(L, eye);
 
 	if (leaf > 0)
+	{
 		name_leaf(L, leaf, cls);
+		wld_pvs_want(L, leaf, cls);
+	}
 	for (k = 0; k < 3; k++)
 	{
 		float h = k == 2 ? 36.0f : 16.0f;
@@ -346,6 +625,7 @@ static void name_point(wld_layer_t *L, const float org[3], int cls)
 		hi[k] = org[k] + h + COL_WIN;
 	}
 	name_box(L, lo, hi, cls);
+	name_models(m, models_of(L, lo, hi, m, COLL_MODELS), cls);
 }
 
 /* The leaves the arrival eye can be in: the seam window's player box
@@ -415,11 +695,51 @@ static void name_seam(wld_layer_t *L, seam_pin_t *p)
 		 * B's movers there were missing for 22 frames) */
 		nl = arrival_leaves(L, p, leaves);
 		for (i = 0; i < nl; i++)
+		{
 			name_leaf(L, leaves[i], WLD_CLS_PIN);
+			wld_pvs_want(L, leaves[i], WLD_CLS_PIN);
+		}
 	}
 }
 
 /* ---- the target set ------------------------------------------------------------ */
+
+/* The PVS rows the eye will read (game FindClientInPVS: ent_client_in_pvs)
+ * before the next rebuild: the leaves next to the eye (PVS_NEAR around,
+ * a stair step up: a strafe, a step, a fall start cross into them before
+ * the next rebuild), along eye + v * t, t <= 1 s, every PVS_STEP u, and
+ * the ducked eye's leaf. */
+static void name_pvs_ahead(wld_layer_t *L)
+{
+	static const float nx[3] = { -PVS_NEAR, 0, PVS_NEAR }, nz[3] = { -PVS_NEAR, 0, PVS_STEPUP };
+	float sp = len3(S.vel), p[3];
+	int n = (int)(sp / PVS_STEP), i, k, leaf, last = S.leaf;
+
+	for (i = 0; i < 27; i++)
+	{
+		p[0] = S.eye[0] + nx[i % 3];
+		p[1] = S.eye[1] + nx[i / 3 % 3];
+		p[2] = S.eye[2] + nz[i / 9];
+		leaf = wld_point_leaf(L, p);
+		if (leaf > 0 && leaf != S.leaf)
+			wld_pvs_want(L, leaf, WLD_CLS_OPEN);	/* the next frames' */
+	}
+	if (n > PVS_SAMPLES)
+		n = PVS_SAMPLES;
+	for (i = 1; i <= n; i++)
+	{
+		for (k = 0; k < 3; k++)
+			p[k] = S.eye[k] + S.vel[k] * (float)i / (float)n;
+		leaf = wld_point_leaf(L, p);
+		if (leaf > 0 && leaf != last)
+			wld_pvs_want(L, leaf, WLD_CLS_PREFETCH);
+		last = leaf;
+	}
+	p[0] = S.eye[0];
+	p[1] = S.eye[1];
+	p[2] = S.eye[2] - DUCK_DZ;
+	wld_pvs_want(L, wld_point_leaf(L, p), WLD_CLS_PREFETCH);
+}
 
 /* Name the whole set, strongest class first (a stronger request may take
  * a weaker queued read's slot, never the reverse). The want peak is
@@ -455,6 +775,7 @@ static void name_all(void)
 				{
 					L->want_leaf = S.leaf;
 					name_leaf(L, S.leaf, cls);
+					wld_pvs_want(L, S.leaf, cls);
 					for (i = 0; i < S.nvleaf; i++)
 						name_leaf(L, S.vleaf[i], cls);
 				}
@@ -468,9 +789,34 @@ static void name_all(void)
 			{
 				if (S.seam[s].on)
 					name_seam(L, &S.seam[s]);
+				/* reachable teleport destinations: a play need,
+				 * measured with the open set */
+				for (i = 0; i < S.ntele; i++)
+					if (S.tele[i].slot == s)
+						name_point(L, S.tele[i].org, cls);
 			}
-			else if (s == S.home_slot)
+			else
 			{
+				/* moving entities' windows and the hydration
+				 * candidates' spawn windows: prefetch (an OPEN set
+				 * this wide overflowed the collision pool in the
+				 * warehouse fight; the sync fallback evicts them) */
+				for (i = 0; i < S.nwin; i++)
+				{
+					name_cells(L, S.ew[i].r[s], cls);
+					name_cells(L, S.ew[i].g[s], cls);
+					if (S.ew[i].slot == s)
+						name_models(S.ew[i].m, S.ew[i].nm, cls);
+				}
+				for (i = 0; i < S.nspawn[s]; i++)
+				{
+					name_cells(L, S.spawn[s][i].r, cls);
+					if (S.spawn[s][i].sub >= 0)
+						name_model_coll(L, (unsigned)S.spawn[s][i].sub, cls);
+				}
+				if (s != S.home_slot)
+					continue;
+				name_models(S.seen, S.nseen, cls);
 				for (i = 0; i < 3; i++)
 				{
 					float p[3];
@@ -482,6 +828,7 @@ static void name_all(void)
 					if (leaf > 0 && leaf != S.leaf)
 						name_leaf(L, leaf, cls);
 				}
+				name_pvs_ahead(L);
 				if (S.have_coll && (S.vel[0] != 0 || S.vel[1] != 0 || S.vel[2] != 0))
 				{
 					for (k = 0; k < 3; k++)
@@ -596,6 +943,8 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 		if (L->open && !L->ready)
 			wld_open_step(L, 16 * 1024);
 	}
+	/* landed PVS offset pairs go on to their rows */
+	wld_pvs_step();
 	/* the drawn eye's offset from the player's eye (bob, punch, landing
 	 * offset): last frame's view minus last frame's eye */
 	if (home_map >= 0 && ren_cam.map == home_map && S.have_prev)
@@ -632,6 +981,9 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 		vb[k] = vbucket(S.vel[k]);
 	if (S.pending == 0 && movr_landed())
 		S.pin_gen++;
+	/* moving entities' windows (a rebuild when one's cells changed) and
+	 * reachable teleport destinations */
+	ent_scan(H, eye);
 	{
 		int hs = H ? H->slot : -1;
 		int32_t leaf = H ? wld_point_leaf(H, eye) : -1, cell = H ? eye_cell(H, eye) : -1;
@@ -825,6 +1177,38 @@ void wld_stream_closed(int slot)
 		S.pin_gen++;
 	memset(&S.seam[slot], 0, sizeof(S.seam[slot]));
 	memset(S.ccell[slot], 0, sizeof(S.ccell[slot]));
+	/* the slot's cell ranges index its grid: none outlives the map */
+	if (S.nspawn[slot])
+		S.coll_gen++;
+	S.nspawn[slot] = 0;
+	{
+		int i, n = 0;
+
+		for (i = 0; i < S.nwin; i++)
+			if (S.ew[i].slot != slot)
+			{
+				S.ew[n] = S.ew[i];
+				S.ew[n].r[slot][0] = S.ew[n].g[slot][0] = 1;
+				S.ew[n].r[slot][3] = S.ew[n].g[slot][3] = 0;
+				n++;
+			}
+		if (n != S.nwin)
+			S.coll_gen++;
+		S.nwin = n;
+		for (i = n = 0; i < S.ntele; i++)
+			if (S.tele[i].slot != slot)
+				S.tele[n++] = S.tele[i];
+		if (n != S.ntele)
+			S.pin_gen++;
+		memset(S.tele + n, 0, sizeof(S.tele[0]) * (size_t)(TELE_PINS - n));
+		S.ntele = n;
+		for (i = n = 0; i < S.nseen; i++)
+			if ((int)(S.seen[i] >> 16) != slot)
+				S.seen[n++] = S.seen[i];
+		if (n != S.nseen)
+			S.coll_gen++;
+		S.nseen = n;
+	}
 }
 
 static int resident(const wld_layer_t *L, int c)
@@ -887,6 +1271,25 @@ static int leaf_resident(const wld_layer_t *L, int leaf)
 	return each_mover((wld_layer_t *)(uintptr_t)L, list, cnt, 0, movr_ok);
 }
 
+/* Every COLL chunk the grid cells in range r list resident. */
+static int cells_resident(const wld_layer_t *L, const int32_t r[6])
+{
+	const w64_grid_t *g = L->grid;
+	int x, y, z, i;
+
+	for (z = r[2]; z <= r[5]; z++)
+		for (y = r[1]; y <= r[4]; y++)
+			for (x = r[0]; x <= r[3]; x++)
+			{
+				const uint16_t *v = L->glists + L->cells[x + g->dims[0] * (y + g->dims[1] * z)].list;
+
+				for (i = 1; i <= v[0]; i++)
+					if (!resident(L, L->dir->coll_first + v[i]))
+						return 0;
+			}
+	return 1;
+}
+
 int wld_pin_resident(const wld_layer_t *B)
 {
 	const seam_pin_t *p = &S.seam[B->slot];
@@ -910,10 +1313,8 @@ int wld_pin_resident(const wld_layer_t *B)
 	}
 	if (p->win)
 	{
-		const w64_grid_t *g = B->grid;
 		float lo[3], hi[3];
 		int32_t r[6];
-		int x, y, z;
 
 		for (k = 0; k < 3; k++)
 		{
@@ -921,22 +1322,74 @@ int wld_pin_resident(const wld_layer_t *B)
 			hi[k] = p->box[k + 3] + COL_WIN;
 		}
 		cell_range(B, lo, hi, r);
-		for (z = r[2]; z <= r[5]; z++)
-			for (y = r[1]; y <= r[4]; y++)
-				for (x = r[0]; x <= r[3]; x++)
-				{
-					const uint16_t *v = B->glists
-						+ B->cells[x + g->dims[0] * (y + g->dims[1] * z)].list;
-
-					for (i = 1; i <= v[0]; i++)
-						if (!resident(B, B->dir->coll_first + v[i]))
-							return 0;
-				}
+		if (!cells_resident(B, r))
+			return 0;
 		nl = arrival_leaves(B, p, leaves);
 		for (i = 0; i < nl; i++)
 			if (!leaf_resident(B, leaves[i]))
 				return 0;
 	}
+	return 1;
+}
+
+/* ---- hydration windows ------------------------------------------------------------- */
+
+/* A record's spawn window: its spawn box grown by SPAWN_MARGIN as grid
+ * cells of L, and a brush record's own submodel (-1 none). */
+static void spawn_cells(const wld_layer_t *L, const float box[6], int sub, spawn_want_t *w)
+{
+	float lo[3], hi[3];
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		lo[k] = box[k] - SPAWN_MARGIN;
+		hi[k] = box[k + 3] + SPAWN_MARGIN;
+	}
+	cell_range(L, lo, hi, w->r);
+	w->sub = sub >= 0 && (unsigned)sub < L->dir->nsub ? sub : -1;
+}
+
+void wld_stream_spawns(int slot, const float (*box)[6], const int *sub, int n)
+{
+	const wld_layer_t *L = wld_layer(slot);
+	spawn_want_t w[SPAWN_WANTS];
+	int i, j, m = 0;
+
+	for (i = 0; L && i < n && m < SPAWN_WANTS; i++)
+	{
+		spawn_cells(L, box[i], sub[i], &w[m]);
+		for (j = 0; j < m && memcmp(&w[j], &w[m], sizeof(w[m])); j++)
+			;
+		if (j == m)
+			m++;
+	}
+	if (m != S.nspawn[slot] || memcmp(w, S.spawn[slot], (size_t)m * sizeof(w[0])))
+	{
+		memcpy(S.spawn[slot], w, (size_t)m * sizeof(w[0]));
+		S.nspawn[slot] = m;
+		S.coll_gen++;
+	}
+}
+
+int wld_spawn_resident(int slot, const float box[6], int sub)
+{
+	const wld_layer_t *L = wld_layer(slot);
+	const w64_model_t *md;
+	spawn_want_t w;
+	unsigned c;
+
+	if (!L)
+		return 1;
+	spawn_cells(L, box, sub, &w);
+	if (!cells_resident(L, w.r))
+		return 0;
+	if (w.sub < 0)
+		return 1;
+	md = &L->models[w.sub];
+	for (c = 0; c < md->coll_count && md->coll_first + c < L->dir->ncoll; c++)
+		if (!resident(L, L->dir->coll_first + (int)(md->coll_first + c)))
+			return 0;
 	return 1;
 }
 

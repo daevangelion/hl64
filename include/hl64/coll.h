@@ -209,8 +209,12 @@ void		col_init(void);
 
 /* OPEN-class collision window, once per frame: the hull 1-3 chunks of the
  * grid cells within 128 u of [mins, maxs] (global) and the chunks of the
- * SOLID_BSP / contents brushes that window touches. */
+ * brushes that window touches (col_models_box). */
 void		col_want(const float mins[3], const float maxs[3]);
+/* The brush models (solid, trigger, contents) whose linked boxes meet a
+ * global box: slot << 16 | submodel into out, at most max; the count
+ * (the stream's prefetch windows of moving entities and point pins). */
+int		col_models_box(const float lo[3], const float hi[3], uint32_t *out, int max);
 
 typedef struct {
 	uint32_t	traces, nodes;		/* since the last call */

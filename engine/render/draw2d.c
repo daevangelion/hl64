@@ -83,7 +83,7 @@ static const uint8_t *read_at(uint32_t rom, uint32_t ofs, uint32_t len)
 	uint8_t *s = mem_region(MEM_SCRATCH);
 	uint32_t a = ofs & ~15u, n = (ofs - a + len + 15) & ~15u;
 
-	io_read_sync(s, rom + a, n);
+	io_read_sync(s, rom + a, n, "hud");
 	return s + (ofs - a);
 }
 

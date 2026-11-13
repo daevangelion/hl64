@@ -71,6 +71,8 @@ static const struct {
 
 #define BUTTON_MASK	(0x3FFFu & ~(1u << 6))
 #define RT_LUMPS	64	/* records of one name id (TARG lump_count) */
+#define RT_NAMES	48	/* distinct name ids a route's ops resolve */
+#define RT_POOL		512	/* their lumps */
 #ifndef M_PI
 #define M_PI		3.14159265358979323846
 #endif
@@ -92,6 +94,12 @@ static struct {
 	double		t0;		/* game time (s) the current op started */
 	uint32_t	rtb_rom, targ_ofs, tlmp_ofs, ntlmp;	/* campaign.rtb test part */
 	rt_targ_t	tg;		/* the current op's name */
+	/* the ops' names, read at load (an op's start reads no cart) */
+	struct {
+		uint16_t	id, map, count, spawners, first;
+	}		names[RT_NAMES];
+	uint16_t	pool[RT_POOL];
+	uint16_t	nnames, npool;
 	int		start;		/* START map, -1 none */
 } rt;
 
@@ -143,12 +151,12 @@ static int rtb_read(rtb_ids_t *t)
 	memset(t, 0, sizeof(*t));
 	if (!rom || size < 32)
 		return -1;
-	io_read_sync(hdr, rom, 32);
+	io_read_sync(hdr, rom, 32, "route rtb");
 	nsect = rd16(hdr + 20);
 	if (rd32(hdr) != RTB_MAGIC || rd16(hdr + 4) != 1 || rd32(hdr + 12) != size
 		|| rd32(hdr + 24) != 32 || nsect > RTB_DIR_MAX || 32 + 16 * nsect > size)
 		return -1;
-	io_read_sync(hdr, rom, (32 + 16 * nsect + 1) & ~1u);
+	io_read_sync(hdr, rom, (32 + 16 * nsect + 1) & ~1u, "route rtb");
 	t->build_id = rd32(hdr + 8);
 	rt.rtb_rom = rom;
 	for (i = 0; i < nsect; i++)
@@ -176,23 +184,53 @@ static int rtb_read(rtb_ids_t *t)
 	return 0;
 }
 
-/* TARG entry of name id `id` and its TLMP lumps; -1 when it has more than
- * RT_LUMPS (the rtb's own rules were checked by res_init) */
-static int tg_read(uint32_t id, rt_targ_t *t)
+/* Read name id `id`'s TARG entry and its TLMP lumps into the route's name
+ * cache (load time: an op's start then reads no cart); -1 when it has more
+ * than RT_LUMPS records, -2 when the cache is full (the rtb's own rules
+ * were checked by res_init). */
+static int tg_load(uint32_t id)
 {
 	static uint8_t w[2 * RT_LUMPS] __attribute__((aligned(16)));
-	uint32_t first, i;
+	uint32_t first, count, i;
 
-	io_read_sync(w, rt.rtb_rom + rt.targ_ofs + 8u * id, 8);
-	t->map = rd16(w);
+	for (i = 0; i < rt.nnames; i++)
+		if (rt.names[i].id == id)
+			return 0;
+	if (rt.nnames >= RT_NAMES)
+		return -2;
+	io_read_sync(w, rt.rtb_rom + rt.targ_ofs + 8u * id, 8, "route names");
 	first = rd16(w + 2);
-	t->count = rd16(w + 4);
-	t->spawners = rd16(w + 6);
-	if (t->count > RT_LUMPS || first + t->count > rt.ntlmp)
+	count = rd16(w + 4);
+	if (count > RT_LUMPS || first + count > rt.ntlmp)
 		return -1;
-	io_read_sync(w, rt.rtb_rom + rt.tlmp_ofs + 2u * first, 2u * t->count);
-	for (i = 0; i < t->count; i++)
-		t->lump[i] = rd16(w + 2 * i);
+	if (rt.npool + count > RT_POOL)
+		return -2;
+	rt.names[rt.nnames].id = (uint16_t)id;
+	rt.names[rt.nnames].map = rd16(w);
+	rt.names[rt.nnames].count = (uint16_t)count;
+	rt.names[rt.nnames].spawners = rd16(w + 6);
+	rt.names[rt.nnames].first = rt.npool;
+	io_read_sync(w, rt.rtb_rom + rt.tlmp_ofs + 2u * first, 2u * count, "route names");
+	for (i = 0; i < count; i++)
+		rt.pool[rt.npool++] = rd16(w + 2 * i);
+	rt.nnames++;
+	return 0;
+}
+
+/* The cached name id `id` (tg_load at load) into t; -1 when not cached. */
+static int tg_get(uint32_t id, rt_targ_t *t)
+{
+	uint32_t i, k;
+
+	for (i = 0; i < rt.nnames && rt.names[i].id != id; i++)
+		;
+	if (i == rt.nnames)
+		return -1;
+	t->map = rt.names[i].map;
+	t->count = rt.names[i].count;
+	t->spawners = rt.names[i].spawners;
+	for (k = 0; k < t->count; k++)
+		t->lump[k] = rt.pool[rt.names[i].first + k];
 	return 0;
 }
 
@@ -233,7 +271,7 @@ int rt_load(const char *path)
 		return 0;
 	if (size < RBC_HDR || size > RBC_MAX_BYTES)
 		return bad(path, 0, "size");
-	io_read_sync(rt.buf, rom, (size + 1) & ~1u);
+	io_read_sync(rt.buf, rom, (size + 1) & ~1u, "route");
 	rt.size = size;
 	rt.nops = rd16(b + 20);
 	rt.code_ofs = rd32(b + 24);
@@ -266,7 +304,7 @@ int rt_load(const char *path)
 	for (i = 0, p = rt.code_ofs; i < rt.nops; i++)
 	{
 		uint32_t code, a, bb, nk, j, line = rd16(b + rt.lines_ofs + 2 * i);
-		int ok_a;
+		int ok_a, tk = 0;
 
 		if (p + 4 > rt.code_end)
 			return bad(path, p, "op runs past the code");
@@ -319,8 +357,9 @@ int rt_load(const char *path)
 		case OP_WAIT_MOVED: case OP_WAIT_GONE:
 			if (bb >= ids.targ)
 				return bad(path, p, "target id");
-			if (tg_read(bb, &rt.tg))
-				return bad(path, p, "name has more than 64 records");
+			if ((tk = tg_load(bb)))
+				return bad(path, p, tk == -1 ? "name has more than 64 records"
+					: "more names than RT_NAMES / RT_POOL");
 			break;
 		case OP_WAIT_GLOBAL:
 			ok_a = a <= 2;
@@ -331,8 +370,9 @@ int rt_load(const char *path)
 			ok_a = a <= 1;
 			if (rd32(b + p + 4) >= ids.maps || bb >= (a ? ids.clas : ids.targ))
 				return bad(path, p, "look_at ids");
-			if (!a && (tg_read(bb, &rt.tg) || rt.tg.map != rd32(b + p + 4)))
-				return bad(path, p, "look_at name not of its map");
+			if (!a && ((tk = tg_load(bb)) || tg_get(bb, &rt.tg) || rt.tg.map != rd32(b + p + 4)))
+				return bad(path, p, tk == -2 ? "more names than RT_NAMES / RT_POOL"
+					: "look_at name not of its map");
 			break;
 		case OP_BUTTONS:
 			if ((bb & ~BUTTON_MASK) || (rd32(b + p + 4) & ~BUTTON_MASK) || (bb & rd32(b + p + 4)))
@@ -743,7 +783,7 @@ void rt_frame(double time)
 				log_printf("route: %u %s\n", rt.op, ops[code].name);
 			/* the name's records (checked at load) */
 			if (code == OP_WAIT_MOVED || code == OP_WAIT_GONE || (code == OP_LOOK_AT && !a))
-				tg_read(b, &rt.tg);
+				tg_get(b, &rt.tg);
 			lookahead_pin();
 		}
 		switch (code)
