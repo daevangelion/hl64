@@ -383,12 +383,12 @@ static int cmd_stats(const dbg_cmd_t *c)
 
 			seam_stats(&ss);
 			log_printf("stats %lu seam: switches=%lu forced=%lu open_fail=%lu late=%lu "
-				"twins=%lu carried=%lu continuity_bad=%lu closes=%lu\n",
+				"twins=%lu carried=%lu continuity_bad=%lu closes=%lu open_wait=%lu\n",
 				(unsigned long)c->arg[0].u, (unsigned long)ss.switches,
 				(unsigned long)ss.forced, (unsigned long)ss.open_fail,
 				(unsigned long)ss.late, (unsigned long)ss.twins,
 				(unsigned long)ss.carried, (unsigned long)ss.continuity_bad,
-				(unsigned long)ss.closes);
+				(unsigned long)ss.closes, (unsigned long)ss.open_wait);
 		}
 		{
 			wld_stream_stats_t ss;
