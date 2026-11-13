@@ -22,8 +22,7 @@
  * use-targets, CBaseToggle moves, masters, damage dispatch.
  *
  * Every position here is map-local in the frame of eng_frame_layer()
- * (architecture.md 8); the trace wrappers add and remove the layer's
- * placement around the engine's global-coordinate collision calls.
+ * (architecture.md 8), as engine/coll takes and returns them.
  */
 #ifndef HL64_GAME_UTIL_H
 #define HL64_GAME_UTIL_H
@@ -324,6 +323,9 @@ void		CBaseEntity_Killed(int e, int attacker, int gib);
 void		CBaseEntity_TraceAttack(int e, int attacker, float damage, const float dir[3],
 			const col_trace_t *tr, int bits);
 int		CBaseEntity_DamageDecal(int e, int bits);
+/* CBaseEntity::TraceBleed; combat.cpp SpawnBlood */
+void		TraceBleed(int e, float damage, const float dir[3], const col_trace_t *tr, int bits);
+void		SpawnBlood(const float org[3], int color, float damage);
 /* multi-damage (combat.cpp) */
 void		ClearMultiDamage(void);
 void		ApplyMultiDamage(int inflictor, int attacker);
@@ -338,8 +340,13 @@ void		RadiusDamage(const float src[3], int inflictor, int attacker, float damage
 #define GLOBAL_OFF		0
 #define GLOBAL_ON		1
 #define GLOBAL_DEAD		2
-int		GlobalState(int id);		/* GLOBAL_*; GLOBAL_OFF unknown */
+/* ids: rec_key_global (-1 none). EntityGetState: GLOBAL_OFF when the id is
+ * not in the table; EntitySetState of an absent id does nothing;
+ * EntityAdd adds or overwrites. */
+int		GlobalState(int id);
+int		GlobalInTable(int id);
 void		GlobalSetState(int id, int state);
+void		GlobalAdd(int id, int state);
 void		GlobalReset(void);
 
 /* ---- decals (HLSDK decals.h order; FX owns the cooked sheet) --------------- */
@@ -371,7 +378,6 @@ void		UTIL_ScreenFade(int r, int g, int b, int alpha, float fade_time, float hol
 
 /* ---- game-side lifetime hooks (dispatch.c) ------------------------------- */
 
-void		game_material_init(void);
 /* Run think-kind function f on e (m_pfnCallWhenMoveDone and the like). */
 void		game_call_think(int e, fn_t f);
 

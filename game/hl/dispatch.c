@@ -134,18 +134,23 @@ void	world_lightstyles(void);
 
 /* ---- lifetime ------------------------------------------------------------------ */
 
+static const phy_game_hooks_t game_hooks = { game_think, game_touch, game_blocked };
+
 void game_init(void)
 {
-	game_material_init();
+	phy_set_game_hooks(&game_hooks);
 	if (game_mon_init)
 		game_mon_init();
 	if (game_items_init)
 		game_items_init();
 }
 
+void	game_logic_reset(void);
+
 void game_new_campaign(void)
 {
 	GlobalReset();
+	game_logic_reset();
 	ClearMultiDamage();
 	memset(&gpGlobals, 0, sizeof gpGlobals);
 	world_lightstyles();
