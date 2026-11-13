@@ -194,6 +194,9 @@ uint32_t	res_file_rom(int file, uint32_t *size);
 uint8_t		res_flags(res_t r);		/* MODEL: EXTTEX, sequence groups */
 /* game/defs/res.def line -> res_t (DEFS section); RES_NONE when absent. */
 res_t		res_def(int line);
+/* pfnModelFrames: sprite frame count (cooked .sc4 header), studio model
+ * body combinations (studio_body_count), 1 for brush models / none. */
+int		res_model_frames(res_t r);
 /* Residency interest (precache-and-resources.md 2): never fails;
  * res_interest tells the residency owners (studio, sound) it was declared. */
 void		res_precache(res_t r);

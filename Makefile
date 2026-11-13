@@ -99,7 +99,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest area pmtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest area pmtest enttest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -250,6 +250,14 @@ AREA_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(AREA_BIN): $(AREA_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 area: $(AREA_BIN)
+
+# Entity layer driver (test/m3/ent.c, run by test/m3/ent.py: K1-K3, K6-K9).
+ENTTEST_BIN := $(BUILD_DIR)/host/hl64-ent
+ENTTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/ent.o
+$(ENTTEST_BIN): $(ENTTEST_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+enttest: $(ENTTEST_BIN)
 
 # Player move driver (test/m2/pm.c, run by test/m2/pmbot.py and test/run/m2.sh).
 PM_BIN := $(BUILD_DIR)/host/hl64-pm
