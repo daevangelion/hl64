@@ -138,7 +138,7 @@ static int CItem_Spawn(int e, res_t model, int kind)
 		log_printf("game: Item %s fell out of level at %f,%f,%f\n",
 			game_class_name(ent_idc(e)->cls), (double)o[0], (double)o[1], (double)o[2]);
 		UTIL_Remove(e);
-		return -1;
+		return SpawnRefuse("CItem::Spawn: fell out of level (DROP_TO_FLOOR 0, UTIL_Remove)");
 	}
 	return 0;
 }
@@ -181,7 +181,8 @@ static int CWorldItem_Spawn(int e, gid_t16 gid)
 		CBase(n)->spawnflags = pev->spawnflags;
 	}
 	/* REMOVE_ENTITY: the record is done (the created item lives on) */
-	return -1;
+	return SpawnRefuse(n < 0 ? "CWorldItem::Spawn: unable to create world_item (REMOVE_ENTITY)"
+		: "CWorldItem::Spawn: replaced by its item_* (REMOVE_ENTITY)");
 }
 
 const game_class_t gc_WORLD_ITEMS = {

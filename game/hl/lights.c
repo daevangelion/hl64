@@ -45,6 +45,8 @@ static void CLight_LogicSpawn(gid_t16 gid)
 
 	if (rec_targetname(gid) == NAME_NONE)
 	{
+		game_refuse_log(rec_class(gid), gid, -1,
+			"CLight::Spawn: no targetname (inert light, REMOVE_ENTITY)");
 		rec_kill(gid);
 		return;
 	}
@@ -81,8 +83,7 @@ const game_class_t gc_LIGHT_SPOT = {
 
 static void NoClass_LogicSpawn(gid_t16 gid)
 {
-	log_printf("spawn: map %u lump %u refused: no HLSDK class (GoldSrc does not spawn it)\n",
-		(unsigned)GID_SLOT(gid), (unsigned)GID_LUMP(gid));
+	game_refuse_log(rec_class(gid), gid, -1, "no HLSDK class (GoldSrc does not spawn it)");
 	rec_kill(gid);
 }
 
