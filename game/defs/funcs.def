@@ -1,0 +1,37 @@
+//
+//	Copyright (c) 1996-2002, Valve LLC. All rights reserved.
+//	Half Life 1 SDK licence: game/LICENSE-HLSDK. hl64 game definitions.
+//
+// Game function ids (include/hl64/types.h fn_t): THINK(Ident), TOUCH(Ident),
+// USE(Ident), BLOCKED(Ident); Ident is the C function (HLSDK Class_Method);
+// fn_t = line order of these lines + 1 (FN_<Ident>, game/hl/util.h). The
+// engine stores ids in ent_tm_t; game/hl/dispatch.c calls them. Ids are
+// run-time only (saved games carry them: append only). Each game slice
+// appends in its own block (GameCore first, then the marked blocks).
+// ---- GameCore: base (subs.cpp, combat.cpp) ----
+THINK(SUB_Remove)
+THINK(SUB_DoNothing)
+THINK(SUB_CallUseToggle)
+THINK(SUB_StartFadeOut)
+THINK(SUB_FadeOut)
+THINK(CBaseToggle_LinearMoveDone)
+THINK(CBaseToggle_AngularMoveDone)
+// ---- GameMon ----
+THINK(CBaseMonster_MonsterThink)
+THINK(CBaseMonster_CallMonsterThink)
+THINK(CBaseMonster_MonsterInitThink)
+THINK(CBaseMonster_CorpseFallThink)
+USE(CBaseMonster_MonsterUse)
+USE(CTalkMonster_FollowerUse)
+TOUCH(CTalkMonster_Touch)
+THINK(CCineMonster_CineThink)
+USE(CCineMonster_Use)
+THINK(CSpeaker_SpeakerThink)
+USE(CSpeaker_ToggleUse)
+THINK(CGib_WaitTillLand)
+TOUCH(CGib_BounceGibTouch)
+TOUCH(CGib_StickyGibTouch)
+TOUCH(CHeadCrab_LeapTouch)
+// ---- Items ----
+// ---- GameCore: classes ----
+USE(CPathTrack_Use)
