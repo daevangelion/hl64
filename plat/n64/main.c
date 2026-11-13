@@ -50,14 +50,18 @@ int main(void)
 		.z_arena_bytes = FB_BYTES + 2 * RBA_PAGE_SIZE,
 		.stream_arena_bytes = 128 * 1024,
 	});
-	/* VI_CRT_MARGIN shrinks the picture so CRTs don't clip the HUD */
+	/* VI_CRT_MARGIN shrinks the picture so CRTs don't clip the HUD.
+	 * Dedither: the 3D passes dither (n64.h N64_DITHER); the VI rebuilds
+	 * the lost low bits. 320 wide 16-bit allows it only with resampling
+	 * (libdragon display.c); every pass writes full coverage, so the
+	 * divot / AA stage this mode also enables leaves pixels alone. */
 	display_init((resolution_t){
 		.width = 320,
 		.height = 240,
 		.interlaced = INTERLACE_OFF,
 		.aspect_ratio = 0,
 		.overscan_margin = VI_CRT_MARGIN,
-	}, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_RESAMPLE);
+	}, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS_DEDITHER);
 	rdpq_init();
 	joypad_init();
 	timer_init();

@@ -15,6 +15,17 @@
  * Expands to a T3D_FLAG_* value: include <t3d/t3d.h> where used. */
 #define N64_CULL	T3D_FLAG_CULL_FRONT
 
+/* Colour dithering of every 3D pass (world, movers, effects, studio):
+ * a lit texel (texture x grey vertex light) truncated per channel to the
+ * 16-bit framebuffer's 5 bits loses up to 7/255 of each channel
+ * independently, a hue shift that grows as the light darkens and bands
+ * light gradients in steps of different colour. The RDP's magic-square
+ * pattern is the one the VI dedither filter (main.c display_init,
+ * FILTERS_RESAMPLE_ANTIALIAS_DEDITHER) folds back to ~8 bits per channel;
+ * alpha stays undithered so alpha-compare cutouts keep exact edges.
+ * Expands to an rdpq_dither_t: include <libdragon.h> where used. */
+#define N64_DITHER	DITHER_SQUARE_NONE
+
 /* fpu_shim.c */
 void		fpu_shim_install(void);
 unsigned long	fpu_shim_trap_count(void);
