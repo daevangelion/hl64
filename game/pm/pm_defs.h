@@ -21,8 +21,9 @@
  * - caps: physents 64 (was 600), move-ents 8 (was 64), touch list 32
  *   (was 600, MAX_PHYSENTS), no visents (pm_shared's movement never reads
  *   them);
- * - physent_t keeps the fields pm_shared reads (no name, studio model,
- *   animation or mod user fields);
+ * - physent_t keeps HLSDK's leading fields verbatim (the unused studio
+ *   model pointer included) and drops the name, animation and mod user
+ *   fields;
  * - playermove_t drops the visent list, the physics info string, the
  *   texture name buffer and the file / console / particle / event
  *   services pm_shared no longer calls; PM_TraceTexture returns the
@@ -57,8 +58,9 @@ typedef struct physent_s
 {
 	int				player;
 	vec3_t			origin;               // Model's origin in world coordinates.
-	struct model_s	*model;		          // brush physents
-	vec3_t			mins, maxs;	          // box physents
+	struct model_s	*model;		          // only for bsp models
+	struct model_s	*studiomodel;         // SOLID_BBOX, but studio clip intersections.
+	vec3_t			mins, maxs;	          // only for non-bsp models
 	int				info;		          // For client or server to use to identify (index into edicts or cl_entities)
 	vec3_t			angles;               // rotated entities need this info for hull testing to work.
 
