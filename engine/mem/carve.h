@@ -28,7 +28,7 @@
 	X(THINK_GRID, "thinkgrid", HL64_THINK_GRID_KB, 0) \
 	X(HLE_BLOBS, "hle", HL64_HLE_BLOBS_KB, 1) \
 	X(DEHYDRATE, "dehydrate", HL64_DEHYDRATE_KB, 0) \
-	X(SOUND, "sound", HL64_SOUND_KB, 1) \
+	X(SOUND, "sound", HL64_SOUND_KB, 0) \
 	X(SPRITE_CACHE, "sprites", HL64_SPRITE_CACHE_KB, 0) \
 	X(DECAL_TEXELS, "decals", HL64_DECAL_TEXELS_KB, 0) \
 	X(PARTICLES, "particles", HL64_PARTICLES_KB, 0) \

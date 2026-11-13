@@ -197,7 +197,7 @@ pointers, so `-m32` and LP64 sizes are identical.
 | sentence table (cooked) | 24 | parsed text in RAM | [EST] word ids, no strings |
 | lightstyle patterns + state | 4 | strings + 96 × value | lightstyles.md |
 | think heap, active bitsets, grid tables | 12 | area tree + leaf lists in edicts | 6.3, 8; the grid tables use 2 KB (measured), grid nodes (16 B each) and the 1485 × 8 B membership pool sit in the entity components region |
-| sound (16 voice buffers, 10 wav64, loops) | 96 | not measured | [EST] |
+| sound (16 voice buffers, 10 wav64, loops) | 96 | not measured | **measured** (ares, test/m3/snd_ares.sh): 78144 B peak (16 × 4 KB voice buffers in the region, 10 open wav64, tables, AUDIO bounce) × 1.25 = 97680 B |
 | sprite cache / decal texels / particles | 64 / 48 / 12 | 64 / 8 / 512 Quake particles | render-fx.md |
 | dlight scratch + flashlight pool | 48 | same | |
 | HUD sheets + font (ui8) | 128 | similar | [EST] |
