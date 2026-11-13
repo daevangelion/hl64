@@ -884,7 +884,7 @@ static int hits_test(char *note, int len)
 
 static void test_x5(void)
 {
-	char note[160] = "", hits[96] = "";
+	char note[288] = "", hits[96] = "";
 	decal_stats_t ds;
 	float eg[3], d[3] = { 1, 0, 0 }, p[3], n[3];
 	int i, k;
@@ -1010,6 +1010,36 @@ static void test_x5(void)
 
 			snprintf(note + l, sizeof(note) - l, "; drawn in frame, max %.4f u off", err);
 		}
+	}
+	/* the vertex ring at its worst: all HL64_FX_DECALS in view, each
+	 * HL64_FX_DECAL_VERTS vertices and its frame matrix, none dropped */
+	{
+		gpu_fx_stats_t gs;
+		float w1[1][3];
+		int owner, nd, i2 = -1, need = HL64_FX_DECALS * ((HL64_FX_DECAL_VERTS + 1) / 2
+			+ GPU_FX_MAT_PAIRS);
+
+		fx_init();
+		CHECK(decal_place_now(p, n, -1, 0) > 0, "worst: placement");
+		for (i = 0; i < HL64_FX_DECALS && decal_info(i, &owner, &nd, w1, 1) <= 0; i++)
+			;
+		if (i < HL64_FX_DECALS)
+			i2 = decal_test_fill_worst(i);
+		eye(eg, 0, 0);
+		draw();
+		gpu_fx_stats(&gs);
+		CHECK(i2 == HL64_FX_DECALS && gs.calls[GPU_FX_DECAL] == HL64_FX_DECALS && !gs.drops
+			&& gs.pairs >= (uint32_t)need, "worst: %d decals filled, %lu drawn, %lu dropped, "
+			"%lu pairs (need %d)", i2, (unsigned long)gs.calls[GPU_FX_DECAL],
+			(unsigned long)gs.drops, (unsigned long)gs.pairs, need);
+		{
+			size_t l = strlen(note);
+
+			snprintf(note + l, sizeof(note) - l, "; %d worst-case decals: %lu of %d ring pairs, "
+				"%lu dropped", HL64_FX_DECALS, (unsigned long)gs.pairs, GPU_FX_RING_PAIRS,
+				(unsigned long)gs.drops);
+		}
+		fx_init();
 	}
 	{
 		size_t l = strlen(note);

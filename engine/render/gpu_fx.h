@@ -18,9 +18,21 @@
 
 #include <stdint.h>
 
+#include "hl64/limits.h"
 #include "engine/render/gpu.h"
 
 #define GPU_FX_POS_SCALE	4.0f	/* s16 position units per world unit */
+
+/* The frame's vertex ring, in vertex pairs (32 B; both platforms count
+ * it the same way): the translucent pass's share (sprites, beams,
+ * streaks, brushes, temp sprites) plus every decal at its worst (all
+ * HL64_FX_DECALS in view, each HL64_FX_DECAL_VERTS vertices and its
+ * frame matrix). A batch that does not fit is not drawn and is counted
+ * (gpu_fx_stats_t.drops; the effects pass logs the first full frame). */
+#define GPU_FX_MAT_PAIRS	2	/* a gpu_fx_frame matrix (64 B) */
+#define GPU_FX_TRANS_PAIRS	1024
+#define GPU_FX_RING_PAIRS	(GPU_FX_TRANS_PAIRS + HL64_FX_DECALS \
+	* ((HL64_FX_DECAL_VERTS + 1) / 2 + GPU_FX_MAT_PAIRS))
 
 /* RDP state of each effects mode (render-fx.md 2 table, as the RDP does it). */
 enum {
@@ -106,6 +118,8 @@ void	gpu_fx_points(const gpu_fx_point_t *p, int n);
 typedef struct {
 	uint32_t	calls[GPU_FX_MODES];	/* triangle / point batches per mode */
 	uint32_t	tris, verts, points, texloads;
+	uint32_t	drops;		/* batches not drawn: the ring was full */
+	uint32_t	pairs;		/* ring pairs used (of GPU_FX_RING_PAIRS) */
 	uint32_t	hash;		/* host: FNV-1a of the effects draw list; cart 0 */
 } gpu_fx_stats_t;
 /* Last completed frame. */

@@ -25,6 +25,7 @@
 #include "hl64/ent.h"
 #include "hl64/limits.h"
 #include "hl64/studio.h"
+#include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/render/fx_int.h"
 #include "engine/render/gpu_studio.h"
@@ -515,10 +516,19 @@ void fx_draw_trans(void)
 
 void fx_draw_decals(void)
 {
+	static uint32_t prev_drops;
 	uint64_t t0 = sys_time_us();
+	gpu_fx_stats_t g;
 
 	decal_draw(&ds.decals, &ds.decal_verts);
 	gpu_fx_end();
+	/* a full vertex ring drops batches (counted per frame): logged on the
+	 * first frame of each run of full frames */
+	gpu_fx_stats(&g);
+	if (g.drops && !prev_drops)
+		log_printf("fx: effects vertex ring full: %lu batches dropped (%lu of %d pairs)\n",
+			(unsigned long)g.drops, (unsigned long)g.pairs, GPU_FX_RING_PAIRS);
+	prev_drops = g.drops;
 	fx_add_us((uint32_t)(sys_time_us() - t0));
 	last = ds;
 }
