@@ -86,11 +86,27 @@
 #define HL64_STUDIO_DRAWN		64
 /* Dynamic lights (docs/specs/dlights.md 1). */
 #define HL64_DLIGHTS			32
+/* Effects (docs/specs/render-fx.md 2-5): temp entities and the studio
+ * temps drawn per frame, particles (the particles region holds them),
+ * beams and their segments, decals, the decal placement queue, the
+ * translucent list per frame and the additive blend cap (RDP wrap guard),
+ * the sprite models the sprite cache tracks. */
+#define HL64_FX_TEMPS			48
+#define HL64_FX_TEMPS_STUDIO		6
+#define HL64_FX_PARTICLES		512
+#define HL64_FX_BEAMS			16
+#define HL64_FX_BEAM_SEGS		16
+#define HL64_FX_DECALS			96
+#define HL64_FX_DECAL_VERTS		24
+#define HL64_FX_DECAL_QUEUE		16
+#define HL64_FX_TRANS_MAX		64
+#define HL64_FX_ADD_CAP			128
+#define HL64_FX_SPRITE_MODELS		16
 
 /* ---- boot carve regions, KB (4.1) ------------------------------------ */
 
 #define HL64_SCRATCH_KB			64	/* per-frame scratch arena */
-#define HL64_RESTAB_KB			28	/* resource table: 9.5 KB measured (Uplink + Hazard, no res.def) + the game's res.def (~500 ids x 20 B) x 1.25 */
+#define HL64_RESTAB_KB			40	/* resource table: 29228 B measured with the game's res.def (Uplink + Hazard cook, GameMon2) x 1.25, rounded up */
 #define HL64_SENTENCES_KB		24	/* [EST] word ids, no strings */
 #define HL64_LIGHTSTYLE_KB		4	/* patterns + state */
 #define HL64_LAYER_DIRS_KB		168	/* 2 open .w64 directories, measured */

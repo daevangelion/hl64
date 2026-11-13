@@ -218,15 +218,13 @@ def typed(key: str, v: str, cname: str, preset: bool, ids: Ids, at: str) -> Tupl
     if (key, cname) in (("message", "env_message"), ("chaptertitle", "worldspawn")):
         return "title", ids.titles.get(v.upper(), NONE)
     if key in restab.SENTENCE_KEYS and v.startswith("!") and len(v) > 1:
-        if v[1:].upper() not in ids.sentences:
-            raise IdError(f"{at}: sentence {v[1:]!r} not in the table")
-        return "res", ids.sentences[v[1:].upper()]
+        # restab stops on names sentences.txt lacks; one missing here lost
+        # every word to missing sounds (GoldSrc plays nothing)
+        return "res", ids.sentences.get(v[1:].upper(), NONE)
     if key == "monstertype":
         return "cls", ids.classes.get(v.lower(), NONE)
     if key == "message" and cname == "speaker" and not preset or key in restab.GROUP_KEYS:
-        if v.upper() not in ids.groups:
-            raise IdError(f"{at}: sentence group {v!r} not in the table")
-        return "res", ids.groups[v.upper()]
+        return "res", ids.groups.get(v.upper(), NONE)
     if key == "model" and re.fullmatch(r"\*[0-9]+", v):
         n = int(v[1:])
         if not 0 < n < SUBMODEL_MAX:
