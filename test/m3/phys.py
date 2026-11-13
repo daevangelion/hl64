@@ -522,7 +522,7 @@ def main():
         p = run(a.bin, a.content, [f"map {mp}", f"selftest {vec([fl[0], fl[1], fl[2] + 0.03125])}"])
         ok = "selftest ok" in p.stdout and p.returncode == 0
         for t in ("P3", "P13"):
-            count(t, ok and f"{t} done" in p.stdout)
+            count(t, ok and (f"{t} slides done" if t == "P3" else f"{t} done") in p.stdout)
         if not ok:
             fails += 1
             print(f"selftest FAIL {mp}:\n  " + "\n  ".join(p.stdout.splitlines()[-12:]))
