@@ -206,7 +206,9 @@ res.def          RES(MODEL|SPRITE|SOUND|SENTENCE|GROUP, IDENT, "name")
 lightstyles.def  LIGHTSTYLE(style 0-63, "pattern")
 ```
 
-A missing definition file counts as empty.
+A missing definition file counts as empty; so does a missing `--defs`
+directory (`game/` arrives in M3; restab prints a note). Routes naming
+classes need `classes.def`.
 
 `sentences.txt` lines: `NAME words…`; `//` comments. Words are separated
 by spaces; `dir/` before a word sets the directory for it and the following

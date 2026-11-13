@@ -375,9 +375,10 @@ def cook(content_dir: str, defs_dir: str) -> rtb.Table:
             sp = spawned.get(name, [])
             targets.append((mi, name, names.get(name, []) + sp, len(sp)))
 
-    # definitions
+    # definitions (game/defs arrives with game/ in M3; absent = no lines)
     if not os.path.isdir(defs_dir):
-        raise CookError(f"definitions directory {defs_dir} missing")
+        print(f"restab: note: no definitions directory {defs_dir}: "
+              f"no classes, game resources or standard lightstyles", file=sys.stderr)
     t.class_names = [g[1] for _, g in read_defs(defs_dir, "classes.def")]
     if len(set(t.class_names)) != len(t.class_names):
         raise CookError("classes.def: duplicate classname")
