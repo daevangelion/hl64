@@ -21,8 +21,9 @@
 # Usage: test/run/m3.sh [--ares]
 # Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content: campaign.rtb,
 #        hldemo*), HL64_FIXTURES (default /scratch/hl64/fixtures),
-#        HL64_DATA (Valve data for ent.py's PVS oracle, default
-#        /scratch/hl1/valve), ARES_BIN, ARES_TIMEOUT, DISPLAY_NUM.
+#        HL64_DATA (Valve data for ent.py's PVS oracle and m1.sh's W1,
+#        default /scratch/hl1/valve), W1_FIXTURES (default
+#        $HL64_FIXTURES/w1), ARES_BIN, ARES_TIMEOUT, DISPLAY_NUM.
 # Exit:  0 pass, 1 gate failure, 2 prerequisite missing.
 set -euo pipefail
 
@@ -51,7 +52,8 @@ CMDS=(--cmd "@1 fixed_dt 33333")
 
 # ---- earlier gates (host parts) ----
 for g in m0 m1 m2; do
-	BUILD_DIR="$BUILD_DIR" HL64_CONTENT="$CONTENT" HL64_FIXTURES="$FIX" "$ROOT/test/run/$g.sh" \
+	BUILD_DIR="$BUILD_DIR" HL64_CONTENT="$CONTENT" HL64_FIXTURES="$FIX" HL64_DATA="$DATA" \
+		W1_FIXTURES="${W1_FIXTURES:-$FIX/w1}" "$ROOT/test/run/$g.sh" \
 		>"$OUT/$g.log" 2>&1 || { tail -20 "$OUT/$g.log" >&2; fail "$g gate (host)"; }
 	say "$g: $(tail -1 "$OUT/$g.log")"
 done
