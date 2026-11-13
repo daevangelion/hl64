@@ -66,7 +66,7 @@ GAME_SRC_MON := game/hl/monsters.c game/hl/schedule.c game/hl/defaultai.c game/h
 	game/hl/talkmonster.c game/hl/scientist.c game/hl/monstermaker.c \
 	game/hl/barney.c game/hl/generic.c game/hl/headcrab.c \
 	game/hl/aisquad.c game/hl/houndeye.c game/hl/barnacle.c \
-	game/hl/roach.c
+	game/hl/roach.c game/hl/grunt.c
 GAME_SRC_ITEMS := game/hl/weapons.c game/hl/weapon_crowbar.c game/hl/weapon_glock.c \
 	game/hl/weapon_python.c game/hl/weapon_mp5.c game/hl/weapon_shotgun.c \
 	game/hl/weapon_handgrenade.c game/hl/items.c game/hl/chargers.c game/hl/grenade.c \

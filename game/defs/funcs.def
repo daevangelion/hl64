@@ -34,6 +34,7 @@ THINK(CBarnacle_BarnacleThink)
 THINK(CBarnacle_WaitTillDead)
 THINK(CRoach_MonsterThink)
 TOUCH(CRoach_Touch)
+USE(CHGruntRepel_RepelUse)
 // ---- Items ----
 THINK(CBasePlayerItem_FallThink)
 TOUCH(CBasePlayerItem_DefaultTouch)
