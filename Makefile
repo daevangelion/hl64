@@ -384,7 +384,8 @@ sndtest: $(SND_BIN)
 SEAM_BIN := $(BUILD_DIR)/host/hl64-seam
 SEAM_WRAP := wld_open_async wld_layer_ready wld_layer_of_map wld_pin_seam wld_pin_seam_window \
 	wld_unpin_seam wld_stream_rebase rec_map_open rec_map_ready rec_map_close rec_slot_live \
-	rec_release rec_twin_alias rec_twin_clear rec_rehome rec_entity rec_wake rec_origin \
+	rec_release rec_twin_alias rec_twin_clear rec_rehome rec_entity rec_state rec_kill rec_wake \
+	rec_origin \
 	rec_name_find rec_fire rec_fire_at rec_key_f game_twin_copy game_carry
 SEAM_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 	$(BUILD_DIR)/host/test/m4/seam_test.o

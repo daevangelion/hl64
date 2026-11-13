@@ -78,6 +78,8 @@ void		__wrap_rec_twin_alias(gid_t16 a, gid_t16 b);
 void		__wrap_rec_twin_clear(int slot);
 int		__wrap_rec_rehome(int e, int slot);
 int		__wrap_rec_entity(gid_t16 gid);
+int		__wrap_rec_state(gid_t16 gid);
+void		__wrap_rec_kill(gid_t16 gid);
 int		__wrap_rec_wake(gid_t16 gid);
 void		__wrap_rec_origin(gid_t16 gid, float out[3]);
 name_t		__wrap_rec_name_find(int slot, const char *s);
@@ -93,7 +95,7 @@ static struct {
 	int		ready, hle_ready, open_null;
 	int		live[4];
 	int		open_async, alias, twin_clear, rehome, release, pin, window, unpin;
-	int		rebase, fire, fire_at, map_open, map_close, copies;
+	int		rebase, fire, fire_at, map_open, map_close, copies, kill;
 	int		pin_n;
 	float		win_mins[3], win_maxs[3];
 	float		T[3];
@@ -108,6 +110,7 @@ static struct {
 static struct {
 	gid_t16		gid;
 	int		e;		/* -1 none */
+	int		state;		/* REC_* while e < 0 */
 	float		org[3];
 } recs[RECS];
 static int nrecs;
@@ -132,6 +135,7 @@ static int rec_add(gid_t16 g, const float org[3])
 		recs[i].gid = g;
 	}
 	recs[i].e = -1;
+	recs[i].state = REC_PENDING;
 	memcpy(recs[i].org, org, sizeof(recs[i].org));
 	return i;
 }
@@ -225,7 +229,10 @@ int __wrap_rec_release(int e)
 	D.release++;
 	for (i = 0; i < nrecs; i++)
 		if (recs[i].e == e)
+		{
 			recs[i].e = -1;
+			recs[i].state = REC_DRY;
+		}
 	ent_destroy(e);
 	return 1;
 }
@@ -258,6 +265,22 @@ int __wrap_rec_entity(gid_t16 gid)
 	return i < 0 ? -1 : recs[i].e;
 }
 
+int __wrap_rec_state(gid_t16 gid)
+{
+	int i = rec_find(gid);
+
+	return i < 0 ? -1 : recs[i].e >= 0 ? REC_LIVE : recs[i].state;
+}
+
+void __wrap_rec_kill(gid_t16 gid)
+{
+	int i = rec_find(gid);
+
+	D.kill++;
+	if (i >= 0)
+		recs[i].state = REC_KILLED;
+}
+
 /* a brush entity of the frame layer at org (submodel 1, 32 u cube) */
 static int make_ent(const float org[3], int brush, gid_t16 gid)
 {
@@ -278,7 +301,7 @@ int __wrap_rec_wake(gid_t16 gid)
 {
 	int i = rec_find(gid);
 
-	if (i < 0)
+	if (i < 0 || (recs[i].e < 0 && recs[i].state == REC_KILLED))
 		return -1;
 	if (recs[i].e < 0)
 		recs[i].e = make_ent(recs[i].org, 1, gid);
@@ -721,7 +744,8 @@ static void test_use(void)
 	memcpy(ang, pl->view_angles, sizeof(ang));
 	/* B's slot will be the other one */
 	sb = sa ^ 1;
-	/* the twins: A copies live (door displaced 10 u up), B records pending */
+	/* the twins: A copies 0-1 live (door displaced 10 u up), 2 dehydrated,
+	 * 3 removed for good; B records pending */
 	eng_set_frame_layer(sa);
 	for (i = 0; i < s.ntwin; i++)
 	{
@@ -730,6 +754,11 @@ static void test_use(void)
 		int r = rec_add(GID_MAKE(sa, s.twins[2 * i]), zero);
 
 		rec_add(GID_MAKE(sb, s.twins[2 * i + 1]), zero);
+		if (i >= 2)
+		{
+			recs[r].state = i == 2 ? REC_DRY : REC_KILLED;
+			continue;
+		}
 		recs[r].e = before_e[i] = make_ent(o, 1, GID_MAKE(sa, s.twins[2 * i]));
 		ent_set_velocity(recs[r].e, vel);
 		ent_tm(recs[r].e)->ltime = 3.5f;
@@ -788,9 +817,9 @@ static void test_use(void)
 	CHECK(ent_idc(ENT_PLAYER)->layer == sb, "player entity layer %d", ent_idc(ENT_PLAYER)->layer);
 	CHECK(D.rebase == 1 && !memcmp(D.T, s.T, sizeof(D.T)), "stream re-base");
 	/* twins: copied (displacement kept), game copy, A released, ground */
-	CHECK(D.copies == 4 && D.release == 4 && st.twins == st0.twins + 4,
-		"twins copies=%d release=%d", D.copies, D.release);
-	for (i = 0; i < 4 && i < D.copies; i++)
+	CHECK(D.copies == 3 && D.release == 3 && st.twins == st0.twins + 3 && D.kill == 1,
+		"twins copies=%d release=%d kill=%d", D.copies, D.release, D.kill);
+	for (i = 0; i < 2 && i < D.copies; i++)
 	{
 		int b = D.copy_to[i];
 
@@ -801,6 +830,10 @@ static void test_use(void)
 			&& RES_SUB_SLOT(ent_rnd(b)->model) == (unsigned)sb,
 			"twin %d components", i);
 	}
+	CHECK(D.copies == 3 && ent_idc(D.copy_to[2])->layer == sb
+		&& __wrap_rec_state(GID_MAKE(sa, s.twins[4])) == REC_DRY,
+		"dehydrated A twin not woken, copied and released");
+	CHECK(__wrap_rec_state(GID_MAKE(sb, s.twins[7])) == REC_KILLED, "removed twin alive in B");
 	CHECK(D.copies > 1 && pl->groundentity == D.copy_to[1], "ground -> B twin (%d)",
 		pl->groundentity);
 	/* carried: in B's frame and slot; the kept one stays in A */

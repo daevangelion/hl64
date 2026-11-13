@@ -965,12 +965,12 @@ static void continuity_after(void)
 			continue;
 		}
 		extra++;
-		log_printf("seam: continuity extra #%d cls=%u at %.1f %.1f %.1f\n", e,
+		log_printf("seam: carry-box extra #%d cls=%u at %.1f %.1f %.1f\n", e,
 			(unsigned)ent_idc(e)->cls, (double)p[0], (double)p[1], (double)p[2]);
 	}
 	for (i = 0; i < S.cont_n; i++)
 		if (!used[i])
-			log_printf("seam: continuity missing cls=%u at %.1f %.1f %.1f\n",
+			log_printf("seam: carry-box missing cls=%u at %.1f %.1f %.1f\n",
 				(unsigned)S.cont[i].cls, (double)S.cont[i].pos[0],
 				(double)S.cont[i].pos[1], (double)S.cont[i].pos[2]);
 	missing = S.cont_n - matched + S.cont_over;
@@ -1065,7 +1065,25 @@ static void cross(int si)
 		int a = rec_entity(ga), b;
 
 		if (a < 0)
-			continue;
+		{
+			int st = rec_state(ga);
+
+			/* A's copy dehydrated: its delta holds the state B takes
+			 * (aliased, B's copy never hydrated on its own) */
+			if (st == REC_DRY)
+				a = rec_wake(ga);
+			/* removed for good in A: gone in B too */
+			else if (st == REC_KILLED && rec_state(gb) != REC_KILLED)
+			{
+				rec_kill(gb);
+				log_printf("seam: twin %u:%u removed in %s: %u:%u killed\n",
+					(unsigned)sa, (unsigned)GID_LUMP(ga), wld_map_name(s.from),
+					(unsigned)sb, (unsigned)GID_LUMP(gb));
+			}
+			/* pending: B's own record spawns the same state */
+			if (a < 0)
+				continue;
+		}
 		eng_set_frame_layer(sb);
 		b = rec_wake(gb);
 		if (b < 0)
