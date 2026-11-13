@@ -238,6 +238,8 @@ def stage_models(data: Data, maps: List[str], ents, res: Dict[str, Set[str]],
     # one name per file: map keys spell models with any case, separator or
     # a leading "/" (c1a* gibmodel "/models/mbarrel.mdl"), as restab names them
     names = {restab._norm(n) for n in names}
+    # env_shooter's shootmodel may name a sprite: stage_sprites stages it
+    names = {n for n in names if n.endswith(".mdl")}
     missing = sorted(n for n in names if not data.has(n))
     if missing:
         raise CookError("models missing from the game data: " + ", ".join(missing))

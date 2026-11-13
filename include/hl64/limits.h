@@ -124,7 +124,10 @@
 #define HL64_THINK_GRID_KB		12	/* think heap, active bitsets, grids */
 #define HL64_HLE_BLOBS_KB		160	/* [EST] 4 slots x 40 KB */
 #define HL64_DEHYDRATE_KB		64	/* dehydrate store */
-#define HL64_SOUND_KB			96	/* [EST] 16 voices, 10 wav64, loops */
+/* Measured (ares, test/m3/snd_ares.sh): 78144 B peak = tables 3424 + AUDIO
+ * bounce 2048 + 16 voice buffers (4096 + VADPCM state 48 + arena header)
+ * + 10 open wav64 (state, codebook); x 1.25 = 97680 B. */
+#define HL64_SOUND_KB			96
 #define HL64_SPRITE_CACHE_KB		64
 #define HL64_DECAL_TEXELS_KB		56	/* decal sheet (43 HLSDK decals, 31 KB) + 96 x 24 piece vertices (22.5 KB) */
 #define HL64_PARTICLES_KB		12

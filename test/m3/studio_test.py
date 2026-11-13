@@ -85,6 +85,7 @@ def main():
     ap.add_argument("--bin", required=True)
     ap.add_argument("--content", required=True)
     ap.add_argument("--model", default="models/scientist")
+    ap.add_argument("--map", default="hldemo1", help="map for the ent_illum checks")
     a = ap.parse_args()
     with open(os.path.join(a.content, a.model + ".s64"), "rb") as f:
         info = Info(f.read())
@@ -123,6 +124,23 @@ def main():
     cmds += ["G 2 1 2", "G 2 1 3", "G 2 1 99", "G 2 0 0"]
     for c in range(info.numctl):
         cmds += ["K 0 %d 30" % info.ctls[c][1], "K 0 %d -400" % info.ctls[c][1]]
+    # ent_illum (pfnGetEntityIllum): probe + lights at monster origins
+    ent_path = os.path.join(a.content, "maps", a.map + ".ent")
+    pts = []
+    if os.path.isfile(ent_path):
+        import re
+        with open(ent_path, encoding="latin-1") as f:
+            for b in re.findall(r"\{[^}]*\}", f.read()):
+                o = re.search(r'"origin" "([^"]*)"', b)
+                if o and re.search(r'"classname" "monster_\w+"', b):
+                    pts.append([float(x) for x in o.group(1).split()])
+    pts = pts[:8]
+    if pts:
+        cmds.append("O %s" % a.map)
+        for x, y, z in pts:
+            cmds += ["P 2 %g %g %g" % (x, y, z + 16), "Q 2", "D %g %g %g 60" % (x, y, z + 16),
+                     "Q 2"]
+        cmds.append("Q 400")
     cmds += ["F", "S"]
     res = run(a.bin, a.content, cmds)
     it = iter(res)
@@ -247,6 +265,13 @@ def main():
             got = nxt("K")
             rep.check(close(float(got[0]), want, 1e-3) and (index > 3 or int(got[1 + index]) == setting),
                       "controller %d value %g: %s != %g/%d" % (index, v, got, want, setting))
+    for _ in pts:
+        q1, q2 = int(nxt("Q")[0]), int(nxt("Q")[0])
+        rep.check(32 <= q1 <= 255 and (q2 == min(255, q1 + 60) if q1 > 32 else q2 >= q1),
+                  "ent_illum %d, with a 60 u light at the origin %d" % (q1, q2))
+    if pts:
+        rep.check(int(nxt("Q")[0]) == 0, "ent_illum of a free slot")
+        rep.check(len(set(int(r[1]) for r in res if r[0] == "Q")) > 2, "illum varies by place")
     s = nxt("S")
     st = dict(x.split("=") for x in s)
     rep.check(int(st["models"]) == 1 and int(st["sync"]) == 1 and int(st["pool"]) > 0,

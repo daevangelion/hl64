@@ -946,15 +946,43 @@ static int probe_at(wld_layer_t *L, const uint16_t *list, int cnt, const float p
 	return -1;
 }
 
-/* Model light (dlights.md 4, lightstyles.md 4): the probe base plus the
- * live lights through ren_model_light (elights only on their entity e;
- * -1 for temps). */
+/* Model light (lightstyles.md 4, dlights.md 4): the probe under the point
+ * (128 when its REND chunk is not resident), the style term (none until
+ * probe v3) and the live lights, by the renderer's ren_model_light. */
 static int light_at(int e, wld_layer_t *L, const uint16_t *list, int cnt, const float local[3],
 	const float global[3])
 {
 	int base = probe_at(L, list, cnt, local);
 
 	return ren_model_light(e, global, base < 0 ? 128.0f : (float)base, -1, 0);
+}
+
+/* pfnGetEntityIllum (ent.h): the light a studio entity is drawn with, or
+ * the model light at a non-studio entity's origin, from the sectors its
+ * leaf sees; an entity whose probe chunk is not resident keeps its last
+ * value (128 before the first). */
+static uint8_t	illum[HL64_MAX_ENTITIES];
+
+int ent_illum(int e)
+{
+	const col_ent_t *cv;
+	wld_layer_t *L;
+	const uint16_t *list;
+	float g[3];
+	int cnt, base, k, v;
+
+	if (!ent_is_live(e) || !(L = wld_layer(ent_idc(e)->layer)))
+		return 0;
+	cv = ent_cv(e);
+	list = wld_leaf_sectors(L, wld_point_leaf(L, cv->origin), &cnt);
+	base = probe_at(L, list, cnt, cv->origin);
+	if (base < 0)
+		base = illum[e] ? illum[e] : 128;
+	for (k = 0; k < 3; k++)
+		g[k] = cv->origin[k] + L->gofs[k];
+	v = ren_model_light(e, g, (float)base, -1, 0);
+	illum[e] = (uint8_t)(base > 0 ? base : 1);
+	return v;
 }
 
 /* ---- draw ------------------------------------------------------------------------------------ */
@@ -1220,8 +1248,8 @@ void studio_draw(double time)
 			cand[i].trans = (uint16_t)(blend_mode(e, &a) != GPU_STUDIO_OPAQUE);
 			cand[i].dist = d;
 		}
-		/* opaque here; translucent ones to the translucent pass, sorted
-		 * back to front with sprites, brushes and effects (trans.h) */
+		/* opaque here; translucent ones join the renderer's back-to-front
+		 * pass (engine/render/trans.c calls studio_draw_trans) */
 		for (i = 0; i < n; i++)
 			if (!cand[i].trans)
 				draw_entity(cand[i].e, time, L, list, cnt, eye, -1, 0);

@@ -10,10 +10,11 @@
  * <source>:<line> <mnemonic> <reason>` and exits 1, PASS logs `route
  * PASS` and exits 0.
  *
- * M2 runs the player ops (WAIT, WAIT_MAP, WAIT_NEAR, LOOK, SETPOS,
- * BUTTONS, IMPULSE, GOD, SHOT, STATS, PASS). The entity and record ops
- * (WAIT_MOVED, WAIT_GONE, WAIT_CLASS, WAIT_GLOBAL, WAIT_END, LOOK_AT,
- * DROP) need M3's entities and records: reaching one fails the route.
+ * Entity and record ops resolve a name id through campaign.rtb's test part
+ * (TARG -> map + BSP entity lumps, TLMP), read from the cart once per op:
+ * gid = GID_MAKE(the map's HLE slot, lump). Their queries never hydrate a
+ * pending record (the route must not change what it measures). Positions
+ * are map-local to the op's map, the frame of its HLE slot's entities.
  */
 #include <math.h>
 #include <string.h>
@@ -21,11 +22,15 @@
 #include "engine/core/dbg.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
+#include "engine/ent/rec_int.h"
 #include "engine/in/in.h"
 #include "engine/io/io.h"
 #include "engine/phys/player.h"
 #include "engine/test/route.h"
 #include "engine/world/wld.h"
+#include "hl64/ent.h"
+#include "hl64/game.h"
+#include "hl64/rec.h"
 
 #define RBC_MAGIC	0x52424331u
 #define RBC_HDR		48
@@ -64,6 +69,16 @@ static const struct {
 };
 
 #define BUTTON_MASK	(0x3FFFu & ~(1u << 6))
+#define RT_LUMPS	64	/* records of one name id (TARG lump_count) */
+#ifndef M_PI
+#define M_PI		3.14159265358979323846
+#endif
+
+/* A name id resolved at the op's start (rtb TARG / TLMP). */
+typedef struct {
+	uint16_t	map, count, spawners;	/* the last `spawners` lumps are monstermakers */
+	uint16_t	lump[RT_LUMPS];
+} rt_targ_t;
 
 static struct {
 	uint8_t		buf[RBC_MAX_BYTES] __attribute__((aligned(16)));
@@ -74,6 +89,8 @@ static struct {
 	uint16_t	op;		/* its index */
 	uint8_t		started;	/* the current op's start time is set */
 	double		t0;		/* game time (s) the current op started */
+	uint32_t	rtb_rom, targ_ofs, tlmp_ofs, ntlmp;	/* campaign.rtb test part */
+	rt_targ_t	tg;		/* the current op's name */
 } rt;
 
 static uint32_t rd32(const uint8_t *p)
@@ -109,7 +126,8 @@ static uint32_t crc32_z(const uint8_t *p, uint32_t n)
 	return ~c;
 }
 
-/* campaign.rtb: build_id and the id-space counts the reader checks */
+/* campaign.rtb: build_id and the id-space counts the reader checks; the
+ * test part's place (TARG, TLMP) into rt (res_init validated the file) */
 typedef struct {
 	uint32_t	build_id;
 	uint32_t	maps, targ, clas, glob;
@@ -130,6 +148,7 @@ static int rtb_read(rtb_ids_t *t)
 		return -1;
 	io_read_sync(hdr, rom, (32 + 16 * nsect + 1) & ~1u);
 	t->build_id = rd32(hdr + 8);
+	rt.rtb_rom = rom;
 	for (i = 0; i < nsect; i++)
 	{
 		const uint8_t *d = hdr + 32 + 16 * i;
@@ -138,12 +157,40 @@ static int rtb_read(rtb_ids_t *t)
 		if (cc == 0x4D415053u)		/* MAPS */
 			t->maps = n;
 		else if (cc == 0x54415247u)	/* TARG */
+		{
 			t->targ = n;
+			rt.targ_ofs = rd32(d + 4);
+		}
+		else if (cc == 0x544C4D50u)	/* TLMP */
+		{
+			rt.tlmp_ofs = rd32(d + 4);
+			rt.ntlmp = n;
+		}
 		else if (cc == 0x434C4153u)	/* CLAS */
 			t->clas = n;
 		else if (cc == 0x474C4F42u)	/* GLOB */
 			t->glob = n;
 	}
+	return 0;
+}
+
+/* TARG entry of name id `id` and its TLMP lumps; -1 when it has more than
+ * RT_LUMPS (the rtb's own rules were checked by res_init) */
+static int tg_read(uint32_t id, rt_targ_t *t)
+{
+	static uint8_t w[2 * RT_LUMPS] __attribute__((aligned(16)));
+	uint32_t first, i;
+
+	io_read_sync(w, rt.rtb_rom + rt.targ_ofs + 8u * id, 8);
+	t->map = rd16(w);
+	first = rd16(w + 2);
+	t->count = rd16(w + 4);
+	t->spawners = rd16(w + 6);
+	if (t->count > RT_LUMPS || first + t->count > rt.ntlmp)
+		return -1;
+	io_read_sync(w, rt.rtb_rom + rt.tlmp_ofs + 2u * first, 2u * t->count);
+	for (i = 0; i < t->count; i++)
+		t->lump[i] = rd16(w + 2 * i);
 	return 0;
 }
 
@@ -252,6 +299,8 @@ int rt_load(const char *path)
 		case OP_WAIT_MOVED: case OP_WAIT_GONE:
 			if (bb >= ids.targ)
 				return bad(path, p, "target id");
+			if (tg_read(bb, &rt.tg))
+				return bad(path, p, "name has more than 64 records");
 			break;
 		case OP_WAIT_GLOBAL:
 			ok_a = a <= 2;
@@ -262,6 +311,8 @@ int rt_load(const char *path)
 			ok_a = a <= 1;
 			if (rd32(b + p + 4) >= ids.maps || bb >= (a ? ids.clas : ids.targ))
 				return bad(path, p, "look_at ids");
+			if (!a && (tg_read(bb, &rt.tg) || rt.tg.map != rd32(b + p + 4)))
+				return bad(path, p, "look_at name not of its map");
 			break;
 		case OP_BUTTONS:
 			if ((bb & ~BUTTON_MASK) || (rd32(b + p + 4) & ~BUTTON_MASK) || (bb & rd32(b + p + 4)))
@@ -354,6 +405,231 @@ static int near(const float *w, int inside_map)
 	return d2 <= w[3] * w[3];
 }
 
+/* HLE slot (= world layer slot) of an open map, -1 when it is closed */
+static int map_slot(int map)
+{
+	int s;
+
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+	{
+		const wld_layer_t *L = wld_layer(s);
+
+		if (L && L->map == map)
+			return s;
+	}
+	return -1;
+}
+
+static int alive(int e)
+{
+	return ent_is_live(e) && !(ent_cv(e)->flags & FL_KILLME);
+}
+
+static int differ3(const float *x, const float *y)
+{
+	return x[0] != y[0] || x[1] != y[1] || x[2] != y[2];
+}
+
+static float dist2(const float *x, const float *y)
+{
+	float d0 = x[0] - y[0], d1 = x[1] - y[1], d2 = x[2] - y[2];
+
+	return d0 * d0 + d1 * d1 + d2 * d2;
+}
+
+/* The current op's map records carrying the name (TARG lumps before the
+ * spawners). */
+static int tg_named(void)
+{
+	return rt.tg.count - rt.tg.spawners;
+}
+
+/* The name in its map's HLE slot: the records' targetname, else (a name
+ * only monstermaker children receive) the first spawner's netname. */
+static name_t tg_name(int slot)
+{
+	gid_t16 g = GID_MAKE(slot, rt.tg.lump[0]);
+
+	return tg_named() ? rec_targetname(g) : rec_key_name(g, RK_NETNAME);
+}
+
+/* Next runtime entity holding the name (monstermaker children), -1 at the
+ * end. rec_next_named wakes pending records of the name, so it is only
+ * asked once none is pending or dry: the route never hydrates. */
+static int tg_child(int slot, int *it)
+{
+	name_t n;
+	int i, e;
+
+	if (!rt.tg.spawners)
+		return -1;
+	for (i = 0; i < tg_named(); i++)
+	{
+		int st = rec_state(GID_MAKE(slot, rt.tg.lump[i]));
+
+		if (st == REC_PENDING || st == REC_DRY)
+			return -1;
+	}
+	if ((n = tg_name(slot)) == NAME_NONE)
+		return -1;
+	while ((e = rec_next_named(n, it)) >= 0)
+		if (ent_idc(e)->gid == GID_NONE && alive(e))
+			return e;
+	return -1;
+}
+
+/* WAIT_MOVED: velocity or avelocity non-zero, or (a map record's entity)
+ * origin / angles differ from the record's keys. */
+static int moved(int e, gid_t16 gid)
+{
+	static const float zero[3];
+	const col_ent_t *cv = ent_cv(e);
+	float o[3], a[3];
+
+	if (differ3(ent_mot(e)->velocity, zero) || differ3(ent_mot(e)->avelocity, zero))
+		return 1;
+	if (gid == GID_NONE)
+		return 0;
+	rec_origin(gid, o);
+	rec_angles(gid, a);
+	return differ3(cv->origin, o) || differ3(cv->angles, a);
+}
+
+static int wait_moved(void)
+{
+	int slot = map_slot(rt.tg.map), i, e, it = 0;
+
+	if (slot < 0)
+		return 0;
+	for (i = 0; i < tg_named(); i++)
+	{
+		gid_t16 g = GID_MAKE(slot, rt.tg.lump[i]);
+
+		if ((e = rec_entity(g)) >= 0 && alive(e) && moved(e, g))
+			return 1;
+	}
+	while ((e = tg_child(slot, &it)) >= 0)
+		if (moved(e, GID_NONE))
+			return 1;
+	return 0;
+}
+
+/* A monstermaker has spawned all it will: its record is killed, or its
+ * entity has neither think nor use left (HLSDK CMonsterMaker::MakeMonster
+ * clears both when its count runs out). */
+static int spawner_done(gid_t16 g)
+{
+	int e;
+
+	if (rec_state(g) == REC_KILLED)
+		return 1;
+	if ((e = rec_entity(g)) < 0)
+		return 0;
+	return !ent_tm(e)->think && !ent_tm(e)->use;
+}
+
+static int wait_gone(void)
+{
+	int slot = map_slot(rt.tg.map), i, it = 0;
+
+	if (slot < 0)
+		return 0;
+	for (i = 0; i < tg_named(); i++)
+		if (rec_state(GID_MAKE(slot, rt.tg.lump[i])) != REC_KILLED)
+			return 0;
+	for (; i < rt.tg.count; i++)
+		if (!spawner_done(GID_MAKE(slot, rt.tg.lump[i])))
+			return 0;
+	return tg_child(slot, &it) < 0;
+}
+
+/* WAIT_CLASS: w = x, y, z, r (map-local to map) */
+static int wait_class(int map, cls_t cls, const float *w)
+{
+	int slot = map_slot(map), e = -1;
+
+	if (slot < 0)
+		return 0;
+	while ((e = ent_next_class(e, cls, slot)) >= 0)
+		if (alive(e) && ent_cv(e)->solid != COL_SOLID_NOT && dist2(ent_cv(e)->origin, w) <= w[3] * w[3])
+			return 1;
+	return 0;
+}
+
+/* LOOK_AT candidate e of map: keep it when its centre is the nearest yet
+ * to the eye (global positions; the lowest index wins a tie) */
+static void look_cand(int e, int map, const float *eye, int *best, float *bd, float *bc)
+{
+	const col_ent_t *cv = ent_cv(e);
+	const float *g = wld_map_origin(map);
+	float c[3], d;
+	int k;
+
+	if (!alive(e))
+		return;
+	for (k = 0; k < 3; k++)
+		c[k] = 0.5f * (cv->absmin[k] + cv->absmax[k]) + g[k];
+	d = dist2(c, eye);
+	if (*best < 0 || d < *bd)
+	{
+		*best = e;
+		*bd = d;
+		memcpy(bc, c, sizeof(c));
+	}
+}
+
+/* LOOK_AT: by_class 0 the current op's name, 1 class id; -1 none live */
+static int look_at(int by_class, uint32_t id, int map)
+{
+	const ent_player_t *pl = phy_player();
+	int slot = map_slot(map), best = -1, e, it = 0, k;
+	float eye[3], c[3], bd = 0, d[3], ang[3];
+
+	if (slot < 0 || !phy_player_active())
+		return -1;
+	for (k = 0; k < 3; k++)
+		eye[k] = pl->origin[k] + pl->view_ofs[k] + wld_map_origin(phy_player_map())[k];
+	if (by_class)
+	{
+		for (e = -1; (e = ent_next_class(e, (cls_t)id, slot)) >= 0;)
+			look_cand(e, map, eye, &best, &bd, c);
+	}
+	else
+	{
+		for (k = 0; k < tg_named(); k++)
+			if ((e = rec_entity(GID_MAKE(slot, rt.tg.lump[k]))) >= 0)
+				look_cand(e, map, eye, &best, &bd, c);
+		while ((e = tg_child(slot, &it)) >= 0)
+			look_cand(e, map, eye, &best, &bd, c);
+	}
+	if (best < 0)
+		return -1;
+	for (k = 0; k < 3; k++)
+		d[k] = c[k] - eye[k];
+	/* view angles: pitch down + (HLSDK), as pm_math VectorAngles */
+	ang[0] = (float)(-atan2(d[2], sqrt((double)d[0] * d[0] + (double)d[1] * d[1])) * 180 / M_PI);
+	ang[1] = (float)(atan2(d[1], d[0]) * 180 / M_PI);
+	ang[2] = 0;
+	in_set_angles(ang);
+	return 0;
+}
+
+/* DROP: HLSDK CBaseEntity::Create of class cls at a map-local point */
+static const char *drop(int map, cls_t cls, const float *org)
+{
+	int slot = map_slot(map), prev = eng_frame_layer(), e, ok;
+
+	if (slot < 0)
+		return "map not open";
+	eng_set_frame_layer(slot);
+	e = ent_create(ENT_ALLOC_GAME);
+	if (e >= 0)
+		ent_set_origin(e, org);
+	ok = e >= 0 && game_spawn_class(cls, e) == 0;
+	eng_set_frame_layer(prev);
+	return e < 0 ? "no free entity" : ok ? NULL : "the game refused the class";
+}
+
 void rt_frame(double time)
 {
 	while (rt_active())
@@ -373,6 +649,9 @@ void rt_frame(double time)
 				log_printf("route: %u %s %s\n", rt.op, ops[code].name, str_at(b));
 			else
 				log_printf("route: %u %s\n", rt.op, ops[code].name);
+			/* the name's records (checked at load) */
+			if (code == OP_WAIT_MOVED || code == OP_WAIT_GONE || (code == OP_LOOK_AT && !a))
+				tg_read(b, &rt.tg);
 		}
 		switch (code)
 		{
@@ -388,6 +667,44 @@ void rt_frame(double time)
 			if (!wait_until(near(w, home), rd32(p + 20), time))
 				return;
 			break;
+		case OP_WAIT_MOVED:
+			if (!wait_until(wait_moved(), rd32(p + 4), time))
+				return;
+			break;
+		case OP_WAIT_GONE:
+			if (!wait_until(wait_gone(), rd32(p + 4), time))
+				return;
+			break;
+		case OP_WAIT_CLASS:
+			if (!wait_until(wait_class((int)b, (cls_t)rd32(p + 4), w + 1), rd32(p + 24), time))
+				return;
+			break;
+		case OP_WAIT_GLOBAL:
+			if (!wait_until(game_global_state((int)b) == (int)a, rd32(p + 4), time))
+				return;
+			break;
+		case OP_WAIT_END:
+			if (!wait_until(game_end_section() > 0, rd32(p + 4), time))
+				return;
+			break;
+		case OP_LOOK_AT:
+			if (look_at((int)a, b, (int)rd32(p + 4)))
+			{
+				fail("no live entity");
+				return;
+			}
+			break;
+		case OP_DROP:
+		{
+			const char *why = drop((int)b, (cls_t)rd32(p + 4), w + 1);
+
+			if (why)
+			{
+				fail(why);
+				return;
+			}
+			break;
+		}
 		case OP_LOOK:
 		{
 			float ang[3] = { w[0], w[1], 0 };
@@ -427,8 +744,6 @@ void rt_frame(double time)
 			log_flush();
 			rt.done = 1;
 			sys_exit(0);
-		default:
-			fail("needs the M3 entities and records");
 			return;
 		}
 		rt.pc += 4u + 4u * (uint32_t)strlen(ops[code].kinds);
