@@ -40,10 +40,12 @@ targetname, 0xFFFF none), `flags`, `key_first`/`key_count`,
 `aux_first`/`aux_count` (fire list when `HLE_RF_AUXFIRE`, else lumplist —
 the multisource inputs), and three streaming fields: `sector` (0xFFFF =
 global), `trank` (cooked trigger touch rank, specs/area-links-and-touch.md
-3.1: written by the `touchrank` cook step after `hlecook` from trigger
-geometry — the trigger's cell in the measured cell model, cells in
-pre-order, then entity index; the GoldSrc probe's A-order captures are the
-step's regression test; 0xFFFF for records that are not triggers. The
+3.1: written by the `touchrank` cook step (`tools/w64c/touchrank.py`) after
+`hlecook` from trigger geometry: `cell << 11 | place`, `cell` the
+trigger's cell (0–30, pre-order) in the measured cell model and `place` its
+position in that cell's link order; ascending `trank` is touch order. The
+GoldSrc probe's A-order captures are the step's regression test
+(`touchrank --check`, A9). 0xFFFF for records that are not triggers. The
 field was `twin`, reserved and always
 0xFFFF; per-neighbour twins live in the [CWG3 seam table](cwg-format.md)),
 `res_first`/`res_count` (precache refs, 0 count today).

@@ -90,7 +90,7 @@ typedef struct
 	uint16_t	aux_first, aux_count;	/* multi_manager: fire[];
 						   multisource: lumplist[] */
 	uint16_t	sector;		/* streaming sector, HLE_NONE = global */
-	uint16_t	twin;		/* seam twin lump in the other map, NONE */
+	uint16_t	trank;		/* trigger touch rank (tools/w64c/touchrank.py), NONE */
 	uint16_t	res_first, res_count;	/* streaming precache refs */
 } hle_rec_t;			/* 24 bytes */
 
@@ -1265,7 +1265,7 @@ static const char *hle_build (const char *src, int len, int big_endian,
 			rec.key_first = (uint16_t)keyi;
 			rec.key_count = (uint16_t)e->nkv;
 			rec.sector = HLE_NONE;
-			rec.twin = HLE_NONE;
+			rec.trank = HLE_NONE;	/* touchrank fills it after the cook */
 			if (e->nfire)
 			{
 				rec.aux_first = (uint16_t)auxf;

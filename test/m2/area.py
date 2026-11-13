@@ -14,12 +14,20 @@ compares the result with the fixtures:
   A3  box trigger vs FLY / bit-256 / SOLID_NOT / SOLID_TRIGGER / NONE /
       TOSS movers and the fake client at gaps -8 ... 18 u per axis.
   A4  set_origin touches nothing; the next physics link does.
-  A5  brush trigger touched iff the mover's origin is in its hull-1 brush,
-      angles ignored (A-shape, hldemo1-3: 640 samples x bot + mover).
+  A5  brush trigger touched iff the mover's origin is in its brush for the
+      mover's hull (player-size movers: hull 1), angles ignored (A-shape,
+      hldemo1-3: 640 samples x bot + mover).
   A7  impact scenarios: touch order, A removed / SOLID_NOT rules, impact
       frame and stop point (A-touch cases >= 1000).
   A9  trigger touch order: the `_order` cases (runtime triggers in creation
-      order: the higher index first) and, when present, A-order pairs.
+      order: the higher index first) and, when present, the A-order
+      captures: every map trigger the cook ranked is linked with its
+      captured box and the cooked `trank` (CONTENT/maps/<m>.w64), every
+      phase-1/3 placement's mover is linked with touch: "A9 touched hN"
+      wants every trigger GoldSrc touched touched (per mover hull), "A9
+      order" every two co-touched triggers in GoldSrc's order; the probe
+      pairs (526) are tallied as match / not co-touched / game-created /
+      not spawned by hl64 / known (KNOWN_ORDER) / fail (out of order).
   A2, A6  self-contained (harness `selftest`).
 
 Usage: test/m2/area.py --bin BUILD/host/hl64-area --content CONTENT
@@ -29,6 +37,7 @@ Exit 0 when every check passes.
 import argparse
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -68,9 +77,10 @@ def v(x):
 MAX_ENTITIES = 495     # include/hl64/limits.h HL64_MAX_ENTITIES
 
 
-def read(path):
+def read(path, extra=()):
     """Records of a fixture, GoldSrc entity indices >= MAX_ENTITIES (the
-    probe server's edicts go to 900) moved to free slots from the top."""
+    probe server's edicts go to 900) moved to free slots from the top;
+    `extra` names further keys that hold entity indices."""
     with open(path) as f:
         recs = [json.loads(l) for l in f if l.strip()]
     used, refs = set(), []
@@ -78,7 +88,7 @@ def read(path):
     def walk(o):
         if isinstance(o, dict):
             for k, x in o.items():
-                if k in ("i", "self", "other", "a", "b", "triggers"):
+                if k in ("i", "self", "other", "a", "b", "triggers") or k in extra:
                     refs.append((o, k))
                 walk(x)
         elif isinstance(o, list):
@@ -372,6 +382,140 @@ def a_shape(recs, sc):
             exp.append((None, "A5", "rule", (ok, what + " src %s" % src["model"])))
     return exp, True
 
+# ---- A-order (A9: map triggers in cooked trank order) --------------------------
+
+# Hull boxes of the probe's movers (hull index -> mins, maxs).
+HULLS = {0: ((0, 0, 0), (0, 0, 0)), 1: ((-16, -16, -36), (16, 16, 36)),
+         2: ((-32, -32, -32), (32, 32, 32)), 3: ((-16, -16, -18), (16, 16, 18))}
+MOVER = 1
+HLE_NONE = 0xFFFF
+# GoldSrc pairs no geometry predicts (map, first lump, second lump); the
+# cause is in docs/specs/area-links-and-touch.md 3.1 (tools/w64c/touchrank.py
+# KNOWN).
+KNOWN_ORDER = {("hldemo2", 509, 601): "item_healthkit 601 relinks after it falls (func_wall_toggle *80)"}
+
+
+def cooked_tranks(w64):
+    """lump -> trank of the cooked package's HLE1 records
+    (docs/formats/w64-format.md ENTS, hle-format-v1.md)."""
+    with open(w64, "rb") as f:
+        b = f.read()
+    dofs = struct.unpack_from(">I", b, 12)[0]
+    nchunks = struct.unpack_from(">H", b, dofs + 10)[0]
+    cd = dofs + struct.unpack_from(">I", b, dofs + 16)[0]
+    ents = struct.unpack_from(">H", b, dofs + 52)[0]
+    assert b[:4] == b"W64L" and ents < nchunks, w64
+    o = struct.unpack_from(">I", b, cd + 16 * ents + 4)[0]
+    bo = "<" if b[o:o + 4] == b"HLE1" else ">"
+    numrecs = struct.unpack_from(bo + "H", b, o + 18)[0]
+    recs = o + struct.unpack_from(bo + "I", b, o + 52)[0]
+    return {struct.unpack_from(bo + "H", b, recs + 24 * r)[0]:
+            struct.unpack_from(bo + "H", b, recs + 24 * r + 18)[0] for r in range(numrecs)}
+
+
+def entity_lump(path):
+    """The staged entity lump text (maps/<m>.ent) as key/value dicts, later
+    keys win (tools/cook/hl_classes.py map_entities)."""
+    with open(path, encoding="latin-1") as f:
+        text = f.read()
+    return [dict(re.findall(r'"([^"]*)"\s*"([^"]*)"', blk))
+            for blk in re.findall(r'\{((?:"[^"]*"|[^"{}])*)\}', text)]
+
+
+def a_order(recs, content):
+    """Script and cases of one A-order capture: every map trigger the cook
+    ranked, linked with its captured box and cooked trank, then every
+    phase-1/3 placement's mover linked with touch."""
+    m = recs[0]["meta"]["map"]
+    tranks = cooked_tranks(os.path.join(content, "maps", m + ".w64"))
+    ents = entity_lump(os.path.join(content, "maps", m + ".ent"))
+    sc = Script()
+    sc.add("map %s" % m)
+    trig, lump = {}, {}
+    for r in recs:
+        if "trigger" not in r:
+            continue
+        t = r["trigger"]
+        trig[t["i"]] = t
+        if not 0 <= t["lump"] < len(ents) or ents[t["lump"]].get("classname", "").lower() != t["class"].lower():
+            continue
+        if not t["model"].startswith("*"):
+            o = (ents[t["lump"]].get("origin", "") + " 0 0 0").split()[:2]
+            if [float(c) for c in o] != t["o"][:2]:
+                continue        # a game-created trigger in a freed map slot
+        lump[t["i"]] = t["lump"]
+        rank = tranks.get(t["lump"], HLE_NONE)
+        if rank == HLE_NONE:
+            continue            # class hl64 does not spawn
+        mn = [t["absmin"][k] + 1 - t["o"][k] for k in range(3)]
+        mx = [t["absmax"][k] - 1 - t["o"][k] for k in range(3)]
+        assert t["i"] != MOVER
+        sc.add("ent %d %d %s %s %s %s 0 %s %d" % (t["i"], SOLID_TRIGGER, v(t["o"]), v(t["a"]), v(mn), v(mx),
+                                                  t["model"] if t["model"].startswith("*") else "-", T_LOG))
+        sc.add("rank %d %d" % (t["i"], rank))
+        sc.add("link %d" % t["i"])
+    cases = []
+    for r in recs:
+        if "place" not in r or r.get("phase") not in (1, 3):
+            continue
+        mn, mx = HULLS[r["hull"]]
+        sc.add("ent %d %d %s 0 0 0 %s %s 0 - 0" % (MOVER, SOLID_SLIDEBOX if r["mover"] == "bot" else SOLID_BBOX,
+                                                    v(r["p"]), v(mn), v(mx)))
+        sc.add("link %d" % MOVER)
+        sc.add("org %d %s" % (MOVER, v(r["after"])))
+        sc.tag("o%d" % r["place"])
+        sc.add("linkt %d" % MOVER)
+        sc.add("free %d" % MOVER)
+        cases.append(r)
+    ranked = {i for i in lump if tranks.get(lump[i], HLE_NONE) != HLE_NONE}
+    return sc, cases, lump, ranked
+
+
+def a_order_compare(rep, m, cases, lump, ranked, out, tally):
+    """Per placement: every two co-touched ranked map triggers touch in
+    GoldSrc's order (A9 order); per probe pair (526 over the 10 maps): in
+    order at every placement, or counted as game-created / not spawned by
+    hl64 / known."""
+    pairs = {}
+    for r in cases:
+        have = [int(l[1]) for l in out.get("o%d" % r["place"], []) if l[0] == "touch" and int(l[2]) == MOVER]
+        want = [x for x in r["touched"] if x in ranked]
+        where = "%s place %d %s hull %d" % (m, r["place"], r["mover"], r["hull"])
+        pos = {x: k for k, x in enumerate(have)}
+        missing = [x for x in want if x not in pos]
+        extra = [x for x in have if x in ranked and x not in want]
+        rep.check("A9 touched h%d" % r["hull"], not missing and not extra,
+                  "%s: GoldSrc touched %s, hl64 %s" % (where, want, have))
+        ok = True
+        for a_, b_ in ((want[j], want[k]) for j in range(len(want)) for k in range(j + 1, len(want))):
+            if a_ not in pos or b_ not in pos:
+                continue
+            elif pos[a_] > pos[b_]:
+                if (m, lump[a_], lump[b_]) in KNOWN_ORDER:
+                    tally["known placements"] = tally.get("known placements", 0) + 1
+                else:
+                    rep.check("A9 order", False, "%s: GoldSrc %d before %d, hl64 %s" % (where, a_, b_, have))
+                    ok = False
+        if ok:
+            rep.check("A9 order", True, "")
+        p = tuple(sorted(r["pair"]))
+        a_, b_ = r["order"]
+        if a_ not in lump or b_ not in lump:
+            kind = "game-created"
+        elif a_ not in ranked or b_ not in ranked:
+            kind = "not spawned by hl64"
+        elif (m, lump[a_], lump[b_]) in KNOWN_ORDER:
+            kind = "known"
+        elif a_ not in pos or b_ not in pos:
+            kind = "not co-touched"     # this placement: A9 touched reports it
+        else:
+            kind = "match" if pos[a_] < pos[b_] else "fail"
+        rank = {"fail": 3, "match": 2, "not co-touched": 1}
+        if rank.get(kind, 0) >= rank.get(pairs.get(p), 0):
+            pairs[p] = kind
+    for kind in pairs.values():
+        tally[kind] = tally.get(kind, 0) + 1
+    return pairs
 
 
 def compare(rep, exp, out):
@@ -415,6 +559,7 @@ def main():
     st = subprocess.run([args.bin], input="selftest\n", capture_output=True, text=True)
     rep.check("A2+A6", st.returncode == 0 and "selftest ok" in st.stdout, "selftest: " + st.stdout[-1500:])
     shapes = 0
+    order_pairs = []
     for m in args.maps.split(","):
         base = os.path.join(args.fixtures, SPEC)
         p = os.path.join(base, "A-touch", m + ".jsonl")
@@ -432,12 +577,28 @@ def main():
             if ran:
                 shapes += 1
                 compare(rep, exp, run(args.bin, args.content, sc))
+        p = os.path.join(base, "A-order", m + ".jsonl")
+        if os.path.exists(p):
+            sc, cases, lump, ranked = a_order(read(p, ("pair", "order", "touched", "ent")), args.content)
+            tally = {}
+            pairs = a_order_compare(rep, m, cases, lump, ranked, run(args.bin, args.content, sc), tally)
+            order_pairs.append((m, len(pairs), tally))
+    tot = {}
+    for _m, n, tally in order_pairs:
+        for k, x in list(tally.items()) + [("pairs", n)]:
+            tot[k] = tot.get(k, 0) + x
+    if order_pairs:
+        rep.check("A9 pairs", not tot.get("fail"), "A-order pairs out of trank order: %d" % tot.get("fail", 0))
     for f in rep.fails:
         print("FAIL " + f)
     for t in sorted(rep.n):
         p, f = rep.n[t]
         print("%-6s %s  %d pass, %d fail" % (t, "PASS" if not f else "FAIL", p, f))
     print("A5 maps with a non-box brush trigger: %d" % shapes)
+    for m, n, tally in order_pairs:
+        print("A9 %s: %d pairs: %s" % (m, n, ", ".join("%s %d" % kv for kv in sorted(tally.items()))))
+    if order_pairs:
+        print("A9 A-order total: %s" % ", ".join("%s %d" % kv for kv in sorted(tot.items())))
     return 1 if rep.fails else 0
 
 

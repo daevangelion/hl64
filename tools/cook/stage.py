@@ -30,7 +30,8 @@ sounds are derived from those maps' entity lumps, the class table
   titles.txt            pruned to the env_message titles
   maps/<m>.w64          layer packages: tools/cook/bake_world_tex.py ->
                         <staging>/maps/<m>.wci4 (embedded and WAD
-                        textures), hlecook -> <m>.hle,
+                        textures), hlecook -> <m>.hle, tools/w64c/touchrank.py
+                        (trigger touch ranks into the .hle),
                         tools/w64c/w64c.py (docs/formats/w64-format.md)
   maps/campaign.cwg     tools/cook/hl_campaign.py graph + tools/w64c/w64seam.py
                         seams (docs/formats/cwg-format.md)
@@ -425,6 +426,7 @@ def cook_world(data: Data, maps: List[str], ct: Content, staging: Path, hlecook:
             tex += ["--ref-palette", ref_palette_path]
         run(tex, env=env, cwd=ROOT)
         run([hlecook, bsp, cook / f"{m}.hle"])
+        run([PY, "-m", "tools.w64c.touchrank", bsp, cook / f"{m}.hle"], env=env, cwd=ROOT)
         run([PY, "-m", "tools.w64c.w64c", bsp, cook / f"{m}.wci4", out_dir / f"{m}.w64",
              "--hle", cook / f"{m}.hle", "--materials", materials,
              "--json", cook / f"{m}.json"], env=env, cwd=ROOT,

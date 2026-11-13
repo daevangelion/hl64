@@ -20,6 +20,8 @@
  *                             2 set self SOLID_NOT, 3 free other,
  *                             4 free self
  *   org I ORG                 set the origin (no link)
+ *   rank I TRANK              ent_set_rank with the open map's HLE slot
+ *                             (0 without a map)
  *   link I | linkt I          ent_link | phy_link_touch
  *   free I
  *   impact A B                phy_impact
@@ -179,6 +181,15 @@ static int line(char *s)
 			return -1;
 		s += n;
 		return vec(&s, slot(i)->origin, 1);
+	}
+	if (!strcmp(op, "rank"))
+	{
+		unsigned r;
+
+		if (sscanf(s, "%d %u", &i, &r) != 2 || r > 0xFFFFu)
+			return -1;
+		ent_set_rank(slot(i), layer_slot < 0 ? 0 : layer_slot, (uint16_t)r);
+		return 0;
 	}
 	if (!strcmp(op, "link") || !strcmp(op, "linkt") || !strcmp(op, "free")
 		|| !strcmp(op, "box"))

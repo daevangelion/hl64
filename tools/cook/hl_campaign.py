@@ -28,7 +28,8 @@ CWG3 binary (big-endian, read by the hl64 world module, engine/world):
   twin[]   4 B  source/destination BSP entity-lump indices (worldspawn = 0)
   sectorpool[] u16 B sector (<0x8000) or 0x8000|B MOVR model; then strings.
 The graph cook leaves seam/twin/sector tables empty; w64seam.py fills them
-after .w64 packaging. See docs/formats/cwg-format.md. HLE's twin stays reserved.
+after .w64 packaging. See docs/formats/cwg-format.md. The HLE record's old
+twin field is now the trigger touch rank (tools/w64c/touchrank.py).
 Maps are stored component by component, each in BFS order from its root;
 links to maps that are not staged are dropped (reported).
 
