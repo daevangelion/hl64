@@ -546,6 +546,7 @@ static void rollup(void)
 			(unsigned long)m.kind_us[PHY_K_PUSHSTEP] / n, (unsigned long)m.traces / n);
 	}
 	rec_prof_line();
+	game_mon_prof();
 	{
 		fx_stats_t f;
 		unsigned long n;
