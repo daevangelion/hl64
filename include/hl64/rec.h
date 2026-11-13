@@ -176,6 +176,8 @@ int		rec_release(int e);
  * the live copy; cleared with rec_twin_clear when either slot closes. */
 void		rec_twin_alias(gid_t16 a, gid_t16 b);
 void		rec_twin_clear(int slot);
+/* The other gid of a rec_twin_alias pair, GID_NONE when g has no twin. */
+gid_t16		rec_twin_of(gid_t16 g);
 /* A carried entity (seam crossing) leaves its record (moved: never
  * respawns in its map) and becomes a runtime entity of slot `slot` with a
  * durable runtime id; the caller has re-based its origin. */
