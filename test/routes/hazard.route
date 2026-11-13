@@ -1,0 +1,555 @@
+# SPDX-License-Identifier: MIT
+# Hazard Course walk route (route source; syntax and semantics:
+# docs/formats/route-bytecode.md). Converted from the old tree's generated
+# walk n64/port/test/out/hl-walk-t0a0_.cfg (gen_hl_walk_route.py, audit:
+# CLEAN): t0a0 -> t0a0a -> t0a0b1 -> t0a0b2 -> t0a0c -> t0a0b -> t0a0c ->
+# t0a0d. Each visit: god on, stats, a setpos into every trigger_once /
+# trigger_multiple brush (masters and scripts decide what fires), stats,
+# then setpos hops through the seam's trigger into its switch box and
+# waitmap for the next map. Conversion: the old `god` (no argument) is
+# `god 1` (the generator's rule: set, never toggle); the old `hl_trace 1`
+# (an old-engine console switch logging entity fires) has no route op and
+# is dropped. Positions are map-local.
+# ---- t0a0 (visit 1/8)
+waitmap t0a0 300
+-duck
+god 1
+stats t0a0
+-duck
+setpos -1380 -1680 -7 0 0
+wait 0.4
+-duck
+setpos -1380 -1892 -7 0 0
+wait 0.4
+-duck
+setpos -1380 -1156 -7 0 0
+wait 0.4
+-duck
+setpos 492 1200 17 0 0
+wait 0.4
+-duck
+setpos 492 1456 75 0 0
+wait 0.4
+-duck
+setpos 492 1712 75 0 0
+wait 0.4
+-duck
+setpos -132 564 -43 0 0
+wait 0.4
+-duck
+setpos 276 568 -43 0 0
+wait 0.4
++duck
+wait 1
+setpos 1164 2200 -57 0 0
+wait 0.4
++duck
+wait 1
+setpos 1401 2200 -53 0 0
+wait 0.4
++duck
+wait 1
+setpos 1657 2200 -53 0 0
+wait 0.4
+-duck
+setpos 492 1870 -7 0 0
+wait 0.4
+-duck
+setpos 812 2200 -7 0 0
+wait 0.4
++duck
+wait 1
+setpos 2280 1353 -53 0 0
+wait 0.4
+-duck
+setpos 2280 1980 -7 0 0
+wait 0.4
+-duck
+setpos 2280 1624 75 0 0
+wait 0.4
+-duck
+setpos 2280 1116 71 0 0
+wait 0.4
+-duck
+setpos 1868 2198 -7 0 0
+wait 0.4
+-duck
+setpos -1372 -408 -7 0 0
+wait 0.4
+-duck
+setpos 2108 628 -7 0 0
+wait 0.4
+-duck
+setpos 2284 944 -7 0 0
+wait 0.4
++duck
+wait 1
+setpos 1820 706 35 0 0
+wait 0.4
++duck
+wait 1
+setpos 1568 550 35 0 0
+wait 0.4
++duck
+wait 1
+setpos 1320 706 35 0 0
+wait 0.4
++duck
+wait 1
+setpos 1296 706 35 0 0
+wait 0.4
++duck
+wait 1
+setpos 1544 550 35 0 0
+wait 0.4
++duck
+wait 1
+setpos 1796 706 35 0 0
+wait 0.4
+-duck
+setpos 845 432 45 0 0
+wait 0.4
+-duck
+setpos 1030 629 -3 0 0
+wait 0.4
+-duck
+setpos 492 736 -43 0 0
+wait 0.4
+-duck
+setpos -1380 -1902 -4 0 0
+wait 0.4
+-duck
+setpos -1376 -1562 -4 0 0
+wait 0.4
+-duck
+setpos 492 878 -4 0 0
+wait 0.4
+-duck
+setpos 850 2200 -4 0 0
+wait 0.4
+-duck
+setpos 2280 1942 -4 0 0
+wait 0.4
+-duck
+setpos 2022 628 -4 0 0
+wait 0.4
+-duck
+setpos -692 664 -7 0 0
+wait 0.4
+-duck
+setpos -1152 -364 -7 0 0
+wait 0.4
+-duck
+setpos -1380 -636 -7 0 0
+wait 0.4
+# 1 trigger(s) without a free spot
+-duck
+stats t0a0-walked
++duck
+wait 1
+setpos 882 244 36 0 0
+# ---- t0a0a (visit 2/8)
+waitmap t0a0a 300
+-duck
+god 1
+stats t0a0a
+-duck
+setpos -554 1788 216 0 0
+wait 0.4
+-duck
+setpos 556 -2560 -96 0 0
+wait 0.4
++duck
+wait 1
+setpos 636 178 36 0 0
+wait 0.4
+-duck
+setpos -2 248 233 0 0
+wait 0.4
+-duck
+setpos 2 746 91 0 0
+wait 0.4
+-duck
+setpos -6 1532 91 0 0
+wait 0.4
+-duck
+setpos -2 1864 233 0 0
+wait 0.4
+-duck
+setpos -548 538 313 0 0
+wait 0.4
+-duck
+setpos -94 -1302 -115 0 0
+wait 0.4
+-duck
+setpos -94 -1632 233 0 0
+wait 0.4
+-duck
+setpos 938 -2026 -115 0 0
+wait 0.4
+-duck
+setpos 1750 -2036 -131 0 0
+wait 0.4
+-duck
+setpos -2 744 233 0 0
+wait 0.4
+-duck
+setpos -4 1156 233 0 0
+wait 0.4
+-duck
+setpos 2 1584 233 0 0
+wait 0.4
+-duck
+setpos -548 538 337 0 0
+wait 0.4
+-duck
+setpos -98 -1594 153 0 0
+wait 0.4
+-duck
+setpos -98 -1890 -87 0 0
+wait 0.4
+-duck
+setpos 1656 -2040 -131 0 0
+wait 0.4
+-duck
+setpos -220 -1878 -19 0 0
+wait 0.4
+-duck
+setpos -244 -1742 13 0 0
+wait 0.4
+-duck
+setpos 32 -1798 13 0 0
+wait 0.4
+-duck
+setpos -582 1192 309 0 0
+wait 0.4
+-duck
+setpos 402 176 249 0 0
+wait 0.4
+-duck
+setpos 614 176 1 0 0
+wait 0.4
+-duck
+setpos -554 1806 212 0 0
+wait 0.4
+-duck
+setpos -582 1226 313 0 0
+wait 0.4
+-duck
+setpos -98 -1058 205 0 0
+wait 0.4
+-duck
+setpos -94 -1334 -115 0 0
+wait 0.4
+-duck
+setpos 530 -2558 -123 0 0
+wait 0.4
+-duck
+setpos 926 -2026 -131 0 0
+wait 0.4
+-duck
+setpos -556 752 185 0 0
+wait 0.4
+-duck
+stats t0a0a-walked
+-duck
+setpos 1834 -1374 -111 0 0
+# ---- t0a0b1 (visit 3/8)
+waitmap t0a0b1 300
+-duck
+god 1
+stats t0a0b1
+-duck
+setpos 1452 266 -87 0 0
+wait 0.4
+-duck
+setpos 1454 42 -87 0 0
+wait 0.4
+-duck
+setpos 872 884 -91 0 0
+wait 0.4
+-duck
+setpos 1708 -1102 -143 0 0
+wait 0.4
+-duck
+setpos 1014 -576 -183 0 0
+wait 0.4
+-duck
+setpos 1448 212 -87 0 0
+wait 0.4
+-duck
+setpos 620 468 -75 0 0
+wait 0.4
+-duck
+setpos 44 1432 -91 0 0
+wait 0.4
+-duck
+setpos 1274 -330 -183 0 0
+wait 0.4
+-duck
+setpos 1160 -1018 -85 0 0
+wait 0.4
+-duck
+setpos 1682 -1102 -135 0 0
+wait 0.4
+-duck
+setpos 1092 -534 -183 0 0
+wait 0.4
+-duck
+setpos 1358 326 -91 0 0
+wait 0.4
+-duck
+setpos 620 498 -91 0 0
+wait 0.4
+-duck
+setpos 44 1402 -91 0 0
+wait 0.4
+-duck
+setpos 1030 326 -91 0 0
+wait 0.4
+-duck
+setpos -904 908 -122 0 0
+wait 0.4
+-duck
+stats t0a0b1-walked
+-duck
+setpos -916 828 -122 0 0
+# ---- t0a0b2 (visit 4/8)
+waitmap t0a0b2 300
+-duck
+god 1
+stats t0a0b2
+-duck
+setpos -1766 666 -151 0 0
+wait 0.4
+-duck
+setpos -1728 -996 -91 0 0
+wait 0.4
+-duck
+setpos -1334 -994 -415 0 0
+wait 0.4
+-duck
+setpos -1258 804 -147 0 0
+wait 0.4
+-duck
+setpos -1728 -28 137 0 0
+wait 0.4
+-duck
+setpos -1728 -692 -359 0 0
+wait 0.4
+-duck
+setpos -1258 852 -147 0 0
+wait 0.4
+-duck
+setpos -1864 670 -147 0 0
+wait 0.4
+-duck
+setpos -1728 -768 -359 0 0
+wait 0.4
+-duck
+setpos -1728 -368 -263 0 0
+wait 0.4
+-duck
+stats t0a0b2-walked
+-duck
+setpos -1190 -988 -199 0 0
+# ---- t0a0c (visit 5/8)
+waitmap t0a0c 300
+-duck
+god 1
+stats t0a0c
+-duck
+setpos -1728 -996 -91 0 0
+wait 0.4
+-duck
+setpos -1158 -994 -415 0 0
+wait 0.4
+-duck
+setpos -144 -714 5 0 0
+wait 0.4
+-duck
+setpos -652 -1856 -99 0 0
+wait 0.4
+-duck
+setpos -286 -322 25 0 0
+wait 0.4
+-duck
+setpos -142 -1184 13 0 0
+wait 0.4
+-duck
+setpos -756 -1864 -39 0 0
+wait 0.4
+-duck
+setpos -1448 -1552 49 0 0
+wait 0.4
+-duck
+setpos -1728 -730 -359 0 0
+wait 0.4
+-duck
+setpos -140 -418 5 0 0
+wait 0.4
+-duck
+setpos -140 -1298 5 0 0
+wait 0.4
+-duck
+setpos -844 -1864 -39 0 0
+wait 0.4
+-duck
+stats t0a0c-walked
+-duck
+setpos -1310 -988 -375 0 0
+# ---- t0a0b (visit 6/8)
+waitmap t0a0b 300
+-duck
+god 1
+stats t0a0b
+-duck
+setpos 1452 266 -87 0 0
+wait 0.4
+-duck
+setpos 1454 42 -87 0 0
+wait 0.4
+-duck
+setpos 872 884 -91 0 0
+wait 0.4
+-duck
+setpos -1766 666 -151 0 0
+wait 0.4
+-duck
+setpos -1728 -996 -91 0 0
+wait 0.4
+-duck
+setpos -1334 -994 -415 0 0
+wait 0.4
+-duck
+setpos 1708 -1102 -143 0 0
+wait 0.4
+-duck
+setpos 1014 -576 -183 0 0
+wait 0.4
+-duck
+setpos 1448 212 -87 0 0
+wait 0.4
+-duck
+setpos 620 468 -75 0 0
+wait 0.4
+-duck
+setpos 44 1432 -91 0 0
+wait 0.4
+-duck
+setpos -1258 804 -147 0 0
+wait 0.4
+-duck
+setpos -1728 -28 137 0 0
+wait 0.4
+-duck
+setpos 1274 -330 -183 0 0
+wait 0.4
+-duck
+setpos 1160 -1018 -85 0 0
+wait 0.4
+-duck
+setpos -1728 -692 -359 0 0
+wait 0.4
+-duck
+setpos 1682 -1102 -135 0 0
+wait 0.4
+-duck
+setpos 1092 -534 -183 0 0
+wait 0.4
+-duck
+setpos 1358 326 -91 0 0
+wait 0.4
+-duck
+setpos 620 498 -91 0 0
+wait 0.4
+-duck
+setpos 44 1402 -91 0 0
+wait 0.4
+-duck
+setpos -1258 852 -147 0 0
+wait 0.4
+-duck
+setpos -1864 670 -147 0 0
+wait 0.4
+-duck
+setpos -1728 -768 -359 0 0
+wait 0.4
+-duck
+setpos -1728 -368 -263 0 0
+wait 0.4
+-duck
+setpos 1030 326 -91 0 0
+wait 0.4
+-duck
+stats t0a0b-walked
+-duck
+setpos -1190 -988 -199 0 0
+# ---- t0a0c (visit 7/8)
+waitmap t0a0c 300
+-duck
+god 1
+stats t0a0c
+-duck
+setpos -1728 -996 -91 0 0
+wait 0.4
+-duck
+setpos -1158 -994 -415 0 0
+wait 0.4
+-duck
+setpos -144 -714 5 0 0
+wait 0.4
+-duck
+setpos -652 -1856 -99 0 0
+wait 0.4
+-duck
+setpos -286 -322 25 0 0
+wait 0.4
+-duck
+setpos -142 -1184 13 0 0
+wait 0.4
+-duck
+setpos -756 -1864 -39 0 0
+wait 0.4
+-duck
+setpos -1448 -1552 49 0 0
+wait 0.4
+-duck
+setpos -1728 -730 -359 0 0
+wait 0.4
+-duck
+setpos -140 -418 5 0 0
+wait 0.4
+-duck
+setpos -140 -1298 5 0 0
+wait 0.4
+-duck
+setpos -844 -1864 -39 0 0
+wait 0.4
+-duck
+stats t0a0c-walked
+-duck
+setpos -840 -1508 111 0 0
+# ---- t0a0d (visit 8/8)
+waitmap t0a0d 300
+-duck
+god 1
+stats t0a0d
+-duck
+setpos 187 -2446 -43 0 0
+wait 0.4
+-duck
+setpos 176 -808 -23 0 0
+wait 0.4
+-duck
+setpos -940 -1500 49 0 0
+wait 0.4
+-duck
+setpos 188 -1058 9 0 0
+wait 0.4
+-duck
+setpos 187 -2288 -43 0 0
+wait 0.4
+-duck
+stats t0a0d-walked
+pass
