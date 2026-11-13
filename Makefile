@@ -124,7 +124,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest sndtest seamproftest seamtest streamtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest rec4test sndtest seamproftest seamtest streamtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -368,7 +368,8 @@ REC_BIN := $(BUILD_DIR)/host/hl64-rec
 # The driver's test game takes the record dispatch rec.c calls (--wrap);
 # the rest of game/ links as usual.
 REC_WRAP := game_spawn_record game_spawn_logic game_use game_logic_use game_logic_timer \
-	game_map_opened game_map_closing
+	game_map_opened game_map_closing game_dehydrate game_rehydrate game_cut_refs \
+	wld_layer_ready wld_layer_of_map
 REC_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 	$(BUILD_DIR)/host/test/m3/rec_test.o
 $(REC_BIN): $(REC_OBJS)
@@ -382,6 +383,15 @@ STREAM_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(STREAM_BIN): $(STREAM_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 streamtest: $(STREAM_BIN)
+# M4 level-state driver (test/m4/rec4_test.c, run by test/m4/rec.sh): async
+# open, release / rehydrate, frozen maps, twins, deferred uses, runtime ids
+# with a test game (--wrap as above, plus runtime spawns).
+REC4_BIN := $(BUILD_DIR)/host/hl64-rec4
+REC4_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m4/rec4_test.o
+$(REC4_BIN): $(REC4_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) $(foreach f,$(REC_WRAP) game_spawn_class,-Wl,--wrap=$(f))
+rec4test: $(REC4_BIN)
 
 # Sound driver (test/m3/snd.c, run by test/m3/snd.sh: S1-S8 host parts).
 SND_BIN := $(BUILD_DIR)/host/hl64-snd

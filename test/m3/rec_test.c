@@ -51,6 +51,13 @@ void	__wrap_game_map_closing(int slot);
 void	__wrap_game_use(int e, int activator, int caller, int use_type, float value);
 void	__wrap_game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float value);
 void	__wrap_game_logic_timer(gid_t16 gid, uint16_t arg, int activator);
+/* M4 level state (GameLS / Stream implement them; this driver keeps the
+ * M3 behaviour: nothing dehydrates, layers open synchronously) */
+uint32_t __wrap_game_dehydrate(int e, void *buf, uint32_t max);
+void	__wrap_game_rehydrate(int e, const void *buf, uint32_t n);
+void	__wrap_game_cut_refs(int slot);
+int	__wrap_wld_layer_ready(const wld_layer_t *L);
+wld_layer_t *__wrap_wld_layer_of_map(int map);
 
 static int fails;
 
@@ -101,6 +108,37 @@ void __wrap_game_map_closing(int slot)
 {
 	(void)slot;
 	G.closing++;
+}
+
+uint32_t __wrap_game_dehydrate(int e, void *buf, uint32_t max)
+{
+	(void)e; (void)buf; (void)max;
+	return 0;	/* refuse: M3 entities stay live until their map closes */
+}
+
+void __wrap_game_rehydrate(int e, const void *buf, uint32_t n)
+{
+	(void)e; (void)buf; (void)n;
+}
+
+void __wrap_game_cut_refs(int slot)
+{
+	(void)slot;
+}
+
+int __wrap_wld_layer_ready(const wld_layer_t *L)
+{
+	return L != NULL;	/* wld_open layers are ready at return */
+}
+
+wld_layer_t *__wrap_wld_layer_of_map(int map)
+{
+	int s;
+
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+		if (wld_layer(s) && wld_layer(s)->map == map)
+			return wld_layer(s);
+	return NULL;
 }
 
 void __wrap_game_use(int e, int activator, int caller, int use_type, float value)
@@ -191,7 +229,8 @@ static int open_map(const char *name)
 	if (map < 0)
 		return -1;
 	L = wld_open(map);
-	return rec_map_open(L->slot);
+	rec_map_finish(rec_map_open(L->slot));
+	return rec_map_ready(L->slot) ? L->slot : -1;
 }
 
 static gid_t16 named(int slot, const char *s, int i)
