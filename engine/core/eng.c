@@ -665,9 +665,9 @@ static void rollup(void)
 		wld_stream_stats(&ss, 1);
 		n = ss.frames ? ss.frames : 1;
 		log_printf("prof stream_us avg=%lu max=%lu frames=%lu recompute=%lu reassert=%lu "
-			"blk1ms=%lu blk1ms_tele=%lu blkmax=%lu promoted=%lu\n",
+			"delta=%lu blk1ms=%lu blk1ms_tele=%lu blkmax=%lu promoted=%lu\n",
 			(unsigned long)ss.us_sum / n, (unsigned long)ss.us_max, (unsigned long)ss.frames,
-			(unsigned long)ss.recompute, (unsigned long)ss.reassert,
+			(unsigned long)ss.recompute, (unsigned long)ss.reassert, (unsigned long)ss.delta,
 			(unsigned long)io.life_frames_blocked_1ms,
 			(unsigned long)io.life_frames_blocked_1ms_tele,
 			(unsigned long)io.life_blocked_max_us, (unsigned long)ss.promoted);

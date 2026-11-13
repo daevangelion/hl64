@@ -23,10 +23,12 @@
  * The target set is rebuilt (a new wld_tgen generation; every chunk named
  * with its strongest class) only when an input changed: the home layer's
  * eye leaf, the player's grid cell, the velocity bucket, the pins, the
- * layer set or the collision window's cells / brush models. Otherwise the
- * previous generation stands (`reassert`): the LRU never evicts a chunk of
- * it for a weaker class, and a naming that could not be queued (no request
- * slot / no room) is retried by re-naming the same generation.
+ * layer set or the player's collision window's cells / brush models.
+ * Otherwise the previous generation stands (`reassert`): the LRU never
+ * evicts a chunk of it for a weaker class; the moving entities' windows
+ * and hydration windows that changed are named into it (`delta`), and a
+ * naming that could not be queued (no request slot / no room) is retried
+ * in it.
  */
 #include <math.h>
 #include <string.h>
@@ -74,6 +76,7 @@
 #define SEEN_MODELS	64		/* brush entities' hulls named in the eye's sectors */
 #define RETRY_MAX	128		/* open / pin namings retried (S.retry) */
 #define PREF_RETRY	8		/* frames before a short prefetch naming is redone */
+#define DSPAWN_MAX	(2 * SPAWN_WANTS)	/* new spawn windows named per frame (name_delta) */
 
 typedef struct {
 	uint8_t		on, win;
@@ -150,6 +153,20 @@ static struct {
 	/* hulls of the brush entities the home eye leaf sees (ent_scan) */
 	uint32_t	seen[SEEN_MODELS];
 	int		nseen;
+	/* changes named into the standing generation (name_delta) instead
+	 * of a rebuild: the windows of S.ew that moved this frame (indices,
+	 * ent_scan), new spawn windows (wld_stream_spawns; their slot), the
+	 * seen hulls changed */
+	uint8_t		dwin[ENT_WINDOWS];
+	int		ndwin;
+	spawn_want_t	dspawn[DSPAWN_MAX];
+	int8_t		dspawn_slot[DSPAWN_MAX];
+	int		ndspawn;
+	uint8_t		dseen;
+	/* the live brush entities (SUBMODEL model) of the open layers, in
+	 * entity order (ent_scan, each frame): each_mover's entity part */
+	uint16_t	brush[HL64_MAX_ENTITIES];
+	int		nbrush;
 	/* pins */
 	seam_pin_t	seam[HL64_WORLD_LAYERS];
 	point_pin_t	point[POINT_PINS];
@@ -263,11 +280,12 @@ static int box_seen_b(const wld_layer_t *L, const float lo[3], const float hi[3]
  * placements (rest positions, opaque and translucent; a record not yet
  * hydrated, or woken and drawn in the same frame, is drawn there) and the
  * live brush entities of L (where they are now: doors, trains, the
- * elevator). fn(L, sub, cls) per model; 0 when fn returned 0 for any. */
+ * elevator; the frame's list from ent_scan, entities freed since
+ * skipped). fn(L, sub, cls) per model; 0 when fn returned 0 for any. */
 static int each_mover(wld_layer_t *L, const uint16_t *list, int cnt, int cls,
 	int (*fn)(wld_layer_t *L, int sub, int cls))
 {
-	int i, k, e, ok = 1;
+	int i, k, ok = 1;
 	float ub[6];
 
 	list_bounds(L, list, cnt, ub);
@@ -286,15 +304,15 @@ static int each_mover(wld_layer_t *L, const uint16_t *list, int cnt, int cls,
 		if (box_seen_b(L, lo, hi, list, cnt, ub) && !fn(L, mv->sub, cls))
 			ok = 0;
 	}
-	for (e = ent_next_live(0); e >= 0; e = ent_next_live(e))
+	for (i = 0; i < S.nbrush; i++)
 	{
+		int e = S.brush[i];
 		res_t m;
 		const col_ent_t *cv;
 		const float *v;
 		float lo[3], hi[3];
-		int k;
 
-		if (ent_idc(e)->layer != L->slot)
+		if (!ent_is_live(e) || ent_idc(e)->layer != L->slot)
 			continue;
 		m = ent_rnd(e)->model;
 		if (RES_KIND(m) != RES_K_SUBMODEL || RES_SUB_SLOT(m) != L->slot)
@@ -581,18 +599,21 @@ static int ent_window(int e, wld_layer_t *L, const ewin_t *prev, ewin_t *w)
  * a gib shoved through a trigger: their first move reads them before a
  * window could name them); the destinations of the trigger_teleports
  * there (architecture.md 5.3 pin class: reachable teleport
- * destinations). A change bumps coll_gen / pin_gen. */
+ * destinations); the brush entity list (each_mover). A window or seen
+ * hull change is named into the standing generation (S.dwin / S.dseen:
+ * name_delta); a teleport destination change bumps pin_gen. */
 static void ent_scan(wld_layer_t *H, const float eye[3])
 {
 	static ewin_t nw[ENT_WINDOWS];
 	uint32_t ns[SEEN_MODELS];
 	tele_pin_t nt[TELE_PINS];
 	const uint16_t *list = NULL;
-	int e, n = 0, nsn = 0, ntl = 0, p = 0, cnt = 0, leaf;
+	int e, n = 0, nsn = 0, ntl = 0, p = 0, cnt = 0, leaf, nd = 0;
 
 	if (H && (leaf = wld_point_leaf(H, eye)) > 0)
 		list = wld_leaf_sectors(H, leaf, &cnt);
 	memset(nt, 0, sizeof(nt));
+	S.nbrush = 0;
 	for (e = ent_next_live(ENT_PLAYER); e >= 0; e = ent_next_live(e))
 	{
 		const col_ent_t *cv;
@@ -601,6 +622,8 @@ static void ent_scan(wld_layer_t *H, const float eye[3])
 		if (!(L = wld_layer(ent_idc(e)->layer)))
 			continue;
 		cv = ent_cv(e);
+		if (RES_KIND(ent_rnd(e)->model) == RES_K_SUBMODEL)
+			S.brush[S.nbrush++] = (uint16_t)e;
 		if (L == H && list && cv->model != COL_NONE && COL_MODEL_SLOT(cv->model) == L->slot
 			&& (cv->solid == COL_SOLID_TRIGGER || cv->movetype == MOVETYPE_PUSH)
 			&& box_seen(H, cv->absmin, cv->absmax, list, cnt))
@@ -622,19 +645,26 @@ static void ent_scan(wld_layer_t *H, const float eye[3])
 		while (p < S.nwin && S.ew[p].e < e)
 			p++;
 		if (ent_window(e, L, p < S.nwin ? &S.ew[p] : NULL, &nw[n]))
+		{
+			/* a new window or one that moved: named this frame */
+			if (!(p < S.nwin && S.ew[p].e == e && !memcmp(&S.ew[p], &nw[n], sizeof(nw[n]))))
+				S.dwin[nd++] = (uint8_t)n;
 			n++;
+		}
 	}
-	if (n != S.nwin || memcmp(nw, S.ew, (size_t)n * sizeof(nw[0])))
+	/* windows gone need no naming: their chunks lapse with the
+	 * generation (the next rebuild) */
+	if (n != S.nwin || nd)
 	{
 		memcpy(S.ew, nw, (size_t)n * sizeof(nw[0]));
 		S.nwin = n;
-		S.coll_gen++;
 	}
+	S.ndwin = nd;
 	if (nsn != S.nseen || memcmp(ns, S.seen, (size_t)nsn * sizeof(ns[0])))
 	{
 		memcpy(S.seen, ns, (size_t)nsn * sizeof(ns[0]));
 		S.nseen = nsn;
-		S.coll_gen++;
+		S.dseen = 1;
 	}
 	if (ntl != S.ntele || memcmp(nt, S.tele, sizeof(nt)))
 	{
@@ -820,6 +850,23 @@ static void name_pvs_ahead(wld_layer_t *L)
 
 static void retry_clear(void);
 
+/* Window w's cells in layer L (slot s) and, in its own layer, its brush
+ * models. */
+static void name_ewin(wld_layer_t *L, int s, const ewin_t *w, int cls)
+{
+	name_cells(L, w->r[s], cls);
+	name_cells(L, w->g[s], cls);
+	if (w->slot == s)
+		name_models(w->m, w->nm, cls);
+}
+
+static void name_spawn(wld_layer_t *L, const spawn_want_t *w, int cls)
+{
+	name_cells(L, w->r, cls);
+	if (w->sub >= 0)
+		name_model_coll(L, (unsigned)w->sub, cls);
+}
+
 /* Name the whole set, strongest class first (a stronger request may take
  * a weaker queued read's slot, never the reverse). The want peak is
  * measured after the open set and the seam pins: the test route's point
@@ -882,18 +929,9 @@ static void name_all(void)
 				 * this wide overflowed the collision pool in the
 				 * warehouse fight; the sync fallback evicts them) */
 				for (i = 0; i < S.nwin; i++)
-				{
-					name_cells(L, S.ew[i].r[s], cls);
-					name_cells(L, S.ew[i].g[s], cls);
-					if (S.ew[i].slot == s)
-						name_models(S.ew[i].m, S.ew[i].nm, cls);
-				}
+					name_ewin(L, s, &S.ew[i], cls);
 				for (i = 0; i < S.nspawn[s]; i++)
-				{
-					name_cells(L, S.spawn[s][i].r, cls);
-					if (S.spawn[s][i].sub >= 0)
-						name_model_coll(L, (unsigned)S.spawn[s][i].sub, cls);
-				}
+					name_spawn(L, &S.spawn[s][i], cls);
 				if (s != S.home_slot)
 					continue;
 				name_models(S.seen, S.nseen, cls);
@@ -917,6 +955,31 @@ static void name_all(void)
 				}
 			}
 		}
+	}
+}
+
+/* The prefetch parts that changed while the other inputs stood: the
+ * windows that moved, new spawn windows, the seen hulls, named into the
+ * standing generation as name_all would (a monster crossing grid cells
+ * no longer renames the whole set; names it no longer needs lapse with
+ * the generation). */
+static void name_delta(void)
+{
+	int s, i;
+
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+	{
+		wld_layer_t *L = wld_layer(s);
+
+		if (!L)
+			continue;
+		for (i = 0; i < S.ndwin; i++)
+			name_ewin(L, s, &S.ew[S.dwin[i]], WLD_CLS_PREFETCH);
+		for (i = 0; i < S.ndspawn; i++)
+			if (S.dspawn_slot[i] == s)
+				name_spawn(L, &S.dspawn[i], WLD_CLS_PREFETCH);
+		if (S.dseen && s == S.home_slot)
+			name_models(S.seen, S.nseen, WLD_CLS_PREFETCH);
 	}
 }
 
@@ -1156,16 +1219,27 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 	}
 	else
 	{
-		/* the standing generation: the namings that could not be
-		 * queued are retried in it (the listed ones each frame; the
-		 * whole set when the list filled, or PREF_RETRY frames after a
-		 * prefetch naming fell short) */
+		/* the standing generation: the windows that moved are named
+		 * into it; the namings that could not be queued are retried
+		 * in it (the listed ones each frame; the whole set when the
+		 * list filled, or PREF_RETRY frames after a prefetch naming
+		 * fell short) */
 		if (S.retry_over || (S.pref_short && wld_frame_no - S.named_frame >= PREF_RETRY))
 			name_all();
-		else if (S.nretry)
-			retry_names();
+		else
+		{
+			if (S.ndwin || S.ndspawn || S.dseen)
+			{
+				name_delta();
+				S.st.delta++;
+			}
+			if (S.nretry)
+				retry_names();
+		}
 		S.st.reassert++;
 	}
+	S.ndwin = S.ndspawn = 0;
+	S.dseen = 0;
 	sub_mark(&tm, WLD_SS_NAME);
 	/* brush entities move without changing an input (doors, trains, the
 	 * elevator): the ones now in the eye's sectors join the standing set */
@@ -1308,10 +1382,12 @@ void wld_stream_closed(int slot)
 		S.pin_gen++;
 	memset(&S.seam[slot], 0, sizeof(S.seam[slot]));
 	memset(S.ccell[slot], 0, sizeof(S.ccell[slot]));
-	/* the slot's cell ranges index its grid: none outlives the map */
-	if (S.nspawn[slot])
-		S.coll_gen++;
+	/* the slot's cell ranges index its grid: none outlives the map; the
+	 * changes not named yet go with a rebuild */
 	S.nspawn[slot] = 0;
+	S.ndwin = S.ndspawn = 0;
+	S.dseen = 0;
+	S.coll_gen++;
 	{
 		int i, n = 0;
 
@@ -1323,8 +1399,6 @@ void wld_stream_closed(int slot)
 				S.ew[n].r[slot][3] = S.ew[n].g[slot][3] = 0;
 				n++;
 			}
-		if (n != S.nwin)
-			S.coll_gen++;
 		S.nwin = n;
 		for (i = n = 0; i < S.ntele; i++)
 			if (S.tele[i].slot != slot)
@@ -1336,8 +1410,6 @@ void wld_stream_closed(int slot)
 		for (i = n = 0; i < S.nseen; i++)
 			if ((int)(S.seen[i] >> 16) != slot)
 				S.seen[n++] = S.seen[i];
-		if (n != S.nseen)
-			S.coll_gen++;
 		S.nseen = n;
 	}
 }
@@ -1497,9 +1569,24 @@ void wld_stream_spawns(int slot, const float (*box)[6], const int *sub, int n)
 	}
 	if (m != S.nspawn[slot] || memcmp(w, S.spawn[slot], (size_t)m * sizeof(w[0])))
 	{
+		/* the new ones are named this frame (name_delta); too many:
+		 * a rebuild */
+		for (i = 0; i < m; i++)
+		{
+			for (j = 0; j < S.nspawn[slot] && memcmp(&S.spawn[slot][j], &w[i], sizeof(w[i])); j++)
+				;
+			if (j < S.nspawn[slot])
+				continue;
+			if (S.ndspawn == DSPAWN_MAX)
+			{
+				S.coll_gen++;
+				break;
+			}
+			S.dspawn[S.ndspawn] = w[i];
+			S.dspawn_slot[S.ndspawn++] = (int8_t)slot;
+		}
 		memcpy(S.spawn[slot], w, (size_t)m * sizeof(w[0]));
 		S.nspawn[slot] = m;
-		S.coll_gen++;
 	}
 }
 

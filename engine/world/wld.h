@@ -249,11 +249,13 @@ void		wld_stats(wld_stats_t *s);
 enum { WLD_SS_OPEN, WLD_SS_SCAN, WLD_SS_NAME, WLD_SS_MOVERS, WLD_SS_PINS, WLD_SS_N };
 
 /* Stream counters since boot (stats record `stream:`); us / frames since
- * the last reset (prof roll-up). sub_us (per WLD_SS_*) and room_us (chunk
+ * the last reset (prof roll-up). delta: frames whose moved entity /
+ * spawn windows were named into the standing generation (no rebuild).
+ * sub_us (per WLD_SS_*) and room_us (chunk
  * requests' and sync reads' room making: weaker queued reads, LRU
  * search, anywhere in the frame) are cumulative since boot (u32, wrap). */
 typedef struct {
-	uint32_t	popin, popin_tele, pins, prefetch, recompute, reassert;
+	uint32_t	popin, popin_tele, pins, prefetch, recompute, reassert, delta;
 	uint32_t	teleports, promoted, evict_queued, open_async, open_fail;
 	uint32_t	frames, us_sum, us_max;
 	uint32_t	sub_us[WLD_SS_N], room_us;
