@@ -19,13 +19,17 @@
  */
 #include "hl64/ent.h"
 #include "hl64/grid.h"
+#include "hl64/game.h"
 #include "hl64/limits.h"
+#include "hl64/rec.h"
 #include "hl64/settings.h"
 #include "engine/core/dbg.h"
 #include "engine/core/eng.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
+#include "engine/ent/rec_int.h"
 #include "engine/io/io.h"
+#include "engine/res/res.h"
 #include "engine/mem/carve.h"
 #include "engine/mem/heap.h"
 #include "engine/render/gpu.h"
@@ -38,6 +42,10 @@
 #include "engine/view/view.h"
 
 const char *eng_route_path = "route.rbc";
+
+/* game/ (slices GameCore, GameMon, Items); skipped until it is linked */
+#pragma weak game_new_campaign
+#pragma weak game_start_frame
 static struct {
 	uint32_t	frame;		/* frames completed */
 	double		time;		/* game clock, f64 s from 1.0 (think-and-time.md 1) */
@@ -206,6 +214,8 @@ static int cmd_mem(const dbg_cmd_t *c)
 	(void)c;
 	mem_carve_log();
 	ent_mem_log();
+	res_mem_line();
+	rec_mem_line();
 	mem_heap_lifetime(&total_mal, &total_fr, &fails, &live_n, &live_kb, &peak_kb);
 	log_printf("mem: allocs %u frees %u fails %u live %u (%u KB) peak %u KB stack %d\n",
 		total_mal, total_fr, fails, live_n, live_kb, peak_kb, sys_stack_peak());
@@ -269,6 +279,8 @@ void eng_boot(const char *platform)
 	dbg_handler_set(DBG_QUIT, cmd_quit);
 	ent_init();
 	eng.world = (uint8_t)wld_init();
+	res_init();
+	rec_init();
 	col_init();
 	if (eng.world)
 	{
@@ -287,9 +299,26 @@ void eng_boot(const char *platform)
 			log_flush();
 			sys_exit(1);
 		}
-		/* a route plays from the campaign start (New Game) */
-		if (r > 0 && phy_player_spawn_start(wld_start_map()))
-			sys_error("route: no start map");
+		/* a route plays from the campaign start (New Game): the start
+		 * map's records, then the player at its first info_player_start
+		 * (+1 u, as HLSDK spawns) */
+		if (r > 0)
+		{
+			int map = wld_start_map(), slot;
+			float org[3], ang[3];
+
+			if (map < 0)
+				sys_error("route: no start map");
+			if (game_new_campaign)
+				game_new_campaign();
+			rec_new_campaign(map);
+			slot = wld_open(map)->slot;
+			if (!rec_player_start(slot, org, ang))
+				sys_error("%s: no info_player_start", wld_map_name(map));
+			org[2] += 1;
+			if (phy_player_spawn(map, org, ang))
+				sys_error("route: player spawn on %s", wld_map_name(map));
+		}
 	}
 
 	/* New Game clock: time 1.0, two settle frames (think-and-time.md 6) */
@@ -360,6 +389,7 @@ static void rollup(void)
 			(unsigned long)s.stepped / n, (unsigned long)s.thinks / n,
 			(unsigned long)s.movers_max, (unsigned long)s.heap_max);
 	}
+	rec_prof_line();
 #ifdef HL64_PROFILE
 	sys_prof_dump(eng.rollup_frames);
 #endif
@@ -395,8 +425,12 @@ void eng_frame(void)
 	io_frame_begin(dt);
 	io_pump();
 
-	/* 4 game (M3): the frame's clock (dt 0 in the settle frames) */
+	/* 4 game: the frame's clock (dt 0 in the settle frames), due logic
+	 * timers (think-and-time.md 5), the game's frame start */
 	gdt = eng_clock_frame((double)dt * 1e-6);
+	rec_run_timers(eng_clock_time(), gdt);
+	if (game_start_frame)
+		game_start_frame();
 	/* 5 player: pmove host */
 	phy_player_frame(&cmd, eng.time);
 	/* 6 active set */
@@ -408,6 +442,17 @@ void eng_frame(void)
 	if (eng.world)
 	{
 		wld_frame(eng.frame);
+		/* 8 hydration pump around the player (global position) */
+		if (phy_player_active())
+		{
+			const float *gm = wld_map_origin(phy_player_map());
+			const float *o = phy_player()->origin;
+			float anchor[1][3] = { { o[0] + gm[0], o[1] + gm[1], o[2] + gm[2] } };
+
+			rec_frame((const float (*)[3])anchor, 1);
+		}
+		else
+			rec_frame(NULL, 0);
 		wld_style_tick(eng.time);
 		ren_dlight_frame(eng.time, (double)dt * 1e-6);
 	}
