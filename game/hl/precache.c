@@ -178,3 +178,9 @@ void game_precache_map(int slot)
 		precache_record(gid, cls);
 	}
 }
+
+void game_precache_class(cls_t cls)
+{
+	memset(done, 0, sizeof(done));
+	precache_class(cls);
+}

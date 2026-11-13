@@ -299,6 +299,10 @@ int rt_load(const char *path)
 				return bad(path, p, "map id");
 			if (code == OP_SETPOS)
 				ok_a = a <= 1;
+			/* a dropped class is precached at load, as a map's classes
+			 * are (its spawn then reads no model info) */
+			if (code == OP_DROP)
+				game_precache_class((cls_t)rd32(b + p + 4));
 #ifdef HL64_TEST
 			if (code == OP_START && i)
 				return bad(path, p, "START is not the first op");
