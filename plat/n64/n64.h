@@ -20,6 +20,10 @@ void		vid_init(void);
 /* Detach and show a frame left attached (error screen path). */
 void		vid_abort_frame(void);
 
+/* cart.c: mount the ROM's DFS (player content) once at boot; without one
+ * (the M0 gate's ROM) sys_cart_addr finds no file. */
+void		cart_mount(void);
+
 /* iostat.c (PROFILE=1) */
 void		iostat_note_dma(unsigned bytes, uint32_t ticks);
 

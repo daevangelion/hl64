@@ -15,14 +15,27 @@ include/hl64/limits.h sizes) from the reporting lines: `mem:` / `mem rec:`
 frame), the roll-ups' pool / region peaks (studio, sound), and the stats
 records' world pools. A region nothing reports is listed as such.
 
+Region rule (docs/architecture.md 4.1): a reported region whose peak is
+above 90% of its carve, or whose peak x 1.25 exceeds its carve, fails the
+gate. EXEMPT names the only region outside the rule.
+
 Usage: gate_table.py LOG     (prints Markdown; exit 1 when a CPU zone the
-       gate needs has no roll-up line or a peak exceeds its region)
+       gate needs has no roll-up line or a region breaks the region rule;
+       the last line names what failed)
 """
 import re
 import sys
 
 ZONES = ["ent", "phys", "rec", "studio", "snd", "fx", "hud", "mon", "game", "pmove", "world"]
 NEEDED = ["ent", "phys", "rec", "studio", "snd", "fx", "hud", "mon", "pmove", "world"]
+# Region rule thresholds (architecture 4.1).
+USE_MAX = 0.90
+HEADROOM = 1.25
+# The entity components region is fixed-size by design: 495 slots x 228 B
+# plus the grid / membership / touch / free-time tables, carved for the
+# HL64_MAX_ENTITIES cap whatever the map, so it always reads ~100% and is
+# sized by the slot cap, not by peak x 1.25.
+EXEMPT = {"components"}
 
 
 def kv(line):
@@ -116,17 +129,31 @@ def main():
         if m:
             for r, v in zip(("render", "texture", "collision"), m.groups()):
                 note(r, int(v) * 1024, "stats world (KB)")
-    over = []
-    out += ["", "### M3 gate: memory per region (peak over the run vs the carved limits.h size)", "",
-            "| region | peak B | size B | use | source |", "|---|---:|---:|---:|---|"]
+    broken = []                       # (region, reason)
+    out += ["", "### M3 gate: memory per region (peak over the run vs the carved limits.h size; "
+            "rule: use <= %d%% and peak x %.2f <= size, %s exempt)" % (
+                USE_MAX * 100, HEADROOM, ", ".join(sorted(EXEMPT))), "",
+            "| region | peak B | size B | use | peak x %.2f B | rule | source |" % HEADROOM,
+            "|---|---:|---:|---:|---:|---|---|"]
     for r, size in carve.items():
         if r in peak:
             b, src = peak[r]
-            out.append("| %s | %d | %d | %.0f%% | %s |" % (r, b, size, 100.0 * b / size, src))
-            if b > size:
-                over.append(r)
+            why = []
+            if b > USE_MAX * size:
+                why.append("use %.0f%% > %d%%" % (100.0 * b / size, USE_MAX * 100))
+            if b * HEADROOM > size:
+                why.append("peak x %.2f = %d B > %d B" % (HEADROOM, b * HEADROOM, size))
+            if r in EXEMPT:
+                verdict = "exempt (fixed-size)"
+            elif why:
+                verdict = "FAIL: " + "; ".join(why)
+                broken.append((r, "; ".join(why)))
+            else:
+                verdict = "ok"
+            out.append("| %s | %d | %d | %.0f%% | %.0f | %s | %s |" % (
+                r, b, size, 100.0 * b / size, b * HEADROOM, verdict, src))
         else:
-            out.append("| %s | — | %d | — | not reported |" % (r, size))
+            out.append("| %s | — | %d | — | — | — | not reported |" % (r, size))
     m = [l for l in lines if l.startswith("mem: allocs ")]
     if m:
         out.append("")
@@ -134,9 +161,9 @@ def main():
     print("\n".join(out))
     if missing:
         print("\nmissing roll-ups: " + ", ".join(missing))
-    if over:
-        print("\nover their region: " + ", ".join(over))
-    return 1 if missing or over else 0
+    if broken:
+        print("\nregion rule failed: " + ", ".join("%s (%s)" % rb for rb in broken))
+    return 1 if missing or broken else 0
 
 
 if __name__ == "__main__":
