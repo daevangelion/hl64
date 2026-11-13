@@ -17,7 +17,8 @@
  *
  * world.c -- worldspawn (HLSDK dlls/world.cpp CWorld), the point classes
  * that become entities (subs.cpp CPointEntity, pathcorner.cpp path_corner
- * and path_track). info_player_start / info_landmark / info_target /
+ * and path_track), infodecal (world.cpp CDecal, on fx_decal_static).
+ * info_player_start / info_landmark / info_target /
  * info_teleport_destination are cooked point records (no entity): their
  * origin and angles are read by name (util.c UTIL_NamedOrigin).
  */
@@ -199,3 +200,72 @@ static int CCorpse_ObjectCaps(int e)
 static const game_vt_t CCorpse_vt = { .ObjectCaps = CCorpse_ObjectCaps };
 
 const game_class_t gc_BODYQUE = { .size = sizeof(CBaseEntity), .Spawn = CCorpse_Spawn, .vt = &CCorpse_vt };
+
+/* ---- infodecal (world.cpp CDecal) ---------------------------------------- */
+
+/* pfnStaticDecal / TE_BSPDECAL: the decal at the origin on the model the
+ * +-5 u trace meets; < 0 when the engine cannot place it yet. */
+static int CDecal_Spray(int e)
+{
+	const float *o = ent_cv(e)->origin;
+	float a[3] = { o[0] - 5, o[1] - 5, o[2] - 5 }, b[3] = { o[0] + 5, o[1] + 5, o[2] + 5 };
+	col_trace_t tr;
+
+	UTIL_TraceLine(a, b, ignore_monsters, e, &tr);
+	return fx_decal_static(tr.ent > 0 ? tr.ent : 0, o, ent_cv(e)->skin);
+}
+
+/* placed, then gone (SUB_Remove); hl64: the engine may not place it yet
+ * (sector or sheet not resident, placement budget): tried again 0.1 s on */
+void CDecal_StaticDecal(int e)
+{
+	if (CDecal_Spray(e) < 0)
+	{
+		ThinkIn(e, 0.1f);
+		return;
+	}
+	UTIL_Remove(e);
+}
+
+void CDecal_TriggerDecal(int e, int activator, int caller, int use_type, float value)
+{
+	(void)activator;
+	(void)caller;
+	(void)use_type;
+	(void)value;
+	if (CDecal_Spray(e) < 0)
+	{
+		SetThink(e, FN_CDecal_StaticDecal);
+		ThinkIn(e, 0.1f);
+		return;
+	}
+	SetThink(e, FN_SUB_Remove);
+	ThinkIn(e, 0.1f);
+}
+
+/* KeyValue "texture" -> pev->skin (DECAL_INDEX: the cooked decal id, -1
+ * when decals.wad lacks it); single player: SF_DECAL_NOTINDEATHMATCH is
+ * a deathmatch rule */
+static int CDecal_Spawn(int e, gid_t16 gid)
+{
+	int d = rec_key_decal(gid, K_TEXTURE);
+
+	if (d < 0)
+		return SpawnRefuse("infodecal: decal not in decals.wad");
+	ent_cv(e)->skin = (int16_t)d;
+	if (ent_idc(e)->targetname == NAME_NONE)
+	{
+		/* sprays itself on as soon as the world is done spawning */
+		SetThink(e, FN_CDecal_StaticDecal);
+		ent_think_at(e, gtime());
+	}
+	else
+	{
+		/* sprays itself on when triggered */
+		SetThink(e, FN_SUB_DoNothing);
+		SetUse(e, FN_CDecal_TriggerDecal);
+	}
+	return 0;
+}
+
+const game_class_t gc_INFODECAL = { .size = sizeof(CBaseEntity), .Spawn = CDecal_Spawn };

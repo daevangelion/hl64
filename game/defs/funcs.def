@@ -151,3 +151,7 @@ USE(CBreakable_Use)
 TOUCH(CPushable_Touch)
 USE(CPushable_Use)
 USE(CFuncConveyor_Use)
+// ---- FX (world.cpp CDecal, effects.cpp CGlow) ----
+THINK(CDecal_StaticDecal)
+USE(CDecal_TriggerDecal)
+THINK(CGlow_Think)

@@ -3,9 +3,15 @@
  * decal.c -- decals (docs/specs/render-fx.md 4, docs/architecture.md 9.7),
  * written from the spec. The old tree's r64_decal.c was not used.
  *
- * Sheet: gsfx/decals.i4 (tools/cook/stage.py stage_decals), loaded at boot
- * into the decal region; its entry i is HLSDK decals.h index i (dlls/
- * world.cpp gDecals order, as the game names decals), no names at run time.
+ * Sheets: gsfx/decals.i4 (tools/cook/stage.py stage_decals), loaded at boot
+ * at the start of the decal region; its entry i is HLSDK decals.h index i
+ * (dlls/world.cpp gDecals order, as the game names decals), no names at
+ * run time. Each open layer's placed-decal sheet (its package's DECL
+ * chunk, docs/formats/w64-format.md; infodecal ids 42 + i) is read into
+ * that layer's slot of the region: two slots, each half of what the global
+ * sheet and the piece vertices leave (the cook's hleids proof). A slot is
+ * refilled two frames after its layer changed (the GPU reads a frame's
+ * texels until then); the decals and placements using it go first.
  *
  * Placement: every cooked triangle of the hit model (the REND chunks of
  * the world sectors around the point, or the mover's MOVR chunk in its
@@ -30,6 +36,7 @@
 #include "hl64/limits.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
+#include "engine/io/io.h"
 #include "engine/mem/carve.h"
 #include "engine/render/fx_int.h"
 #include "engine/render/ren.h"
@@ -38,6 +45,10 @@
 #define SHEET_MAGIC	0x44493402u	/* 'DI4' 2: HLSDK decals.h order */
 #define SHEET_ENTRY	28
 #define SHEET_MAX	64		/* decals in a sheet */
+#define TEXES		(SHEET_MAX * (1 + HL64_WORLD_LAYERS))	/* global, then slot s */
+#define MAP_FIRST	42		/* first map-local decal id (hle-format-v1.md "Ids") */
+#define DECL_FOURCC	0x4445434Cu	/* 'DECL' chunk of a .w64 */
+#define SLOT_DELAY	2		/* frames before a changed slot is refilled */
 #define REACH		4.0f		/* plane distance that receives the decal */
 #define PIECE_MAX	8		/* clip vertices kept per piece */
 #define PIECES		8		/* pieces per decal */
@@ -75,8 +86,15 @@ typedef struct {
 	uint8_t		live, tries;
 } pend_t;
 
-static dtex_t		tex[SHEET_MAX];
-static int		ntex;
+static dtex_t		tex[TEXES];
+static int		ntex;			/* global sheet entries */
+static struct {
+	int		map;			/* layer map the slot follows; -1 none */
+	uint32_t	due;			/* frame its sheet may be read */
+	uint8_t		loaded, n;
+} slots[HL64_WORLD_LAYERS];
+static uint8_t		*slot_base;		/* region + align16(global sheet) */
+static uint32_t		slot_bytes, frames, spent_us;
 static fxdecal_t	pool[HL64_FX_DECALS];
 static dvert_t		*verts;			/* HL64_FX_DECALS x HL64_FX_DECAL_VERTS */
 static pend_t		queue[HL64_FX_DECAL_QUEUE];
@@ -90,8 +108,8 @@ static uint32_t be32(const uint8_t *p)
 	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
 }
 
-/* Validate the sheet (hostile input); 0 ok. */
-static int load_sheet(uint8_t *b, uint32_t size)
+/* Validate a sheet (hostile input) into out; entries, or < 0 = rule broken. */
+static int load_sheet(uint8_t *b, uint32_t size, dtex_t *out)
 {
 	int n, i;
 
@@ -108,15 +126,14 @@ static int load_sheet(uint8_t *b, uint32_t size)
 		if (!e[16] || !e[17] || e[16] > 64 || e[17] > 64 || (e[16] & 15) || ofs & 7
 			|| ofs > size || bytes > size - ofs || !e[18] || !e[19])
 			return -3;
-		tex[i].tw = e[16];
-		tex[i].th = e[17];
-		tex[i].ww = e[18];
-		tex[i].wh = e[19];
-		memcpy(tex[i].tint, e + 20, 3);
-		tex[i].i4 = b + ofs;
+		out[i].tw = e[16];
+		out[i].th = e[17];
+		out[i].ww = e[18];
+		out[i].wh = e[19];
+		memcpy(out[i].tint, e + 20, 3);
+		out[i].i4 = b + ofs;
 	}
-	ntex = n;
-	return 0;
+	return n;
 }
 
 void decal_init(void)
@@ -124,17 +141,26 @@ void decal_init(void)
 	uint8_t *region = mem_region(MEM_DECAL_TEXELS);
 	uint32_t cap = mem_region_bytes(MEM_DECAL_TEXELS);
 	uint32_t vbytes = HL64_FX_DECALS * HL64_FX_DECAL_VERTS * (uint32_t)sizeof(dvert_t);
-	uint32_t size = 0, rom;
-	int bad;
+	uint32_t size = 0, rom, gbytes;
+	int n, s;
 
 	memset(pool, 0, sizeof(pool));
 	memset(queue, 0, sizeof(queue));
 	memset(&st, 0, sizeof(st));
+	memset(tex, 0, sizeof(tex));
 	ntex = 0;
 	seq = 0;
+	frames = spent_us = 0;
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+	{
+		slots[s].map = -1;
+		slots[s].loaded = slots[s].n = 0;
+	}
 	if (vbytes > cap)
 		sys_error("fx: decal vertices %lu B > decal region", (unsigned long)vbytes);
 	verts = (dvert_t *)(region + cap - vbytes);
+	slot_base = region;
+	slot_bytes = ((cap - vbytes) / HL64_WORLD_LAYERS) & ~15u;
 	rom = sys_cart_addr("gsfx/decals.i4", &size);
 	if (!rom)
 		return;
@@ -143,10 +169,78 @@ void decal_init(void)
 			(unsigned long)(cap - vbytes));
 	if (!sys_cart_read(region, cap - vbytes, rom, size, 0, size))
 		sys_error("gsfx/decals.i4: read");
-	if ((bad = load_sheet(region, size)))
-		sys_error("gsfx/decals.i4: bad sheet (rule %d)", bad);
-	log_printf("mem fx: decals sheet=%lu verts=%lu region=%lu decals=%d\n", (unsigned long)size,
+	if ((n = load_sheet(region, size, tex)) < 0)
+		sys_error("gsfx/decals.i4: bad sheet (rule %d)", -n);
+	ntex = n;
+	gbytes = (size + 15) & ~15u;
+	slot_base = region + gbytes;
+	slot_bytes = ((cap - vbytes - gbytes) / HL64_WORLD_LAYERS) & ~15u;
+	log_printf("mem fx: decals sheet=%lu slots=%dx%lu verts=%lu region=%lu decals=%d\n",
+		(unsigned long)size, HL64_WORLD_LAYERS, (unsigned long)slot_bytes,
 		(unsigned long)vbytes, (unsigned long)cap, ntex);
+}
+
+/* Slot s follows layer s: a new map drops the decals and placements that
+ * use the slot's textures, then (SLOT_DELAY frames later) reads the map's
+ * DECL sheet; a sheet that breaks the rules or the slot leaves the map
+ * without its placed decals (logged). */
+static void slot_sync(int s)
+{
+	wld_layer_t *L = wld_layer(s);
+	int map = L ? L->map : -1, lo = SHEET_MAX * (1 + s), i, r;
+	uint32_t c;
+
+	if (slots[s].map != map)
+	{
+		for (i = 0; i < HL64_FX_DECALS; i++)
+			if (pool[i].live && pool[i].tex >= lo && pool[i].tex < lo + SHEET_MAX)
+				pool[i].live = 0;
+		for (i = 0; i < HL64_FX_DECAL_QUEUE; i++)
+			if (queue[i].live && queue[i].decal >= lo && queue[i].decal < lo + SHEET_MAX)
+				queue[i].live = 0;
+		memset(&tex[lo], 0, SHEET_MAX * sizeof(tex[0]));
+		slots[s].map = map;
+		slots[s].loaded = slots[s].n = 0;
+		slots[s].due = frames + SLOT_DELAY;
+	}
+	if (slots[s].loaded || !L || (int32_t)(frames - slots[s].due) < 0)
+		return;
+	slots[s].loaded = 1;
+	for (c = 0; c < L->dir->nchunks; c++)
+		if (L->chunks[c].fourcc == DECL_FOURCC)
+			break;
+	if (c == L->dir->nchunks)
+		return;
+	if (L->chunks[c].size > slot_bytes)
+	{
+		log_printf("fx: %s: DECL %lu B > decal slot %lu B\n", wld_map_name(map),
+			(unsigned long)L->chunks[c].size, (unsigned long)slot_bytes);
+		return;
+	}
+	io_read_sync(slot_base + (uint32_t)s * slot_bytes, L->rom + L->chunks[c].ofs, L->chunks[c].size);
+	if ((r = load_sheet(slot_base + (uint32_t)s * slot_bytes, L->chunks[c].size, &tex[lo])) < 0)
+	{
+		memset(&tex[lo], 0, SHEET_MAX * sizeof(tex[0]));
+		log_printf("fx: %s: bad DECL sheet (rule %d)\n", wld_map_name(map), -r);
+		return;
+	}
+	slots[s].n = (uint8_t)r;
+}
+
+/* Texture of decal id for a caller in layer slot (map-local ids): >= 0,
+ * -1 no such decal, -2 the slot's sheet is not read yet. */
+static int resolve(int decal, int slot)
+{
+	if (decal < 0)
+		return -1;
+	if (decal < MAP_FIRST)
+		return decal < ntex && tex[decal].tw ? decal : -1;
+	if (slot < 0 || slot >= HL64_WORLD_LAYERS || decal - MAP_FIRST >= SHEET_MAX)
+		return -1;
+	slot_sync(slot);
+	if (!slots[slot].loaded)
+		return -2;
+	return decal - MAP_FIRST < slots[slot].n ? SHEET_MAX * (1 + slot) + decal - MAP_FIRST : -1;
 }
 
 /* ---- geometry ------------------------------------------------------------------------- */
@@ -590,13 +684,13 @@ static int winding_sign(const place_t *P, const wld_layer_t *L, const uint8_t *c
 }
 
 /* Place now. Returns pieces placed (>= 0), -1 when a needed chunk is not
- * resident (retry later). */
+ * resident (retry later). decal = texture (resolve). */
 static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
 {
 	place_t P;
 	int li, k, placed = 0, missing = 0, sheet;
 
-	if (decal < 0 || decal >= ntex || !tex[sheet = decal].tw)
+	if (decal < 0 || decal >= TEXES || !tex[sheet = decal].tw)
 	{
 		st.nosheet++;
 		return 0;
@@ -762,7 +856,23 @@ void decal_queue(const float p_g[3], const float n[3], int e, int decal)
 
 int decal_place_now(const float p_g[3], const float n[3], int e, int decal)
 {
-	return place(p_g, n, e > 0 && ent_is_live(e) ? ent_handle_of(e) : 0, decal);
+	int t = resolve(decal, eng_frame_layer());
+
+	if (t < 0)
+		return t == -2 ? -1 : 0;
+	return place(p_g, n, e > 0 && ent_is_live(e) ? ent_handle_of(e) : 0, t);
+}
+
+static void queue_id(const float p_g[3], const float n[3], int e, int decal)
+{
+	int t = resolve(decal, eng_frame_layer());
+
+	if (t < 0)
+	{
+		st.nosheet++;
+		return;
+	}
+	decal_queue(p_g, n, e, t);
 }
 
 void fx_decal_trace(const col_trace_t *tr, int decal)
@@ -772,7 +882,7 @@ void fx_decal_trace(const col_trace_t *tr, int decal)
 	if (tr->frac >= 1.0f)
 		return;
 	fx_global(tr->end, p);
-	decal_queue(p, tr->normal, tr->ent > 0 ? tr->ent : 0, decal);
+	queue_id(p, tr->normal, tr->ent > 0 ? tr->ent : 0, decal);
 }
 
 void fx_decal_at(int e, const float org[3], int decal)
@@ -781,7 +891,33 @@ void fx_decal_at(int e, const float org[3], int decal)
 	float p[3];
 
 	fx_global(org, p);
-	decal_queue(p, none, e > 0 ? e : 0, decal);
+	queue_id(p, none, e > 0 ? e : 0, decal);
+}
+
+int fx_decal_static(int e, const float org[3], int decal)
+{
+	static const float none[3] = { 0, 0, 0 };
+	uint64_t t0;
+	float p[3];
+	int t = resolve(decal, eng_frame_layer()), r;
+
+	if (t == -2 || spent_us > BUDGET_US)
+		return -1;
+	if (t < 0)
+	{
+		st.nosheet++;
+		return 0;
+	}
+	t0 = sys_time_us();
+	fx_global(org, p);
+	r = place(p, none, e > 0 && ent_is_live(e) ? ent_handle_of(e) : 0, t);
+	spent_us += (uint32_t)(sys_time_us() - t0);
+	if (r > 0)
+	{
+		st.placed++;
+		st.statics++;
+	}
+	return r;
 }
 
 void decal_frame(void)
@@ -789,6 +925,9 @@ void decal_frame(void)
 	uint64_t t0 = sys_time_us();
 	int i, retries = 0, n = 0;
 
+	frames++;
+	for (i = 0; i < HL64_WORLD_LAYERS; i++)
+		slot_sync(i);
 	for (i = 0; i < HL64_FX_DECAL_QUEUE; i++)
 	{
 		pend_t *q = &queue[i];
@@ -802,7 +941,7 @@ void decal_frame(void)
 			st.dropped++;
 			continue;
 		}
-		if (sys_time_us() - t0 > BUDGET_US)
+		if (sys_time_us() - t0 + spent_us > BUDGET_US)
 			break;		/* excess placements wait */
 		if (q->tries && retries >= RETRIES)
 			continue;
@@ -820,7 +959,8 @@ void decal_frame(void)
 			st.placed++;
 	}
 	st.pending = (uint16_t)n;
-	st.place_us += (uint32_t)(sys_time_us() - t0);
+	st.place_us += (uint32_t)(sys_time_us() - t0) + spent_us;
+	spent_us = 0;
 }
 
 int decal_count(void)
