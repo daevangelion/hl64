@@ -1900,7 +1900,7 @@ void rec_map_finish(int slot)
 
 		for (i = 0; i < 3; i++)
 			if (m->req[i].state == IO_QUEUED || m->req[i].state == IO_ACTIVE)
-				io_finish(&m->req[i]);
+				io_finish(&m->req[i], "hle open");
 		advance(m);
 		if (m->phase == ph)
 			sys_error("rec: %s: HLE open waits for its layer", wld_map_name(m->map));

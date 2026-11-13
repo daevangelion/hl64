@@ -89,10 +89,13 @@ uint32_t	sys_cart_addr(const char *path, uint32_t *size);
 int		sys_cart_read(void *dst, size_t dst_cap, uint32_t rom,
 			uint32_t rom_size, uint32_t off, uint32_t len);
 /* engine/io backend: start one piece, poll, wait (returns blocked us),
- * synchronous read (returns blocked us), modelled PI us (host; 0 cart). */
+ * synchronous read (returns blocked us), modelled PI us (host; 0 cart).
+ * sys_pi_wait's audio: the waiter is the mixer's AUDIO read (the host
+ * charges a waiting sync read the in-flight piece's whole modelled time,
+ * an audio read none: plat/host/io_host.c). */
 void		sys_pi_launch(void *dst, uint32_t rom, uint32_t len);
 int		sys_pi_busy(void);
-uint32_t	sys_pi_wait(void);
+uint32_t	sys_pi_wait(int audio);
 uint32_t	sys_pi_read(void *dst, uint32_t rom, uint32_t len);
 uint32_t	sys_pi_cost_us(uint32_t len);
 

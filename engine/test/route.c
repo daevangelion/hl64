@@ -143,12 +143,12 @@ static int rtb_read(rtb_ids_t *t)
 	memset(t, 0, sizeof(*t));
 	if (!rom || size < 32)
 		return -1;
-	io_read_sync(hdr, rom, 32);
+	io_read_sync(hdr, rom, 32, "route rtb");
 	nsect = rd16(hdr + 20);
 	if (rd32(hdr) != RTB_MAGIC || rd16(hdr + 4) != 1 || rd32(hdr + 12) != size
 		|| rd32(hdr + 24) != 32 || nsect > RTB_DIR_MAX || 32 + 16 * nsect > size)
 		return -1;
-	io_read_sync(hdr, rom, (32 + 16 * nsect + 1) & ~1u);
+	io_read_sync(hdr, rom, (32 + 16 * nsect + 1) & ~1u, "route rtb");
 	t->build_id = rd32(hdr + 8);
 	rt.rtb_rom = rom;
 	for (i = 0; i < nsect; i++)
@@ -183,14 +183,14 @@ static int tg_read(uint32_t id, rt_targ_t *t)
 	static uint8_t w[2 * RT_LUMPS] __attribute__((aligned(16)));
 	uint32_t first, i;
 
-	io_read_sync(w, rt.rtb_rom + rt.targ_ofs + 8u * id, 8);
+	io_read_sync(w, rt.rtb_rom + rt.targ_ofs + 8u * id, 8, "route names");
 	t->map = rd16(w);
 	first = rd16(w + 2);
 	t->count = rd16(w + 4);
 	t->spawners = rd16(w + 6);
 	if (t->count > RT_LUMPS || first + t->count > rt.ntlmp)
 		return -1;
-	io_read_sync(w, rt.rtb_rom + rt.tlmp_ofs + 2u * first, 2u * t->count);
+	io_read_sync(w, rt.rtb_rom + rt.tlmp_ofs + 2u * first, 2u * t->count, "route names");
 	for (i = 0; i < t->count; i++)
 		t->lump[i] = rd16(w + 2 * i);
 	return 0;
@@ -233,7 +233,7 @@ int rt_load(const char *path)
 		return 0;
 	if (size < RBC_HDR || size > RBC_MAX_BYTES)
 		return bad(path, 0, "size");
-	io_read_sync(rt.buf, rom, (size + 1) & ~1u);
+	io_read_sync(rt.buf, rom, (size + 1) & ~1u, "route");
 	rt.size = size;
 	rt.nops = rd16(b + 20);
 	rt.code_ofs = rd32(b + 24);

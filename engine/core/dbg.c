@@ -98,7 +98,7 @@ int dbg_load(const char *path)
 		return 0;
 	if (size < DBG_FILE_HDR || size > sizeof(buf))
 		sys_error("%s: size %lu", path, (unsigned long)size);
-	io_read_sync(buf, rom, (size + 1) & ~1u);
+	io_read_sync(buf, rom, (size + 1) & ~1u, "dbg.cmd");
 	n = (uint32_t)(buf[6] << 8 | buf[7]);
 	if (rd32(buf) != DBG_FILE_MAGIC || buf[4] || buf[5] != 1
 		|| size != DBG_FILE_HDR + DBG_FILE_REC * n)

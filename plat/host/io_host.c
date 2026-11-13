@@ -256,9 +256,22 @@ static uint32_t io_pread(void *dst, uint32_t rom, uint32_t len)
 	return n;
 }
 
+/* The piece launched last: its modelled PI time. A piece lands by the next
+ * pump (sys_pi_busy 0), but a sync read issued before that pump waits for
+ * it: the cart's DMA of up to IO_PIECE (3.1 ms) is still running when the
+ * frame's logic reads right after the frame-start pump (the cart's
+ * playable walk: 1-2 ms of a > 1 ms frame was this wait). The host has no
+ * CPU clock to tell how much of it has passed, so a sync read is charged
+ * the whole piece: worst case. The mixer's AUDIO reads come at the frame's
+ * sound step, after the several ms of logic, physics and residency the
+ * cart runs since the pump: the host charges them nothing (the cart's
+ * `io: frame` line measures its own drains). engine/io only waits while it
+ * holds a piece in flight (io.c Drain). */
+static uint32_t io_inflight_us;
+
 void sys_pi_launch(void *dst, uint32_t rom, uint32_t len)
 {
-	io_pread(dst, rom, len);
+	io_inflight_us = sys_pi_cost_us(io_pread(dst, rom, len));
 }
 
 /* one pump interval models a piece's PI time */
@@ -267,9 +280,12 @@ int sys_pi_busy(void)
 	return 0;
 }
 
-uint32_t sys_pi_wait(void)
+uint32_t sys_pi_wait(int audio)
 {
-	return 0;
+	uint32_t w = audio ? 0 : io_inflight_us;
+
+	io_inflight_us = 0;
+	return w;
 }
 
 uint32_t sys_pi_read(void *dst, uint32_t rom, uint32_t len)

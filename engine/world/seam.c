@@ -316,7 +316,7 @@ void seam_init(void)
 	if (size < 32 || ((size + 1) & ~1u) > cap)
 		sys_error("%s: %lu B does not fit the campaign region (%lu B): raise "
 			"HL64_CAMPAIGN_KB", path, (unsigned long)size, (unsigned long)cap);
-	io_read_sync(b, rom, (size + 1) & ~1u);
+	io_read_sync(b, rom, (size + 1) & ~1u, "cwg");
 	G.b = b;
 	G.size = size;
 	if (be32(b) != CWG_MAGIC || be16(b + 4) != 3 || be16(b + 6))

@@ -124,10 +124,11 @@ int sys_pi_busy(void)
 	return (*PI_STATUS & (PI_STATUS_DMA_BUSY | PI_STATUS_IO_BUSY)) != 0;
 }
 
-uint32_t sys_pi_wait(void)
+uint32_t sys_pi_wait(int audio)
 {
 	uint32_t t0;
 
+	(void)audio;
 	if (!sys_pi_busy())
 		return 0;
 	t0 = TICKS_READ();

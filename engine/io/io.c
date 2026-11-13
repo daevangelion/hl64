@@ -23,8 +23,10 @@ static int		loading;	/* io_set_load depth */
 static int		booting;	/* boot: until the first io_frame_begin */
 static uint32_t		q_bytes;	/* remaining bytes of queued + active requests */
 static uint32_t		fr_pi_us;	/* modelled PI busy time this frame (host) */
-/* this frame's sync reads (the > 1 ms report) */
+/* this frame's sync reads, audio reads and in-flight waits (the > 1 ms
+ * report) */
 static uint32_t		fr_sync_calls, fr_sync_bytes, fr_sync_max, fr_sync_max_rom;
+static uint32_t		fr_audio_calls, fr_drain_us;
 /* since boot, never reset by io_stats */
 static uint32_t		life_frames, life_blocked_max, life_blocked_1ms, life_budget_over;
 static uint32_t		life_blocked_1ms_tele;	/* > 1 ms frames inside io_tele_window */
@@ -40,17 +42,27 @@ static void HwLaunch(uint8_t *dst, uint32_t rom, uint32_t len)
 	fr_pi_us += sys_pi_cost_us(len);
 }
 
-static void HwWaitIdle(void)
+static void HwWaitIdle(int audio)
 {
-	fr_blocked_us += sys_pi_wait();
+	uint32_t w = sys_pi_wait(audio);
+
+	fr_blocked_us += w;
+	if (!LOADING())
+		fr_drain_us += w;
 }
 
-static void HwSync(uint8_t *dst, uint32_t rom, uint32_t len)
+/* A blocking PI read; audio reads are counted apart from sync reads. */
+static void HwSync(uint8_t *dst, uint32_t rom, uint32_t len, int audio)
 {
 	fr_blocked_us += sys_pi_read(dst, rom, len);
 	if (LOADING())
 		return;		/* layer-open reads are not a playing frame's PI time */
 	fr_pi_us += sys_pi_cost_us(len);
+	if (audio)
+	{
+		fr_audio_calls++;
+		return;
+	}
 	fr_sync_calls++;
 	fr_sync_bytes += len;
 	if (len > fr_sync_max)
@@ -83,13 +95,19 @@ static void Unlink(io_req_t *r)
 
 static void Link(io_req_t *r)
 {
-	r->next = NULL;
+	io_req_t **pp = &q_head[r->prio];
+
 	q_bytes += r->len - r->done;
-	if (q_tail[r->prio])
-		q_tail[r->prio]->next = r;
+	if (!r->front)
+		pp = q_tail[r->prio] ? &q_tail[r->prio]->next : pp;
 	else
-		q_head[r->prio] = r;
-	q_tail[r->prio] = r;
+		/* after the class's leading front requests */
+		while (*pp && (*pp)->front)
+			pp = &(*pp)->next;
+	r->next = *pp;
+	*pp = r;
+	if (!r->next)
+		q_tail[r->prio] = r;
 	if (++q_len > (int)st.queue_max)
 		st.queue_max = (uint32_t)q_len;
 }
@@ -132,6 +150,7 @@ void io_init(void)
 	budget = IO_BUDGET;
 	fr_async = fr_blocked_us = fr_pi_us = 0;
 	fr_sync_calls = fr_sync_bytes = fr_sync_max = fr_sync_max_rom = 0;
+	fr_audio_calls = fr_drain_us = 0;
 	life_frames = life_blocked_max = life_blocked_1ms = life_budget_over = 0;
 	life_blocked_1ms_tele = 0;
 	tele_until = 0;
@@ -172,10 +191,11 @@ void io_frame_begin(uint32_t frame_us)
 			else
 				life_blocked_1ms++;
 			log_printf("io: frame %lu blocked %lu us: %lu sync reads %lu B, largest %lu B "
-				"at 0x%08lx%s\n", (unsigned long)life_frames, (unsigned long)fr_blocked_us,
-				(unsigned long)fr_sync_calls, (unsigned long)fr_sync_bytes,
-				(unsigned long)fr_sync_max, (unsigned long)fr_sync_max_rom,
-				tele ? " (teleport window)" : "");
+				"at 0x%08lx, %lu audio reads, drain %lu us%s\n", (unsigned long)life_frames,
+				(unsigned long)fr_blocked_us, (unsigned long)fr_sync_calls,
+				(unsigned long)fr_sync_bytes, (unsigned long)fr_sync_max,
+				(unsigned long)fr_sync_max_rom, (unsigned long)fr_audio_calls,
+				(unsigned long)fr_drain_us, tele ? " (teleport window)" : "");
 		}
 		if (fr_blocked_us > life_blocked_max && life_frames >= tele_until)
 			life_blocked_max = fr_blocked_us;
@@ -191,6 +211,7 @@ void io_frame_begin(uint32_t frame_us)
 	fr_us = frame_us;
 	fr_pi_us = 0;
 	fr_sync_calls = fr_sync_bytes = fr_sync_max = fr_sync_max_rom = 0;
+	fr_audio_calls = fr_drain_us = 0;
 	st.frames++;
 	life_frames++;
 }
@@ -264,19 +285,20 @@ void io_pump(void)
 	HwLaunch(r->dst + r->done, r->rom + r->done, n);
 }
 
-/* Wait for the piece in flight (someone else's or r's) and retire it. */
-static void Drain(void)
+/* Wait for the piece in flight (someone else's or r's) and retire it;
+ * audio: the waiter is an AUDIO read (sys_pi_wait). */
+static void Drain(int audio)
 {
 	if (!act)
 		return;
-	HwWaitIdle();
+	HwWaitIdle(audio);
 	Retire();
 }
 
 void io_cancel(io_req_t *r)
 {
 	if (r->state == IO_ACTIVE)
-		Drain();
+		Drain(0);
 	if (r->state == IO_QUEUED)
 		Unlink(r);
 	if (r->state != IO_DONE)
@@ -315,39 +337,46 @@ uint32_t io_queued(void)
 	return q_bytes;
 }
 
-void io_finish(io_req_t *r)
+/* A sync read in play: counted, and named in test builds. */
+static void SyncCount(const char *what, uint32_t rom, uint32_t n)
+{
+	if (LOADING())
+		return;
+	st.sync_calls++;
+	st.sync_bytes += n;
+#ifdef HL64_TEST
+	log_printf("io: sync %s %lu B at 0x%08lx\n", what, (unsigned long)n, (unsigned long)rom);
+#else
+	(void)what;
+	(void)rom;
+#endif
+}
+
+void io_finish(io_req_t *r, const char *what)
 {
 	uint32_t n, b0 = fr_blocked_us;
 
 	if (r->state == IO_ACTIVE)
-		Drain();
+		Drain(0);
 	if (r->state != IO_QUEUED)
 		return;
-	Drain();
+	Drain(0);
 	n = r->len - r->done;
-	if (!LOADING())
-	{
-		st.sync_calls++;
-		st.sync_bytes += n;
-	}
-	HwSync(r->dst + r->done, r->rom + r->done, n);
+	SyncCount(what, r->rom + r->done, n);
+	HwSync(r->dst + r->done, r->rom + r->done, n, 0);
 	q_bytes -= n;
 	r->done = r->len;
 	Complete(r);
 	LoadAccount(b0, n);
 }
 
-void io_read_sync(void *dst, uint32_t rom, uint32_t len)
+void io_read_sync(void *dst, uint32_t rom, uint32_t len, const char *what)
 {
 	uint32_t b0 = fr_blocked_us;
 
-	Drain();
-	if (!LOADING())
-	{
-		st.sync_calls++;
-		st.sync_bytes += len;
-	}
-	HwSync(dst, rom, len);
+	Drain(0);
+	SyncCount(what, rom, len);
+	HwSync(dst, rom, len, 0);
 	LoadAccount(b0, len);
 }
 
@@ -355,9 +384,9 @@ void io_read_audio(void *dst, uint32_t rom, uint32_t len)
 {
 	uint32_t b0;
 
-	Drain();
+	Drain(1);
 	b0 = fr_blocked_us;
-	HwSync(dst, rom, len);
+	HwSync(dst, rom, len, 1);
 	st.audio_calls++;
 	st.audio_bytes += len;
 	st.audio_us += fr_blocked_us - b0;

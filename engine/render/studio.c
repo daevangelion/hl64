@@ -571,7 +571,7 @@ static void iload_step(iload_t *l, int sync)
 	smodel_t *m = &models[l->idx];
 
 	if (sync && (l->r.state == IO_QUEUED || l->r.state == IO_ACTIVE))
-		io_finish(&l->r);
+		io_finish(&l->r, "studio info (queued)");
 	if (l->r.state != IO_DONE)
 		return;
 	if (l->phase == 1)
@@ -629,13 +629,13 @@ static smodel_t *info_of(res_t r)
 	}
 	if (m->info_st == U_BAD || model_files(i) || m->size < 64)
 		return NULL;
-	io_read_sync(&hdr, m->rom, 64);
+	io_read_sync(&hdr, m->rom, 64, "studio info");
 	if (info_header(m, i, &hdr))
 		return NULL;
 	if (!(m->info_blk = alloc(m->info_size, (void **)&m->info)))
 		sys_error("studio: no pool room for model %d info (%lu B)", i,
 			(unsigned long)m->info_size);
-	io_read_sync(m->info, m->rom + m->info_ofs, m->info_size);
+	io_read_sync(m->info, m->rom + m->info_ofs, m->info_size, "studio info");
 	if (info_landed(m, i))
 		return NULL;
 	sync_read(i, "info");
@@ -833,7 +833,7 @@ static const void *anim_get(res_t model, int seq, uint32_t *size, int want_only,
 		for (k = 0; k < REQS; k++)
 			if (reqs[k].kind == 2 && reqs[k].idx == a - anims)
 			{
-				io_finish(&reqs[k].r);
+				io_finish(&reqs[k].r, "studio anim (queued)");
 				sync_read(mi, "anim (queued)");
 			}
 		io_pump();
@@ -842,7 +842,7 @@ static const void *anim_get(res_t model, int seq, uint32_t *size, int want_only,
 	{
 		if (!(a->blk = alloc(s->anim_size, (void **)&a->data)))
 			return NULL;
-		io_read_sync(a->data, m->arom + s->anim_ofs, s->anim_size);
+		io_read_sync(a->data, m->arom + s->anim_ofs, s->anim_size, "studio anim");
 		sync_read(mi, "anim");
 		a->st = U_LANDED;
 	}

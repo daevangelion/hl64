@@ -215,7 +215,7 @@ uint32_t res_install(const uint8_t *b, const rtb_dir_t *d, int resolve)
 		if (e->size < 8)
 			sys_error("campaign.rtb: sprite %lu: file shorter than its header",
 				(unsigned long)i);
-		io_read_sync(h, R.files[e->file].rom + e->offset, 8);
+		io_read_sync(h, R.files[e->file].rom + e->offset, 8, "sprite header");
 		if (rd32(h) != 0x53433431u || !rd16(h + 6))
 			sys_error("campaign.rtb: sprite %lu: not an SC41 sprite", (unsigned long)i);
 		R.sprframes[i] = (uint16_t)rd16(h + 6);
@@ -255,19 +255,19 @@ void res_init(void)
 	}
 	if (size < RTB_DIR_END)
 		sys_error("campaign.rtb: offset 0: file shorter than its header and directory");
-	io_read_sync(buf, rom, (RTB_DIR_END + 1) & ~1u);
+	io_read_sync(buf, rom, (RTB_DIR_END + 1) & ~1u, "rtb");
 	if ((why = rtb_parse_dir(buf, size, &d, &bad)))
 		sys_error("campaign.rtb: offset %lu: %s", (unsigned long)bad, why);
 	if (d.cart_end > mem_region_bytes(MEM_SCRATCH))
 		sys_error("campaign.rtb: cart part %lu B over the scratch region",
 			(unsigned long)d.cart_end);
-	io_read_sync(buf, rom, (d.cart_end + 1) & ~1u);
+	io_read_sync(buf, rom, (d.cart_end + 1) & ~1u, "rtb");
 	if ((why = rtb_parse_cart(buf, &d, &bad)))
 		sys_error("campaign.rtb: offset %lu: %s", (unsigned long)bad, why);
 #ifdef HL64_HOST
 	if (size > sizeof(host_file))
 		sys_error("campaign.rtb: %lu B over the host check buffer", (unsigned long)size);
-	io_read_sync(host_file, rom, (size + 1) & ~1u);
+	io_read_sync(host_file, rom, (size + 1) & ~1u, "rtb");
 	if ((why = rtb_parse_rest(host_file, &d, &bad)))
 		sys_error("campaign.rtb: offset %lu: %s", (unsigned long)bad, why);
 #elif defined(HL64_TEST)
@@ -281,7 +281,7 @@ void res_init(void)
 		{
 			uint32_t n = size - at < piece ? size - at : piece;
 
-			io_read_sync(buf, rom + at, (n + 1) & ~1u);
+			io_read_sync(buf, rom + at, (n + 1) & ~1u, "rtb");
 			crc = rtb_crc32(crc, buf, n);
 			at += n;
 		}

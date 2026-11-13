@@ -14,12 +14,17 @@
  * of a trace) bypass the budget and are counted as blocked I/O, except
  * during boot (until the first io_frame_begin) and inside io_set_load
  * (boot / New Game / setpos map loads), which count as load I/O. A frame
- * blocked more than 1 ms logs `io: frame N blocked U us: ...`; inside a
- * test teleport window (io_tele_window) it counts as blk1ms_tele.
+ * blocked more than 1 ms logs `io: frame N blocked U us: S sync reads B B,
+ * largest L B at R, A audio reads, drain D us`; inside a test teleport
+ * window (io_tele_window) it counts as blk1ms_tele. Drain is the wait for
+ * a queued piece still in flight when a sync / audio read starts. Test
+ * builds also log each sync read in play: `io: sync <what> N B at R`.
  *
  * Shared by the cart and the host build: the backend (sys.h sys_pi_*) is
  * a PI DMA (cart) or a pread with a modelled PI cost per KB (host), so
- * the host reports the same per-frame traffic, budget and blocked time.
+ * the host reports the same per-frame traffic, budget and blocked time
+ * (host: a sync read issued while a piece is in flight waits the piece's
+ * whole modelled time, plat/host/io_host.c).
  */
 #ifndef HL64_IO_H
 #define HL64_IO_H
@@ -43,6 +48,10 @@ typedef struct io_req_s
 	uint32_t		done;	/* bytes landed */
 	uint8_t			prio;
 	volatile uint8_t	state;
+	/* queued ahead of its class's other requests (after earlier front
+	 * ones): collision chunks, whose absence blocks a trace, before
+	 * render data, whose absence is pop-in */
+	uint8_t			front;
 	void			(*cb)(struct io_req_s *r);	/* on completion, from io_pump */
 	int			user;
 } io_req_t;
@@ -92,11 +101,13 @@ void	io_submit(io_req_t *r);
 void	io_promote(io_req_t *r, int prio);
 /* Remove a request; an active one is waited for (counted as blocked). */
 void	io_cancel(io_req_t *r);
-/* Block until r is DONE (counted as blocked); r must be queued or active. */
-void	io_finish(io_req_t *r);
+/* Block until r is DONE (counted as blocked); r must be queued or active;
+ * `what` as io_read_sync's. */
+void	io_finish(io_req_t *r, const char *what);
 void	io_pump(void);
-/* Blocking read outside the queue (waits for the piece in flight first). */
-void	io_read_sync(void *dst, uint32_t rom, uint32_t len);
+/* Blocking read outside the queue (waits for the piece in flight first);
+ * `what` names the caller in the test builds' in-play `io: sync` line. */
+void	io_read_sync(void *dst, uint32_t rom, uint32_t len, const char *what);
 /*
  * AUDIO class (architecture 5.2: AUDIO > OPEN > SEAM > PREFETCH): the
  * mixer's wave reads, synchronous and ahead of every queued request (they

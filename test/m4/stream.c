@@ -716,7 +716,7 @@ static void t6_blocked(void)
 	}
 	frames(1);
 	io_stats(&a, 0);
-	io_read_sync(big, rom, sizeof(big));
+	io_read_sync(big, rom, sizeof(big), "test");
 	frames(1);
 	io_stats(&b, 0);
 	check("T6 blocked", b.life_frames_blocked_1ms == a.life_frames_blocked_1ms + 1
@@ -724,10 +724,10 @@ static void t6_blocked(void)
 		"(blkmax %lu us)", (unsigned long)b.life_blocked_max_us);
 	a = b;
 	io_set_load(1);
-	io_read_sync(big, rom, sizeof(big));
+	io_read_sync(big, rom, sizeof(big), "test");
 	io_set_load(0);
 	frames(1);
-	io_read_sync(big, rom, 512);
+	io_read_sync(big, rom, 512, "test");
 	frames(1);
 	io_stats(&b, 0);
 	check("T6 blocked", b.life_frames_blocked_1ms == a.life_frames_blocked_1ms
@@ -735,11 +735,11 @@ static void t6_blocked(void)
 		"the same read as load I/O (io_set_load), a 512 B read: not counted");
 	a = b;
 	io_tele_window(2);
-	io_read_sync(big, rom, sizeof(big));
+	io_read_sync(big, rom, sizeof(big), "test");
 	frames(1);
-	io_read_sync(big, rom, sizeof(big));
+	io_read_sync(big, rom, sizeof(big), "test");
 	frames(1);
-	io_read_sync(big, rom, sizeof(big));
+	io_read_sync(big, rom, sizeof(big), "test");
 	frames(1);
 	io_stats(&b, 0);
 	check("T6 blocked", b.life_frames_blocked_1ms_tele == a.life_frames_blocked_1ms_tele + 2

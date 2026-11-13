@@ -183,7 +183,7 @@ int wld_init(void)
 	}
 	if (size < 32 || size > cap)
 		bad(path, 0, "size");
-	io_read_sync(b, rom, (size + 1) & ~1u);
+	io_read_sync(b, rom, (size + 1) & ~1u, "cwg");
 	if (be32(b) != 0x43574733u || be16(b + 4) != 3)
 		bad(path, 0, "not CWG3");
 	nmaps = be16(b + 8);
@@ -861,6 +861,8 @@ static int request(wld_layer_t *L, int c, int cls)
 	r->dst = ch->data;
 	r->len = size;
 	r->prio = (uint8_t)cls_prio(cls);
+	/* a missing COLL chunk blocks a trace, missing render data pops in */
+	r->front = ck->fourcc == W64_CHUNK_COLL;
 	r->cb = req_done;
 	r->user = (int)L->slot << 16 | c;
 	io_submit(r);
@@ -942,15 +944,18 @@ uint8_t *wld_chunk_sync(wld_layer_t *L, int c)
 	uint32_t size = (ck->size + 15) & ~15u;
 	io_req_t *r;
 
+	/* named by the target set but not landed yet, or wanted by nobody
+	 * (wld_chunk_use, just before, queued it) */
 	if (ch->state == WLD_CH_LOADING && (r = req_of(L, c)))
-		io_finish(r);	/* req_done lands it */
+		io_finish(r, ch->want == wld_tgen ? "coll chunk (wanted, loading)"
+			: "coll chunk (not wanted)");	/* req_done lands it */
 	if (ch->state == WLD_CH_ABSENT)
 	{
 		while (!(ch->blk = mem_pool_alloc(&pools[POOL_COLL], size, &ch->data)))
 			if (!evict_one(POOL_COLL, WLD_CLS_OPEN))
 				sys_error("world: %s: COLL chunk %d does not fit the collision pool",
 					maps[L->map].name, c);
-		io_read_sync(ch->data, L->rom + ck->ofs, size);
+		io_read_sync(ch->data, L->rom + ck->ofs, size, "coll chunk");
 		ch->state = WLD_CH_RESIDENT;
 		st.loads++;
 		landed(L, c, ch->data);
@@ -1501,10 +1506,10 @@ wld_layer_t *wld_open(int map)
 		uint8_t stage = o->stage;
 
 		if (o->req.state == IO_QUEUED || o->req.state == IO_ACTIVE)
-			io_finish(&o->req);
+			io_finish(&o->req, "layer open");
 		for (i = 0; i < HL64_WORLD_REQS; i++)
 			if (reqs[i].user >= 0)
-				io_finish(&reqs[i]);
+				io_finish(&reqs[i], "layer open");
 		wld_open_step(L, 0);
 		spins = o->stage == stage ? spins + 1 : 0;
 		if (spins > OPEN_TRIES + 2)
@@ -1669,7 +1674,7 @@ static const uint8_t *visr_read(const wld_layer_t *L, uint32_t off, uint32_t len
 
 	if (off > ck->size || len > ck->size - off || n > sizeof(pvs_buf))
 		bad(maps[L->map].name, a, "VISR row");
-	io_read_sync(pvs_buf, L->rom + a0, n);
+	io_read_sync(pvs_buf, L->rom + a0, n, "visr");
 	return pvs_buf + (a - a0);
 }
 
