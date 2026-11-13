@@ -29,8 +29,8 @@
 #
 # Usage: test/run/m4.sh [--ares] [--no-earlier]
 #        --no-earlier skips test/run/m3.sh (iteration only: not a gate run)
-# Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c6
-#        cook /scratch/hl64/tmp/M3Lead2/c6), HL64_FIXTURES, HL64_DATA,
+# Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c7
+#        cook /scratch/hl64/tmp/M4Lead/c7), HL64_FIXTURES, HL64_DATA,
 #        W1_FIXTURES (passed to m3.sh), ARES_BIN, ARES_TIMEOUT, DISPLAY_NUM.
 # Exit:  0 pass, 1 gate failure, 2 prerequisite missing.
 set -euo pipefail
@@ -48,7 +48,7 @@ for a in "$@"; do
 	*) echo "usage: test/run/m4.sh [--ares] [--no-earlier]" >&2; exit 2 ;;
 	esac
 done
-CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/M3Lead2/c6}"
+CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/M4Lead/c7}"
 FIX="${HL64_FIXTURES:-/scratch/hl64/fixtures}"
 DATA="${HL64_DATA:-/scratch/hl1/valve}"
 RTB="$CONTENT/campaign.rtb"
@@ -102,12 +102,21 @@ suite() {
 		fail "suite $entry"
 	fi
 }
+suite seam.sh - test/m4/seam.sh "$CONTENT"
+suite rec.sh - test/m4/rec.sh
+suite gamels.py gamelstest python3 test/m4/gamels.py --bin "$B/hl64-gamels" --content "$CONTENT"
+# the residency driver: its script once it lands, the driver alone before
+if [[ -e "$ROOT/test/m4/stream.sh" ]]; then
+	suite stream.sh - test/m4/stream.sh
+else
+	suite stream.c streamtest "$B/hl64-stream" "$CONTENT"
+fi
 suite gate_seamprof.py seamproftest python3 test/m4/gate_seamprof.py --bin "$B/hl64-seamprof"
 suite gate_selftest.py - python3 test/m4/gate_selftest.py --scratch "$OUT/selftest"
 # every entry point of test/m4 runs here (gate_parse.py is the parsers'
 # module, gate_check.py the route checks and gate_table.py the ares table
-# below; gate_seamprof.c is gate_seamprof.py's driver)
-RAN+="gate_parse.py gate_check.py gate_table.py "
+# below; seam_parse.py is seam.sh's; the *.c files are the drivers)
+RAN+="gate_parse.py gate_check.py gate_table.py seam_parse.py "
 for f in "$ROOT"/test/m4/*.py "$ROOT"/test/m4/*.sh; do
 	[[ -e "$f" ]] || continue
 	[[ "$RAN" == *" $(basename "$f") "* ]] || fail "test/m4/$(basename "$f") is not wired into test/run/m4.sh"
