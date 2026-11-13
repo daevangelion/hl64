@@ -35,6 +35,12 @@ void		wld_stream_closed(int slot);
 /* After the stream named a generation: the bytes its open + pin classes
  * want per pool, into wld_stats_t.want_peak. */
 void		wld_want_measure(void);
+/* PVS rows (world.c, architecture.md 5.5): name leaf's row of L in the
+ * current generation at class cls (queued asynchronously into the row
+ * cache unless cached or loading); wld_pvs_step, once per frame, moves
+ * the landed offset pairs on to their row reads. */
+void		wld_pvs_want(wld_layer_t *L, int leaf, int cls);
+void		wld_pvs_step(void);
 #ifdef HL64_HOST
 /* Host tests: hold `bytes` of the texture pool (a locked block at its
  * high end; 0 gives it back), so an eviction test fills it with one map. */

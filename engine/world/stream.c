@@ -56,6 +56,11 @@
 #define MOVER_LEAD_S	0.5f		/* a moving brush entity's box swept this far ahead */
 #define MOVER_MARGIN	128.0f		/* ... and grown this much (a door about to move) */
 #define POPIN_LOGS	16		/* `stream: popin` lines logged at most */
+#define PVS_STEP	16.0f		/* u between the eye path's PVS row samples */
+#define PVS_SAMPLES	24		/* ... at most (1 s ahead) */
+#define PVS_NEAR	24.0f		/* u around the eye whose leaves' rows are named */
+#define PVS_STEPUP	20.0f		/* ... and above it (a stair step: 18 u) */
+#define DUCK_DZ		16.0f		/* standing eye - ducked eye (view offsets 28 / 12) */
 
 typedef struct {
 	uint8_t		on, win, movr_wait;
@@ -102,6 +107,8 @@ static struct {
 	uint32_t	popin_logs;
 	wld_stream_stats_t st;
 } S;
+
+static float len3(const float v[3]);
 
 /* ---- naming helpers --------------------------------------------------------- */
 
@@ -337,7 +344,10 @@ static void name_point(wld_layer_t *L, const float org[3], int cls)
 	int k, leaf = wld_point_leaf(L, eye);
 
 	if (leaf > 0)
+	{
 		name_leaf(L, leaf, cls);
+		wld_pvs_want(L, leaf, cls);
+	}
 	for (k = 0; k < 3; k++)
 	{
 		float h = k == 2 ? 36.0f : 16.0f;
@@ -415,11 +425,51 @@ static void name_seam(wld_layer_t *L, seam_pin_t *p)
 		 * B's movers there were missing for 22 frames) */
 		nl = arrival_leaves(L, p, leaves);
 		for (i = 0; i < nl; i++)
+		{
 			name_leaf(L, leaves[i], WLD_CLS_PIN);
+			wld_pvs_want(L, leaves[i], WLD_CLS_PIN);
+		}
 	}
 }
 
 /* ---- the target set ------------------------------------------------------------ */
+
+/* The PVS rows the eye will read (game FindClientInPVS: ent_client_in_pvs)
+ * before the next rebuild: the leaves next to the eye (PVS_NEAR around,
+ * a stair step up: a strafe, a step, a fall start cross into them before
+ * the next rebuild), along eye + v * t, t <= 1 s, every PVS_STEP u, and
+ * the ducked eye's leaf. */
+static void name_pvs_ahead(wld_layer_t *L)
+{
+	static const float nx[3] = { -PVS_NEAR, 0, PVS_NEAR }, nz[3] = { -PVS_NEAR, 0, PVS_STEPUP };
+	float sp = len3(S.vel), p[3];
+	int n = (int)(sp / PVS_STEP), i, k, leaf, last = S.leaf;
+
+	for (i = 0; i < 27; i++)
+	{
+		p[0] = S.eye[0] + nx[i % 3];
+		p[1] = S.eye[1] + nx[i / 3 % 3];
+		p[2] = S.eye[2] + nz[i / 9];
+		leaf = wld_point_leaf(L, p);
+		if (leaf > 0 && leaf != S.leaf)
+			wld_pvs_want(L, leaf, WLD_CLS_OPEN);	/* the next frames' */
+	}
+	if (n > PVS_SAMPLES)
+		n = PVS_SAMPLES;
+	for (i = 1; i <= n; i++)
+	{
+		for (k = 0; k < 3; k++)
+			p[k] = S.eye[k] + S.vel[k] * (float)i / (float)n;
+		leaf = wld_point_leaf(L, p);
+		if (leaf > 0 && leaf != last)
+			wld_pvs_want(L, leaf, WLD_CLS_PREFETCH);
+		last = leaf;
+	}
+	p[0] = S.eye[0];
+	p[1] = S.eye[1];
+	p[2] = S.eye[2] - DUCK_DZ;
+	wld_pvs_want(L, wld_point_leaf(L, p), WLD_CLS_PREFETCH);
+}
 
 /* Name the whole set, strongest class first (a stronger request may take
  * a weaker queued read's slot, never the reverse). The want peak is
@@ -455,6 +505,7 @@ static void name_all(void)
 				{
 					L->want_leaf = S.leaf;
 					name_leaf(L, S.leaf, cls);
+					wld_pvs_want(L, S.leaf, cls);
 					for (i = 0; i < S.nvleaf; i++)
 						name_leaf(L, S.vleaf[i], cls);
 				}
@@ -482,6 +533,7 @@ static void name_all(void)
 					if (leaf > 0 && leaf != S.leaf)
 						name_leaf(L, leaf, cls);
 				}
+				name_pvs_ahead(L);
 				if (S.have_coll && (S.vel[0] != 0 || S.vel[1] != 0 || S.vel[2] != 0))
 				{
 					for (k = 0; k < 3; k++)
@@ -596,6 +648,8 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 		if (L->open && !L->ready)
 			wld_open_step(L, 16 * 1024);
 	}
+	/* landed PVS offset pairs go on to their rows */
+	wld_pvs_step();
 	/* the drawn eye's offset from the player's eye (bob, punch, landing
 	 * offset): last frame's view minus last frame's eye */
 	if (home_map >= 0 && ren_cam.map == home_map && S.have_prev)
