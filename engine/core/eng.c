@@ -25,7 +25,6 @@
 #include "hl64/game.h"
 #include "hl64/limits.h"
 #include "hl64/rec.h"
-#include "hl64/seam.h"
 #include "hl64/settings.h"
 #include "hl64/snd.h"
 #include "engine/core/dbg.h"
@@ -52,7 +51,6 @@
 #include "engine/phys/player.h"
 #include "engine/phys/motion.h"
 #include "engine/test/route.h"
-#include "engine/test/seamprof.h"
 #include "engine/view/view.h"
 
 const char *eng_route_path = "route.rbc";
@@ -435,7 +433,6 @@ void eng_boot(const char *platform)
 	dbg_handler_set(DBG_LOG_FLUSH, cmd_flush);
 	dbg_handler_set(DBG_QUIT, cmd_quit);
 	dbg_handler_set(DBG_STEP_ALL, cmd_step_all);
-	SEAMPROF_INIT();
 	ent_init();
 	eng.world = (uint8_t)wld_init();
 	res_init();
@@ -630,8 +627,6 @@ static void rollup(void)
 #ifdef HL64_PROFILE
 	sys_prof_dump(eng.rollup_frames);
 #endif
-	/* the roll-up APIs just reset their window sums (reset = 1) */
-	SEAMPROF_ROLLUP_RESET();
 	eng.rollup_frames = 0;
 	eng.rollup_t0 = t;
 }
@@ -644,7 +639,6 @@ void eng_frame(void)
 	double gdt;
 
 	/* 1 plat: dt from the VI clock, clamped (D6 i); test builds may fix it */
-	SEAMPROF_BEGIN();
 	eng.last_vi = vi;
 	if (dt < HL64_DT_MIN_US)
 		dt = HL64_DT_MIN_US;
@@ -660,33 +654,27 @@ void eng_frame(void)
 		in_frame(dt, phy_player()->maxspeed, &cmd);
 	else if (eng.world)
 		ren_cam_update(dt);
-	SEAMPROF_STEP(INPUT);
 
 	/* 3 io */
 	io_frame_begin(dt);
 	io_pump();
-	SEAMPROF_STEP(IO);
 
 	/* 4 game: the frame's clock (dt 0 in the settle frames), due logic
 	 * timers (think-and-time.md 5), the game's frame start */
 	gdt = eng_clock_frame((double)dt * 1e-6);
 	rec_run_timers(eng_clock_time(), gdt);
 	game_start_frame();
-	SEAMPROF_STEP(LOGIC);
 	/* 5 player: pmove host */
 	phy_player_frame(&cmd, eng.time);
-	SEAMPROF_STEP(PLAYER);
 	/* 6 active set */
 	phy_entities_frame(eng.time, gdt);
 	/* the clock advances by the frame time (f64) after step 6 */
 	eng_clock_advance();
 	eng.time = eng_clock_time();
-	SEAMPROF_STEP(ACTIVE);
 	/* 7-10 world, hydration, residency, sound (M1-M4) */
 	if (eng.world)
 	{
 		wld_frame(eng.frame);
-		SEAMPROF_STEP(STREAM);
 		/* 8 hydration pump around the player (global position) */
 		if (phy_player_active())
 		{
@@ -698,17 +686,14 @@ void eng_frame(void)
 		}
 		else
 			rec_frame(NULL, 0);
-		SEAMPROF_STEP(HYDRATE);
 		wld_style_tick(eng.time);
 		ren_dlight_frame(eng.time, (double)dt * 1e-6);
 		ren_dlight_sources(eng.time);
 		studio_frame();
-		SEAMPROF_STEP(SCENE);
 	}
 	/* effects on the game clock: temp entities, particles, beams, decal
 	 * placements, persistent render fades, shake */
 	fx_frame(eng.time, gdt);
-	SEAMPROF_STEP(FXSIM);
 	/* 10 sound: listener = the view (global eye, right vector) of the last
 	 * drawn frame */
 	{
@@ -721,26 +706,22 @@ void eng_frame(void)
 
 		snd_frame(ren_cam.org, right, (double)dt * 1e-6);
 	}
-	SEAMPROF_STEP(SND);
 
 	/* 11-12 render into a free framebuffer; submit for paced present */
 	while (!sys_frame_try_begin())
 		io_pump();
 	io_pump();
-	SEAMPROF_STEP(WAIT);
 	if (eng.world)
 	{
 		ren_stats_t r;
 
 		ren_view_frame(eng.time, (double)dt * 1e-6);
 		ren_frame(eng.time);
-		SEAMPROF_STEP(RENDER);
 		/* the HUD after the 3D frame (architecture.md 9.8) */
 		game_hud_frame(eng.time, (double)dt * 1e-6);
 		d2_begin();
 		game_hud_draw();
 		d2_end();
-		SEAMPROF_STEP(HUD);
 		ren_stats(&r);
 		eng.rollup_world_us += r.world_us;
 		if (r.world_us > eng.rollup_world_max)
@@ -748,15 +729,12 @@ void eng_frame(void)
 		io_pump();
 	}
 	sys_frame_end();
-	SEAMPROF_STEP(SUBMIT);
 
 	/* 13 test: debug commands at the frame boundary, route VM, roll-up, log */
 	eng.frame++;
 	dbg_run(eng.frame);
 	if (rt_active())
 		rt_frame(eng.time);
-	SEAMPROF_STEP(TEST);
-	SEAMPROF_END(eng.frame, dt, seam_last_switch_frame());
 	rollup();
 	log_flush();
 }

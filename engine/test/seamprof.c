@@ -11,7 +11,6 @@
 #include "hl64/ent.h"
 #include "hl64/fx.h"
 #include "hl64/limits.h"
-#include "hl64/rec.h"
 #include "hl64/snd.h"
 #include "hl64/studio.h"
 #include "engine/core/dbg.h"
@@ -256,16 +255,15 @@ void seamprof_rollup_reset(void)
 }
 
 /* Bytes in use of the layer-directory region: each open layer's directory
- * and tables blocks (world.c layer_pool), layers still opening included
- * (wld_layer_of_map; wld_layer skips them). */
+ * and tables blocks (world.c layer_pool). */
 static uint32_t layerdirs_used(void)
 {
 	uint32_t b = 0;
-	int m, n = wld_map_count();
+	int s;
 
-	for (m = 0; m < n; m++)
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
 	{
-		const wld_layer_t *L = wld_layer_of_map(m);
+		const wld_layer_t *L = wld_layer(s);
 
 		if (!L)
 			continue;
@@ -290,7 +288,6 @@ void seamprof_end(uint32_t frame, uint32_t dt_us, uint32_t switch_frame)
 	ren_stats_t rs;
 	wld_stats_t ws;
 	ent_priv_stats_t ps;
-	uint32_t hle, store;
 	int mark = sp.mark;
 
 	f->us[SEAMPROF_Z_FRAME] = (uint32_t)(sys_time_us() - sp.t0);
@@ -314,13 +311,10 @@ void seamprof_end(uint32_t frame, uint32_t dt_us, uint32_t switch_frame)
 	wld_stats(&ws);
 	snd_stats(&sn, 0);
 	ent_priv_stats(&ps);
-	rec_mem_use(&hle, &store);
 	f->mem[SEAMPROF_R_RENDER] = ws.pool_used[0];
 	f->mem[SEAMPROF_R_TEXTURE] = ws.pool_used[1];
 	f->mem[SEAMPROF_R_COLLISION] = ws.pool_used[2];
 	f->mem[SEAMPROF_R_STUDIO] = ss.pool_used;
-	f->mem[SEAMPROF_R_HLE] = hle;
-	f->mem[SEAMPROF_R_DEHYDRATE] = store;
 	f->mem[SEAMPROF_R_LAYERDIRS] = layerdirs_used();
 	f->mem[SEAMPROF_R_GAMEPRIVATE] = ps.bytes_live;
 	f->mem[SEAMPROF_R_COMPONENTS] = ent_s.region_bytes;

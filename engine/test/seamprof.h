@@ -33,14 +33,13 @@
  * counters. FRAME = frame start to seamprof_end. */
 #define SEAMPROF_ZONES(X) \
 	X(FRAME, "frame") \
-	X(INPUT, "input")		/* 1-2 dt, pad / free camera */ \
 	X(IO, "io")			/* 3 io_frame_begin, io_pump */ \
 	X(LOGIC, "logic")		/* 4 clock, rec_run_timers, game_start_frame */ \
 	X(PLAYER, "player")		/* 5 phy_player_frame */ \
 	X(ACTIVE, "active")		/* 6 phy_entities_frame, clock advance */ \
 	X(SEAM, "seam")			/* 7 seam_frame */ \
 	X(HYDRATE, "hydrate")		/* 8 rec_frame */ \
-	X(STREAM, "stream")		/* 9 wld_stream_frame; wld_frame */ \
+	X(STREAM, "stream")		/* 9 wld_frame, wld_stream_frame */ \
 	X(SCENE, "scene")		/* styles, dlights, studio_frame */ \
 	X(FXSIM, "fxsim")		/* fx_frame */ \
 	X(SND, "snd")			/* 10 snd_frame */ \
@@ -73,8 +72,6 @@ enum {
 	X(TEXTURE, "texture", MEM_POOL_TEXTURE) \
 	X(COLLISION, "collision", MEM_POOL_COLLISION) \
 	X(STUDIO, "studio", MEM_POOL_STUDIO) \
-	X(HLE, "hle", MEM_HLE_BLOBS) \
-	X(DEHYDRATE, "dehydrate", MEM_DEHYDRATE) \
 	X(LAYERDIRS, "layerdirs", MEM_LAYER_DIRS) \
 	X(GAMEPRIVATE, "gameprivate", MEM_GAME_PRIVATE) \
 	X(COMPONENTS, "components", MEM_COMPONENTS) \

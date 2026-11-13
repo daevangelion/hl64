@@ -16,7 +16,7 @@ import sys
 
 import gate_parse as gp
 
-ZONES = ["frame", "input", "io", "logic", "player", "active", "seam", "hydrate", "stream", "scene",
+ZONES = ["frame", "io", "logic", "player", "active", "seam", "hydrate", "stream", "scene",
          "fxsim", "snd", "wait", "render", "hud", "submit", "test", "pmove", "ent", "phys",
          "studio", "fx", "world"]
 # (windows in log order: case, n, frame, frames, mark, cut)
