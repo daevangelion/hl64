@@ -2,3 +2,7 @@
 /build/
 *.z64
 *.elf
+# cooked tables and compiled routes (restab / routec outputs), Python caches
+*.rtb
+*.rbc
+__pycache__/
