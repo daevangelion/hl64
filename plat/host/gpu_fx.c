@@ -3,7 +3,7 @@
  * gpu_fx.c -- the host's effects draw-list recorder (D5;
  * engine/render/gpu_fx.h): every effects call is counted per mode and
  * hashed (mode, RDP state, texture size, vertices, points), so a run is
- * comparable with itself and the X1 test reads the state each mode set.
+ * comparable with itself; the last triangle batch is kept for the tests.
  */
 #include <string.h>
 
@@ -11,6 +11,8 @@
 
 static gpu_fx_stats_t	cur, done;
 static int		mode = -1;
+static gpu_fx_vert_t	last_v[64];
+static int		last_n, last_mode = -1;
 
 static void mix(const void *p, uint32_t n)
 {
@@ -71,6 +73,18 @@ void gpu_fx_tris(const gpu_fx_vert_t *v, int nv, const uint8_t *idx, int ntri)
 	cur.calls[mode]++;
 	cur.tris += (uint32_t)ntri;
 	cur.verts += (uint32_t)nv;
+	last_n = nv > 64 ? 64 : nv;
+	memcpy(last_v, v, sizeof(*v) * (size_t)last_n);
+	last_mode = mode;
+}
+
+int gpu_fx_host_last(gpu_fx_vert_t *out, int max, int *m)
+{
+	int n = last_n < max ? last_n : max;
+
+	memcpy(out, last_v, sizeof(*out) * (size_t)n);
+	*m = last_mode;
+	return n;
 }
 
 void gpu_fx_points(const gpu_fx_point_t *p, int n)

@@ -129,7 +129,7 @@
  * + 10 open wav64 (state, codebook); x 1.25 = 97680 B. */
 #define HL64_SOUND_KB			96
 #define HL64_SPRITE_CACHE_KB		64
-#define HL64_DECAL_TEXELS_KB		48
+#define HL64_DECAL_TEXELS_KB		56	/* decal sheet (43 HLSDK decals, 31 KB) + 96 x 24 piece vertices (22.5 KB) */
 #define HL64_PARTICLES_KB		12
 #define HL64_DLIGHT_KB			48	/* dlight scratch + flashlight pool */
 #define HL64_HUD_KB			128	/* [EST] HUD sheets + font */

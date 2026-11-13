@@ -116,7 +116,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -285,6 +285,15 @@ ENTTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(ENTTEST_BIN): $(ENTTEST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 enttest: $(ENTTEST_BIN)
+
+# Effects driver (test/m3/fx.c, run by test/m3/fx.py: X1-X6, D1/D2/D4,
+# L1/L2, model light terms).
+FXTEST_BIN := $(BUILD_DIR)/host/hl64-fx
+FXTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/fx.o
+$(FXTEST_BIN): $(FXTEST_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+fxtest: $(FXTEST_BIN)
 
 # Physics driver (test/m3/phys.c, run by test/m3/phys.py: P1-P15, K4).
 PHYS_BIN := $(BUILD_DIR)/host/hl64-phys
