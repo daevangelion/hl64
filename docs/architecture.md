@@ -183,7 +183,12 @@ pointers, so `-m32` and LP64 sizes are identical.
 Measured columns: M3 gate, ares, route `m3-a` (hldemo1 only, one geometry
 layer, 2400 frames; `/scratch/hl64/tmp/Gate/rest/table.md`). Carved heap
 at boot: **3696 KB** in 166 allocations, 0 frees, 0 failures (peak = carve).
-Peaks are one-map values; M4 re-measures every region with two layers.
+Peaks are one-map values; M4 re-measured the two-layer regions (ares, route
+`m4`, worst over the ±2 s windows of both crossings, `test/m4/gate_table.py`;
+`/scratch/hl64/builds/SeamPerf/g4/m4/table-seams.md`). The render, texture
+and collision pools are LRU caches: the 90% / peak × 1.25 rule applies to
+their **want** peak (open + pin classes), the resident high-water is
+information only.
 
 | region | hl64 KB (carve) | M3 peak (use) | old tree | basis |
 |---|---:|---:|---:|---|
@@ -191,14 +196,15 @@ Peaks are one-map values; M4 re-measures every region with two layers.
 | code overlay arena (TLB frames, 7.4) | 192 [EST] | — (M6) | — | cook-proved: Uplink pair 132 KB / 18 TLB entries, retail [EST] ≈ 160 KB / ≈ 22 entries; 48 × 4 KB frames, ≤ 30 wired entries |
 | framebuffers ×2 + Z | 450 | — | 450 | measured |
 | rspq / tiny3d / matrices | 96 | not reported | (in heap) | [EST] |
-| render / texture / collision pools | 240 / 128 / 208 | 117 KB (49%) / 99 KB (77%) / 55 KB (26%) | 240 / 128 / 208 | cook-proved worst sets (SA2 §8); **measured** one layer |
-| layer directories (2 open) | 168 | not reported (hldemo1 dir 40.8 KB) | 2 × 38–84 | measured |
-| studio pool | 1024 (D3 b) | 225 KB (22%) | 1536 | **measured** |
+| render / texture / collision pools | 336 / 240 / 208 | M3: 117 KB (49%) / 99 KB (77%) / 55 KB (26%); **M4 want peak** 243104 B (71%) / 173376 B (71%) / 86736 B (41%) on ares (host route want peak 273792 / 190384 / 86528 B) | 240 / 128 / 208 | render and texture = host want peak × 1.25 (two layers: A's open set + B's seam pin + the arrival view exceed the cook's per-seam need: the cook proof does not cover that window yet); collision cook-proved (seam hldemo3→hldemo2, 206592 B) |
+| layer directories (2 open) | 267 | M4: 175456 B (64%) at hldemo2 + hldemo3 | 2 × 38–84 | cook-proved (`tools/cook/layerdirs.py`, every linked pair): worst t0a0b + t0a0a 218624 B × 1.25 |
+| campaign graph (CWG3) | 6 | 4730 B (Uplink + Hazard) | (parsed per map) | cook-proved (`stage.py` fails above the region) |
+| studio pool | 1024 (D3 b) | M3 225 KB (22%); **M4** resident 635104 B (61%) at hldemo2→hldemo3 with soft residency, want (live + pinned) 410032 B | 1536 | **measured** |
 | studio skinned-mesh tables, view model scratch | 192 | not reported | 256 heap reserve | [EST] |
 | entity components | 134 | 137168 of 137216 B (100%) | edicts 495 × 884 = 427 | **measured**, exact by construction: 495 × 228 B + 24308 B grid nodes, membership pool, touch rank, free times |
 | game private data | 160 | 30.6 KB (19%), 98 live entities | (inside the edicts) | **measured** ≈ 320 B per live entity; at the 495 cap ≈ 155 KB, so 160 stays |
-| HLE slots | 240 | 77.9 KB for **one** map (m3-a, before infodecal/env_glow) | 72 KB text + 13–19 KB keys per map | **measured** (cook5, infodecal and env_glow kept): hldemo1 chunk 52000 B, resident slot 67344 B, 72512 B while opening, runtime 15344 B, plus 16688 B shared tables; cook-checked need below |
-| dehydrate store | 64 | 0 (no crossing in m3-a) | similar | M4 measures |
+| HLE slots | 240 | M3: 77.9 KB for **one** map (m3-a, before infodecal/env_glow); **M4**: 151244 B (62%) with hldemo1 + hldemo2 open, 132716 B at hldemo2→hldemo3 (hldemo1 frozen: 2780 B) | 72 KB text + 13–19 KB keys per map | **measured** (cook5, infodecal and env_glow kept): hldemo1 chunk 52000 B, resident slot 67344 B, 72512 B while opening, plus 20016 B shared tables; cook-checked need below (M4 cook: 165440 B) |
+| dehydrate store | 64 | M4: 14364 B (22%) at hldemo2→hldemo3 (host route end 15300 B) | similar | **measured**; closing maps store every entity, released pristine records store nothing |
 | resource table + pattern table | 56 | 43.5 KB (78%) | precache name tables, sfx names | **measured** (the earlier 12 KB counted the 12 B entries only) |
 | sentence table (cooked) | 24 | not reported | parsed text | [EST] |
 | lightstyle patterns + state | 4 | not reported | strings + 96 × value | lightstyles.md |
