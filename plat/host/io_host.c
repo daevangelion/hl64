@@ -27,7 +27,11 @@
 #include "engine/core/sys.h"
 #include "plat/host/host.h"
 
-#define IO_MAX_FILES	512
+/* Cart files the host models (the cart's DFS has no such table; cooked
+ * Uplink + Hazard content holds ~950 files with the studio cook). Files
+ * are opened on demand, one at a time, so the host never holds more than
+ * one descriptor whatever the count. */
+#define IO_MAX_FILES	4096
 #define IO_PATH_MAX	256
 #define IO_ROM_BASE	0x10000000u	/* cart ROM domain, like the PI bus */
 #define IO_PI_US_PER_KB	195u
@@ -105,11 +109,12 @@ uint32_t sys_cart_addr(const char *path, uint32_t *out_size)
 		close(fd);
 		return 0;
 	}
+	close(fd);
 	if (io_nfiles >= IO_MAX_FILES)
 		sys_error("io_host: more than %d cart files", IO_MAX_FILES);
 	f = &io_files[io_nfiles++];
 	snprintf(f->path, sizeof(f->path), "%s", full);
-	f->fd = fd;
+	f->fd = -1;
 	f->size = (uint32_t)st.st_size;
 	f->rom = io_next_rom;
 	/* next file on a 2-byte boundary, like DFS's halfword-aligned files */
@@ -128,6 +133,26 @@ static io_file_t *io_file_at(uint32_t rom)
 		if (rom >= io_files[i].rom && rom < io_files[i].rom + io_files[i].size)
 			return &io_files[i];
 	sys_error("io_host: unknown rom address 0x%08lx", (unsigned long)rom);
+}
+
+/* The file's descriptor: the last file read keeps its descriptor open. */
+static int io_fd(io_file_t *f)
+{
+	static io_file_t *open_f;
+
+	if (open_f == f)
+		return f->fd;
+	if (open_f)
+	{
+		close(open_f->fd);
+		open_f->fd = -1;
+		open_f = NULL;
+	}
+	f->fd = open(f->path, O_RDONLY);
+	if (f->fd < 0)
+		sys_error("io_host: cannot reopen %s", f->path);
+	open_f = f;
+	return f->fd;
 }
 
 static void io_count(uint32_t n)
@@ -158,7 +183,7 @@ int sys_cart_read(void *dst, size_t dst_cap, uint32_t rom, uint32_t rom_size,
 	/* the PI transfers the rounded halfword past a file's odd tail too */
 	if (off + dma_len > f->size)
 		dma_len = len;
-	if (pread(f->fd, dst, dma_len, (off_t)off) != (ssize_t)dma_len)
+	if (pread(io_fd(f), dst, dma_len, (off_t)off) != (ssize_t)dma_len)
 		sys_error("io_host: short read %s @%lu", f->path, (unsigned long)off);
 	io_count(dma_len);
 	return 1;
@@ -173,7 +198,7 @@ static uint32_t io_pread(void *dst, uint32_t rom, uint32_t len)
 
 	if (off + n > f->size)
 		n = f->size - off;
-	if (pread(f->fd, dst, n, (off_t)off) != (ssize_t)n)
+	if (pread(io_fd(f), dst, n, (off_t)off) != (ssize_t)n)
 		sys_error("io_host: short read %s @%lu", f->path, (unsigned long)off);
 	io_count(n);
 	return n;

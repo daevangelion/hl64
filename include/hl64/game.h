@@ -44,6 +44,11 @@ void	game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float 
 void	game_logic_timer(gid_t16 gid, uint16_t arg, int activator);
 /* Multisource state for a master name: 1 open, 0 closed, -1 missing. */
 int	game_master_state(name_t master, int activator);
+/* HLSDK gGlobalState.EntityGetState of a global id (rec_key_global):
+ * 0 OFF / 1 ON / 2 DEAD, OFF when unset (route WAIT_GLOBAL). */
+int	game_global_state(int id);
+/* trigger_endsection fires since New Game (route WAIT_END). */
+int	game_end_section(void);
 
 /* ---- frame (architecture.md 3.2) ------------------------------------------- */
 

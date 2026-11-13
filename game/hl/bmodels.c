@@ -16,7 +16,8 @@
  * hl64 game/, Half Life 1 SDK licence (game/LICENSE-HLSDK).
  *
  * bmodels.c -- HLSDK dlls/bmodels.cpp: func_wall, func_wall_toggle,
- * func_illusionary, func_rotating, func_pendulum. (RampPitchVol / SpinUp's
+ * func_conveyor, func_illusionary, func_rotating, func_pendulum.
+ * (RampPitchVol / SpinUp's
  * abs() of floats are taken as fabsf: the float value, as HLSDK means.)
  */
 #include <math.h>
@@ -111,6 +112,65 @@ static int CFuncWallToggle_Spawn(int e, gid_t16 gid)
 
 const game_class_t gc_FUNC_WALL_TOGGLE = {
 	.size = sizeof(CBaseEntity), .Spawn = CFuncWallToggle_Spawn, .vt = &bmodel_vt,
+};
+
+/* ---- func_conveyor ------------------------------------------------------------ */
+
+#define SF_CONVEYOR_VISUAL	0x0001
+#define SF_CONVEYOR_NOTSOLID	0x0002
+
+/* HLSDK UpdateSpeed: the speed in rendercolor (4 fractional bits, sign in
+ * x) for the scrolling texture; the engine's base velocity speed * movedir
+ * for what rests on an FL_CONVEYOR brush (phy_set_conveyor). */
+static void CFuncConveyor_UpdateSpeed(int e, float speed)
+{
+	ent_rnd_t *r = ent_rnd(e);
+	int code = (int)(fabsf(speed) * 16.0f);
+	float v[3];
+
+	r->rendercolor[0] = speed < 0 ? 1 : 0;
+	r->rendercolor[1] = (uint8_t)(code >> 8);
+	r->rendercolor[2] = (uint8_t)(code & 0xFF);
+	if (ent_cv(e)->flags & FL_CONVEYOR)
+	{
+		VecScale(CBase(e)->movedir, speed, v);
+		phy_set_conveyor(e, v);
+	}
+}
+
+void CFuncConveyor_Use(int e, int activator, int caller, int use_type, float value)
+{
+	(void)activator;
+	(void)caller;
+	(void)use_type;
+	(void)value;
+	CBase(e)->speed = -CBase(e)->speed;
+	CFuncConveyor_UpdateSpeed(e, CBase(e)->speed);
+}
+
+static int CFuncConveyor_Spawn(int e, gid_t16 gid)
+{
+	CBaseEntity *p = CBase(e);
+
+	SetMovedir(e);
+	CFuncWall_Spawn(e, gid);
+	SetUse(e, FN_CFuncConveyor_Use);
+	if (!(p->spawnflags & SF_CONVEYOR_VISUAL))
+		EFlagsSet(e, FL_CONVEYOR);
+	/* HACKHACK - This is to allow for some special effects */
+	if (p->spawnflags & SF_CONVEYOR_NOTSOLID)
+	{
+		ent_set_solid(e, SOLID_NOT);
+		ent_cv(e)->skin = 0;	/* no special contents on this brush */
+	}
+	if (p->speed == 0)
+		p->speed = 100;
+	CFuncConveyor_UpdateSpeed(e, p->speed);
+	return 0;
+}
+
+const game_class_t gc_FUNC_CONVEYOR = {
+	.size = sizeof(CBaseEntity), .Spawn = CFuncConveyor_Spawn, .vt = &bmodel_vt,
 };
 
 /* ---- func_illusionary --------------------------------------------------- */

@@ -150,6 +150,7 @@ void	game_logic_reset(void);
 void game_new_campaign(void)
 {
 	GlobalReset();
+	EndSectionReset();
 	game_logic_reset();
 	ClearMultiDamage();
 	memset(&gpGlobals, 0, sizeof gpGlobals);

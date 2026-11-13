@@ -348,6 +348,8 @@ int		GlobalInTable(int id);
 void		GlobalSetState(int id, int state);
 void		GlobalAdd(int id, int state);
 void		GlobalReset(void);
+/* trigger_endsection fire count (game_end_section) := 0, New Game */
+void		EndSectionReset(void);
 
 /* ---- decals (HLSDK decals.h order; FX owns the cooked sheet) --------------- */
 

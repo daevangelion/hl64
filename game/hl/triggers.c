@@ -603,11 +603,25 @@ typedef struct {
 	char		section[32];
 } CTriggerEndSection;
 
-/* pfnEndSection: the menu's end of a section (M5); logged. */
+/* trigger_endsection fires since New Game (game_end_section) */
+static int	end_section_fires;
+
+int game_end_section(void)
+{
+	return end_section_fires;
+}
+
+void EndSectionReset(void)
+{
+	end_section_fires = 0;
+}
+
+/* pfnEndSection: the menu's end of a section (M5); logged and counted. */
 static void EndSection(int e)
 {
 	CTriggerEndSection *p = PRIV(CTriggerEndSection, e);
 
+	end_section_fires++;
 	if (p->section[0])
 		log_printf("endsection: %s\n", p->section);
 }
