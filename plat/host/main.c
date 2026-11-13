@@ -5,13 +5,15 @@
  * line as text, parsed here only (architecture 12) into the binary
  * commands the cart's channels deliver.
  *
- *   hl64-host [--root DIR] [--frames N] [--cmd "[@FRAME] NAME ARGS..."]...
- *             [--write-cmds FILE]
+ *   hl64-host [--root DIR] [--frames N] [--route FILE.rbc]
+ *             [--cmd "[@FRAME] NAME ARGS..."]... [--write-cmds FILE]
  *
  * --root        cart root (the DFS image source); default "."
  * --frames      quit 0 after N frames (same as --cmd "@N quit 0")
  * --cmd         one debug command (engine/core/dbg.h names); run at frame
  *               FRAME (default 1). Settings may be named: "set gravity 600".
+ * --route       a compiled route (.rbc) to run instead of the cart root's
+ *               route.rbc (engine/test/route.c)
  * --write-cmds  write the parsed commands as a cart command file
  *               (dbg.h DBG_FILE_*) and exit instead of running.
  */
@@ -29,7 +31,7 @@
 
 static int usage(void)
 {
-	fprintf(stderr, "usage: hl64-host [--root DIR] [--frames N] "
+	fprintf(stderr, "usage: hl64-host [--root DIR] [--frames N] [--route FILE.rbc] "
 		"[--cmd \"[@FRAME] NAME ARGS...\"]... [--write-cmds FILE]\n");
 	return 2;
 }
@@ -145,6 +147,8 @@ int main(int argc, char **argv)
 			cmd = argv[++i];
 		else if (!strcmp(argv[i], "--write-cmds") && i + 1 < argc)
 			out = argv[++i];
+		else if (!strcmp(argv[i], "--route") && i + 1 < argc)
+			eng_route_path = argv[++i];
 		else
 			return usage();
 		if (!cmd)

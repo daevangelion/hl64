@@ -10,9 +10,15 @@
 
 #include <stdint.h>
 
-/* Boot steps after the platform's: carve, settings, io, debug channel.
- * Logs the carve table and "boot ok". */
+/* Boot steps after the platform's: carve, settings, io, debug channel,
+ * entities, world, input, player, and a compiled route when one is
+ * present (it spawns the player at the campaign start). Logs the carve
+ * table and "boot ok". */
 void		eng_boot(const char *platform);
 void		eng_frame(void);
+
+/* The route eng_boot loads: "route.rbc" at the cart root unless the
+ * platform names another before eng_boot (host --route). */
+extern const char *eng_route_path;
 
 #endif

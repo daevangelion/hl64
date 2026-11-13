@@ -7,9 +7,12 @@
  * dt, 3 I/O pump, 11-12 frame bracket and paced present) and the test
  * step (13: debug commands, 1 s roll-up, log flush); M1 adds the free
  * camera at step 2, the world frame (residency fences, lightstyle tick,
- * dynamic lights) at steps 7-9 and the world draw at step 11. Steps 4-6
- * and 8, 10 are added by their modules (game, physics, entities, sound
- * M2-M3) at the marked places, with `now` advancing by dt after step 6.
+ * dynamic lights) at steps 7-9 and the world draw at step 11. M2 adds the
+ * pad -> usercmd at step 2 once the player exists (the free camera flies
+ * before), the player move at step 5, the player's view as the camera at
+ * step 11 and the route VM at step 13. Steps 4, 6, 8 and 10 are added by
+ * their modules (game, entities, sound M3-M4), with `now` advancing by dt
+ * after step 6.
  */
 #include "hl64/grid.h"
 #include "hl64/limits.h"
@@ -24,7 +27,12 @@
 #include "engine/render/gpu.h"
 #include "engine/render/ren.h"
 #include "engine/world/wld.h"
+#include "engine/in/in.h"
+#include "engine/phys/player.h"
+#include "engine/test/route.h"
+#include "engine/view/view.h"
 
+const char *eng_route_path = "route.rbc";
 static struct {
 	uint32_t	frame;		/* frames completed */
 	uint64_t	now_us;		/* game time */
@@ -172,6 +180,17 @@ static int cmd_stats(const dbg_cmd_t *c)
 			(unsigned long)(w.pool_used[2] / 1024), (unsigned long)(w.pool_peak[2] / 1024));
 		log_draw("stats", c->arg[0].u);
 	}
+	if (phy_player_active())
+	{
+		const ent_player_t *pl = phy_player();
+
+		log_printf("stats %lu player: map=%s org=%.9g,%.9g,%.9g vel=%.9g,%.9g,%.9g "
+			"flags=%lu hull=%u ground=%d water=%d\n", (unsigned long)c->arg[0].u,
+			wld_map_name(phy_player_map()), (double)pl->origin[0], (double)pl->origin[1],
+			(double)pl->origin[2], (double)pl->velocity[0], (double)pl->velocity[1],
+			(double)pl->velocity[2], (unsigned long)pl->flags, pl->usehull,
+			pl->groundentity, pl->waterlevel);
+	}
 	return 0;
 }
 
@@ -250,6 +269,22 @@ void eng_boot(const char *platform)
 		ren_init();
 		ren_cam_init();
 	}
+	in_init();
+	phy_player_init();
+	if (eng.world)
+	{
+		int r = rt_load(eng_route_path);
+
+		if (r < 0)
+		{
+			log_printf("route FAIL load %s\n", eng_route_path);
+			log_flush();
+			sys_exit(1);
+		}
+		/* a route plays from the campaign start (New Game) */
+		if (r > 0 && phy_player_spawn_start(wld_start_map()))
+			sys_error("route: no start map");
+	}
 
 	eng.frame = 0;
 	eng.now_us = 0;
@@ -289,6 +324,17 @@ static void rollup(void)
 			(unsigned long)eng.rollup_world_max, (unsigned long)eng.rollup_frames);
 	eng.rollup_world_us = 0;
 	eng.rollup_world_max = 0;
+	if (phy_player_active())
+	{
+		phy_player_prof_t p;
+
+		phy_player_prof(&p, 1);
+		log_printf("prof pmove_us avg=%lu max=%lu frames=%lu physents_max=%lu "
+			"overflow=%lu sounds=%lu\n",
+			(unsigned long)(p.frames ? p.us_sum / p.frames : 0), (unsigned long)p.us_max,
+			(unsigned long)p.frames, (unsigned long)p.physents_max,
+			(unsigned long)p.overflow, (unsigned long)p.sounds);
+	}
 #ifdef HL64_PROFILE
 	sys_prof_dump(eng.rollup_frames);
 #endif
@@ -300,6 +346,7 @@ void eng_frame(void)
 {
 	uint32_t vi = sys_vi_count();
 	uint32_t dt = (vi - eng.last_vi) * sys_vi_period_us();
+	in_cmd_t cmd;
 
 	/* 1 plat: dt from the VI clock, clamped (D6 i); test builds may fix it */
 	eng.last_vi = vi;
@@ -312,15 +359,18 @@ void eng_frame(void)
 	if (eng.timescale != 1.0f)
 		dt = (uint32_t)(dt * eng.timescale + 0.5f);
 
-	/* 2 in: pad -> usercmd (M2); M1: the free camera */
-	if (eng.world)
+	/* 2 in: pad -> usercmd once the player exists; before: the free camera */
+	if (phy_player_active())
+		in_frame(dt, phy_player()->maxspeed, &cmd);
+	else if (eng.world)
 		ren_cam_update(dt);
 
 	/* 3 io */
 	io_frame_begin(dt);
 	io_pump();
 
-	/* 4-6 game, player, active set (M3) */
+	/* 4 game (M3); 5 player: pmove host; 6 active set (M3) */
+	phy_player_frame(&cmd, eng.now_us);
 	eng.now_us += dt;
 	/* 7-10 world, hydration, residency, sound (M1-M4) */
 	if (eng.world)
@@ -338,6 +388,7 @@ void eng_frame(void)
 	{
 		ren_stats_t r;
 
+		ren_view_frame(eng.now_us, dt);
 		ren_frame(eng.now_us);
 		ren_stats(&r);
 		eng.rollup_world_us += r.world_us;
@@ -347,9 +398,11 @@ void eng_frame(void)
 	}
 	sys_frame_end();
 
-	/* 13 test: debug commands at the frame boundary, roll-up, log */
+	/* 13 test: debug commands at the frame boundary, route VM, roll-up, log */
 	eng.frame++;
 	dbg_run(eng.frame);
+	if (rt_active())
+		rt_frame(eng.now_us);
 	rollup();
 	log_flush();
 }

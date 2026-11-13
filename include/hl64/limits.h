@@ -61,6 +61,11 @@
 /* World chunk reads in flight or queued at once (engine/world). */
 #define HL64_WORLD_REQS			16
 
+/* Player move (specs/pmove-host.md 2, D2): physents, ladders, touch list. */
+#define HL64_PM_PHYSENTS		64
+#define HL64_PM_MOVEENTS		8
+#define HL64_PM_TOUCH			32
+
 /* ---- renderer (9) ------------------------------------------------------ */
 
 /* Meshlets listed per frame (per-frame draw list in the scratch region;

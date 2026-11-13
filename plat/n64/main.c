@@ -71,10 +71,10 @@ int main(void)
 
 	eng_boot("n64");
 #ifdef HL64_TEST
-	/* no route VM yet: a test ROM runs the host-written command file
-	 * dbg.cmd when the ROM carries one, else idles and quits 0 through
-	 * the harness */
-	if (!dbg_load("dbg.cmd"))
+	/* a test ROM runs the host-written command file dbg.cmd when the ROM
+	 * carries one; without it and without a route (route.rbc, loaded by
+	 * eng_boot) it idles and quits 0 through the harness */
+	if (!dbg_load("dbg.cmd") && !rt_active())
 	{
 		dbg_cmd_t quit = { .frame = HL64_TEST_IDLE_FRAMES, .op = DBG_QUIT, .nargs = 1 };
 

@@ -36,10 +36,23 @@ ENGINE_SRC := \
 	engine/mem/carve.c engine/mem/heap.c engine/mem/pool.c \
 	engine/render/cam.c engine/render/dlight.c engine/render/world.c \
 	engine/world/style.c engine/world/world.c
-# engine/ent + engine/phys: entity slots, linked boxes, spatial grid, touches (M2)
 # engine/coll: traces, contents, hitboxes, collision residency (M2)
 ENGINE_SRC += engine/coll/coll.c engine/coll/colbench.c
+# engine/ent + engine/phys: entity slots, linked boxes, spatial grid, touches (M2)
 ENGINE_SRC += engine/ent/ent.c engine/ent/grid.c engine/ent/grid_bench.c engine/phys/touch.c
+# input, player move host, view, route VM, rng (M2)
+ENGINE_SRC += engine/core/rng.c engine/in/in.c engine/phys/pmove.c engine/test/route.c \
+	engine/view/view.c
+# game/ (HLSDK licence, game/LICENSE-HLSDK) links into the same images:
+# pm_shared and its adapter (D2), the player's pre-move think, the view
+GAME_SRC := game/pm/pm_shared.c game/pm/pm_math.c game/pm/pm_host.c game/hl/player.c \
+	game/hud/view.c
+# HLSDK sources kept as Valve wrote them: their unused locals, MSVC
+# pragmas and array-parameter styles are not ours to fix; HLSDK builds
+# them without strict aliasing (mathlib.h IS_NAN)
+HLSDK_CFLAGS := -fno-strict-aliasing -Wno-unused-variable -Wno-unused-but-set-variable \
+	-Wno-unknown-pragmas -Wno-array-parameter
+ENGINE_SRC += $(GAME_SRC)
 N64_SRC := plat/n64/cart.c plat/n64/fpu_shim.c plat/n64/gpu.c plat/n64/main.c plat/n64/sys.c \
 	plat/n64/vid.c
 HOST_SRC := plat/host/gpu.c plat/host/heap_host.c plat/host/io_host.c plat/host/main.c \
@@ -48,7 +61,7 @@ HOST_SRC := plat/host/gpu.c plat/host/heap_host.c plat/host/io_host.c plat/host/
 # Directories built without -ffast-math on the cart (18.2): host and cart
 # must agree bit for bit on collision and physics, and on the world
 # draw list (frustum, point -> leaf) the cook predicts.
-NOFASTMATH_DIRS := engine/coll engine/phys engine/render engine/world
+NOFASTMATH_DIRS := engine/coll engine/phys engine/render engine/world game/pm
 
 HL64_WARN := -Wall -Wextra -Werror
 HL64_DEFS :=
@@ -63,7 +76,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest area cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest area pmtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -120,6 +133,7 @@ ROM_OBJS := $(addprefix $(BUILD_DIR)/,$(ENGINE_SRC:.c=.o) $(N64_SRC:.c=.o))
 
 $(foreach d,$(NOFASTMATH_DIRS),$(eval $(BUILD_DIR)/$(d)/%.o: CFLAGS += -fno-fast-math))
 $(BUILD_DIR)/engine/%.o: CFLAGS += -std=c99
+$(addprefix $(BUILD_DIR)/,game/pm/pm_shared.o game/pm/pm_math.o): CFLAGS += $(HLSDK_CFLAGS)
 
 # n64.mk sets the toolchain for %.z64 targets (and so for everything $(ROM)
 # depends on); `make elf` gets the same so it alone is a compile/link check.
@@ -177,6 +191,8 @@ $(BUILD_DIR)/host/%.o: %.c
 	@echo "    [HOSTCC] $<"
 	$(HOST_CC) -c $(HOST_CFLAGS) -o $@ $<
 
+$(addprefix $(BUILD_DIR)/host/,game/pm/pm_shared.o game/pm/pm_math.o): HOST_CFLAGS += $(HLSDK_CFLAGS)
+
 $(HOST_BIN): $(HOST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 
@@ -207,6 +223,14 @@ AREA_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(AREA_BIN): $(AREA_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 area: $(AREA_BIN)
+
+# Player move driver (test/m2/pm.c, run by test/m2/pmbot.py and test/run/m2.sh).
+PM_BIN := $(BUILD_DIR)/host/hl64-pm
+PM_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m2/pm.o
+$(PM_BIN): $(PM_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+pmtest: $(PM_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 
