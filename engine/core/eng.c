@@ -17,12 +17,15 @@
  * route all run on it. Integer microseconds remain only for engine-internal
  * timing (dt from the VI clock, I/O, pacing, profiling).
  */
+#include <math.h>
+
 #include "hl64/ent.h"
 #include "hl64/grid.h"
 #include "hl64/game.h"
 #include "hl64/limits.h"
 #include "hl64/rec.h"
 #include "hl64/settings.h"
+#include "hl64/snd.h"
 #include "engine/core/dbg.h"
 #include "engine/core/eng.h"
 #include "engine/core/log.h"
@@ -309,6 +312,7 @@ void eng_boot(const char *platform)
 	ent_init();
 	eng.world = (uint8_t)wld_init();
 	res_init();
+	snd_init();
 	rec_init();
 	col_init();
 	if (eng.world)
@@ -436,6 +440,17 @@ static void rollup(void)
 			(unsigned long)m.kind_us[PHY_K_PUSHSTEP] / n, (unsigned long)m.traces / n);
 	}
 	rec_prof_line();
+	{
+		snd_stats_t s;
+
+		snd_stats(&s, 1);
+		log_printf("prof snd_us avg=%lu max=%lu voices_peak=%lu loops_peak=%lu waves_peak=%lu "
+			"started=%lu stolen=%lu dropped=%lu mem=%lu mem_peak=%lu region=%lu\n",
+			(unsigned long)s.us, (unsigned long)s.us_max, (unsigned long)s.voices_peak,
+			(unsigned long)s.loops_peak, (unsigned long)s.waves_peak,
+			(unsigned long)s.started, (unsigned long)s.stolen, (unsigned long)s.dropped,
+			(unsigned long)s.mem, (unsigned long)s.mem_peak, (unsigned long)s.mem_region);
+	}
 #ifdef HL64_PROFILE
 	sys_prof_dump(eng.rollup_frames);
 #endif
@@ -502,6 +517,18 @@ void eng_frame(void)
 		wld_style_tick(eng.time);
 		ren_dlight_frame(eng.time, (double)dt * 1e-6);
 		studio_frame();
+	}
+	/* 10 sound: listener = the view (global eye, right vector) of the last
+	 * drawn frame */
+	{
+		float yaw = ren_cam.ang[1] * (3.14159265f / 180.0f);
+		float pitch = ren_cam.ang[0] * (3.14159265f / 180.0f);
+		float roll = ren_cam.ang[2] * (3.14159265f / 180.0f);
+		float sy = sinf(yaw), cy = cosf(yaw), sp = sinf(pitch), cp = cosf(pitch);
+		float sr = sinf(roll), cr = cosf(roll);
+		float right[3] = { -sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp };
+
+		snd_frame(ren_cam.org, right, (double)dt * 1e-6);
 	}
 
 	/* 11-12 render into a free framebuffer; submit for paced present */

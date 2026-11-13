@@ -23,4 +23,19 @@ size_t	mem_heap_free_total(void);
 /* Live blocks with callers, gaps and the last failures (DBG_MEM). */
 void	mem_heap_map_dump(void);
 
+/*
+ * Region redirect (plat/n64/audio.c: libdragon's mixer and wav64 blocks
+ * in the SOUND region, architecture 4.3): while active, malloc / calloc /
+ * memalign go to alloc; free / realloc of a block owns() recognises go to
+ * release at any time. One redirect at a time; NULL removes it.
+ */
+typedef struct {
+	void	*(*alloc)(size_t align, size_t size);	/* NULL when full */
+	void	(*release)(void *p);
+	size_t	(*size)(void *p);			/* usable bytes of an owned block */
+	int	(*owns)(const void *p);
+	int	active;
+} mem_heap_redirect_t;
+void	mem_heap_redirect(mem_heap_redirect_t *r);
+
 #endif
