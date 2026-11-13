@@ -40,6 +40,7 @@
 #include "engine/in/in.h"
 #include "engine/phys/phys.h"
 #include "engine/phys/player.h"
+#include "engine/phys/motion.h"
 #include "engine/test/route.h"
 #include "engine/view/view.h"
 
@@ -417,6 +418,22 @@ static void rollup(void)
 			"heap_max=%lu\n", (unsigned long)s.us / n, (unsigned long)s.us_max,
 			(unsigned long)s.stepped / n, (unsigned long)s.thinks / n,
 			(unsigned long)s.movers_max, (unsigned long)s.heap_max);
+	}
+	{
+		phy_motion_prof_t m;
+		unsigned long n;
+
+		phy_motion_prof(&m, 1);
+		n = m.frames ? m.frames : 1;
+		log_printf("prof phys_us avg=%lu max=%lu toss=%lu step=%lu push=%lu pushstep=%lu "
+			"toss_us=%lu step_us=%lu push_us=%lu pushstep_us=%lu traces=%lu\n",
+			(unsigned long)m.us / n, (unsigned long)m.us_max,
+			(unsigned long)m.steps[PHY_K_TOSS] / n, (unsigned long)m.steps[PHY_K_STEP] / n,
+			(unsigned long)m.steps[PHY_K_PUSH] / n,
+			(unsigned long)m.steps[PHY_K_PUSHSTEP] / n,
+			(unsigned long)m.kind_us[PHY_K_TOSS] / n, (unsigned long)m.kind_us[PHY_K_STEP] / n,
+			(unsigned long)m.kind_us[PHY_K_PUSH] / n,
+			(unsigned long)m.kind_us[PHY_K_PUSHSTEP] / n, (unsigned long)m.traces / n);
 	}
 	rec_prof_line();
 #ifdef HL64_PROFILE

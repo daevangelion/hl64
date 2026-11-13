@@ -50,7 +50,7 @@ GAME_SRC := game/pm/pm_shared.c game/pm/pm_math.c game/pm/pm_host.c game/hl/play
 # M3 slices: each slice adds its own sources on its own line only
 # (merges stay trivial; local://M3-contract.md).
 ENGINE_SRC_ENT := engine/ent/heap.c engine/ent/pass.c engine/ent/priv.c
-ENGINE_SRC_PHYS :=
+ENGINE_SRC_PHYS := engine/phys/move.c engine/phys/push.c engine/phys/walk.c
 ENGINE_SRC_REC := engine/ent/rec.c engine/ent/rec_hle.c engine/res/res.c engine/res/rtb.c
 ENGINE_SRC_STUDIO := engine/render/studio.c
 ENGINE_SRC_SND :=
@@ -261,6 +261,14 @@ ENTTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(ENTTEST_BIN): $(ENTTEST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 enttest: $(ENTTEST_BIN)
+
+# Physics driver (test/m3/phys.c, run by test/m3/phys.py: P1-P15, K4).
+PHYS_BIN := $(BUILD_DIR)/host/hl64-phys
+PHYS_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/phys.o
+$(PHYS_BIN): $(PHYS_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+phystest: $(PHYS_BIN)
 
 # Player move driver (test/m2/pm.c, run by test/m2/pmbot.py and test/run/m2.sh).
 PM_BIN := $(BUILD_DIR)/host/hl64-pm
