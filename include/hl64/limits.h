@@ -92,7 +92,11 @@
 #define HL64_POOL_COLLISION_KB		208	/* cook-proved: seam hldemo3->hldemo2, 206592 B */
 #define HL64_POOL_STUDIO_KB		1024	/* [EST] D3(b) per-sequence chunks */
 #define HL64_STUDIO_SCRATCH_KB		192	/* [EST] skinned-mesh tables, view model */
-#define HL64_COMPONENTS_KB		113	/* 228 B x HL64_MAX_ENTITIES (6.2) */
+/* Measured layout (engine/ent/ent.c ent_init, -m32 = cart): components
+ * 228 B (cv 92, mot 36, phys 24, tm 16, rnd 44, id 16) + grid node 16,
+ * membership pool 3 x 8, touch rank 4, free time 4, contents flag 1 per
+ * slot, each array 16-aligned: 137168 B for HL64_MAX_ENTITIES 495. */
+#define HL64_COMPONENTS_KB		134
 #define HL64_GAME_PRIVATE_KB		160	/* [EST] game private slabs */
 #define HL64_THINK_GRID_KB		12	/* think heap, active bitsets, grids */
 #define HL64_HLE_BLOBS_KB		160	/* [EST] 4 slots x 40 KB */

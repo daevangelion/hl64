@@ -132,7 +132,7 @@ typedef struct {
 	uint8_t		renderamt;
 	uint8_t		rendercolor[3];
 	uint16_t	sectors[4];	/* renderer: overlapped sectors (ENT_NONE) */
-} ent_rnd_t;			/* 40 */
+} ent_rnd_t;			/* 44 */
 /* rendermode and skin live in col_ent_t (traces filter on them). */
 
 #define ENT_ST_FREE		0
@@ -188,8 +188,10 @@ int		ent_create(int reserve);
 /* Immediate free (pfnRemoveEntity): unlink, leave the heap and the active
  * sets, free the private block, zero components (serial += 1). */
 void		ent_destroy(int e);
-/* HLSDK UTIL_Remove: FL_KILLME; the engine frees it after its movetype
- * step this frame (or at the end of the frame's entity pass). */
+/* HLSDK UTIL_Remove: FL_KILLME; the active-set pass frees it when it
+ * reaches its slot, after its movetype step: this frame when its slot is
+ * still ahead of the pass, else on the next frame's pass (GoldSrc's
+ * ascending loop frees FL_KILLME entities as it visits them). */
 void		ent_remove(int e);
 ent_h		ent_handle_of(int e);
 /* Slot of a handle, -1 when freed since. */
@@ -223,11 +225,15 @@ void		ent_set_aiment(int e, int aiment);
 /* nextthink := t (f32 s, <= 0 clears); updates the think heap. Pushers:
  * t is in ltime units (physics-movetypes.md 4.1). */
 void		ent_think_at(int e, float t);
-/* After direct writes to mot / cv.flags / cv.movetype / phys.groundentity:
- * re-evaluate active-set membership. */
+/* After direct writes to mot / cv.flags / cv.movetype / phys.groundentity /
+ * tm.nextthink: re-evaluate the think heap and active-set membership. */
 void		ent_motion_changed(int e);
 /* Link with or without trigger touches (area-links-and-touch.md 3). */
 void		ent_relink(int e, int touch);
+/* The offset that converts e's map-local positions into the frame of
+ * eng_frame_layer(): g_M(e's layer) - g_M(frame). Returns 0 (d zero)
+ * when e is in that frame. */
+int		ent_frame_delta(int e, float d[3]);
 
 /* ---- frame (architecture.md 3.2 step 6; engine side) --------------------- */
 
@@ -237,12 +243,26 @@ void		phy_entities_frame(double time, double dt);
 /* K9: step every live entity every frame (test builds). */
 void		phy_set_step_all(int on);
 
+/* Engine -> game dispatch (game.h game_think / game_touch / game_blocked):
+ * game_init installs them; NULL members (the default) dispatch nothing,
+ * so the engine links without game/; tests install their own. The engine
+ * sets eng_frame_layer to the dispatched entity's layer around each call. */
+typedef struct {
+	void	(*think)(int e);
+	void	(*touch)(int e, int other);
+	void	(*blocked)(int e, int other);
+} phy_game_hooks_t;
+void		phy_set_game_hooks(const phy_game_hooks_t *h);
+
 typedef struct {
 	uint32_t	stepped, thinks, movers_max, heap_max;
 	uint32_t	by_type[14];	/* steps per movetype */
 	uint32_t	us;		/* step 6 CPU in the window */
+	uint32_t	us_max, frames;	/* worst frame, frames in the window */
 } phy_ent_stats_t;
 void		phy_ent_stats(phy_ent_stats_t *s, int reset);
+/* `mem` lines: components region, live / peak slots, private slabs. */
+void		ent_mem_log(void);
 
 /* ---- engine movement services (physics-movetypes.md 6) ------------------- */
 

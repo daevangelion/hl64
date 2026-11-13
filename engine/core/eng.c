@@ -17,6 +17,7 @@
  * route all run on it. Integer microseconds remain only for engine-internal
  * timing (dt from the VI clock, I/O, pacing, profiling).
  */
+#include "hl64/ent.h"
 #include "hl64/grid.h"
 #include "hl64/limits.h"
 #include "hl64/settings.h"
@@ -31,6 +32,7 @@
 #include "engine/render/ren.h"
 #include "engine/world/wld.h"
 #include "engine/in/in.h"
+#include "engine/phys/phys.h"
 #include "engine/phys/player.h"
 #include "engine/test/route.h"
 #include "engine/view/view.h"
@@ -203,6 +205,7 @@ static int cmd_mem(const dbg_cmd_t *c)
 
 	(void)c;
 	mem_carve_log();
+	ent_mem_log();
 	mem_heap_lifetime(&total_mal, &total_fr, &fails, &live_n, &live_kb, &peak_kb);
 	log_printf("mem: allocs %u frees %u fails %u live %u (%u KB) peak %u KB stack %d\n",
 		total_mal, total_fr, fails, live_n, live_kb, peak_kb, sys_stack_peak());
@@ -289,8 +292,10 @@ void eng_boot(const char *platform)
 			sys_error("route: no start map");
 	}
 
+	/* New Game clock: time 1.0, two settle frames (think-and-time.md 6) */
+	eng_clock_new_game();
 	eng.frame = 0;
-	eng.time = 1.0;
+	eng.time = eng_clock_time();
 	eng.timescale = 1.0f;
 	eng.fixed_dt_us = 0;
 #ifdef HL64_PROFILE
@@ -344,6 +349,17 @@ static void rollup(void)
 			(unsigned long)p.clips / n, (unsigned long)p.contents_us / n,
 			(unsigned long)p.contents / n);
 	}
+	{
+		phy_ent_stats_t s;
+		unsigned long n;
+
+		phy_ent_stats(&s, 1);
+		n = s.frames ? s.frames : 1;
+		log_printf("prof ent_us avg=%lu max=%lu stepped=%lu thinks=%lu movers_max=%lu "
+			"heap_max=%lu\n", (unsigned long)s.us / n, (unsigned long)s.us_max,
+			(unsigned long)s.stepped / n, (unsigned long)s.thinks / n,
+			(unsigned long)s.movers_max, (unsigned long)s.heap_max);
+	}
 #ifdef HL64_PROFILE
 	sys_prof_dump(eng.rollup_frames);
 #endif
@@ -356,6 +372,7 @@ void eng_frame(void)
 	uint32_t vi = sys_vi_count();
 	uint32_t dt = (vi - eng.last_vi) * sys_vi_period_us();
 	in_cmd_t cmd;
+	double gdt;
 
 	/* 1 plat: dt from the VI clock, clamped (D6 i); test builds may fix it */
 	eng.last_vi = vi;
@@ -378,10 +395,15 @@ void eng_frame(void)
 	io_frame_begin(dt);
 	io_pump();
 
-	/* 4 game (M3); 5 player: pmove host; 6 active set (M3) */
+	/* 4 game (M3): the frame's clock (dt 0 in the settle frames) */
+	gdt = eng_clock_frame((double)dt * 1e-6);
+	/* 5 player: pmove host */
 	phy_player_frame(&cmd, eng.time);
-	/* the clock advances by dt (f64) after step 6 */
-	eng.time += (double)dt * 1e-6;
+	/* 6 active set */
+	phy_entities_frame(eng.time, gdt);
+	/* the clock advances by the frame time (f64) after step 6 */
+	eng_clock_advance();
+	eng.time = eng_clock_time();
 	/* 7-10 world, hydration, residency, sound (M1-M4) */
 	if (eng.world)
 	{
