@@ -205,3 +205,20 @@ void __wrap_console_render(void)
 	debug_assert_func_f(__FILE__, __LINE__, __func__, "RSP crash (dump above)",
 		"%s", rsp_crash_text);
 }
+
+/* ---- controller ------------------------------------------------------------ */
+
+void sys_pad_read(sys_pad_t *p)
+{
+	joypad_inputs_t in;
+
+	joypad_poll();
+	in = joypad_get_inputs(JOYPAD_PORT_1);
+	p->stick_x = in.stick_x;
+	p->stick_y = in.stick_y;
+	p->buttons = (uint16_t)((in.btn.a ? SYS_PAD_A : 0) | (in.btn.b ? SYS_PAD_B : 0)
+		| (in.btn.z ? SYS_PAD_Z : 0) | (in.btn.start ? SYS_PAD_START : 0)
+		| (in.btn.l ? SYS_PAD_L : 0) | (in.btn.r ? SYS_PAD_R : 0)
+		| (in.btn.c_up ? SYS_PAD_C_UP : 0) | (in.btn.c_down ? SYS_PAD_C_DOWN : 0)
+		| (in.btn.c_left ? SYS_PAD_C_LEFT : 0) | (in.btn.c_right ? SYS_PAD_C_RIGHT : 0));
+}

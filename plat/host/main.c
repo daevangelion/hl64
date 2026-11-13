@@ -6,11 +6,14 @@
  * commands the cart's channels deliver.
  *
  *   hl64-host [--root DIR] [--frames N] [--cmd "[@FRAME] NAME ARGS..."]...
+ *             [--write-cmds FILE]
  *
- * --root    cart root (the DFS image source); default "."
- * --frames  quit 0 after N frames (same as --cmd "@N quit 0")
- * --cmd     one debug command (engine/core/dbg.h names); run at frame
- *           FRAME (default 1). Settings may be named: "set gravity 600".
+ * --root        cart root (the DFS image source); default "."
+ * --frames      quit 0 after N frames (same as --cmd "@N quit 0")
+ * --cmd         one debug command (engine/core/dbg.h names); run at frame
+ *               FRAME (default 1). Settings may be named: "set gravity 600".
+ * --write-cmds  write the parsed commands as a cart command file
+ *               (dbg.h DBG_FILE_*) and exit instead of running.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +30,7 @@
 static int usage(void)
 {
 	fprintf(stderr, "usage: hl64-host [--root DIR] [--frames N] "
-		"[--cmd \"[@FRAME] NAME ARGS...\"]...\n");
+		"[--cmd \"[@FRAME] NAME ARGS...\"]... [--write-cmds FILE]\n");
 	return 2;
 }
 
@@ -82,10 +85,48 @@ static int parse_cmd(const char *text, dbg_cmd_t *c)
 	return strtok_r(NULL, " \t", &save) ? -1 : 0;
 }
 
+static void put32(uint8_t *p, uint32_t v)
+{
+	p[0] = (uint8_t)(v >> 24);
+	p[1] = (uint8_t)(v >> 16);
+	p[2] = (uint8_t)(v >> 8);
+	p[3] = (uint8_t)v;
+}
+
+/* The commands as a cart command file (dbg.h); 0 on success. */
+static int write_cmds(const char *path, const dbg_cmd_t *cmds, int n)
+{
+	uint8_t buf[DBG_FILE_HDR + DBG_FILE_REC * HL64_DBG_QUEUE];
+	FILE *f;
+	int i, k, ok;
+
+	memset(buf, 0, sizeof(buf));
+	put32(buf, DBG_FILE_MAGIC);
+	buf[5] = 1;
+	buf[6] = (uint8_t)(n >> 8);
+	buf[7] = (uint8_t)n;
+	for (i = 0; i < n; i++)
+	{
+		uint8_t *r = buf + DBG_FILE_HDR + DBG_FILE_REC * i;
+
+		put32(r, cmds[i].frame);
+		r[4] = cmds[i].op;
+		r[5] = cmds[i].nargs;
+		for (k = 0; k < cmds[i].nargs; k++)
+			put32(r + 8 + 4 * k, cmds[i].arg[k].u);
+	}
+	f = fopen(path, "wb");
+	if (!f)
+		return -1;
+	ok = fwrite(buf, 1, (size_t)(DBG_FILE_HDR + DBG_FILE_REC * n), f)
+		== (size_t)(DBG_FILE_HDR + DBG_FILE_REC * n);
+	return fclose(f) == 0 && ok ? 0 : -1;
+}
+
 int main(int argc, char **argv)
 {
 	dbg_cmd_t cmds[HL64_DBG_QUEUE];
-	const char *root = NULL;
+	const char *root = NULL, *out = NULL;
 	int i, ncmds = 0;
 
 	for (i = 1; i < argc; i++)
@@ -102,6 +143,8 @@ int main(int argc, char **argv)
 		}
 		else if (!strcmp(argv[i], "--cmd") && i + 1 < argc)
 			cmd = argv[++i];
+		else if (!strcmp(argv[i], "--write-cmds") && i + 1 < argc)
+			out = argv[++i];
 		else
 			return usage();
 		if (!cmd)
@@ -112,6 +155,15 @@ int main(int argc, char **argv)
 			return usage();
 		}
 		ncmds++;
+	}
+	if (out)
+	{
+		if (write_cmds(out, cmds, ncmds))
+		{
+			fprintf(stderr, "hl64-host: cannot write %s\n", out);
+			return 1;
+		}
+		return 0;
 	}
 
 	host_io_init(root);

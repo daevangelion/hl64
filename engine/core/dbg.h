@@ -76,4 +76,17 @@ int	dbg_push(const dbg_cmd_t *c);
 /* Frame boundary: run every due command. Returns failures so far. */
 uint32_t dbg_run(uint32_t frame);
 
+/*
+ * Command file (test builds): the host CLI's parsed commands for a cart
+ * run (hl64-host --write-cmds FILE --cmd ...), packed into the ROM as
+ * dbg.cmd and queued at boot. Big-endian: magic 'DBGC' u32, version u16
+ * (1), count u16 (<= HL64_DBG_QUEUE), then per command: frame u32, op u8,
+ * nargs u8, reserved u16, args u32[7] (unused 0).
+ */
+#define DBG_FILE_MAGIC	0x44424743u
+#define DBG_FILE_HDR	8
+#define DBG_FILE_REC	36
+/* Queue the commands of a cart file; 0 when there is none. */
+int	dbg_load(const char *path);
+
 #endif

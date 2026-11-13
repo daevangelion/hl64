@@ -103,9 +103,19 @@ int sys_pace_stats(char *buf, int size)
 	return len < size ? len : size - 1;
 }
 
+/* The draw-list recorder (gpu.c) is the host's picture: the shot command
+ * logs its counts. */
 int sys_shot(void)
 {
-	return -1;
+	return 0;
+}
+
+/* The host pad is scripted through debug commands: idle. */
+void sys_pad_read(sys_pad_t *p)
+{
+	p->stick_x = 0;
+	p->stick_y = 0;
+	p->buttons = 0;
 }
 
 /* ---- memory ---------------------------------------------------------------- */

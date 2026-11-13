@@ -55,6 +55,26 @@
  * with both maps' sets live (hldemo3 arrival). */
 #define HL64_MAX_ENTITIES		495
 
+/* Campaign maps (CWG3 map table) and their names. */
+#define HL64_MAX_MAPS			128
+#define HL64_MAP_NAME			32
+/* World chunk reads in flight or queued at once (engine/world). */
+#define HL64_WORLD_REQS			16
+
+/* ---- renderer (9) ------------------------------------------------------ */
+
+/* Meshlets listed per frame (per-frame draw list in the scratch region;
+ * the cooked maps have 367-1728 meshlets in total). */
+#define HL64_REN_VIS_MAX		1536
+/* Movers drawn under their own matrix per layer per frame (overflow is
+ * counted as dropped). */
+#define HL64_REN_MOVERS_MAX		48
+/* Texture pages and textures per layer (cooked maps: <= 134 / 142). */
+#define HL64_REN_PAGES_MAX		512
+#define HL64_REN_TEX_MAX		512
+/* Dynamic lights (docs/specs/dlights.md 1). */
+#define HL64_DLIGHTS			32
+
 /* ---- boot carve regions, KB (4.1) ------------------------------------ */
 
 #define HL64_SCRATCH_KB			64	/* per-frame scratch arena */

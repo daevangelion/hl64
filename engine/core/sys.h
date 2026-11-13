@@ -59,6 +59,27 @@ int		sys_stack_peak(void);
  * (no-op on the host). */
 void		sys_cache_writeback(const void *p, uint32_t n);
 
+/* ---- controller (11; M1: the free camera's debug pad) ------------------ */
+
+typedef struct {
+	int8_t		stick_x, stick_y;	/* -128..127, right / up positive */
+	uint16_t	buttons;		/* SYS_PAD_* held */
+} sys_pad_t;
+
+#define SYS_PAD_A	0x0001
+#define SYS_PAD_B	0x0002
+#define SYS_PAD_Z	0x0004
+#define SYS_PAD_START	0x0008
+#define SYS_PAD_L	0x0010
+#define SYS_PAD_R	0x0020
+#define SYS_PAD_C_UP	0x0040
+#define SYS_PAD_C_DOWN	0x0080
+#define SYS_PAD_C_LEFT	0x0100
+#define SYS_PAD_C_RIGHT	0x0200
+
+/* Port 1 now (the host's scripted pad reads as idle). */
+void		sys_pad_read(sys_pad_t *p);
+
 /* ---- cart files and the PI (5.1, 5.2) -------------------------------- */
 
 /* PI address and size of a loose cart file, 0 if none. */

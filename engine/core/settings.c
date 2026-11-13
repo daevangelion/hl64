@@ -39,6 +39,7 @@ void settings_reset(void)
 	settings.zmax = 4096;
 	settings.yawspeed = 210;
 	settings.pitchspeed = 225;
+	settings.fov = 90;
 	settings.footsteps = 1;
 	settings.skill = 1;
 	settings.vol_master = 100;

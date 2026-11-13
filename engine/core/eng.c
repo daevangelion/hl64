@@ -5,10 +5,11 @@
  *
  * The loop runs the 3.2 steps in order. M0 has the platform steps (1 VI
  * dt, 3 I/O pump, 11-12 frame bracket and paced present) and the test
- * step (13: debug commands, 1 s roll-up, log flush); steps 2 and 4-10
- * are added by their modules (input M2; game, physics, world, entities,
- * residency, sound M1-M3) at the marked places, with `now` advancing by
- * dt after step 6.
+ * step (13: debug commands, 1 s roll-up, log flush); M1 adds the free
+ * camera at step 2, the world frame (residency fences, lightstyle tick,
+ * dynamic lights) at steps 7-9 and the world draw at step 11. Steps 4-6
+ * and 8, 10 are added by their modules (game, physics, entities, sound
+ * M2-M3) at the marked places, with `now` advancing by dt after step 6.
  */
 #include "hl64/limits.h"
 #include "hl64/settings.h"
@@ -19,6 +20,9 @@
 #include "engine/io/io.h"
 #include "engine/mem/carve.h"
 #include "engine/mem/heap.h"
+#include "engine/render/gpu.h"
+#include "engine/render/ren.h"
+#include "engine/world/wld.h"
 
 static struct {
 	uint32_t	frame;		/* frames completed */
@@ -27,8 +31,11 @@ static struct {
 	float		timescale;
 	uint32_t	fixed_dt_us;	/* test builds; 0 = VI clock */
 	uint8_t		rollup;		/* 1 s roll-up line (DBG_PROF) */
+	uint8_t		world;		/* player content present */
 	uint32_t	rollup_frames;
 	uint64_t	rollup_t0;
+	uint64_t	rollup_world_us;	/* world draw CPU in the roll-up window */
+	uint32_t	rollup_world_max;
 } eng;
 
 /* ---- stats record (15) ------------------------------------------------- */
@@ -97,6 +104,32 @@ static int cmd_fixed_dt(const dbg_cmd_t *c)
 	return 0;
 }
 
+/* The drawn frame's world counts (renderer) and the GPU calls (recorder on
+ * the host); identical lines on the cart and the host. */
+static void log_draw(const char *what, uint32_t label)
+{
+	ren_stats_t r;
+	gpu_stats_t g;
+
+	if (!eng.world)
+		return;
+	ren_stats(&r);
+	gpu_stats(&g);
+	log_printf("%s %lu ren: map=%s eye=%.9g,%.9g,%.9g ang=%.9g,%.9g,%.9g leaf=%lu r10=%lu "
+		"sectors=%lu movers=%lu meshlets=%lu verts=%lu tris=%lu binds=%lu relit=%lu "
+		"dlit=%lu missing=%lu dropped=%lu world_us=%lu\n", what, (unsigned long)label,
+		wld_map_name(ren_cam.map), (double)ren_cam.org[0], (double)ren_cam.org[1],
+		(double)ren_cam.org[2], (double)ren_cam.ang[0], (double)ren_cam.ang[1],
+		(double)ren_cam.ang[2], (unsigned long)r.leaf, (unsigned long)r.r10,
+		(unsigned long)r.sectors, (unsigned long)r.movers, (unsigned long)r.meshlets,
+		(unsigned long)r.verts, (unsigned long)r.tris, (unsigned long)r.binds,
+		(unsigned long)r.relit, (unsigned long)r.dlit, (unsigned long)r.missing,
+		(unsigned long)r.dropped, (unsigned long)r.world_us);
+	log_printf("%s %lu gpu: binds=%lu meshlets=%lu verts=%lu tris=%lu hash=%08lx\n", what,
+		(unsigned long)label, (unsigned long)g.binds, (unsigned long)g.meshlets,
+		(unsigned long)g.verts, (unsigned long)g.tris, (unsigned long)g.hash);
+}
+
 static int cmd_shot(const dbg_cmd_t *c)
 {
 	if (sys_shot())
@@ -106,6 +139,7 @@ static int cmd_shot(const dbg_cmd_t *c)
 	}
 	log_printf("shot %lu frame=%lu\n", (unsigned long)c->arg[0].u,
 		(unsigned long)eng.frame);
+	log_draw("shot", c->arg[0].u);
 	return 0;
 }
 
@@ -124,6 +158,19 @@ static int cmd_stats(const dbg_cmd_t *c)
 		(unsigned long)s.io_queued, (unsigned long)s.io_blocked_max_us,
 		(unsigned long)s.io_budget_over, (unsigned long)s.fpu_traps,
 		s.stack_peak, pace);
+	if (eng.world)
+	{
+		wld_stats_t w;
+
+		wld_stats(&w);
+		log_printf("stats %lu world: loads=%lu evict=%lu nofit=%lu render=%lu/%luKB "
+			"texture=%lu/%luKB coll=%lu/%luKB\n", (unsigned long)c->arg[0].u,
+			(unsigned long)w.loads, (unsigned long)w.evictions, (unsigned long)w.nofit,
+			(unsigned long)(w.pool_used[0] / 1024), (unsigned long)(w.pool_peak[0] / 1024),
+			(unsigned long)(w.pool_used[1] / 1024), (unsigned long)(w.pool_peak[1] / 1024),
+			(unsigned long)(w.pool_used[2] / 1024), (unsigned long)(w.pool_peak[2] / 1024));
+		log_draw("stats", c->arg[0].u);
+	}
 	return 0;
 }
 
@@ -145,6 +192,8 @@ static int cmd_prof(const dbg_cmd_t *c)
 	eng.rollup = c->arg[0].u != 0;
 	eng.rollup_frames = 0;
 	eng.rollup_t0 = sys_time_us();
+	eng.rollup_world_us = 0;
+	eng.rollup_world_max = 0;
 	return 0;
 }
 
@@ -192,6 +241,12 @@ void eng_boot(const char *platform)
 	dbg_handler_set(DBG_PROF, cmd_prof);
 	dbg_handler_set(DBG_LOG_FLUSH, cmd_flush);
 	dbg_handler_set(DBG_QUIT, cmd_quit);
+	eng.world = (uint8_t)wld_init();
+	if (eng.world)
+	{
+		ren_init();
+		ren_cam_init();
+	}
 
 	eng.frame = 0;
 	eng.now_us = 0;
@@ -225,6 +280,12 @@ static void rollup(void)
 		(unsigned long)eng.rollup_frames,
 		(unsigned long)(span / eng.rollup_frames), pace,
 		(unsigned long)io.async_bytes, (unsigned long)io.blocked_us);
+	if (eng.world)
+		log_printf("prof world_us avg=%lu max=%lu frames=%lu\n",
+			(unsigned long)(eng.rollup_world_us / eng.rollup_frames),
+			(unsigned long)eng.rollup_world_max, (unsigned long)eng.rollup_frames);
+	eng.rollup_world_us = 0;
+	eng.rollup_world_max = 0;
 #ifdef HL64_PROFILE
 	sys_prof_dump(eng.rollup_frames);
 #endif
@@ -248,7 +309,9 @@ void eng_frame(void)
 	if (eng.timescale != 1.0f)
 		dt = (uint32_t)(dt * eng.timescale + 0.5f);
 
-	/* 2 in: pad -> usercmd (M2) */
+	/* 2 in: pad -> usercmd (M2); M1: the free camera */
+	if (eng.world)
+		ren_cam_update(dt);
 
 	/* 3 io */
 	io_frame_begin(dt);
@@ -257,11 +320,28 @@ void eng_frame(void)
 	/* 4-6 game, player, active set (M3) */
 	eng.now_us += dt;
 	/* 7-10 world, hydration, residency, sound (M1-M4) */
+	if (eng.world)
+	{
+		wld_frame(eng.frame);
+		wld_style_tick(eng.now_us);
+		ren_dlight_frame(eng.now_us, dt);
+	}
 
 	/* 11-12 render into a free framebuffer; submit for paced present */
 	while (!sys_frame_try_begin())
 		io_pump();
 	io_pump();
+	if (eng.world)
+	{
+		ren_stats_t r;
+
+		ren_frame(eng.now_us);
+		ren_stats(&r);
+		eng.rollup_world_us += r.world_us;
+		if (r.world_us > eng.rollup_world_max)
+			eng.rollup_world_max = r.world_us;
+		io_pump();
+	}
 	sys_frame_end();
 
 	/* 13 test: debug commands at the frame boundary, roll-up, log */

@@ -36,6 +36,8 @@ typedef struct {
 	/* controls */
 	float		yawspeed;	/* deg/s at full stick */
 	float		pitchspeed;
+	/* render: horizontal field of view in degrees (GoldSrc default 90) */
+	float		fov;
 	uint8_t		footsteps;
 	/* game */
 	uint8_t		skill;		/* 1 easy .. 3 hard */
@@ -73,6 +75,7 @@ extern settings_t settings;
 	X(ROLLSPEED, rollspeed, F32, 0, 10000, 1) \
 	X(YAWSPEED, yawspeed, F32, 0, 1000, 1) \
 	X(PITCHSPEED, pitchspeed, F32, 0, 1000, 1) \
+	X(FOV, fov, F32, 10, 170, 1) \
 	X(FOOTSTEPS, footsteps, U8, 0, 1, 1) \
 	X(SKILL, skill, U8, 1, 3, 1) \
 	X(VOL_MASTER, vol_master, U8, 0, 100, 1) \

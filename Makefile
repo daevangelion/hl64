@@ -22,6 +22,9 @@ export N64_INST N64_GCCPREFIX
 T3D_INST ?= $(N64_INST)
 HOST_M32 ?= 1
 HL64_CONTENT ?=
+# Test ROMs: a host-written debug command file (hl64-host --write-cmds),
+# packed as dbg.cmd next to the content.
+HL64_CMDS ?=
 HL64_DATA ?=
 HL64_REF_PALETTE ?=
 MAPS ?=
@@ -30,13 +33,18 @@ MAPS ?=
 ENGINE_SRC := \
 	engine/core/dbg.c engine/core/eng.c engine/core/log.c engine/core/settings.c \
 	engine/io/io.c \
-	engine/mem/carve.c engine/mem/heap.c engine/mem/pool.c
-N64_SRC := plat/n64/cart.c plat/n64/fpu_shim.c plat/n64/main.c plat/n64/sys.c plat/n64/vid.c
-HOST_SRC := plat/host/heap_host.c plat/host/io_host.c plat/host/main.c plat/host/sys.c
+	engine/mem/carve.c engine/mem/heap.c engine/mem/pool.c \
+	engine/render/cam.c engine/render/dlight.c engine/render/world.c \
+	engine/world/style.c engine/world/world.c
+N64_SRC := plat/n64/cart.c plat/n64/fpu_shim.c plat/n64/gpu.c plat/n64/main.c plat/n64/sys.c \
+	plat/n64/vid.c
+HOST_SRC := plat/host/gpu.c plat/host/heap_host.c plat/host/io_host.c plat/host/main.c \
+	plat/host/sys.c
 
 # Directories built without -ffast-math on the cart (18.2): host and cart
-# must agree bit for bit on collision and physics.
-NOFASTMATH_DIRS := engine/coll engine/phys
+# must agree bit for bit on collision and physics, and on the world
+# draw list (frustum, point -> leaf) the cook predicts.
+NOFASTMATH_DIRS := engine/coll engine/phys engine/render engine/world
 
 HL64_WARN := -Wall -Wextra -Werror
 HL64_DEFS :=
@@ -51,7 +59,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -120,16 +128,29 @@ elf: ASFLAGS+=$(N64_ASFLAGS)
 elf: LDFLAGS+=$(N64_LDFLAGS)
 $(ELF): $(ROM_OBJS) | sdk-check
 
+# Player content as the ROM's DFS (HL64_CONTENT; the cook's restab-only
+# inputs maps/*.ent stay out), plus HL64_CMDS as dbg.cmd. The tree is
+# staged with hard links into BUILD_DIR and re-packed on every ROM build.
+DFS := $(if $(HL64_CONTENT),$(BUILD_DIR)/hl64.dfs)
+.PHONY: FORCE
+$(BUILD_DIR)/hl64.dfs: FORCE
+	@echo "    [DFS] $@"
+	@rm -rf $(BUILD_DIR)/dfs-root && mkdir -p $(BUILD_DIR)/dfs-root
+	cd '$(HL64_CONTENT)' && find . -type f ! -name '*.ent' | cpio -pdml --quiet '$(abspath $(BUILD_DIR))/dfs-root'
+	$(if $(HL64_CMDS),cp '$(HL64_CMDS)' $(BUILD_DIR)/dfs-root/dbg.cmd)
+	$(N64_MKDFS) $@.tmp $(BUILD_DIR)/dfs-root >/dev/null && mv $@.tmp $@
+
 # Explicit ROM rule (n64.mk's %.z64 writes into the working directory).
 $(ROM): N64_ROM_TITLE = "hl64"
-$(ROM): $(ELF)
+$(ROM): $(ELF) $(DFS)
 	@echo "    [Z64] $@"
 	$(N64_SYM) --all $< $<.sym
 	cp $< $<.stripped
 	$(N64_STRIP) -s $<.stripped
 	$(N64_ELFCOMPRESS) -o $(dir $<) -c $(N64_ROM_ELFCOMPRESS) $<.stripped
 	@rm -f $@
-	$(N64_TOOL) $(N64_TOOLFLAGS) --output $@.tmp --align 256 $<.stripped $<.sym $(N64_TOOLFILES)
+	$(N64_TOOL) $(N64_TOOLFLAGS) --output $@.tmp --align 256 $<.stripped $<.sym $(DFS) \
+		$(N64_TOOLFILES)
 	@mv $@.tmp $@
 
 rom: $(ROM)
@@ -144,7 +165,7 @@ HOST_CFLAGS := $(HOST_ARCH) -std=c99 -O2 $(HL64_WARN) -g -MMD \
 	-ffp-contract=off -msse2 -mfpmath=sse \
 	-D_POSIX_C_SOURCE=200809L -DHL64_HOST=1 -DHL64_TEST=1 \
 	$(filter -DHL64_PROFILE=1,$(HL64_DEFS)) -I. -Iinclude -Iplat/host
-HOST_LDFLAGS := $(HOST_ARCH) -Wl,--wrap=malloc,--wrap=free,--wrap=calloc,--wrap=realloc
+HOST_LDFLAGS := $(HOST_ARCH) -Wl,--wrap=malloc,--wrap=free,--wrap=calloc,--wrap=realloc -lm
 HOST_OBJS := $(addprefix $(BUILD_DIR)/host/,$(ENGINE_SRC:.c=.o) $(HOST_SRC:.c=.o))
 
 $(BUILD_DIR)/host/%.o: %.c
@@ -156,6 +177,15 @@ $(HOST_BIN): $(HOST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 
 host: $(HOST_BIN)
+
+# Host unit tests of the M1 modules (test/m1/unit.c): the host objects
+# without main.
+UNIT_BIN := $(BUILD_DIR)/host/hl64-unit
+UNIT_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m1/unit.o
+$(UNIT_BIN): $(UNIT_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+unit: $(UNIT_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 
