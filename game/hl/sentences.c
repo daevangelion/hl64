@@ -224,6 +224,7 @@ static int AcceptableSpeaker(gid_t16 gid, int t)
 
 	if (t >= 0 && mon_is_monster(t) && t != ENT_PLAYER)
 	{
+		Mon_SettleSpawn(t);
 		if (sf & SF_SENTENCE_FOLLOWERS)
 		{
 			leader = EHGet(MON(t)->m_hTargetEnt);

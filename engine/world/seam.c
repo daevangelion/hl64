@@ -721,13 +721,17 @@ static int neighbour(int si)
 
 			if (!N)
 				return 0;
-			live = S.hle_open[N->slot] ? rec_slot_live(N->slot) : 0;
+			/* N's layer is needed now: what Rec's distance release left
+			 * far away refused (quiescence) and goes with the closing
+			 * release (rec_map_close); entities within the release radius
+			 * of the player keep N open */
+			live = S.hle_open[N->slot] ? rec_slot_held(N->slot) : 0;
 			if (live)
 			{
 				char why[96];
 
 				/* retried every frame: Rec releases N's entities by distance */
-				snprintf(why, sizeof(why), "both layers in use: %s live=%d",
+				snprintf(why, sizeof(why), "both layers in use: %s held=%d",
 					wld_map_name(N->map), live);
 				open_fail(si, why, 0);
 				return 0;

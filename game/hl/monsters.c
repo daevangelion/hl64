@@ -1466,6 +1466,19 @@ void CBaseMonster_MonsterInitThink(int e)
 	Mon_StartMonster(e);
 }
 
+/* A monster record woken by a name search (a script's or a sentence's
+ * FindEntity, rec_next_named) spawns in that call, mid-game. GoldSrc spawned
+ * it at map load, so its MonsterInitThink (StartMonster, 0.1 s after Spawn)
+ * had run long before any script or sentence could pick it; run it now.
+ * Otherwise StartMonster's targetname branch (SetState IDLE, SCHED_WAIT_
+ * TRIGGER) runs after the possession and drops the script (hldemo1's dome
+ * barney, woken by domebarn_script_1, never ran to its mark). */
+void Mon_SettleSpawn(int e)
+{
+	if (e >= 0 && mon_is_monster(e) && ent_tm(e)->think == FN_CBaseMonster_MonsterInitThink)
+		CBaseMonster_MonsterInitThink(e);
+}
+
 void CBaseMonster_StartMonster(int e)
 {
 	CBaseMonster	*m = MON(e);

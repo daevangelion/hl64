@@ -569,6 +569,22 @@ static int spawner_done(gid_t16 g)
 	return !ent_tm(e)->think && !ent_tm(e)->use;
 }
 
+/* A record of the name is gone: killed, or its live entity is no longer
+ * there physically (SOLID_NOT). GoldSrc keeps entities that share a
+ * breakable's name but have no body (ambient_generic, env_sprite, a
+ * toggled-off trigger) in the map for good; a pending or dry record is
+ * not gone (the route never hydrates). */
+static int rec_gone(gid_t16 g)
+{
+	int e;
+
+	if (rec_state(g) == REC_KILLED)
+		return 1;
+	if ((e = rec_entity(g)) < 0)
+		return 0;
+	return !alive(e) || ent_cv(e)->solid == COL_SOLID_NOT;
+}
+
 static int wait_gone(void)
 {
 	int slot = map_slot(rt.tg.map), i, it = 0;
@@ -576,7 +592,7 @@ static int wait_gone(void)
 	if (slot < 0)
 		return 0;
 	for (i = 0; i < tg_named(); i++)
-		if (rec_state(GID_MAKE(slot, rt.tg.lump[i])) != REC_KILLED)
+		if (!rec_gone(GID_MAKE(slot, rt.tg.lump[i])))
 			return 0;
 	for (; i < rt.tg.count; i++)
 		if (!spawner_done(GID_MAKE(slot, rt.tg.lump[i])))
