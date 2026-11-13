@@ -96,4 +96,22 @@ grep -q '^mem rec: slot [1-9]' "$OUT/startmap.log" && fail "startmap: a second H
 if startroute startdefault ""; then fail "control: the route without startmap passed"; fi
 grep -q '^route FAIL 0 .*WAIT_MAP' "$OUT/startdefault.log" || fail "control: no WAIT_MAP failure"
 echo "startmap: hldemo2 New Game, $N records spawned, route PASS (control without it: WAIT_MAP FAIL)"
+# the playable boot (eng_play, host --play): no route, New Game at the
+# campaign start with the player spawned; control: the test build's
+# routeless boot keeps the free camera (no records, no player)
+START=$(python3 -c "import sys; from pathlib import Path; from tools.cook.hl_campaign import read_cwg; \
+print(read_cwg(Path(sys.argv[1]))['start'])" "$CONTENT/maps/campaign.cwg") \
+	|| fail "play: campaign start map"
+for p in play free; do
+	"$BUILD_DIR/host/hl64-host" --root "$CONTENT" $([[ $p == play ]] && echo --play) \
+		--frames 40 --cmd "@30 stats 7" >"$OUT/$p.log" 2>&1 || { tail -20 "$OUT/$p.log" >&2; fail "$p boot"; }
+done
+N=$(sed -n "s/^rec: new campaign $START: \([0-9]*\) spawned.*/\1/p" "$OUT/play.log")
+[[ -n "$N" && "$N" -gt 0 ]] || fail "play: no New Game on $START"
+grep -q "^stats 7 player: map=$START " "$OUT/play.log" || fail "play: no player on $START at frame 30"
+L=$(sed -n 's/^stats 7 ents: live=\([0-9]*\) .*/\1/p' "$OUT/play.log")
+[[ -n "$L" && "$L" -gt 0 ]] || fail "play: no live entities"
+grep -qE '^rec: new campaign|^stats 7 player:' "$OUT/free.log" && fail "control: routeless test boot played"
+grep -q '^stats 7 ents: live=0 ' "$OUT/free.log" || fail "control: routeless test boot has entities"
+echo "play: routeless --play boot New Game on $START, $N records spawned, player at frame 30, $L live (control: free camera, 0 live)"
 echo "REC PASS"

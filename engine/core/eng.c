@@ -54,6 +54,11 @@
 #include "engine/view/view.h"
 
 const char *eng_route_path = "route.rbc";
+#ifdef HL64_TEST
+int eng_play;
+#else
+int eng_play = 1;
+#endif
 
 static struct {
 	uint32_t	frame;		/* frames completed */
@@ -376,6 +381,25 @@ static int cmd_quit(const dbg_cmd_t *c)
 
 /* ---- boot, frame ----------------------------------------------------------- */
 
+/* New Game on map: the game's campaign state, the map's records, then the
+ * player at its first info_player_start (+1 u, as HLSDK spawns). */
+static void eng_new_game(int map)
+{
+	float org[3], ang[3];
+	int slot;
+
+	if (map < 0)
+		sys_error("new game: no start map");
+	game_new_campaign();
+	rec_new_campaign(map);
+	slot = wld_open(map)->slot;
+	if (!rec_player_start(slot, org, ang))
+		sys_error("%s: no info_player_start", wld_map_name(map));
+	org[2] += 1;
+	if (phy_player_spawn(map, org, ang))
+		sys_error("new game: player spawn on %s", wld_map_name(map));
+}
+
 void eng_boot(const char *platform)
 {
 #ifdef HL64_TEST
@@ -435,17 +459,17 @@ void eng_boot(const char *platform)
 			log_flush();
 			sys_exit(1);
 		}
-		/* a route plays from the campaign start (New Game): the start
-		 * map's records, then the player at its first info_player_start
-		 * (+1 u, as HLSDK spawns); test builds: a route's START map
-		 * instead (the free camera's start layer is closed) */
-		if (r > 0)
+		/* New Game (architecture 3.1 step 5): a route plays from the
+		 * campaign start (test builds: its START map instead); without a
+		 * route the playable build starts there too (test builds only
+		 * when asked, eng_play: their routeless boots fly the free
+		 * camera) */
+		if (r > 0 || eng_play)
 		{
-			int map = wld_start_map(), slot;
-			float org[3], ang[3];
+			int map = wld_start_map();
 
 #ifdef HL64_TEST
-			if (rt_start_map() >= 0 && rt_start_map() != map)
+			if (r > 0 && rt_start_map() >= 0 && rt_start_map() != map)
 			{
 				if (map >= 0)
 					wld_close(wld_open(map));
@@ -453,16 +477,7 @@ void eng_boot(const char *platform)
 				log_printf("route: start map %s\n", wld_map_name(map));
 			}
 #endif
-			if (map < 0)
-				sys_error("route: no start map");
-			game_new_campaign();
-			rec_new_campaign(map);
-			slot = wld_open(map)->slot;
-			if (!rec_player_start(slot, org, ang))
-				sys_error("%s: no info_player_start", wld_map_name(map));
-			org[2] += 1;
-			if (phy_player_spawn(map, org, ang))
-				sys_error("route: player spawn on %s", wld_map_name(map));
+			eng_new_game(map);
 		}
 	}
 
