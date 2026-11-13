@@ -117,7 +117,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -303,6 +303,14 @@ GAMETEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(GAMETEST_BIN): $(GAMETEST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 gametest: $(GAMETEST_BIN)
+
+# Monster sweep driver (test/m3/mon.c, run by test/m3/mon_sweep.py).
+MONTEST_BIN := $(BUILD_DIR)/host/hl64-mon
+MONTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/mon.o
+$(MONTEST_BIN): $(MONTEST_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+montest: $(MONTEST_BIN)
 
 # Physics driver (test/m3/phys.c, run by test/m3/phys.py: P1-P15, K4).
 PHYS_BIN := $(BUILD_DIR)/host/hl64-phys
