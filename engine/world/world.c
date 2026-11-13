@@ -1256,3 +1256,87 @@ const uint16_t *wld_leaf_sectors(const wld_layer_t *L, int leaf, int *count)
 	*count = list[0];
 	return list + 1;
 }
+
+/* ---- PVS rows (architecture.md 5.5; w64-format.md VISR) ---------------------- */
+
+/* One decoded row per layer slot; only the offset pair and the row's own
+ * compressed bytes are read (synchronously, counted as blocked I/O), the
+ * VISR chunk itself is never resident. */
+#define PVS_ROW_MAX	1024		/* BSP30: at most 8192 visleafs */
+typedef struct {
+	uint8_t		set;		/* map and visleafs valid */
+	uint8_t		all;		/* the cached leaf has no row */
+	uint16_t	map;
+	int32_t		leaf;		/* cached leaf, -1 none */
+	int32_t		visleafs;	/* 0: no vis */
+	uint8_t		row[PVS_ROW_MAX];
+} pvs_cache_t;
+static pvs_cache_t pvs[HL64_WORLD_LAYERS];
+/* PI destination: whole 16 B lines (architecture.md 4.3) */
+static uint8_t pvs_buf[PVS_ROW_MAX + 64] __attribute__((aligned(16)));
+
+/* Bytes [off, off + len) of L's VISR chunk. */
+static const uint8_t *visr_read(const wld_layer_t *L, uint32_t off, uint32_t len)
+{
+	const w64_chunk_t *ck = &L->chunks[L->dir->visr_chunk];
+	uint32_t a = ck->ofs + off, a0 = a & ~15u, n = (a - a0 + len + 15) & ~15u;
+
+	if (off > ck->size || len > ck->size - off || n > sizeof(pvs_buf))
+		bad(maps[L->map].name, a, "VISR row");
+	io_read_sync(pvs_buf, L->rom + a0, n);
+	return pvs_buf + (a - a0);
+}
+
+const uint8_t *wld_pvs_row(wld_layer_t *L, int leaf, int *visleafs)
+{
+	pvs_cache_t *c = &pvs[L->slot];
+	const uint8_t *src, *end;
+	uint32_t a, b, nbytes, o;
+
+	if (!c->set || c->map != L->map)
+	{
+		c->set = 1;
+		c->map = L->map;
+		c->leaf = -1;
+		c->visleafs = 0;
+		if (L->dir->visr_chunk != W64_NONE)
+		{
+			c->visleafs = (int32_t)(be32(visr_read(L, 0, 4)) / 4u) - 1;
+			if (c->visleafs < 0 || (uint32_t)(c->visleafs + 7) >> 3 > PVS_ROW_MAX)
+				bad(maps[L->map].name, L->chunks[L->dir->visr_chunk].ofs, "VISR visleafs");
+		}
+	}
+	*visleafs = c->visleafs;
+	if (!c->visleafs || leaf <= 0 || leaf > c->visleafs)
+		return NULL;
+	if (c->leaf == leaf)
+		return c->all ? NULL : c->row;
+	src = visr_read(L, 4u * (uint32_t)(leaf - 1), 8);
+	a = be32(src);
+	b = be32(src + 4);
+	c->leaf = leaf;
+	c->all = a == b;
+	if (c->all)
+		return NULL;
+	if (b < a)
+		bad(maps[L->map].name, L->chunks[L->dir->visr_chunk].ofs, "VISR row order");
+	nbytes = ((uint32_t)c->visleafs + 7u) >> 3;
+	src = visr_read(L, a, b - a);
+	end = src + (b - a);
+	/* a non-zero byte is 8 literal bits; zero + count = that many zeros */
+	for (o = 0; o < nbytes && src < end; src++)
+	{
+		if (*src)
+			c->row[o++] = *src;
+		else if (src + 1 < end)
+		{
+			uint32_t n = *++src;
+
+			while (n-- && o < nbytes)
+				c->row[o++] = 0;
+		}
+	}
+	while (o < nbytes)
+		c->row[o++] = 0;
+	return c->row;
+}

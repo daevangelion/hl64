@@ -59,7 +59,9 @@ void	fx_implosion(const float org[3], int radius, int count, int life);
 
 /* ---- decals (render-fx.md 4) -------------------------------------------- */
 
-/* Decal texture index of the cooked decal sheet (game/defs decal names). */
+/* decal = HLSDK decals.h index (dlls/world.cpp gDecals order); the
+ * effects map it by name onto the cooked decal sheet (gsfx/decals.i4);
+ * decals the sheet lacks are not placed. */
 void	fx_decal_trace(const col_trace_t *tr, int decal);
 void	fx_decal_at(int e, const float org[3], int decal);
 
@@ -75,6 +77,29 @@ void	fx_lightstyle(int style, uint16_t pattern);
 /* Cooked titles.txt entry id, or a game text (HUD draws it). */
 void	fx_text(uint16_t title);
 
+/* ---- effect assets ------------------------------------------------------------ */
+
+/* The game names the sounds and sprites the client effects use (its
+ * res.def ids) at game_init: per set up to FX_ASSET_MAX ids; sounds are
+ * picked at random, muzzle-flash sprites by flash type. Unregistered sets
+ * play / draw nothing. */
+enum {
+	FX_A_RICOCHET_SND,	/* TE_ARMOR_RICOCHET, TE_GUNSHOT, sparks */
+	FX_A_EXPLODE_SND,	/* TE_EXPLOSION unless NOSOUND */
+	FX_A_SHELL_SND,		/* TE_BOUNCE_SHELL */
+	FX_A_SHOTSHELL_SND,	/* TE_BOUNCE_SHOTSHELL */
+	FX_A_GLASS_SND,		/* break-model debris bounces per BREAK_* material */
+	FX_A_METAL_SND,
+	FX_A_FLESH_SND,
+	FX_A_WOOD_SND,
+	FX_A_CONCRETE_SND,
+	FX_A_RICOCHET_SPR,	/* sparks / ricochet sprite (sprites/richo1.spr) */
+	FX_A_MUZZLE_SPR,	/* muzzle flash sprites by type */
+	FX_A_SETS
+};
+#define FX_ASSET_MAX	6
+void	fx_assets(int set, const res_t *ids, int n);
+
 /* ---- engine side ------------------------------------------------------------- */
 
 void	fx_init(void);
@@ -88,6 +113,7 @@ uint16_t fx_text_current(float *alpha);
 typedef struct {
 	uint32_t	temps, temps_peak, particles_peak, beams_peak, decals, decal_drops;
 	uint32_t	trans_drawn, trans_dropped, us, us_max;
+	uint32_t	frames, dlights;	/* fx_frame calls, lights allocated */
 } fx_stats_t;
 void	fx_stats(fx_stats_t *s, int reset);
 

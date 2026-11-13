@@ -17,12 +17,15 @@
  * route all run on it. Integer microseconds remain only for engine-internal
  * timing (dt from the VI clock, I/O, pacing, profiling).
  */
+#include <math.h>
+
 #include "hl64/ent.h"
 #include "hl64/grid.h"
 #include "hl64/game.h"
 #include "hl64/limits.h"
 #include "hl64/rec.h"
 #include "hl64/settings.h"
+#include "hl64/snd.h"
 #include "engine/core/dbg.h"
 #include "engine/core/eng.h"
 #include "engine/core/log.h"
@@ -35,11 +38,15 @@
 #include "engine/render/gpu.h"
 #include "engine/render/gpu_studio.h"
 #include "hl64/studio.h"
+#include "hl64/fx.h"
+#include "engine/render/gpu_fx.h"
+#include "engine/render/trans.h"
 #include "engine/render/ren.h"
 #include "engine/world/wld.h"
 #include "engine/in/in.h"
 #include "engine/phys/phys.h"
 #include "engine/phys/player.h"
+#include "engine/phys/motion.h"
 #include "engine/test/route.h"
 #include "engine/view/view.h"
 
@@ -160,6 +167,25 @@ static void log_draw(const char *what, uint32_t label)
 			"mats=%lu hash=%08lx\n", what, (unsigned long)label, (unsigned long)sg.ents,
 			(unsigned long)sg.runs, (unsigned long)sg.meshlets, (unsigned long)sg.verts,
 			(unsigned long)sg.tris, (unsigned long)sg.mats, (unsigned long)sg.hash);
+	}
+	{
+		gpu_fx_stats_t gf;
+		fx_draw_stats_t fd;
+		int m;
+		unsigned long calls = 0;
+
+		gpu_fx_stats(&gf);
+		fx_draw_stats(&fd);
+		for (m = 0; m < GPU_FX_MODES; m++)
+			calls += gf.calls[m];
+		log_printf("%s %lu fx: items=%lu cutouts=%lu dropped=%lu sprites=%lu studio=%lu "
+			"brushes=%lu temps=%lu beams=%lu occluded=%lu calls=%lu tris=%lu points=%lu "
+			"tex=%lu hash=%08lx\n", what, (unsigned long)label, (unsigned long)fd.items,
+			(unsigned long)fd.cutouts, (unsigned long)fd.dropped, (unsigned long)fd.sprites,
+			(unsigned long)fd.studio, (unsigned long)fd.brushes, (unsigned long)fd.temps,
+			(unsigned long)fd.beams, (unsigned long)fd.glow_occluded, calls,
+			(unsigned long)gf.tris, (unsigned long)gf.points, (unsigned long)gf.texloads,
+			(unsigned long)gf.hash);
 	}
 }
 
@@ -308,6 +334,7 @@ void eng_boot(const char *platform)
 	ent_init();
 	eng.world = (uint8_t)wld_init();
 	res_init();
+	snd_init();
 	rec_init();
 	col_init();
 	if (eng.world)
@@ -316,6 +343,7 @@ void eng_boot(const char *platform)
 		studio_init();
 		ren_cam_init();
 	}
+	fx_init();
 	in_init();
 	phy_player_init();
 	if (eng.world)
@@ -418,7 +446,47 @@ static void rollup(void)
 			(unsigned long)s.stepped / n, (unsigned long)s.thinks / n,
 			(unsigned long)s.movers_max, (unsigned long)s.heap_max);
 	}
+	{
+		phy_motion_prof_t m;
+		unsigned long n;
+
+		phy_motion_prof(&m, 1);
+		n = m.frames ? m.frames : 1;
+		log_printf("prof phys_us avg=%lu max=%lu toss=%lu step=%lu push=%lu pushstep=%lu "
+			"toss_us=%lu step_us=%lu push_us=%lu pushstep_us=%lu traces=%lu\n",
+			(unsigned long)m.us / n, (unsigned long)m.us_max,
+			(unsigned long)m.steps[PHY_K_TOSS] / n, (unsigned long)m.steps[PHY_K_STEP] / n,
+			(unsigned long)m.steps[PHY_K_PUSH] / n,
+			(unsigned long)m.steps[PHY_K_PUSHSTEP] / n,
+			(unsigned long)m.kind_us[PHY_K_TOSS] / n, (unsigned long)m.kind_us[PHY_K_STEP] / n,
+			(unsigned long)m.kind_us[PHY_K_PUSH] / n,
+			(unsigned long)m.kind_us[PHY_K_PUSHSTEP] / n, (unsigned long)m.traces / n);
+	}
 	rec_prof_line();
+	{
+		fx_stats_t f;
+		unsigned long n;
+
+		fx_stats(&f, 1);
+		n = f.frames ? f.frames : 1;
+		log_printf("prof fx_us avg=%lu max=%lu trans=%lu temps_peak=%lu parts_peak=%lu "
+			"beams_peak=%lu decals=%lu drops=%lu dlights=%lu\n", (unsigned long)f.us / n,
+			(unsigned long)f.us_max, (unsigned long)f.trans_drawn / n,
+			(unsigned long)f.temps_peak, (unsigned long)f.particles_peak,
+			(unsigned long)f.beams_peak, (unsigned long)f.decals,
+			(unsigned long)(f.decal_drops + f.trans_dropped), (unsigned long)f.dlights);
+	}
+	{
+		snd_stats_t s;
+
+		snd_stats(&s, 1);
+		log_printf("prof snd_us avg=%lu max=%lu voices_peak=%lu loops_peak=%lu waves_peak=%lu "
+			"started=%lu stolen=%lu dropped=%lu mem=%lu mem_peak=%lu region=%lu\n",
+			(unsigned long)s.us, (unsigned long)s.us_max, (unsigned long)s.voices_peak,
+			(unsigned long)s.loops_peak, (unsigned long)s.waves_peak,
+			(unsigned long)s.started, (unsigned long)s.stolen, (unsigned long)s.dropped,
+			(unsigned long)s.mem, (unsigned long)s.mem_peak, (unsigned long)s.mem_region);
+	}
 #ifdef HL64_PROFILE
 	sys_prof_dump(eng.rollup_frames);
 #endif
@@ -484,7 +552,23 @@ void eng_frame(void)
 			rec_frame(NULL, 0);
 		wld_style_tick(eng.time);
 		ren_dlight_frame(eng.time, (double)dt * 1e-6);
+		ren_dlight_sources(eng.time);
 		studio_frame();
+	}
+	/* effects on the game clock: temp entities, particles, beams, decal
+	 * placements, persistent render fades, shake */
+	fx_frame(eng.time, gdt);
+	/* 10 sound: listener = the view (global eye, right vector) of the last
+	 * drawn frame */
+	{
+		float yaw = ren_cam.ang[1] * (3.14159265f / 180.0f);
+		float pitch = ren_cam.ang[0] * (3.14159265f / 180.0f);
+		float roll = ren_cam.ang[2] * (3.14159265f / 180.0f);
+		float sy = sinf(yaw), cy = cosf(yaw), sp = sinf(pitch), cp = cosf(pitch);
+		float sr = sinf(roll), cr = cosf(roll);
+		float right[3] = { -sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp };
+
+		snd_frame(ren_cam.org, right, (double)dt * 1e-6);
 	}
 
 	/* 11-12 render into a free framebuffer; submit for paced present */

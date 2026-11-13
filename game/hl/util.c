@@ -1287,6 +1287,11 @@ void GlobalReset(void)
 	memset(global_state, 0, sizeof global_state);
 }
 
+int game_global_state(int id)
+{
+	return GlobalState(id);
+}
+
 /* ---- effects helpers (util.cpp) ------------------------------------------------ */
 
 int UTIL_ShouldShowBlood(int color)

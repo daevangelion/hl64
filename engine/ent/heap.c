@@ -209,12 +209,13 @@ static int any3(const float v[3])
 /* A ground entity that keeps a resting entity busy: a conveyor sets its
  * base velocity every frame, a box resting on a monster or a client lands
  * again every frame [probe:measured P-toss], and a freed ground leaves it
- * to fall (until its step clears groundentity). */
+ * to fall (until its step clears groundentity). The world (slot 0) is
+ * still ground whether or not its slot is allocated. */
 static int busy_ground(int e)
 {
 	int g = ent_c.phys[e].groundentity;
 
-	if (g == ENT_NONE)
+	if (g == ENT_NONE || g == ENT_WORLD)
 		return 0;
 	return !ent_is_live(g) || (ent_c.cv[g].flags & (FL_CONVEYOR | FL_MONSTER | FL_CLIENT));
 }
