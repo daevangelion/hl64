@@ -23,6 +23,10 @@ void		phy_player_init(void);
 int		phy_player_spawn(int map, const float org[3], const float ang[3]);
 /* At the map's info_player_start (+1 u, as HLSDK spawns), or -1. */
 int		phy_player_spawn_start(int map);
+/* Test builds' debug teleport (route-bytecode.md SETPOS): phy_player_spawn,
+ * then lifted (<= 64 u, 1 u steps) to the first z where the box of the
+ * player's hull is free. Returns 0, or -1 for a bad map. */
+int		phy_player_setpos(int map, const float org[3], const float ang[3]);
 int		phy_player_active(void);
 /* The home map (CWG index) the player is in, WLD_NO_MAP before spawn. */
 int		phy_player_map(void);
