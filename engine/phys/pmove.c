@@ -526,7 +526,7 @@ static int cmd_look(const dbg_cmd_t *c);
 int phy_player_spawn(int map, const float org[3], const float ang[3])
 {
 	const wld_layer_t *L;
-	int k;
+	int k, created = 0;
 
 	if (map < 0 || map >= wld_map_count() || !(L = wld_open(map)))
 		return -1;
@@ -549,6 +549,7 @@ int phy_player_spawn(int map, const float org[3], const float ang[3])
 		memcpy(P.pl.mins, phy_pm_mins[0], sizeof(P.pl.mins));
 		memcpy(P.pl.maxs, phy_pm_maxs[0], sizeof(P.pl.maxs));
 		P.active = 1;
+		created = 1;
 		dbg_handler_set(DBG_SETPOS, cmd_setpos);
 		dbg_handler_set(DBG_LOOK, cmd_look);
 	}
@@ -571,6 +572,15 @@ int phy_player_spawn(int map, const float org[3], const float ang[3])
 	ent_link(P.e);
 	log_printf("player: %s %.9g %.9g %.9g ang %.9g %.9g\n", wld_map_name(map),
 		(double)org[0], (double)org[1], (double)org[2], (double)ang[0], (double)ang[1]);
+	/* the game's CBasePlayer::Spawn, once, in the player's home frame */
+	if (created)
+	{
+		int layer = eng_frame_layer();
+
+		eng_set_frame_layer(L->slot);
+		game_player_spawn(ENT_PLAYER);
+		eng_set_frame_layer(layer);
+	}
 	return 0;
 }
 
@@ -623,8 +633,10 @@ void phy_player_frame(const in_cmd_t *cmd, double time)
 		col_want(mins, maxs);
 	}
 
-	/* step 2: the player's think before the move (game), then its think
-	 * if due (think-and-time.md 2) */
+	/* step 2: the command's game side (buttons, impulse), the player's
+	 * think before the move (game), then its think if due
+	 * (think-and-time.md 2) */
+	game_player_command(cmd);
 	game_player_prethink(pl);
 	phy_run_think(ENT_PLAYER, time, eng_frametime());
 
@@ -663,6 +675,8 @@ void phy_player_frame(const in_cmd_t *cmd, double time)
 		if (other && ent_get(ENT_PLAYER) == P.e)
 			phy_impact(P.e, other);
 	}
+	/* HLSDK PlayerPostThink: weapons, use, impulses, fall damage */
+	game_player_postthink(pl);
 	eng_set_frame_layer(layer);
 
 	us = (uint32_t)(sys_time_us() - t0);
