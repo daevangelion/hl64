@@ -49,8 +49,10 @@ typedef struct io_req_s
 	uint8_t			prio;
 	volatile uint8_t	state;
 	/* queued ahead of its class's other requests (after earlier front
-	 * ones): collision chunks, whose absence blocks a trace, before
-	 * render data, whose absence is pop-in */
+	 * ones): PVS rows, whose absence makes the game's PVS test read
+	 * synchronously. Not COLL chunks: after a teleport their burst kept
+	 * the visible set's render chunks queued past the teleport window
+	 * (test/m4/stream_open.route: popin 3, 0 without) */
 	uint8_t			front;
 	void			(*cb)(struct io_req_s *r);	/* on completion, from io_pump */
 	int			user;

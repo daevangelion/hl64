@@ -863,8 +863,6 @@ static int request(wld_layer_t *L, int c, int cls)
 	r->dst = ch->data;
 	r->len = size;
 	r->prio = (uint8_t)cls_prio(cls);
-	/* a missing COLL chunk blocks a trace, missing render data pops in */
-	r->front = ck->fourcc == W64_CHUNK_COLL;
 	r->cb = req_done;
 	r->user = (int)L->slot << 16 | c;
 	io_submit(r);
