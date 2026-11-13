@@ -863,7 +863,7 @@ void rt_frame(double time)
 
 			if (!home)
 				fail("home map differs");
-			if (phy_player_spawn((int)b, org, ang))
+			if (phy_player_setpos((int)b, org, ang))
 				fail("setpos refused");
 			/* a test-only teleport: the destination's records hydrate
 			 * in the next frames; their blocked frames count apart
