@@ -90,39 +90,59 @@ candidate list taken before the first call, skipping entities freed since.
 ### 3.1 Touch order
 
 GoldSrc touches overlapping triggers in its own (area-node) order, not in
-entity index order. Two cases:
+entity index order. Measured on A-order (Oracle2, hl64 `d2bf3d8`, 10 maps;
+526 map-trigger pairs, all consistent between placements, no cycle;
+analysis script `/scratch/quakegeneric/tmp/EngineSpec/acell4.py`):
 
+- **Cell model** (fitted to the capture, prose only): halve the world
+  model's box four times, each time along the longer horizontal axis at
+  its midpoint (31 cells, a binary tree); a trigger belongs to the
+  deepest cell whose box contains its linked box (it stays at the first
+  split plane it straddles). A trigger in an **ancestor cell** touches
+  before one in a descendant cell: **666 of 666** co-touched placements in
+  ancestor/descendant cells **[probe:measured A-order]**. Within one cell,
+  brush triggers touch in ascending entity index (**411 of 411**
+  placements); pairs involving point triggers (items, SOLID_TRIGGER
+  weapons) follow ascending index in 2 212 of 2 405 placements; the 193
+  exceptions all involve items, which relink after
+  spawn when they settle **[probe:measured A-order]**. 33 placements
+  co-touched triggers in disjoint cells (order there is the tree walk:
+  the cell nearer the mover's box first) **[probe]**.
+- **Map triggers**: the `touchrank` cook step computes `trank` (HLE1 field,
+  `docs/formats/hle-format-v1.md`) **from geometry with the cell model**:
+  cells in pre-order, then entity index. It needs no capture, so it works
+  on any player-supplied map; the A-order captures are its regression test
+  (A9), and a mismatch on a probed map fails the cook check. Where point
+  triggers end up after settling is part of the open item below.
 - **Triggers created at run time** touch in **creation order** (the order
   they were allocated), not index order: a trigger of index 179 created
-  earlier touches before one of index 7 created later (the "index 180
-  before index 10" case of the first capture) **[probe:measured A-touch,
-  A-order]** (all 10 maps). Mechanism: every entity gets a creation
-  serial at allocation; runtime triggers sort by it.
-- **Map triggers** touch in the cooked **touch rank**: the cook lists, per
-  map, every pair of triggers whose linked boxes are within 64 u of each
-  other (a mover box can overlap both); the probe places a mover
-  overlapping both and records which is touched first (capture
-  **A-order**). The `touchrank` cook step (after `hlecook`) turns the
-  pairwise orders into a per-map rank stored in the HLE1 record field
-  `trank` (the former always-0xFFFF `twin`, `docs/formats/hle-format-v1.md`):
-  a topological order of the pair graph, ties by lump; a cycle is a cook
-  failure (the spec then needs revisiting).
-- At run time trigger candidates sort by map-trigger rank, then runtime
-  triggers after every map trigger in creation order. Whether GoldSrc
-  interleaves runtime triggers with map triggers differently is not yet
-  measured **[probe]**; Uplink and Hazard create no triggers at run time.
-- Known limit: in GoldSrc a trigger that is relinked (moved, re-enabled)
-  can change its position in its area-node list; hl64's rank is static.
-  Uplink and Hazard triggers do not move; the A-order capture also records
-  re-enabled triggers (`trigger_multiple` toggled by `use`) so the limit is
-  measured, not assumed.
+  earlier touches before one of index 7 created later
+  **[probe:measured A-touch, A-order]** (all 10 maps). Whether they
+  interleave with map triggers by cell is not yet measured **[probe]**;
+  Uplink and Hazard create none.
+- **Re-enabled / relinked triggers reorder**: a trigger that is unlinked
+  and linked again changes its place within its cell; after the probe's
+  sequential re-enables, the most recently re-enabled trigger touched
+  **first** among same-cell partners in 392 of 421 placements, and order across
+  cells never changed (88 of 88) **[probe:measured A-order]**. hl64 rule:
+  the touch key is (cell, link sequence); spawn assigns ascending
+  sequences by index; re-enabling a trigger (SOLID_NOT → SOLID_TRIGGER)
+  gives it a sequence ahead of every trigger currently in its cell. The
+  29 re-enable pairs this rule misses and the 193 settled-item pairs are
+  tracked by A9 until the rule is refined **[probe]**. Which HLSDK classes can be re-enabled:
+  `trigger_multiple` has **no** toggle Use; ToggleUse exists on
+  `trigger_hurt` (only with a targetname), `trigger_push` and
+  `trigger_monsterjump` (HLSDK).
 
-**Force retouch**: for the next N frames every live entity in the active
-set and every entity resting inside a trigger box is relinked with touch
-(HLSDK sets `gpGlobals->force_retouch` when triggers are enabled).
-Mechanism: the engine keeps, per trigger, nothing extra; it relinks the
-entities whose boxes overlap any trigger (grid query per trigger), which is
-what is observable.
+**Force retouch**: HLSDK sets `gpGlobals->force_retouch` when triggers are
+enabled; it lasts **one frame** **[probe:measured A-order]**
+(`force_retouch_frames` 1). On that frame every live entity in the active
+set and every entity resting inside a trigger box is relinked with touch,
+and the touches of that frame come in a different order from an ordinary
+link (the relinked triggers' new sequences above) **[probe:measured
+A-order]**. Mechanism: the engine keeps, per trigger, nothing extra; it
+relinks the entities whose boxes overlap any trigger (grid query per
+trigger), which is what is observable.
 
 **Pending-record wake**: before the touch pass, pending map records whose
 cooked bounds meet the mover's box are hydrated (architecture.md 6.4) so a
@@ -151,4 +171,4 @@ checks A's liveness before continuing.
 | A6 | touch that frees the trigger / another trigger / the toucher: no crash, no touch of freed entities | synthetic |
 | A7 | impact touch: A.touch(B) then B.touch(A); no B.touch(A) when A removed itself in A.touch(B); a SOLID_NOT mover passes through box entities with no impact and no touch | **[probe:measured A-touch]** |
 | A8 | pending record hydrated and touched in the same frame | synthetic |
-| A9 | touch order: runtime-created triggers in creation order (index 179 created before index 7 touches first); map trigger pairs within 64 u in cooked-rank order | **[probe:measured A-touch, A-order]** (creation order, all 10 maps); A-order pairs → `trank` |
+| A9 | touch order: runtime-created triggers in creation order (index 179 created before index 7 touches first); map triggers in geometry-computed `trank` order (ancestor cell first 666/666, same-cell brush triggers by index 411/411; 526 pairs consistent, no cycle); re-enabled trigger first in its cell (392/421); force retouch lasts one frame | **[probe:measured A-touch, A-order]** (all 10 maps); every A-order placement is a regression case for `touchrank` |

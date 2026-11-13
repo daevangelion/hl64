@@ -95,7 +95,7 @@ Captures owed before the milestone that needs them:
 | capture | oracle | for |
 |---|---|---|
 | T-points, T-segments, T-entities, T-rotated, T-hitbox, T-allsolid | probe | trace-and-hulls.md (M2) |
-| A-touch, A-shape, A-order (taken: creation order of runtime triggers; map-trigger pairs feed the `touchrank` cook step) | probe | area-links-and-touch.md (M2) |
+| A-touch, A-shape, A-order (taken: creation order of runtime triggers; map-trigger placements validate the geometry-computed `touchrank` cell model) | probe | area-links-and-touch.md (M2) |
 | P-toss, P-bounce, P-step, P-push, P-rotate, P-pushable, P-walkmove (taken) | probe | physics-movetypes.md (M3) |
 | K-think, K-pusher, K-alloc, K-settle (taken); W-water: `func_water` contents (taken); L-illum (taken: no server-side light observable, below) | probe | think-and-time.md, trace-and-hulls.md, lightstyles.md (M3) |
 | PM-bot runs (walk, run, jump, duck, ladder, water, stairs) | probe | pmove-host.md (M2) |

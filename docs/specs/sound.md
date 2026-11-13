@@ -1,5 +1,10 @@
 # Sound: channels, attenuation, stereo, sentences
 
+**Oracle status: awaiting a retail-client capture plan.** Mixing,
+attenuation and channel stealing happen in the client; the HLDS probe
+sees only the emit calls. Every `[probe]` property about what is heard is
+to be measured on the retail client (README "Oracles").
+
 Behaviour: what plays, where, how loud and on which ear, as in Half-Life.
 Mechanism: 16 libdragon mixer voices over cart-streamed wav64, sounds and
 sentences as cooked ids (architecture.md 10). Conventions:

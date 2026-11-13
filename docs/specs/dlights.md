@@ -1,5 +1,10 @@
 # Dynamic lights
 
+**Oracle status: awaiting a retail-client capture plan.** Dynamic lights
+exist only in the client; the HLDS probe cannot observe them
+(`GetEntityIllum` = 128 everywhere, capture L-illum). Every `[probe]`
+property here is to be measured on the retail client (README "Oracles").
+
 Conventions: [README.md](README.md). Lighting model: the world is
 vertex-lit from the cook (lightstyles.md); dynamic lights add to it at
 draw time only.

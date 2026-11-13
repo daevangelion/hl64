@@ -1,5 +1,11 @@
 # Lightstyles
 
+**Oracle status: awaiting a retail-client capture plan.** The HLDS probe
+cannot observe lighting: `GetEntityIllum` returns 128 everywhere on a
+dedicated server (capture L-illum, Oracle2, hl64 `d2bf3d8`, 10 maps), and
+style values are only applied by the client. Every `[probe]` property here
+is to be measured on the retail client (README "Oracles").
+
 Behaviour: animated and switchable lights look and time as in Half-Life.
 Mechanism: patterns cooked to value arrays with ids; the world recolours
 only styled meshlets, only when a value changes. Conventions:

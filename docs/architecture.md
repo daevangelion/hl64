@@ -137,7 +137,7 @@ ids), which the cook reads too.
 
 | step | module | work |
 |---|---|---|
-| 1 | plat | VI counter → `dt_us` = elapsed vblanks × VI period, clamped to [1/60, 0.1] s (D6 iii); `host_fixed_dt` in test builds |
+| 1 | plat | VI counter → `dt` (f64 s) = elapsed vblanks × VI period, clamped to [1/60, 0.1] s (D6 iii); `host_fixed_dt` in test builds |
 | 2 | in | pad → `usercmd` |
 | 3 | io | pump (also between steps 6/7, 9/10 and after the world draw) |
 | 4 | game | `game_start_frame`; logic timers due by `now + dt` (think-and-time.md 4) |
@@ -189,7 +189,7 @@ pointers, so `-m32` and LP64 sizes are identical.
 | layer directories (2 open) | 168 | 2 × 38–84 | measured |
 | studio pool | 1536 → 1024 with D3(b) | 1536 | old route fits; D3(b) per-sequence animation chunks: ≈ 60 KB per NPC model instead of 93–142 KB (SA2 §3.6) [EST] |
 | studio skinned-mesh tables, view model scratch | 192 | 256 heap reserve | [EST] 4–10 KB per drawn NPC (old `sk_build`) |
-| entity components | 113 | edicts 495 × 884 = 427 + client `entity_t` copies, baselines | 6.2: 228 B × 495 |
+| entity components | 113 | edicts 495 × 884 = 427 + client `entity_t` copies, baselines | 6.2: 220 B × 495 ≈ 109 KB |
 | game private data | 160 | (inside the 884 B edicts) | [EST] ~60 monsters × ≤ 1 KB + movers + items, slab size classes |
 | HLE1 blobs (4 slots) | 160 | 72 KB text + 13–19 KB keys per map before HLE1 | [EST] 40 KB per map; names/classes are ids, keys typed |
 | dehydrate store | 64 | similar | 64 runtime pickups + per-map deltas |
@@ -361,15 +361,21 @@ Slot index u16, cap 495 (ceil(1.25 × measured host peak 396)). A handle
 | `mot` | velocity, avelocity, basevelocity f32[3] | 36 | physics |
 | `box` | mins, maxs, absmin, absmax f32[3] | 48 | traces, grid, touches |
 | `phys` | movetype u8, solid u8, waterlevel s8, watertype s8, flags u32, groundentity / owner / aiment u16, gravity f32 (0 = 1), friction f32 (the grid node is a separate 16 B array, 8) | 32 | physics, traces |
-| `tm` | nextthink u64 µs (0 = none), ltime u64 µs (pushers), think / touch / use / blocked u16 function ids | 24 | think heap, pushers, dispatch |
-| `rnd` | modelindex `res_t` u16, sequence u16, frame f32, animtime u64 µs, framerate f32, scale u16 (8.8), skin s16, body u8, effects u16, controller u8[4], blending u8[2], rendermode, renderfx, renderamt u8, rendercolor u8[3], sectors u16[4] | 48 | render, studio |
+| `tm` | nextthink f32 s (0 = none), ltime f32 s (pushers), think / touch / use / blocked u16 function ids | 16 | think heap, pushers, dispatch |
+| `rnd` | modelindex `res_t` u16, sequence u16, frame f32, animtime f32 s, framerate f32, scale u16 (8.8), skin s16, body u8, effects u16, controller u8[4], blending u8[2], rendermode, renderfx, renderamt u8, rendercolor u8[3], sectors u16[4] | 48 | render, studio |
 | `id` | serial u16, state u8, layer s8, class u16 (from `classes.def`), private handle u16, record gid u16, runtime id u16, targetname `name_t` u16 | 16 | names, hydration, save |
-| **total** | | **228 × 495 ≈ 113 KB** | |
+| **total** | | **220 × 495 ≈ 109 KB** | |
 
-- **Integer time**: all times are u64 microseconds of game clock; the game's
-  HLSDK-style float `time` is derived (`now_us · 1e−6`) and its delays are
-  converted once (`ent_think_in(e, 0.1f)` → +100000 µs). Think ordering and
-  due tests are integer compares.
+- **Game clock in GoldSrc's formats**: `time` is f64 seconds advanced by
+  `dt` (f64), starting at 1.0; `nextthink`, `ltime` and `animtime` are the
+  f32 values the game writes; a think is due when `(f64) nextthink ≤ time +
+  dt` in double. The probe showed the frame a think runs on depends on that
+  float rounding (specs/think-and-time.md 1–2), so integer µs would change
+  results; µs integers remain for engine-internal timing only (I/O,
+  pacing, residency, profiling).
+- **SOLID_BSP requires MOVETYPE_PUSH**: setting any other pair is
+  `sys_error` naming the class, as GoldSrc stops with a fatal error
+  (specs/physics-movetypes.md 2).
 - **Ids instead of strings**: targetnames are cooked `name_t` (per-map name
   index from HLE1; global form = slot << 12 | index); classnames are
   `classes.def` ids; models and sounds are `res_t` (6.5). There is no string
@@ -389,8 +395,9 @@ Slot index u16, cap 495 (ceil(1.25 × measured host peak 396)). A handle
 
 ### 6.3 Active sets and the think heap
 
-- **Think heap**: 4-ary min-heap of (nextthink µs, index), ≤ 512 entries.
-  Setting `nextthink` updates the entity's heap entry.
+- **Think heap**: 4-ary min-heap of (nextthink f32 bit pattern, index),
+  ≤ 512 entries; due test in double as above. Setting `nextthink` updates
+  the entity's heap entry.
 - **Movers set** (bitset, 512 bits): an entity enters when its movetype
   needs a step — velocity or avelocity non-zero, or a falling type not on
   ground, or a pusher with motion, or FOLLOW — and leaves when it comes to
@@ -472,7 +479,7 @@ A slim, statically linked C API in our own names covering the HLSDK
 | light | lightstyle(style, pattern id) | pfnLightStyle |
 | effects | direct calls: sparks, ricochet, blood stream/sprite, bullet decal, decal trace, explosion, smoke, beams, tracer, break model, gibs, dlight, elight, muzzle flash, shake, fade, text message (cooked titles ids) | `TE_*` / user messages |
 | HUD/2D | ui8 sub-rect with colour/mode, fill, glyphs, screen size | client SPR_*, FillRGBA |
-| time, rng | `now_us`, `dt_us`, float `time`; random long/float (one stream, seeded at New Game) | gpGlobals->time, pfnRandomLong |
+| time, rng | `time` (f64 s), `dt` (f64 s), float `time`; random long/float (one stream, seeded at New Game) | gpGlobals->time, pfnRandomLong |
 | settings | typed `settings.h` record (skill, movevars, volume…) | cvars |
 | records | typed record keys, record origin/angles/bounds, fire name in slot, fire later, use-targets, master state, timers, map slot of entity, dehydrate/rehydrate | (replaces keyvalue parsing and level transitions) |
 | campaign | home map, map slot ids, global offsets | — |
@@ -714,7 +721,7 @@ retarget.
 | player movement | `source/sv_user.c` | FORBIDDEN | replace | HLSDK pm_shared (D2) |
 | entity components, handles, heap | `source/pr_edict.c`, `progs.h` | FORBIDDEN | rewrite | 6 |
 | resources | `source/sv_main.c` precache, `snd_n64.c` name table | FORBIDDEN / CLEAN+QI | rewrite | cooked table (6.5), precache-and-resources.md |
-| HLE records, hydration, wakes, timers | `source/hl/hl_ents.c/.h`, `hl_entcook.h` | CLEAN+QI (2486–2524 HLSDK) | retarget | heavier: names/keys become ids, timers in µs; 2486–2524 → `game/` |
+| HLE records, hydration, wakes, timers | `source/hl/hl_ents.c/.h`, `hl_entcook.h` | CLEAN+QI (2486–2524 HLSDK) | retarget | heavier: names/keys become ids, timers keep HLSDK f32 nextthink (specs/think-and-time.md 5); 2486–2524 → `game/` |
 | level state | `source/hl/hl_levelstate.c/.h` | CLEAN+QI | retarget | |
 | node graph | `source/hl/hl_nodecook.h` | CLEAN+QI except 280–578 | split | tracing on the hl64 API |
 | mixer, voices | `n64/port/snd_n64.c` | CLEAN+QI | retarget | spatialisation and channel rules per sound.md (GoldSrc), names → `res_t` |
@@ -761,7 +768,7 @@ retarget.
 | `tools/w64c/hlecook.c` + `hl_entcook.h` | CLEAN | import; extended to cook names/classes/resources to ids |
 | `tools/studio_bake` | CLEAN, links `studio_geom.c` | retarget onto `game/studio`; D3(b) adds per-sequence animation chunks |
 | `hl_campaign.py`, `ui_bake`, `hlhud_bake`, `world_tex_bake`, `hl_stage_content.py`, `hl_sprite_cook.py`, `hl_gsfx.py`, sound scripts | CLEAN | import (staging retargeted to the hl64 layout) |
-| new tools | — | `restab` (campaign resource table + pattern table), `sentc` (sentences), `routec` (routes), `touchrank` (HLE1 `trank` from the GoldSrc probe's A-order pairs, after `hlecook`), all MIT |
+| new tools | — | `restab` (campaign resource table + pattern table), `sentc` (sentences), `routec` (routes), `touchrank` (HLE1 `trank` computed from trigger geometry with the measured cell model, after `hlecook`; the GoldSrc A-order captures are its regression test), all MIT |
 | `q64mapc`, `q64zone`, `hl_world/*` | — | drop |
 | `w64-format.md`, `cwg-format.md`, `hle-format-v1.md` | CLEAN | import into `docs/formats/` with the audit's scrub; add `rtb-format.md`, `route-bytecode.md` in M0 |
 | `stream-arch-v2.md` | CLEAN | cite as history |
@@ -811,8 +818,9 @@ rev must equal the SDK's `libdragon_rev`), toolchain
   active set; no per-frame walk over all entities; ids (u16) instead of
   pointers in anything stored, saved or cooked.
 - Integer where it saves cycles or bytes without changing GoldSrc-visible
-  results: time (u64 µs), ids, colours, light values, quantised render
-  data (s16 verts, 8.8 scale). Floats for positions, velocities, angles and
+  results: ids, colours, light values, quantised render data (s16 verts,
+  8.8 scale); the game clock keeps GoldSrc's f64 time / f32 nextthink.
+  Floats for positions, velocities, angles and
   collision results, IEEE double for non-axial plane distances and split
   fractions in hull walks (8); no `-ffast-math` in `coll/`, `phys/`; host
   builds with `-ffp-contract=off` and SSE2 so host and cart agree bit for
@@ -846,7 +854,7 @@ campaign graph's chapter boundaries; sizing is redone with the retail data.
 
 | # | decision | options | recommendation |
 |---|---|---|---|
-| D1 | Entity representation (M0) | (a) typed components in parallel arrays (228 B per slot), active sets, think heap, ids, HLSDK field names via accessors (6); (b) HLSDK `edict_t` + `entvars_t` verbatim (≈ 800 B per slot, scanned per frame) | (a): ≈ 314 KB less than the old edicts at the 495 cap, O(active) frame loops, exact host/cart sizes, saves by block copy |
+| D1 | Entity representation (M0) | (a) typed components in parallel arrays (220 B per slot), active sets, think heap, ids, HLSDK field names via accessors (6); (b) HLSDK `edict_t` + `entvars_t` verbatim (≈ 800 B per slot, scanned per frame) | (a): ≈ 329 KB less than the old edicts at the 495 cap, O(active) frame loops, exact host/cart sizes, saves by block copy |
 | D2 | Player movement (M2) | (a) HLSDK `pm_shared` in `game/pm/` (HLSDK licence), caps 64 physents / 8 ladders / 32 touches; (b) a new clean engine movement from a GoldSrc behaviour spec | (a): it is GoldSrc's movement, allowed by PROVENANCE; probe bots verify the adapter |
 | D3 | Studio animation (M3) | (a) HLSDK `StudioModelRenderer` pose maths in `game/studio/` over whole MDL animation data resident in the studio pool (as the old tree does); (b) the same pose maths over cooked per-sequence animation chunks (the MDL's run-length values regrouped per sequence, 16-aligned, streamed individually) so only the sequences in use are resident | (b): identical poses (same values), ≈ 60 KB instead of 93–142 KB per NPC model, so ≈ 500 KB less studio pool [EST, SA2 §3.6]; costs one cook tool and a format doc in M3 |
 | D4 | Saved games (after M5) | none; FlashRAM 128 KB; SRAM 32 KB; Controller Pak 32 KB | FlashRAM: 40–90 KB [EST] does not fit 32 KB |

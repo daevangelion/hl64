@@ -14,17 +14,27 @@ appear in cooked leaves.
 
 - **Point contents** at p (`pfnPointContents`): the hull-0 leaf contents of
   the world at p, with CURRENT_* reported as WATER — except that a point
-  inside a contents brush entity (`func_ladder`: SOLID_NOT, `skin` =
-  CONTENTS_LADDER; inside = in a SOLID leaf of the entity's hull-0 model at
-  its origin) returns the brush's contents (LADDER −16)
-  **[probe:measured T-points]** (702 samples inside ladders; the world
-  there was EMPTY 689 / WATER 13) — **unless the world is SOLID at p**: then
-  SOLID (−2) wins **[probe:measured T-points]** (13 samples, all 10 maps).
-  Other contents brushes (`func_water`) are not yet measured and are
-  expected to behave the same way **[probe]**.
+  inside a contents brush entity returns the brush's contents
+  **[probe:measured T-points, W-water]** — **unless the world is SOLID at
+  p**: then SOLID (−2) wins **[probe:measured T-points]** (13 samples, all
+  10 maps).
+  - A **contents brush entity** is a brush entity with **SOLID_NOT** and a
+    non-zero `skin`; its contents = skin. A skin on a SOLID_TRIGGER or
+    SOLID_BSP brush entity is ignored (the point reads the world, −1 in the
+    probe) **[probe:measured W-water]** (probe brushes with skins −2, −3,
+    −4, −5, −9, −16 at solid 0 / 1 / 4, 7 maps). The skin value is returned
+    as is: a SOLID_NOT brush with skin −9 (CURRENT_0) reads −9, one with
+    skin −2 reads SOLID **[probe:measured W-water]**.
+  - "Inside" = in a SOLID leaf of the entity's hull-0 model at its origin.
+    Measured: `func_ladder` (skin LADDER) reads −16 (702 samples; the world
+    there was EMPTY 689 / WATER 13) **[probe:measured T-points]**;
+    `func_water` (SOLID_NOT, skin WATER) reads −3 from `pfnPointContents`
+    and −3 from pmove's `PM_PointContents`, while true point contents reads
+    the world (−1) **[probe:measured W-water]** (76–158 samples per map).
   Mechanism: each open layer keeps the short list of its contents brush
-  entities; a point tests the world first (SOLID returns at once), then
-  their linked boxes, then their hull 0.
+  entities (SOLID_NOT with skin ≠ 0; the list is updated when solid or
+  skin changes); a point tests the world first (SOLID returns at once),
+  then their linked boxes, then their hull 0.
 - **True point contents** (pmove's `PM_TruePointContents`) stays
   world-only and keeps CURRENT_* **[probe:measured PM-bot]**; pmove adds
   physent contents itself (pmove-host.md).
@@ -209,7 +219,7 @@ materials"; HLSDK `TEXTURETYPE` letters).
 | # | property | data |
 |---|---|---|
 | T0 | cooked COLL walks equal BSP clipnode walks (contents, path) for every point/segment of the old cook proof | self-contained on the player's BSPs (w64check rules) |
-| T1 | point contents equals GoldSrc: LADDER inside every `func_ladder` (702 samples) where the world is EMPTY or WATER, SOLID where the world is SOLID (13 samples); true point contents (pmove) stays world-only | **[probe:measured T-points]**, PM-bot |
+| T1 | point contents equals GoldSrc: LADDER inside every `func_ladder` (702 samples) where the world is EMPTY or WATER, SOLID where the world is SOLID (13 samples); `func_water` −3 / PM −3 / true −1; skins count only on SOLID_NOT brush entities and are returned unconverted (probe brushes: skins −2…−16 × solid 0/1/4); true point contents (pmove) stays world-only | **[probe:measured T-points, W-water]**, PM-bot |
 | T2 | segment traces equal GoldSrc: flags exact, fraction ±1e-5 (non-axial plane maths in double, 2), end ±0.001 u, normal exact, distance ±1e-4; ORDER mismatches counted under T12, not as failures | **[probe:measured T-segments]**: 2000 segments ≤ 192 u per map per hull + 200 ≤ 4096 u |
 | T3 | world impacts with fraction in (0,1): `normal·end − dist` ∈ [1/32 − 1e-3, 1/32 + 1e-3], except where the GoldSrc fixture for the same segment is itself short — GoldSrc has 3 of 26 890 such impacts (stand-off 0.0023–0.0197). Rule: a short impact passes only if T-segments has the same segment and hl64's end point equals GoldSrc's within T2's tolerance; any other short impact fails; the count of short impacts must not exceed GoldSrc's on the same inputs. Brush-entity impacts are excluded (their distance is model-frame, 4.2) | **[probe:measured T-segments]** + self-contained |
 | T4 | end points never classify SOLID in the traced hull | self-contained |

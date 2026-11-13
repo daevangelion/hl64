@@ -1,5 +1,10 @@
 # Render modes, sprites, decals, temporary effects
 
+**Oracle status: awaiting a retail-client capture plan.** Render modes,
+sprites, decals and temporary effects are drawn by the client; the HLDS
+probe cannot observe them. Every `[probe]` property here is to be measured
+on the retail client (README "Oracles").
+
 The old tree's code for these areas follows Xash3D sources (audit: r64_trans.c,
 r64_decal.c, gsfx_cl.c, gsfx_cart.c), so hl64 rewrites them from this spec,
 HLSDK's `const.h`/`effects.cpp`/`util.cpp` (game side, allowed), the SPR
