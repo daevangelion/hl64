@@ -22,6 +22,7 @@
  */
 #include <math.h>
 
+#include "engine/core/hlmath.h"
 #include "engine/phys/player.h"
 #include "game/hl/monster.h"
 #include "game/hl/player.h"
@@ -168,8 +169,8 @@ void CBarnacle_BarnacleThink(int e)
 			org[0] = o[0];
 			org[1] = o[1];
 			yaw = ent_cv(enemy)->angles[1];
-			org[0] -= 6 * (float)cos(yaw * M_PI / 180.0);
-			org[1] -= 6 * (float)sin(yaw * M_PI / 180.0);
+			org[0] -= 6 * (float)hl_cos(yaw * M_PI / 180.0);
+			org[1] -= 6 * (float)hl_sin(yaw * M_PI / 180.0);
 			b->m_flAltitude -= BARNACLE_PULL_SPEED;
 			org[2] += BARNACLE_PULL_SPEED;
 			EyePosition(enemy, eye);

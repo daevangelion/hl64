@@ -24,6 +24,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "engine/core/hlmath.h"
 #include "game/hl/player.h"
 #include "game/hud/hud.h"
 
@@ -337,7 +338,7 @@ static void draw_damage(void)
 
 	if (!hud.bitsDamage)
 		return;
-	a = (int)(fabs(sin(hud.time * 2)) * 256.0);
+	a = (int)(fabs(hl_sin(hud.time * 2)) * 256.0);
 	if (a > 255)
 		a = 255;
 	scale(RGB_YELLOWISH, a, c);

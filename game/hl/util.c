@@ -23,6 +23,7 @@
  */
 #include <string.h>
 
+#include "engine/core/hlmath.h"
 #include "game/hl/util.h"
 
 game_globals_t	gpGlobals;
@@ -53,7 +54,7 @@ float UTIL_VecToYaw(const float v[3])
 
 	if (v[1] == 0 && v[0] == 0)
 		return 0;
-	yaw = (float)(atan2(v[1], v[0]) * 180 / M_PI);
+	yaw = (float)(hl_atan2(v[1], v[0]) * 180 / M_PI);
 	if (yaw < 0)
 		yaw += 360;
 	return yaw;

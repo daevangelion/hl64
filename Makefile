@@ -45,6 +45,8 @@ ENGINE_SRC += engine/ent/ent.c engine/ent/grid.c engine/ent/grid_bench.c engine/
 # input, player move host, view, route VM, rng (M2)
 ENGINE_SRC += engine/core/rng.c engine/in/in.c engine/phys/pmove.c engine/test/route.c \
 	engine/view/view.c
+# the transcendentals every engine/ and game/ call site uses (host = cart)
+ENGINE_SRC += engine/core/hlmath.c
 # game/ (HLSDK licence, game/LICENSE-HLSDK) links into the same images:
 # pm_shared and its adapter (D2), the player's pre-move think, the view
 GAME_SRC := game/pm/pm_shared.c game/pm/pm_math.c game/pm/pm_host.c game/hl/player.c \
@@ -128,7 +130,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest rec4test sndtest gamelstest seamproftest seamtest streamtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest rec4test sndtest gamelstest seamproftest mathtest seamtest streamtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -184,6 +186,7 @@ endif
 ROM_OBJS := $(addprefix $(BUILD_DIR)/,$(ENGINE_SRC:.c=.o) $(N64_SRC:.c=.o))
 
 $(foreach d,$(NOFASTMATH_DIRS),$(eval $(BUILD_DIR)/$(d)/%.o: CFLAGS += -fno-fast-math))
+$(BUILD_DIR)/engine/core/hlmath.o: CFLAGS += -fno-fast-math
 $(BUILD_DIR)/engine/%.o: CFLAGS += -std=c99
 $(addprefix $(BUILD_DIR)/,game/pm/pm_shared.o game/pm/pm_math.o): CFLAGS += $(HLSDK_CFLAGS)
 # game/hl private blocks are HLSDK class chains as flat C structs used
@@ -413,6 +416,12 @@ SEAMPROF_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(SEAMPROF_BIN): $(SEAMPROF_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 seamproftest: $(SEAMPROF_BIN)
+
+# Transcendentals accuracy driver (test/m4/hlmath.c, run by test/m4/hlmath.py).
+MATHTEST_BIN := $(BUILD_DIR)/host/hl64-mathtest
+$(MATHTEST_BIN): $(BUILD_DIR)/host/engine/core/hlmath.o $(BUILD_DIR)/host/test/m4/hlmath.o
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+mathtest: $(MATHTEST_BIN)
 
 # Seam driver (test/m4/seam_test.c, run by test/m4/seam.sh): the seam
 # runtime over the real campaign parse, world layers, player re-base and

@@ -26,6 +26,7 @@
 #include <math.h>
 #include <stddef.h>
 
+#include "engine/core/hlmath.h"
 #include "hl64/fx.h"
 #include "hl64/game.h"
 #include "hl64/settings.h"
@@ -48,14 +49,14 @@ static void angle_vectors(const float *angles, float *forward, float *right, flo
 	float angle, sr, sp, sy, cr, cp, cy;
 
 	angle = angles[1] * ((float)M_PI * 2 / 360);
-	sy = sin(angle);
-	cy = cos(angle);
+	sy = hl_sin(angle);
+	cy = hl_cos(angle);
 	angle = angles[0] * ((float)M_PI * 2 / 360);
-	sp = sin(angle);
-	cp = cos(angle);
+	sp = hl_sin(angle);
+	cp = hl_cos(angle);
 	angle = angles[2] * ((float)M_PI * 2 / 360);
-	sr = sin(angle);
-	cr = cos(angle);
+	sr = hl_sin(angle);
+	cr = hl_cos(angle);
 	forward[0] = cp * cy;
 	forward[1] = cp * sy;
 	forward[2] = -sp;
@@ -90,7 +91,7 @@ static float V_CalcBob(float time, float frametime, int onground, const float *s
 	/* bob is proportional to simulated velocity in the xy plane
 	 * (don't count Z, or jumping messes it up) */
 	bob = sqrt(simvel[0] * simvel[0] + simvel[1] * simvel[1]) * CL_BOB;
-	bob = bob * 0.3 + bob * 0.7 * sin(cycle);
+	bob = bob * 0.3 + bob * 0.7 * hl_sin(cycle);
 	if (bob > 4.0f)
 		bob = 4.0f;
 	if (bob < -7.0f)

@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "hl64/ent.h"
+#include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/ent/ent.h"
 #include "engine/phys/motion.h"
@@ -283,9 +284,9 @@ static int translate(int e, float mt, float ltime0)
 static void angle_basis(const float a[3], turn_t *t)
 {
 	const double rad = 3.14159265358979323846 / 180.0;
-	double sp = sin(a[0] * rad), cp = cos(a[0] * rad);
-	double sy = sin(a[1] * rad), cy = cos(a[1] * rad);
-	double sr = sin(a[2] * rad), cr = cos(a[2] * rad);
+	double sp = hl_sin(a[0] * rad), cp = hl_cos(a[0] * rad);
+	double sy = hl_sin(a[1] * rad), cy = hl_cos(a[1] * rad);
+	double sr = hl_sin(a[2] * rad), cr = hl_cos(a[2] * rad);
 
 	t->f[0] = (float)(cp * cy);
 	t->f[1] = (float)(cp * sy);

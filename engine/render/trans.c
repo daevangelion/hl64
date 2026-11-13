@@ -25,6 +25,7 @@
 #include "hl64/ent.h"
 #include "hl64/limits.h"
 #include "hl64/studio.h"
+#include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/render/fx_int.h"
@@ -99,7 +100,7 @@ int trans_blend_amt(int rendermode, int renderfx, int amt, int e, float dist)
 		float hz = (renderfx == FX_RFX_PULSE_SLOW || renderfx == FX_RFX_PULSE_SLOW_WIDE) ? 1 : 4;
 		float a = renderfx >= FX_RFX_PULSE_SLOW_WIDE ? 64 : 16;
 
-		return clamp255((float)amt + a * sinf(PI2 * hz * t + phase(e)));
+		return clamp255((float)amt + a * hl_sinf(PI2 * hz * t + phase(e)));
 	}
 	case FX_RFX_STROBE_SLOW:
 	case FX_RFX_STROBE_FAST:
@@ -116,7 +117,7 @@ int trans_blend_amt(int rendermode, int renderfx, int amt, int e, float dist)
 		/* two incommensurate sines: ~2 Hz slow, ~5 Hz fast */
 		float hz = renderfx == FX_RFX_FLICKER_SLOW ? 2.0f : 5.0f;
 
-		v = sinf(PI2 * hz * t + phase(e)) + sinf(PI2 * hz * 1.618034f * t + 2 * phase(e));
+		v = hl_sinf(PI2 * hz * t + phase(e)) + hl_sinf(PI2 * hz * 1.618034f * t + 2 * phase(e));
 		return v > -0.3f ? amt : 0;
 	}
 	case FX_RFX_DISTORT:

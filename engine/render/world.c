@@ -36,6 +36,7 @@
 #include "hl64/settings.h"
 #include "hl64/studio.h"
 #include "hl64/seam.h"
+#include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/io/io.h"
@@ -115,9 +116,9 @@ void ren_init(void)
 void ren_angle_axes(const float ang[3], float f[3], float r[3], float u[3])
 {
 	const float k = 3.14159265358979f / 180.0f;
-	float sp = sinf(ang[0] * k), cp = cosf(ang[0] * k);
-	float sy = sinf(ang[1] * k), cy = cosf(ang[1] * k);
-	float sr = sinf(ang[2] * k), cr = cosf(ang[2] * k);
+	float sp = hl_sinf(ang[0] * k), cp = hl_cosf(ang[0] * k);
+	float sy = hl_sinf(ang[1] * k), cy = hl_cosf(ang[1] * k);
+	float sr = hl_sinf(ang[2] * k), cr = hl_cosf(ang[2] * k);
 
 	f[0] = cp * cy;
 	f[1] = cp * sy;
@@ -135,7 +136,7 @@ float ren_fov_y(float fov_x)
 {
 	const float k = 3.14159265358979f / 360.0f;
 
-	return atanf(tanf(fov_x * k) * 0.75f) / k;
+	return hl_atanf(hl_tanf(fov_x * k) * 0.75f) / k;
 }
 
 /* Box (mins, maxs) fully outside one plane: n . p-vertex < d. */
@@ -712,8 +713,8 @@ static void fp_tri(const wld_layer_t *L, const float lo[3], float p3[3][3],
 	for (j = 0; j < 8; j++)
 	{
 		float poly[FP_POLY][3], tmp[FP_POLY][3];
-		float c0 = cosf((float)j * 0.785398f), s0 = sinf((float)j * 0.785398f);
-		float c1 = cosf((float)(j + 1) * 0.785398f), s1 = sinf((float)(j + 1) * 0.785398f);
+		float c0 = hl_cosf((float)j * 0.785398f), s0 = hl_sinf((float)j * 0.785398f);
+		float c1 = hl_cosf((float)(j + 1) * 0.785398f), s1 = hl_sinf((float)(j + 1) * 0.785398f);
 		int np = 3, i, first, lo_i = 0, hi_i, s;
 
 		for (k = 0; k < 3; k++)
@@ -1220,10 +1221,10 @@ void ren_frame(double time)
 	/* inward side planes: fwd x sin(half fov) +- axis x cos(half fov) */
 	fx = settings.fov * (3.14159265358979f / 360.0f);
 	fy = v.fov_y * (3.14159265358979f / 360.0f);
-	sx = sinf(fx);
-	cx = cosf(fx);
-	sy = sinf(fy);
-	cy = cosf(fy);
+	sx = hl_sinf(fx);
+	cx = hl_cosf(fx);
+	sy = hl_sinf(fy);
+	cy = hl_cosf(fy);
 	for (k = 0; k < 3; k++)
 	{
 		fr_n[0][k] = v.fwd[k] * sx + v.right[k] * cx;

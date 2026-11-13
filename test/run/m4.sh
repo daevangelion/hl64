@@ -112,6 +112,7 @@ else
 	suite stream.c streamtest "$B/hl64-stream" "$CONTENT"
 fi
 suite gate_seamprof.py seamproftest python3 test/m4/gate_seamprof.py --bin "$B/hl64-seamprof"
+suite hlmath.py mathtest python3 test/m4/hlmath.py --bin "$B/hl64-mathtest"
 suite gate_selftest.py - python3 test/m4/gate_selftest.py --scratch "$OUT/selftest"
 # every entry point of test/m4 runs here (gate_parse.py is the parsers'
 # module, gate_check.py the route checks and gate_table.py the ares table

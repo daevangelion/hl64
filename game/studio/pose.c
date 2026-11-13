@@ -32,11 +32,13 @@
  *    pev->frame as is, no interpolation, memoised by its inputs.
  * A sequence whose chunk is not resident (studio_anim NULL: requested)
  * holds the entity's last resident sequence and frame, else the bones'
- * default values. The pose is computed in float (sinf / cosf).
+ * default values. The pose is computed in float (hl_sinf / hl_cosf).
  */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "engine/core/hlmath.h"
 
 #include "hl64/ent.h"
 #include "hl64/game.h"
@@ -80,14 +82,14 @@ static void AngleMatrix(const float *angles, float (*matrix)[4])
 	float sr, sp, sy, cr, cp, cy;
 
 	angle = angles[YAW] * (float)(M_PI * 2 / 360);
-	sy = sinf(angle);
-	cy = cosf(angle);
+	sy = hl_sinf(angle);
+	cy = hl_cosf(angle);
 	angle = angles[PITCH] * (float)(M_PI * 2 / 360);
-	sp = sinf(angle);
-	cp = cosf(angle);
+	sp = hl_sinf(angle);
+	cp = hl_cosf(angle);
 	angle = angles[ROLL] * (float)(M_PI * 2 / 360);
-	sr = sinf(angle);
-	cr = cosf(angle);
+	sr = hl_sinf(angle);
+	cr = hl_cosf(angle);
 
 	// matrix = (YAW * PITCH) * ROLL
 	matrix[0][0] = cp * cy;
@@ -141,14 +143,14 @@ static void AngleQuaternion(const float *angles, vec4_t quaternion)
 
 	// FIXME: rescale the inputs to 1/2 angle
 	angle = angles[2] * 0.5f;
-	sy = sinf(angle);
-	cy = cosf(angle);
+	sy = hl_sinf(angle);
+	cy = hl_cosf(angle);
 	angle = angles[1] * 0.5f;
-	sp = sinf(angle);
-	cp = cosf(angle);
+	sp = hl_sinf(angle);
+	cp = hl_cosf(angle);
 	angle = angles[0] * 0.5f;
-	sr = sinf(angle);
-	cr = cosf(angle);
+	sr = hl_sinf(angle);
+	cr = hl_cosf(angle);
 
 	quaternion[0] = sr * cp * cy - cr * sp * sy; // X
 	quaternion[1] = cr * sp * cy + sr * cp * sy; // Y
@@ -182,10 +184,10 @@ static void QuaternionSlerp(const vec4_t p, vec4_t q, float t, vec4_t qt)
 	{
 		if ((1.0f - cosom) > 0.000001f)
 		{
-			omega = acosf(cosom);
-			sinom = sinf(omega);
-			sclp = sinf((1.0f - t) * omega) / sinom;
-			sclq = sinf(t * omega) / sinom;
+			omega = hl_acosf(cosom);
+			sinom = hl_sinf(omega);
+			sclp = hl_sinf((1.0f - t) * omega) / sinom;
+			sclq = hl_sinf(t * omega) / sinom;
 		}
 		else
 		{
@@ -201,8 +203,8 @@ static void QuaternionSlerp(const vec4_t p, vec4_t q, float t, vec4_t qt)
 		qt[1] = q[0];
 		qt[2] = -q[3];
 		qt[3] = q[2];
-		sclp = sinf((1.0f - t) * (0.5f * (float)M_PI));
-		sclq = sinf(t * (0.5f * (float)M_PI));
+		sclp = hl_sinf((1.0f - t) * (0.5f * (float)M_PI));
+		sclq = hl_sinf(t * (0.5f * (float)M_PI));
 		for (i = 0; i < 3; i++)
 			qt[i] = sclp * p[i] + sclq * qt[i];
 	}

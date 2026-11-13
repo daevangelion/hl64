@@ -30,6 +30,7 @@
 #include "hl64/snd.h"
 #include "engine/core/dbg.h"
 #include "engine/core/eng.h"
+#include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/ent/rec_int.h"
@@ -904,8 +905,8 @@ void eng_frame(void)
 		float yaw = ren_cam.ang[1] * (3.14159265f / 180.0f);
 		float pitch = ren_cam.ang[0] * (3.14159265f / 180.0f);
 		float roll = ren_cam.ang[2] * (3.14159265f / 180.0f);
-		float sy = sinf(yaw), cy = cosf(yaw), sp = sinf(pitch), cp = cosf(pitch);
-		float sr = sinf(roll), cr = cosf(roll);
+		float sy = hl_sinf(yaw), cy = hl_cosf(yaw), sp = hl_sinf(pitch), cp = hl_cosf(pitch);
+		float sr = hl_sinf(roll), cr = hl_cosf(roll);
 		float right[3] = { -sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp };
 
 		snd_frame(ren_cam.org, right, (double)dt * 1e-6);

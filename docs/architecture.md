@@ -906,7 +906,15 @@ mostly block copies.
   no simulation-affecting decision depends on PI timing, pump counts or
   wall time, so the host's PI model and the cart's DMA give identical
   route ops and entity records. Budgets count work (records per frame,
-  `REC_BUDGET_HOST`). I/O completes in frames (engine/io, 5.2): at
+  `REC_BUDGET_HOST`). Transcendentals (sin, cos, tan, atan, atan2, asin,
+  acos; float and double) come from `engine/core/hlmath.c`, built from
+  IEEE basic operations without `-ffast-math`, never from libm: glibc
+  and newlib round them differently (m4 stats 84: a yawed studio box 1
+  ulp apart). Every engine/, game/ and include/ call site uses them,
+  renderer and sound included; `test/m4/hlmath.py` fails on a direct
+  libm transcendental there and runs the accuracy driver (float results
+  correctly rounded on its arguments, double within 1-2.5 ulp). I/O
+  completes in frames (engine/io, 5.2): at
   `io_frame_begin` the scheduler plans the frame's pieces from the queue
   alone (priority order, the frame's byte budget, at most
   `IO_TEST_PIECES`), they move during the frame (one in flight, pumped at

@@ -18,6 +18,7 @@
 
 #include "hl64/limits.h"
 #include "hl64/rec.h"
+#include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/io/io.h"
@@ -398,7 +399,7 @@ static void axes(int type, const float org[3], const float ang[3], float r[3], f
 	case FX_SPR_PARALLEL_ORIENTED:
 	{
 		/* the view plane's axes turned by the entity's roll */
-		float a = ang[2] * (3.14159265358979f / 180.0f), c = cosf(a), s = sinf(a);
+		float a = ang[2] * (3.14159265358979f / 180.0f), c = hl_cosf(a), s = hl_sinf(a);
 
 		for (k = 0; k < 3; k++)
 		{

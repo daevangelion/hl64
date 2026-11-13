@@ -23,6 +23,7 @@
 #include "hl64/coll.h"
 #include "hl64/ent.h"
 #include "hl64/limits.h"
+#include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/world/wld.h"
@@ -394,9 +395,9 @@ static int walk_trace(src_t *s, const float p1[3], const float p2[3], col_trace_
 static void angle_vectors(const float ang[3], float f[3], float r[3], float u[3])
 {
 	const float k = 3.14159265358979323846f / 180.0f;
-	float sp = sinf(ang[0] * k), cp = cosf(ang[0] * k);
-	float sy = sinf(ang[1] * k), cy = cosf(ang[1] * k);
-	float sr = sinf(ang[2] * k), cr = cosf(ang[2] * k);
+	float sp = hl_sinf(ang[0] * k), cp = hl_cosf(ang[0] * k);
+	float sy = hl_sinf(ang[1] * k), cy = hl_cosf(ang[1] * k);
+	float sr = hl_sinf(ang[2] * k), cr = hl_cosf(ang[2] * k);
 
 	f[0] = cp * cy;
 	f[1] = cp * sy;

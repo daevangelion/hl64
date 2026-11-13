@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "engine/core/dbg.h"
+#include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/ent/rec_int.h"
@@ -711,8 +712,8 @@ static int look_at(int by_class, uint32_t id, int map)
 	for (k = 0; k < 3; k++)
 		d[k] = c[k] - eye[k];
 	/* view angles: pitch down + (HLSDK), as pm_math VectorAngles */
-	ang[0] = (float)(-atan2(d[2], sqrt((double)d[0] * d[0] + (double)d[1] * d[1])) * 180 / M_PI);
-	ang[1] = (float)(atan2(d[1], d[0]) * 180 / M_PI);
+	ang[0] = (float)(-hl_atan2(d[2], sqrt((double)d[0] * d[0] + (double)d[1] * d[1])) * 180 / M_PI);
+	ang[1] = (float)(hl_atan2(d[1], d[0]) * 180 / M_PI);
 	ang[2] = 0;
 	in_set_angles(ang);
 	tell("look_at", best);

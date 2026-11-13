@@ -13,6 +13,7 @@
 #include "hl64/ent.h"
 #include "hl64/pmove.h"
 #include "hl64/settings.h"
+#include "engine/core/hlmath.h"
 #include "engine/ent/ent.h"
 #include "engine/phys/motion.h"
 
@@ -197,8 +198,8 @@ int phy_walk_move(int e, float yaw, float dist, int mode)
 
 	if (!(ent_c.cv[e].flags & (FL_ONGROUND | FL_FLY | FL_SWIM)))
 		return 0;
-	d[0] = (float)(cos(a) * dist);
-	d[1] = (float)(sin(a) * dist);
+	d[0] = (float)(hl_cos(a) * dist);
+	d[1] = (float)(hl_sin(a) * dist);
 	d[2] = 0;
 	return move_step(e, d, mode);
 }
@@ -218,7 +219,7 @@ int phy_move_to_origin(int e, const float goal[3], float dist, int mode)
 
 	if (!(v->flags & (FL_ONGROUND | FL_FLY | FL_SWIM)))
 		return 0;
-	yaw = atan2(dy, dx) / DEG2RAD;
+	yaw = hl_atan2(dy, dx) / DEG2RAD;
 	if (phy_walk_move(e, (float)yaw, dist, mode))
 		return 1;
 	back = (int)floor((yaw + 180.0) / 45.0 + 0.5) & 7;
@@ -228,7 +229,7 @@ int phy_move_to_origin(int e, const float goal[3], float dist, int mode)
 
 		if (i == back)
 			continue;
-		gain[i] = (float)(cos(a) * dx + sin(a) * dy);
+		gain[i] = (float)(hl_cos(a) * dx + hl_sin(a) * dy);
 		/* insertion by gain, a random side on ties */
 		for (j = n; j > 0; j--)
 		{

@@ -16,6 +16,7 @@
 #include "hl64/ent.h"
 #include "hl64/grid.h"
 #include "hl64/limits.h"
+#include "engine/core/hlmath.h"
 #include "engine/render/fx_int.h"
 
 typedef struct {
@@ -278,8 +279,8 @@ void beam_draw(int id, uint8_t blend)
 		{
 			float t = 6.2831853f * (float)i / (float)n;
 
-			pts[i][0] = a[0] + r * cosf(t);
-			pts[i][1] = a[1] + r * sinf(t);
+			pts[i][0] = a[0] + r * hl_cosf(t);
+			pts[i][1] = a[1] + r * hl_sinf(t);
 			pts[i][2] = a[2] + 0.5f * b->width;
 			side[i][0] = side[i][1] = 0;
 			side[i][2] = 0.5f * b->width;

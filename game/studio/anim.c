@@ -28,6 +28,8 @@
 #include <math.h>
 #include <string.h>
 
+#include "engine/core/hlmath.h"
+
 #include "hl64/ent.h"
 #include "hl64/game.h"
 #include "hl64/pmove.h"
@@ -545,8 +547,8 @@ void gs_set_sequence_box(int e)
 	/* the bbox's corners rotated by yaw: per axis the smallest and the
 	 * largest of (cos, -sin) . (x, y) resp. (sin, cos) . (x, y), each term
 	 * taken at the end of its interval that minimises / maximises it */
-	c = cosf(ent_cv(e)->angles[1] * (float)(M_PI / 180.0));
-	sn = sinf(ent_cv(e)->angles[1] * (float)(M_PI / 180.0));
+	c = hl_cosf(ent_cv(e)->angles[1] * (float)(M_PI / 180.0));
+	sn = hl_sinf(ent_cv(e)->angles[1] * (float)(M_PI / 180.0));
 	ax = c * mins[0];
 	bx = c * maxs[0];
 	ay = -sn * mins[1];
