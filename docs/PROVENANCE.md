@@ -28,6 +28,11 @@ Quake, quakegeneric, Xash3D or GoldSrc engine code.
 - libdragon, tiny3d and their documentation.
 - Files marked CLEAN in `docs/provenance-audit.md` (our own code from the
   quakegeneric N64 work), copied with their history noted in the commit.
+- Files marked QUAKE-INTERFACE in `docs/provenance-audit.md` (decision D9,
+  accepted 2026-11-13): importable only when the same commit replaces every
+  Quake binding the audit lists for that file and rewrites every flagged
+  line range from a spec, without opening the Quake/Xash originals.
+  `provcheck` must pass on the commit.
 - Format specifications we wrote (`docs/formats/`).
 - Public documentation of GoldSrc behaviour, and black-box observation of the
   quakegeneric build or retail Half-Life (run it, measure, compare output).

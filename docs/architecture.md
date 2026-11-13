@@ -817,10 +817,11 @@ rev must equal the SDK's `libdragon_rev`), toolchain
 
 ---
 
-## 19. Decisions for the user
+## 19. Decisions
 
-Work proceeds on the recommendation unless the user overrules. D9 and D10
-block M0; D1–D3 block M2/M3; the rest wait for the milestone named.
+All recommendations below were accepted by the user on 2026-11-13 (D1 a,
+D2 a, D3 b, D4 FlashRAM, D5 recorder, D6 i-iv as recommended, D7 Expansion
+Pak, D8 copy with note, D9 a, D10 a).
 
 | # | decision | options | recommendation |
 |---|---|---|---|
