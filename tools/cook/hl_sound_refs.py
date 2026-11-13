@@ -319,6 +319,10 @@ def collect(data: Data, maps: Iterable[str], models: Dict[str, bytes],
                 refs.models.add(e["shootmodel"].lower())
             elif cn == "gibshooter":
                 refs.models.add("models/hgibs.mdl")
+            # talk monsters (HLSDK CTalkMonster): a group name or !NAME
+            for k in ("UseSentence", "UnUseSentence"):
+                if e.get(k):
+                    add_sentence_ref(refs, e[k], sent_table, groups)
 
     refs.samples.update(ESSENTIAL)
     refs.samples.update(samples)

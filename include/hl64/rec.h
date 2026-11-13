@@ -152,8 +152,9 @@ void		rec_fire_at(float t, name_t target, name_t killtarget, int activator,
 int		rec_map_open(int layer);
 void		rec_map_close(int slot);
 /* New Game: open the start map, spawn its logic and its records within
- * the spawn radius of the player start, run the settle frames
- * (think-and-time.md 6). */
+ * the spawn radius of the player start, in entity order, at time 1.0; the
+ * loop's next two frames are the settle frames (think-and-time.md 6,
+ * eng_clock_new_game). */
 void		rec_new_campaign(int map);
 /* Step 8: hydration pump / release under the entity budget around the
  * anchors (global positions). */
