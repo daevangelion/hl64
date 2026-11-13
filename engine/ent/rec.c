@@ -518,7 +518,7 @@ res_t rec_key_res(gid_t16 gid, key_t16 k)
 
 	if (k == RK_PATTERN || k == RK_GLOBALSTATE || k == RK_MONSTERTYPE
 		|| (k == RK_MESSAGE && c == RC_ENV_MESSAGE) || (k == RK_CHAPTERTITLE && c == RC_WORLDSPAWN)
-		|| typed_id(gid, k, HLE_KS, &key) < 0)
+		|| (k == RK_TEXTURE && c == RC_INFODECAL) || typed_id(gid, k, HLE_KS, &key) < 0)
 		return RES_NONE;
 	if (RES_KIND(key->id) == RES_K_SUBMODEL)
 		return RES_SUBMODEL(GID_SLOT(gid), RES_SUB_NUM(key->id));
@@ -537,6 +537,15 @@ int rec_key_pattern(gid_t16 gid, key_t16 k)
 	const hle_key_t *key;
 
 	return k == RK_PATTERN && typed_id(gid, k, HLE_KS, &key) >= 0 ? key->id : -1;
+}
+
+int rec_key_decal(gid_t16 gid, key_t16 k)
+{
+	const hle_key_t *key;
+
+	if (k != RK_TEXTURE || rec_class(gid) != RC_INFODECAL)
+		return -1;
+	return typed_id(gid, k, HLE_KS, &key) >= 0 ? key->id : -1;
 }
 
 int rec_key_title(gid_t16 gid, key_t16 k)
@@ -1149,6 +1158,27 @@ static int16_t s16_hi(float v)
 
 static void thaw(rmap_t *m);
 
+/* infodecal ids of a layer: the global sheet's, then the entries of the
+ * package's DECL chunk (found by fourcc, docs/formats/w64-format.md) */
+static uint32_t layer_decals(const wld_layer_t *L)
+{
+	uint8_t d[8] __attribute__((aligned(8)));
+	uint32_t c, n;
+
+	for (c = 0; c < L->dir->nchunks; c++)
+	{
+		if (L->chunks[c].fourcc != REC_DECL_FOURCC || L->chunks[c].size < sizeof(d))
+			continue;
+		io_read_sync(d, L->rom + L->chunks[c].ofs, sizeof(d));
+		n = (uint32_t)d[4] << 8 | d[5];
+		if (((uint32_t)d[0] << 24 | (uint32_t)d[1] << 16 | (uint32_t)d[2] << 8 | d[3])
+			!= REC_DECL_MAGIC || n > REC_DECALS_MAP_MAX)
+			n = 0;
+		return REC_DECALS_GLOBAL + n;
+	}
+	return REC_DECALS_GLOBAL;
+}
+
 static int open_chunk(rmap_t *m, const wld_layer_t *L)
 {
 	const w64_chunk_t *ck = &L->chunks[L->dir->ents_chunk];
@@ -1183,6 +1213,7 @@ static int open_chunk(rmap_t *m, const wld_layer_t *L)
 	for (k = 0; k < 8; k++)
 		lim.kcount[k] = (uint32_t)res_count((int)k);
 	lim.nsub = L->dir->nsub;
+	lim.ndecals = layer_decals(L);
 	if ((why = rec_hle_check(p, len, &lim, &m->graph, &m->graph_size)))
 		sys_error("%s: ENTS chunk: %s", file, why);
 	m->block = at;

@@ -29,12 +29,13 @@ cd "$ROOT"
 make --no-print-directory BUILD_DIR="$BUILD_DIR" "$BUILD_DIR/tools/hlecook" rectest \
 	>"$OUT/build.log" 2>&1 || { tail -30 "$OUT/build.log" >&2; fail "build"; }
 grep -E 'warning:' "$OUT/build.log" && fail "build has warnings"
-python3 -m unittest tools.restab.test_restab >"$OUT/unit.log" 2>&1 \
+python3 -m unittest tools.restab.test_restab tools.cook.test_decals >"$OUT/unit.log" 2>&1 \
 	&& HL64_HLECOOK="$BUILD_DIR/tools/hlecook" HL64_CONTENT="$CONTENT" python3 -m unittest \
 		tools.w64c.test_hleids tools.w64c.test_hlecook tools.w64c.test_touchrank >>"$OUT/unit.log" 2>&1 \
 	|| { tail -30 "$OUT/unit.log" >&2; fail "cook unit tests"; }
 echo "R1 / id step: cook unit tests PASS"
-# R2: every res_t of every chunk and res.def inside its file; the HLE region proof
+# R2: every res_t of every chunk and res.def inside its file; decal ids; the
+# HLE and decal region proofs
 python3 -m tools.w64c.hleids --check "$CONTENT" --defs game/defs || fail "R2 (hleids --check)"
 # R6: no string compare on the resource path
 if grep -nE '\b(strcmp|strcasecmp|strncmp|strncasecmp|stricmp)\b' engine/res/*.c engine/snd/*.c \

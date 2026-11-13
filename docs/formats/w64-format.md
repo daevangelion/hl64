@@ -30,8 +30,8 @@ header (`include/hl64/` / `engine/world`, retargeted from the old
 0      w64_header_t (64 B)
 64     layer directory (dir_size B)
 ...    chunks, each 16-aligned, in this order:
-       REND × nsect, MOVR × movers, TEXP × npages, COLL × ncoll, ENTS, VISR
-       (old-tree packages may add ZONE, DRYS, STRM; see below)
+       REND × nsect, MOVR × movers, TEXP × npages, COLL × ncoll, ENTS, VISR,
+       DECL (optional; old-tree packages may add ZONE, DRYS, STRM; see below)
 ```
 
 ### `w64_header_t` (64 B)
@@ -321,6 +321,24 @@ then, 16-aligned, the map's HLN1 node graph when it has `info_node`s
 (hle-format-v1.md § Node graph); little-endian, the runtime fixes byte
 order in place with `hle_fixup` / `hln_fixup` — zero-padded to 16.
 
+## `DECL` chunk (placed decals)
+
+The map's placed-decal sheet: the `texture` values of its kept `infodecal`
+records that are not in the global sheet `gsfx/decals.i4` (the 42 HLSDK
+decals.h decals), sorted by name, cooked from the player's `decals.wad` in
+the global sheet's format (DI4 2, `tools/cook/decals.py`; the engine's
+`load_sheet` rules hold), zero-padded to 16. An infodecal's decal id
+42 + i is entry i of this chunk (hle-format-v1.md "Ids"). At most one,
+after `VISR`; absent when the map places no such decal. Found by fourcc
+(no directory index), so packages without it keep the layout and version.
+Runtime (architecture.md 4.1 decal region): the global sheet at the region
+start, two map slots (one per open layer, each half of what the global
+sheet and the piece vertices leave), the piece vertices at the end; a
+layer's `DECL` is read into its slot when the layer opens. The cook proves
+align16(global) + 2 × align16(largest `DECL` of the campaign) +
+`HL64_FX_DECALS` × `HL64_FX_DECAL_VERTS` × 10 B ≤ `HL64_DECAL_TEXELS_KB`
+(`hleids --check`).
+
 ## `VISR` chunk
 
 `u32 ofs[visleafs + 1]` (from chunk start; the row of leaf `L` (1..visleafs)
@@ -409,8 +427,8 @@ $(BUILD_DIR)/tools/hlecook <map.bsp> <out.hle>       # HLE1 + HLN1 (ENTS input)
 python3 -m tools.cook.bake_world_tex <map.bsp> -o <map.wci4> [--wad-dir DIR]
                    [--ref-palette palette.lmp]
 python3 -m tools.w64c.w64c <map.bsp> <map.wci4> <out.w64> --hle <map.hle>
-                   [--materials sound/materials.txt] [--json report.json]
-                   [--no-budget]
+                   [--decl <map.decl>] [--materials sound/materials.txt]
+                   [--json report.json] [--no-budget]
 python3 -m tools.w64c.w64check <map.w64> <map.bsp> [--hle map.hle]
                    [--points N] [--segments N] [--submodels N] [--seed S]
 python3 -m tools.w64c.w1 --fixtures DIR --data DIR [--hlecook PATH] [--w64c-only]
@@ -440,4 +458,5 @@ every hull 1–3 node a box-pruned walk of the cell reaches is in its list;
 (fraction, flags, visited path) on the encoding as on the BSP and visit
 only pinned or 3 × 3 × 3 neighbourhood chunks; `VISR` rows decompress to
 the BSP rows; `ENTS` equals the `hlecook` blob; every chunk is a known kind
-(old-tree ZONE / DRYS / STRM companions are skipped, at most once each).
+(old-tree ZONE / DRYS / STRM companions are skipped, at most once each; a
+`DECL` chunk, at most once, passes the sheet rules).

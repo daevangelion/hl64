@@ -32,6 +32,8 @@ static const char *str_id_ok(const rec_limits_t *lim, uint16_t key, uint16_t cls
 	if ((key == RK_MESSAGE && cls == RC_ENV_MESSAGE)
 		|| (key == RK_CHAPTERTITLE && cls == RC_WORLDSPAWN))
 		return id < lim->titles ? NULL : "title id";
+	if (key == RK_TEXTURE && cls == RC_INFODECAL)
+		return id < lim->ndecals ? NULL : "decal id";
 	if (k == RES_K_SUBMODEL)
 		return i && i < lim->nsub && i < 1024 ? NULL : "submodel id";
 	if (k == 0 || k == RES_K_ANIM || i >= lim->kcount[k])

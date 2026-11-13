@@ -66,6 +66,11 @@ int		rec_key_global(gid_t16 gid, key_t16 k);
  * the text GoldSrc would show). */
 int		rec_key_title(gid_t16 gid, key_t16 k);
 int		rec_key_pattern(gid_t16 gid, key_t16 k);
+/* infodecal `texture`: decal id, -1 when absent or not in decals.wad
+ * (HLSDK CDecal removes the entity). Below 42 the global sheet's entry
+ * (gsfx/decals.i4, HLSDK decals.h order), 42 + i entry i of the record's
+ * own map's DECL sheet (w64-format.md "DECL"). */
+int		rec_key_decal(gid_t16 gid, key_t16 k);
 cls_t		rec_key_cls(gid_t16 gid, key_t16 k);
 /* Key iteration for the game's KeyValue dispatch (multi_manager targets
  * arrive as the fire list, not keys): i < rec_key_count(gid). */

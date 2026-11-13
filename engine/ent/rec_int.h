@@ -44,11 +44,20 @@ enum {
 #define REC_LOGIC_BYTES		16	/* rec_logic_t, per logic record */
 #define REC_TABLE_BYTES		16688	/* rec_init's tables before the slot heap */
 
+/* infodecal `texture` ids (hle-format-v1.md "Ids"): below
+ * REC_DECALS_GLOBAL the gsfx/decals.i4 entry (tools/cook/decals.py
+ * GLOBAL_COUNT), then the entries of the map package's DECL chunk */
+#define REC_DECALS_GLOBAL	42
+#define REC_DECALS_MAP_MAX	64	/* entries of one DECL sheet */
+#define REC_DECL_FOURCC		0x4445434Cu	/* 'DECL' chunk of a .w64 */
+#define REC_DECL_MAGIC		0x44493402u	/* 'DI4' 2 sheet */
+
 /* The id spaces an HLE1 chunk's typed ids are checked against. */
 typedef struct {
 	uint32_t	classes, patterns, globals, titles;
 	uint32_t	kcount[8];	/* res_t kinds */
 	uint32_t	nsub;		/* the layer's BSP models */
+	uint32_t	ndecals;	/* REC_DECALS_GLOBAL + the layer's DECL entries */
 } rec_limits_t;
 
 /* Validate a chunk (HLE1 + optional HLN1 tail, docs/formats/

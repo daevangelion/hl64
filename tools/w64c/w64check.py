@@ -25,7 +25,8 @@ Cook-side proof that the package is exact (docs/formats/w64-format.md):
     3x3x3 neighbourhood lists of the start cell;
   - VISR rows decompress to the BSP PVS rows; ENTS equals the hlecook blob;
     every chunk is a known kind (the old ZONE / DRYS / STRM companion chunks
-    are skipped, at most once each, as w64-format.md says readers do).
+    are skipped, at most once each, as w64-format.md says readers do; a DECL
+    chunk, at most once, is a valid decal sheet).
 
 Usage (from the repository root):
   python3 -m tools.w64c.w64check <map.w64> <map.bsp> [--hle map.hle]
@@ -44,6 +45,8 @@ import zlib
 from pathlib import Path
 
 import numpy as np
+
+from tools.cook import decals
 
 F32 = np.float32
 LOCAL_BITS = 12
@@ -882,10 +885,20 @@ def check_visr(w: W64, bsp: Bsp):
 
 def check_chunk_kinds(w: W64):
     """Every chunk is a known kind; the old companion kinds appear at most once
-    and are skipped. Returns the companion kinds present."""
+    and are skipped; a DECL chunk appears at most once and is a valid decal
+    sheet. Returns the companion kinds present."""
     seen = []
-    for i, (fcc, _o, _sz) in enumerate(w.chunks):
-        need(fcc in KNOWN_CHUNKS or fcc in SKIPPED_CHUNKS, f"chunk {i} unknown fourcc {fcc!r}")
+    decl = 0
+    for i, (fcc, o, sz) in enumerate(w.chunks):
+        need(fcc in KNOWN_CHUNKS or fcc in SKIPPED_CHUNKS or fcc == decals.DECL,
+             f"chunk {i} unknown fourcc {fcc!r}")
+        if fcc == decals.DECL:
+            decl += 1
+            need(decl == 1, "duplicate DECL chunk")
+            try:
+                decals.sheet_names(w.b[o:o + sz], f"chunk {i} DECL")
+            except decals.DecalError as e:
+                raise Fail(str(e)) from None
         if fcc in SKIPPED_CHUNKS:
             need(fcc not in seen, f"duplicate {fcc.decode()} chunk")
             seen.append(fcc)
