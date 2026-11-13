@@ -46,6 +46,7 @@ int	__wrap_game_spawn_record(gid_t16 gid, int e);
 int	__wrap_game_spawn_class(cls_t cls, int e);
 void	__wrap_game_spawn_logic(gid_t16 gid);
 void	__wrap_game_map_opened(int slot);
+void	__wrap_game_logic_restored(gid_t16 gid);
 void	__wrap_game_map_closing(int slot);
 void	__wrap_game_use(int e, int activator, int caller, int use_type, float value);
 void	__wrap_game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float value);
@@ -121,6 +122,15 @@ void __wrap_game_spawn_logic(gid_t16 gid)
 {
 	(void)gid;
 	G.logic++;
+}
+
+/* Precache on restore of a reopened map's live logic records (counted) */
+static int restored;
+
+void __wrap_game_logic_restored(gid_t16 gid)
+{
+	(void)gid;
+	restored++;
 }
 
 void __wrap_game_map_opened(int slot)
@@ -505,6 +515,7 @@ static void test_frozen(int slot, const float start[3])
 	CHECK(rec_state(killg) == REC_KILLED && rec_state(dryg) == REC_DRY, "record states thawed");
 	frame_at(slot, NULL, 0);	/* logic_pending spawns run in rec_frame */
 	CHECK(G.logic == logic0, "live logic records not respawned (%d)", G.logic - logic0);
+	CHECK(restored > 0, "live logic records restored (game_logic_restored)");
 	/* the timer: 0.3 s left at close, due 0.3 s after reopen */
 	eng_set_clock(topen + 0.28, DT);
 	rec_run_timers(topen + 0.28 - DT, 0.01);

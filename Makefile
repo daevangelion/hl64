@@ -376,8 +376,8 @@ REC_BIN := $(BUILD_DIR)/host/hl64-rec
 # The driver's test game takes the record dispatch rec.c calls (--wrap);
 # the rest of game/ links as usual.
 REC_WRAP := game_spawn_record game_spawn_logic game_use game_logic_use game_logic_timer \
-	game_map_opened game_map_closing game_dehydrate game_rehydrate game_cut_refs \
-	wld_layer_ready wld_layer_of_map
+	game_logic_restored game_map_opened game_map_closing game_dehydrate game_rehydrate \
+	game_cut_refs wld_layer_ready wld_layer_of_map
 REC_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 	$(BUILD_DIR)/host/test/m3/rec_test.o
 $(REC_BIN): $(REC_OBJS)

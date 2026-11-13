@@ -98,6 +98,12 @@ void __wrap_game_spawn_logic(gid_t16 gid)
 	G.logic++;
 }
 
+void __wrap_game_logic_restored(gid_t16 gid);
+void __wrap_game_logic_restored(gid_t16 gid)
+{
+	(void)gid;
+}
+
 void __wrap_game_map_opened(int slot)
 {
 	(void)slot;
