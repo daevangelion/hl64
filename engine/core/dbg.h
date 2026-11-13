@@ -39,7 +39,8 @@
 	X(BENCH, "bench", "u", 1)		/* 1 = spatial grid (engine/ent) */ \
 	X(COLBENCH, "colbench", "u", 1)		/* map: traces of coll/bench.bin (engine/coll) */ \
 	X(STEP_ALL, "stepall", "u", 1)		/* K9: step every live entity (phy_set_step_all) */ \
-	X(SOUND, "sound", "uuu", 1)		/* res_t (SOUND / SENTENCE), entity (0 = the listener), pitch (0 = 100) */
+	X(SOUND, "sound", "uuu", 1)		/* res_t (SOUND / SENTENCE), entity (0 = the listener), pitch (0 = 100) */ \
+	X(SEAMPROF_MARK, "seamprof_mark", "", 1)	/* open a seam-window profile at this frame (engine/test/seamprof, PROFILE) */
 
 enum {
 #define DBG_ENUM(id, name, args, test) DBG_##id,
