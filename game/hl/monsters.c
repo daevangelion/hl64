@@ -236,6 +236,7 @@ void mon_stats(mon_stats_t *s, int reset)
 
 void mon_stats_frame(void)
 {
+	mstat.frames++;
 	mstat.us += mstat_frame_us;
 	if (mstat_frame_us > mstat.us_max)
 		mstat.us_max = mstat_frame_us;
@@ -243,6 +244,34 @@ void mon_stats_frame(void)
 }
 
 void mon_stats_route(void) { mstat.routes++; }
+
+/* `prof mon_us` roll-up line (engine/core/eng.c, once a second): CPU of
+ * the monster thinks per frame, thinks / routes per frame, live monsters
+ * and their private blocks (bytes, peak since the campaign started). */
+static uint32_t	mon_mem_peak;
+
+void game_mon_prof(void)
+{
+	mon_stats_t	s;
+	uint32_t	n, live = 0, mem = 0;
+	int		e;
+
+	for (e = ENT_PLAYER + 1; e < HL64_MAX_ENTITIES; e++)
+		if (mon_is_monster(e))
+		{
+			live++;
+			mem += game_class(ent_idc(e)->cls)->size;
+		}
+	if (mem > mon_mem_peak)
+		mon_mem_peak = mem;
+	mon_stats(&s, 1);
+	n = s.frames ? s.frames : 1;
+	log_printf("prof mon_us avg=%lu max=%lu thinks=%lu routes=%lu local_moves=%lu monsters=%lu "
+		"scripts=%lu mem=%lu mem_peak=%lu\n", (unsigned long)(s.us / n),
+		(unsigned long)s.us_max, (unsigned long)(s.thinks / n), (unsigned long)s.routes,
+		(unsigned long)s.local_moves, (unsigned long)live, (unsigned long)s.scripts,
+		(unsigned long)mem, (unsigned long)mon_mem_peak);
+}
 
 /* ---- animation helpers (CBaseAnimating, animating.cpp) -------------------- */
 
@@ -1424,7 +1453,18 @@ void CBaseMonster_MonsterInit(int e)
 	mstat.monsters++;
 }
 
-void CBaseMonster_MonsterInitThink(int e) { Mon_StartMonster(e); }
+/* the engine's copy of pev->view_ofs.z (waterlevel 3); spawn code may set
+ * view_ofs after MonsterInit, StartMonster runs after all of it */
+static void sync_view_ofs(int e)
+{
+	ent_phys(e)->view_ofs_z = (int16_t)MON(e)->view_ofs[2];
+}
+
+void CBaseMonster_MonsterInitThink(int e)
+{
+	sync_view_ofs(e);
+	Mon_StartMonster(e);
+}
 
 void CBaseMonster_StartMonster(int e)
 {
@@ -1672,6 +1712,7 @@ float Mon_VecToYaw(int e, const float dir[3])
 void Mon_SetEyePosition(int e)
 {
 	gs_eye_position(ent_rnd(e)->model, MON(e)->view_ofs);
+	sync_view_ofs(e);
 }
 
 void CBaseMonster_HandleAnimEvent(int e, const MonsterEvent_t *ev)
@@ -2198,6 +2239,7 @@ void game_mon_new_campaign(void)
 	for (i = 0; i < 4; i++)
 		Graph_SlotChanged(i);
 	memset(&mstat, 0, sizeof(mstat));
+	mon_mem_peak = 0;
 }
 
 void game_mon_map_opened(int slot) { Graph_SlotChanged(slot); }
