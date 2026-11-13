@@ -8,6 +8,13 @@
 
 #include <stdint.h>
 
+/* Face culling of every 3D pass (world, movers, effects, studio models):
+ * GoldSrc front faces -- BSP faces and studio triangles alike -- wind
+ * clockwise seen from outside (tools/studio/test_studiocook.py
+ * test_triangles_wind_like_the_world), which is tiny3d's front side.
+ * Expands to a T3D_FLAG_* value: include <t3d/t3d.h> where used. */
+#define N64_CULL	T3D_FLAG_CULL_FRONT
+
 /* fpu_shim.c */
 void		fpu_shim_install(void);
 unsigned long	fpu_shim_trap_count(void);

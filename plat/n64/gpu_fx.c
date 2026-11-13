@@ -26,6 +26,7 @@
 #include "hl64/limits.h"
 #include "engine/core/sys.h"
 #include "engine/render/gpu_fx.h"
+#include "plat/n64/n64.h"
 
 #define RING_PAIRS	GPU_FX_RING_PAIRS	/* vertex pairs per frame */
 #define MAT_PAIRS	GPU_FX_MAT_PAIRS
@@ -79,7 +80,7 @@ void gpu_fx_end(void)
 	rdpq_mode_persp(true);
 	rdpq_mode_zbuf(true, true);
 	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
-		| T3D_FLAG_NO_LIGHT | T3D_FLAG_CULL_FRONT);
+		| T3D_FLAG_NO_LIGHT | N64_CULL);
 	gpu_state_lost();	/* alpha compare now off, whatever the world's cache says */
 	cur.pairs = (uint32_t)used;
 	done = cur;

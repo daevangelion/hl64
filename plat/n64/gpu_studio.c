@@ -27,6 +27,7 @@
 #include "engine/core/sys.h"
 #include "engine/render/gpu_studio.h"
 #include "engine/world/wld.h"
+#include "plat/n64/n64.h"
 
 _Static_assert(sizeof(w64_vert_t) == sizeof(T3DVertPacked), "w64_vert_t is T3DVertPacked");
 
@@ -141,8 +142,7 @@ void gpu_studio_frame(void)
 void gpu_studio_begin(void)
 {
 	rdpq_mode_combiner(RDPQ_COMBINER1((TEX0, 0, PRIM, 0), (TEX0, 0, PRIM, 0)));
-	t3d_state_set_drawflags(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH | T3D_FLAG_NO_LIGHT
-		| T3D_FLAG_CULL_BACK);
+	t3d_state_set_drawflags(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH | T3D_FLAG_NO_LIGHT | N64_CULL);
 }
 
 void gpu_studio_end(void)
@@ -152,7 +152,7 @@ void gpu_studio_end(void)
 	rdpq_mode_blender(0);
 	rdpq_mode_zbuf(true, true);
 	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
-		| T3D_FLAG_NO_LIGHT | T3D_FLAG_CULL_FRONT);
+		| T3D_FLAG_NO_LIGHT | N64_CULL);
 	done = cur;
 }
 

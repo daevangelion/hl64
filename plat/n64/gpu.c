@@ -23,6 +23,7 @@
 #include "engine/core/sys.h"
 #include "engine/render/gpu.h"
 #include "engine/world/wld.h"
+#include "plat/n64/n64.h"
 
 _Static_assert(sizeof(w64_vert_t) == sizeof(T3DVertPacked), "w64_vert_t is T3DVertPacked");
 
@@ -104,7 +105,7 @@ void gpu_begin(const gpu_view_t *v)
 	rdpq_mode_zbuf(true, true);
 	fence = -1;
 	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
-		| T3D_FLAG_NO_LIGHT | T3D_FLAG_CULL_FRONT);
+		| T3D_FLAG_NO_LIGHT | N64_CULL);
 }
 
 void gpu_end(void)
