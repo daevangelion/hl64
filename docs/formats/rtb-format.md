@@ -230,6 +230,16 @@ these ids into each map's entity chunk; class-dependent keys (titles,
 monstermaker `monstertype`, `func_breakable` gib models chosen by material
 through `res.def`) are typed there or by the game.
 
+Region proof (architecture.md 4.3): restab computes the bytes
+`engine/res` takes for the table in the RESTAB region (the same
+allocations: files 8 B, maps 2 B, `RES_` 12 B, sentences 4 B, words 8 B,
+groups 4 B, patterns 4 B + letters, `DEFS` 2 B, titles 40 B + texts,
+interest bits, sprite frame counts 2 B; each rounded up to 4) and the cart
+part res_init reads into the scratch region (file start to `TARG`), and
+fails the cook when either exceeds `HL64_RESTAB_KB` / `HL64_SCRATCH_KB`
+(`--limits`, default `include/hl64/limits.h`); test/m3/rec.sh checks the
+engine's `mem res` tables line equals the cook's number.
+
 `restab.cook(content, defs, map_names)` (the id step's prepass) builds the
 same id spaces without `maps/campaign.cwg` and the map packages.
 
