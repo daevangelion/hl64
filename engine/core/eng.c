@@ -52,11 +52,6 @@
 
 const char *eng_route_path = "route.rbc";
 
-/* game/ (slices GameCore, GameMon, Items); skipped until it is linked */
-#pragma weak game_init
-#pragma weak game_prof_line
-#pragma weak game_new_campaign
-#pragma weak game_start_frame
 static struct {
 	uint32_t	frame;		/* frames completed */
 	double		time;		/* game clock, f64 s from 1.0 (think-and-time.md 1) */
@@ -348,9 +343,8 @@ void eng_boot(const char *platform)
 	fx_init();
 	in_init();
 	phy_player_init();
-	/* the game's tables and its dispatch hooks (phy_set_game_hooks) */
-	if (game_init)
-		game_init();
+	/* game/: dispatch tables, engine hooks (think / touch / blocked) */
+	game_init();
 	if (eng.world)
 	{
 		int r = rt_load(eng_route_path);
@@ -371,8 +365,7 @@ void eng_boot(const char *platform)
 
 			if (map < 0)
 				sys_error("route: no start map");
-			if (game_new_campaign)
-				game_new_campaign();
+			game_new_campaign();
 			rec_new_campaign(map);
 			slot = wld_open(map)->slot;
 			if (!rec_player_start(slot, org, ang))
@@ -468,8 +461,7 @@ static void rollup(void)
 			(unsigned long)m.kind_us[PHY_K_PUSHSTEP] / n, (unsigned long)m.traces / n);
 	}
 	rec_prof_line();
-	if (game_prof_line)
-		game_prof_line();
+	game_prof_line();
 	{
 		fx_stats_t f;
 		unsigned long n;
@@ -533,8 +525,7 @@ void eng_frame(void)
 	 * timers (think-and-time.md 5), the game's frame start */
 	gdt = eng_clock_frame((double)dt * 1e-6);
 	rec_run_timers(eng_clock_time(), gdt);
-	if (game_start_frame)
-		game_start_frame();
+	game_start_frame();
 	/* 5 player: pmove host */
 	phy_player_frame(&cmd, eng.time);
 	/* 6 active set */
