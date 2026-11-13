@@ -810,6 +810,125 @@ static void test_frames(const char *m0, const char *m1)
 	ent_reset();
 }
 
+/* Searches (7.1): sphere / box / class against brute force. */
+static void test_searches(void)
+{
+	int i, k, round, checks = 0;
+	uint16_t out[HL64_MAX_ENTITIES];
+
+	ent_reset();
+	eng_clock_new_game();
+	rng_state = 99;
+	for (i = 0; i < 300; i++)
+	{
+		int e = ent_create(ENT_ALLOC_GAME);
+		float o[3], mn[3], mx[3];
+
+		for (k = 0; k < 3; k++)
+		{
+			o[k] = frnd(-1000, 1000);
+			mn[k] = -frnd(0, 40);
+			mx[k] = frnd(0, 40);
+		}
+		ent_idc(e)->cls = (cls_t)(rnd() % 5);
+		ent_set_size(e, mn, mx);
+		ent_set_flags(e, rnd() & 1 ? FL_MONSTER : 0);
+		if (i % 5 == 0)
+			ent_cv(e)->origin[0] = o[0];	/* placed but never linked: no box */
+		else
+		{
+			ent_set_solid(e, (int)(rnd() % 4));
+			ent_set_origin(e, o);
+		}
+	}
+	for (round = 0; round < 200; round++)
+	{
+		float c[3], r = frnd(0, 400), lo[3], hi[3];
+		int e = -1, n, want;
+		uint32_t mask = round & 1 ? FL_MONSTER : 0;
+
+		for (k = 0; k < 3; k++)
+		{
+			c[k] = frnd(-1000, 1000);
+			lo[k] = c[k] - frnd(0, 300);
+			hi[k] = c[k] + frnd(0, 300);
+		}
+		/* sphere: ascending, box distance <= r, every live slot from 1 */
+		for (i = 1; i < HL64_MAX_ENTITIES; i++)
+		{
+			float d2 = 0;
+
+			if (!ent_is_live(i))
+				continue;
+			for (k = 0; k < 3; k++)
+			{
+				float a = ent_cv(i)->absmin[k], b = ent_cv(i)->absmax[k];
+				float x = c[k] < a ? a - c[k] : c[k] > b ? c[k] - b : 0;
+
+				d2 += x * x;
+			}
+			if (d2 > r * r)
+				continue;
+			e = ent_next_in_sphere(e, c, r);
+			CHECK(e == i, "sphere round %d: got %d want %d", round, e, i);
+			checks++;
+		}
+		CHECK(ent_next_in_sphere(e, c, r) < 0, "sphere round %d: extra result", round);
+		/* box: linked entities only, flag mask, ascending */
+		n = ent_in_box(lo, hi, mask, out, HL64_MAX_ENTITIES);
+		for (i = 1, want = 0; i < HL64_MAX_ENTITIES; i++)
+		{
+			const col_ent_t *v = ent_cv(i);
+
+			if (!ent_is_live(i) || !ent_sets_linked(i) || (mask && !(v->flags & mask)))
+				continue;
+			for (k = 0; k < 3; k++)
+				if (v->absmin[k] > hi[k] || v->absmax[k] < lo[k])
+					break;
+			if (k < 3)
+				continue;
+			CHECK(want < n && out[want] == i, "box round %d: result %d", round, want);
+			want++;
+			checks++;
+		}
+		CHECK(n == want, "box round %d: %d results, want %d", round, n, want);
+		/* class */
+		e = -1;
+		for (i = 0; i < HL64_MAX_ENTITIES; i++)
+			if (ent_is_live(i) && ent_idc(i)->cls == (cls_t)(round % 5))
+			{
+				e = ent_next_class(e, (cls_t)(round % 5), -1);
+				CHECK(e == i, "class round %d: got %d want %d", round, e, i);
+				checks++;
+			}
+		CHECK(ent_next_class(e, (cls_t)(round % 5), -1) < 0, "class round %d: extra", round);
+	}
+	printf("searches ok: 200 rounds, %d results checked (sphere, box with flag masks and "
+		"unlinked entities, class)\n", checks);
+	ent_reset();
+}
+
+/* pvs MAP EYE P: a viewer of the map's layer at EYE; prints "pvs LE LP V". */
+static int cmd_pvs(const char *s)
+{
+	char m[64];
+	float eye[3], p[3];
+	const wld_layer_t *L;
+	int map, e, v;
+
+	if (sscanf(s, "pvs %63s %f %f %f %f %f %f", m, &eye[0], &eye[1], &eye[2], &p[0], &p[1],
+		&p[2]) != 7 || (map = wld_map_find(m)) < 0 || !(L = wld_open(map)))
+		return -1;
+	eng_set_frame_layer(L->slot);
+	e = ent_create(ENT_ALLOC_GAME);
+	ent_set_origin(e, eye);
+	v = ent_point_in_pvs(e, p);
+	printf("pvs %d %d %d\n", wld_point_leaf(L, eye), wld_point_leaf(L, p), v);
+	ent_destroy(e);
+	eng_set_frame_layer(-1);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	char buf[1024];
@@ -844,8 +963,18 @@ int main(int argc, char **argv)
 			test_p13();
 			test_k9();
 			test_priv();
+			test_searches();
 			quiet = 0;
 			printf(fails ? "selftest FAIL\n" : "selftest ok\n");
+			continue;
+		}
+		if (!strncmp(buf, "pvs ", 4))
+		{
+			if (cmd_pvs(buf))
+			{
+				printf("FAIL script line %d: %s", ln, buf);
+				return 1;
+			}
 			continue;
 		}
 		if (sscanf(buf, "frames %63s %63s", m0, m1) == 2)
