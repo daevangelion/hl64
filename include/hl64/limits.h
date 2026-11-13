@@ -90,7 +90,7 @@
 /* ---- boot carve regions, KB (4.1) ------------------------------------ */
 
 #define HL64_SCRATCH_KB			64	/* per-frame scratch arena */
-#define HL64_RESTAB_KB			28	/* resource table: 9.5 KB measured (Uplink + Hazard, no res.def) + the game's res.def (~500 ids x 20 B) x 1.25 */
+#define HL64_RESTAB_KB			40	/* resource table: 29228 B measured with the game's res.def (Uplink + Hazard cook, GameMon2) x 1.25, rounded up */
 #define HL64_SENTENCES_KB		24	/* [EST] word ids, no strings */
 #define HL64_LIGHTSTYLE_KB		4	/* patterns + state */
 #define HL64_LAYER_DIRS_KB		168	/* 2 open .w64 directories, measured */
