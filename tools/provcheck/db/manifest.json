@@ -1,0 +1,222 @@
+{
+ "audit_rows_skipped": [
+  "n64/port/r64_tex.c: 802 lines, audit snapshot 801",
+  "n64/port/r64_trans.c: 978 lines, audit snapshot 950",
+  "n64/port/r64_world.c: 2983 lines, audit snapshot 2977",
+  "source/g_combat.c: 613 lines, audit snapshot 568"
+ ],
+ "corpora": [
+  {
+   "bytes": 1865290,
+   "env": "PROVCHECK_QUAKEGENERIC",
+   "files": 184,
+   "kind": "git",
+   "label": "QUAKE",
+   "name": "quakegeneric-9fd3580",
+   "path": "~/src/ports/quakegeneric",
+   "rev": "9fd3580b518b9de232359e5d7a4845cf65b18df6",
+   "subdirs": null
+  },
+  {
+   "bytes": 1126746,
+   "env": "PROVCHECK_QUAKEGENERIC",
+   "files": 132,
+   "kind": "git",
+   "label": "QUAKE",
+   "name": "quakegeneric-1305210",
+   "path": "~/src/ports/quakegeneric",
+   "rev": "13052102577c629650cf07a46151a4b6e1b19c3c",
+   "subdirs": null
+  },
+  {
+   "bytes": 317120,
+   "env": "PROVCHECK_QUAKEGENERIC",
+   "files": 27,
+   "kind": "glob",
+   "label": "QUAKE",
+   "name": "quakegeneric-qctrans",
+   "path": "~/src/ports/quakegeneric",
+   "rev": null,
+   "subdirs": null
+  },
+  {
+   "bytes": 1198976,
+   "env": "PROVCHECK_QUAKEGENERIC",
+   "files": 74,
+   "kind": "audit",
+   "label": "AUDIT",
+   "name": "quakegeneric-audit",
+   "path": "~/src/ports/quakegeneric",
+   "rev": null,
+   "subdirs": null
+  },
+  {
+   "bytes": 11449899,
+   "env": "PROVCHECK_ID_QUAKE",
+   "files": 624,
+   "kind": "dir",
+   "label": "QUAKE",
+   "name": "id-quake",
+   "path": "/scratch/hl64/corpora/quake",
+   "rev": "bf4ac424ce754894ac8f1dae6a3981954bc9852d",
+   "subdirs": [
+    "WinQuake",
+    "QW",
+    "qw-qc"
+   ]
+  },
+  {
+   "bytes": 5988003,
+   "env": "PROVCHECK_ID_QUAKE2",
+   "files": 371,
+   "kind": "dir",
+   "label": "QUAKE",
+   "name": "id-quake2",
+   "path": "/scratch/hl64/corpora/quake2",
+   "rev": "372afde46e7defc9dd2d719a1732b8ace1fa096e",
+   "subdirs": null
+  },
+  {
+   "bytes": 6532433,
+   "env": "PROVCHECK_XASH",
+   "files": 496,
+   "kind": "dir",
+   "label": "XASH",
+   "name": "xash3d-fwgs",
+   "path": "/scratch/hl64/corpora/xash",
+   "rev": "707596f4905689ec224e993fcaa4d4ad66aa67d6",
+   "subdirs": [
+    "engine",
+    "ref",
+    "common",
+    "pm_shared",
+    "public",
+    "filesystem",
+    "utils"
+   ]
+  },
+  {
+   "bytes": 37469889,
+   "env": "PROVCHECK_HLSDK",
+   "files": 1156,
+   "kind": "dir",
+   "label": "HLSDK",
+   "name": "hlsdk",
+   "path": "/scratch/hl64/corpora/hlsdk",
+   "rev": "b1b5cf5892918535619b2937bb927e46cb097ba1",
+   "subdirs": null
+  },
+  {
+   "bytes": 4616409,
+   "env": "PROVCHECK_HLSDK_PORTABLE",
+   "files": 475,
+   "kind": "dir",
+   "label": "HLSDK",
+   "name": "hlsdk-portable",
+   "path": "/scratch/hl64/corpora/hlsdk-portable",
+   "rev": "89e83b92d561f5ceb11594c2f15e2e1519bc6c36",
+   "subdirs": null
+  },
+  {
+   "bytes": 236847,
+   "env": "PROVCHECK_COMMON_LICENSES",
+   "files": 14,
+   "kind": "dir",
+   "label": "GENERIC-TEXT",
+   "name": "common-licenses",
+   "path": "/usr/share/common-licenses",
+   "rev": null,
+   "subdirs": null
+  },
+  {
+   "bytes": 2263,
+   "env": null,
+   "files": 2,
+   "kind": "glob",
+   "label": "GENERIC-TEXT",
+   "name": "sdk-licences",
+   "path": "~/sdks",
+   "rev": null,
+   "subdirs": null
+  },
+  {
+   "bytes": 1069,
+   "env": null,
+   "files": 1,
+   "kind": "glob",
+   "label": "GENERIC-TEXT",
+   "name": "hl64-licence",
+   "path": "@hl64",
+   "rev": null,
+   "subdirs": null
+  },
+  {
+   "bytes": 9011623,
+   "env": "PROVCHECK_LIBDRAGON",
+   "files": 568,
+   "kind": "dir",
+   "label": "GENERIC",
+   "name": "libdragon",
+   "path": "~/sdks/libdragon",
+   "rev": "bc24d3d5a7d2f3bb0683b1722e0ce6f34c1adb6f",
+   "subdirs": [
+    "src",
+    "include"
+   ]
+  },
+  {
+   "bytes": 175436885,
+   "env": "PROVCHECK_TINY3D",
+   "files": 784,
+   "kind": "dir",
+   "label": "GENERIC",
+   "name": "tiny3d",
+   "path": "~/sdks/tiny3d",
+   "rev": "e84172f29f719680ac3213a7f408c2f721ef7b24",
+   "subdirs": null
+  },
+  {
+   "bytes": 15808539,
+   "env": "PROVCHECK_LIBC_INCLUDE",
+   "files": 1089,
+   "kind": "dir",
+   "label": "GENERIC-NAMES",
+   "name": "newlib-headers",
+   "path": "~/sdks/mips64-toolchain/mips64-elf/include",
+   "rev": null,
+   "subdirs": null
+  }
+ ],
+ "counts": {
+  "comment": 200503,
+  "exact": 399576,
+  "filehash": 1501,
+  "ident": 14979,
+  "norm": 269348,
+  "path": 182,
+  "qcname": 25
+ },
+ "db": "provcheck.db.gz",
+ "db_sha256": "17ab85bcbf8bcf11a4c5647306ec04e3bd7995eae984568f23f6fbf79ac71e9f",
+ "generic_dropped": {
+  "comment": 315,
+  "exact": 300,
+  "norm": 499
+ },
+ "params": {
+  "comment_informative": 5,
+  "comment_k": 8,
+  "comment_max_basenames": 12,
+  "comment_min": 10,
+  "exact_k": 12,
+  "exact_min": 60,
+  "exact_w": 6,
+  "filehash_min_bytes": 64,
+  "norm_distinct": 8,
+  "norm_k": 24,
+  "norm_max_basenames": 8,
+  "norm_min": 100,
+  "norm_w": 8,
+  "region_gap": 8
+ }
+}
