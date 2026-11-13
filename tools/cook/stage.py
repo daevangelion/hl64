@@ -13,9 +13,10 @@ sounds are derived from those maps' entity lumps, the class table
 (game/defs/res.def when it exists):
 
   maps/<m>.ent          the BSP entity lump text (restab input)
-  models/<x>.mdl        studio models the maps and the game name, with their
-                        <x>t.mdl texture and <x>NN.mdl sequence-group files
-                        (raw MDL until the M3 studio bake, see STUDIO below)
+  models/<x>.s64, .a64  studio models the maps and the game name, cooked
+                        (tools/studio/studiocook.py, studio-format.md) from
+                        <x>.mdl, its <x>t.mdl texture and <x>NN.mdl
+                        sequence-group files
   sprites/<x>.sc4       cart CI4 sprites (tools/cook/hl_sprite_cook.py) of
                         every sprite the maps and the game effects name
   gsfx/decals.i4        the decals the game shoots (cart I4)
@@ -74,6 +75,7 @@ from tools.cook import hl_sprite_cook
 from tools.cook.data import Data, DataError
 from tools.cook.hl_classes import BspError
 from tools.restab import restab, rtb
+from tools.studio import studiocook
 from tools.w64c import hleids
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -104,10 +106,10 @@ DECAL_I4_MAX = 64  # texels per side (TMEM); larger lumps are halved
 
 MAX_SEQ_GROUPS = 15
 
-# STUDIO: the M3 studio bake (D3 b: per-sequence animation chunks,
-# architecture.md 16.3 tools/studio_bake) runs after the model step and
-# writes models/<x>.stb* next to the raw files; until then the content
-# carries the raw MDL files restab tables.
+# STUDIO: the D3(b) studio cook (tools/studio/studiocook.py,
+# docs/formats/studio-format.md) turns every staged model into
+# models/<x>.s64 + .a64 right after the model step, before any restab pass;
+# the raw MDL files stay out of the content directory.
 
 
 class CookError(Exception):
@@ -245,9 +247,16 @@ def stage_models(data: Data, maps: List[str], ents, res: Dict[str, Set[str]],
             if not data.has(seq) or seq in names:
                 break
             out[seq] = data.need(seq)
-    for n, b in out.items():
-        ct.put(n, b)
-    log(f"    {len(names)} models, {len(out) - len(names)} texture / sequence-group files")
+    low = {k.lower(): v for k, v in out.items()}
+    for n in sorted({x.lower(): x for x in names}.values()):
+        try:
+            model, anim, _ = studiocook.cook_model(lambda rel: low.get(rel.lower()), n)
+        except studiocook.CookError as e:
+            raise CookError(f"studio: {e}") from None
+        ct.put(n[:-4] + ".s64", model)
+        ct.put(n[:-4] + ".a64", anim)
+    log(f"    {len(names)} models cooked to .s64 / .a64 ({len(out) - len(names)} texture / "
+        f"sequence-group files read)")
     return out
 
 

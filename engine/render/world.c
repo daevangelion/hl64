@@ -30,6 +30,7 @@
 
 #include "hl64/limits.h"
 #include "hl64/settings.h"
+#include "hl64/studio.h"
 #include "engine/core/sys.h"
 #include "engine/mem/carve.h"
 #include "engine/render/ren.h"
@@ -554,9 +555,16 @@ void ren_frame(double time)
 	for (i = 0; i < HL64_WORLD_LAYERS; i++)
 		if ((L = wld_layer(i)) && L->map == ren_cam.map)
 			draw_layer(L);
-	gpu_end();
 	st.world_us = (uint32_t)(sys_time_us() - t0);
+	studio_draw(time);
+	studio_draw_view();
+	gpu_end();
 	last = st;
+}
+
+const float (*ren_frustum(void))[3]
+{
+	return (const float (*)[3])fr_n;
 }
 
 void ren_stats(ren_stats_t *s)
