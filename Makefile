@@ -59,7 +59,7 @@ ENGINE_SRC_D2 :=
 GAME_SRC_CORE :=
 GAME_SRC_MON :=
 GAME_SRC_ITEMS :=
-GAME_SRC_STUDIO :=
+GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
 	$(ENGINE_SRC_SND) $(ENGINE_SRC_FX) $(ENGINE_SRC_D2)
 GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO)
@@ -278,7 +278,7 @@ routes: cook
 
 test-host: $(HLECOOK)
 	BUILD_DIR=$(BUILD_DIR) test/run/m0.sh
-	python3 -m unittest tools.restab.test_restab tools.routec.test_routec
+	python3 -m unittest tools.restab.test_restab tools.routec.test_routec tools.studio.test_studiocook
 	HL64_HLECOOK=$(HLECOOK) python3 -m unittest tools.cook.test_cook tools.cook.test_hl_campaign \
 		tools.w64c.test_w64c tools.w64c.test_w64check tools.w64c.test_w64seam \
 		tools.w64c.test_hlecook

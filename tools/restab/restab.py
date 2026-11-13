@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
 from . import rtb
+from tools.studio import s64
 
 MAX_ENTS_TEXT = 4 << 20       # entity lump text cap per map (bytes)
 MAX_DEF_LINES = 65535
@@ -35,6 +36,8 @@ MAX_SEQGROUPS = 15
 # entity keys whose "!NAME" value names a sentence (ambient_generic message,
 # scripted_sentence sentence, noise keys)
 SENTENCE_KEYS = frozenset(("message", "sentence", "noise", "noise1", "noise2", "noise3"))
+# HLSDK scriptevent.h: a studio event whose options name a sentence group
+SCRIPT_EVENT_SENTENCE_RND1 = 1009
 
 
 class CookError(Exception):
@@ -311,12 +314,29 @@ def res_kind_of_value(value: str) -> Optional[Tuple[int, str]]:
 
 
 def cart_file_of(kind: int, name: str) -> str:
-    """Staged file holding a resource (rtb-format.md "Resource files")."""
+    """Staged file holding a resource (rtb-format.md "Resource files"):
+    MODEL / ANIM of a cooked studio model are models/<x>.s64 / .a64
+    (studio-format.md); a MODEL without them is the raw MDL."""
     if kind == rtb.KIND_MODEL:
         return name
+    if kind == rtb.KIND_ANIM:
+        return name[:-4] + ".a64"
     if kind == rtb.KIND_SPRITE:
         return name[:-4] + ".sc4"
     return "sound/" + name + "64"     # x.wav -> sound/x.wav64
+
+
+def event_resource(event: int, options: str) -> Optional[Tuple[int, str]]:
+    """(kind, name) a studio event's option text names: a .wav sound, a
+    !SENTENCE, or the sentence group of SCRIPT_EVENT_SENTENCE_RND1."""
+    o = options.strip()
+    if o.lower().endswith(".wav"):
+        return rtb.KIND_SOUND, _norm(o).lstrip("*")
+    if o.startswith("!") and len(o) > 1:
+        return rtb.KIND_SENTENCE, o[1:].upper()
+    if event == SCRIPT_EVENT_SENTENCE_RND1 and o:
+        return rtb.KIND_GROUP, o.upper()
+    return None
 
 
 def cook(content_dir: str, defs_dir: str) -> rtb.Table:
@@ -402,6 +422,46 @@ def cook(content_dir: str, defs_dir: str) -> rtb.Table:
         def_keys.append((kind, name))
     style_lines = read_defs(defs_dir, "lightstyles.def")
 
+    # cooked studio models (tools/studio, studio-format.md): every model has
+    # models/<x>.s64 + .a64, or none has (raw MDL tables, no ANIM ids). Their
+    # events' option texts name sounds, sentences and groups: staged ones
+    # become resources, and their ids are written into the .s64 below.
+    model_list = sorted(n for k, n in refs if k == rtb.KIND_MODEL)
+    cooked: Dict[str, str] = {}
+    for name in model_list:
+        rel = content.find(name[:-4] + ".s64")
+        if rel:
+            cooked[name] = rel
+    if cooked and len(cooked) != len(model_list):
+        raise CookError("studio: models without a cooked .s64: "
+                        + ", ".join(n for n in model_list if n not in cooked))
+    studio_events: Dict[str, Tuple[bytes, List[Tuple[int, Tuple[int, str]]]]] = {}
+    soft_sentences: Set[str] = set()
+    soft_groups: Set[str] = set()
+    for name, rel in cooked.items():
+        with open(os.path.join(content_dir, rel), "rb") as f:
+            data = f.read()
+        try:
+            info = s64.read_model(data)
+        except (s64.S64Error, struct.error) as e:
+            raise CookError(f"{rel}: {e}") from None
+        evs = []
+        for ev in info.events:
+            er = event_resource(ev.event, ev.options)
+            if er is None:
+                continue
+            if er[0] == rtb.KIND_SOUND:
+                if not content.find(cart_file_of(rtb.KIND_SOUND, er[1])):
+                    continue
+                refs.setdefault(er, f"{name}: event {ev.event}")
+            elif er[0] == rtb.KIND_SENTENCE:
+                soft_sentences.add(er[1])
+            else:
+                soft_groups.add(er[1])
+            evs.append((ev.res_at, er))
+        studio_events[name] = (data, evs)
+        refs.setdefault((rtb.KIND_ANIM, name), refs[(rtb.KIND_MODEL, name)])
+
     # sentences: those referenced plus every member of a referenced group
     sent_path = content.find("sound/sentences.txt")
     all_sent: List[Sentence] = []
@@ -411,6 +471,12 @@ def cook(content_dir: str, defs_dir: str) -> rtb.Table:
     by_name: Dict[str, Sentence] = {}
     for s in all_sent:
         by_name.setdefault(s.name.upper(), s)
+    for name in sorted(soft_sentences):
+        if name in by_name:
+            sentence_refs.setdefault(name, "studio event")
+    for name in sorted(soft_groups):
+        if any(group_name(s.name).upper() == name for s in all_sent):
+            group_refs.setdefault(name, "studio event")
     keep: List[Sentence] = []
     for s in all_sent:
         if s.name.upper() in sentence_refs or group_name(s.name).upper() in group_refs:
@@ -448,16 +514,43 @@ def cook(content_dir: str, defs_dir: str) -> rtb.Table:
     for mname in t.map_names:
         t.map_files.append(add_file(need(f"maps/{mname}.w64", f"map {mname}")))
 
+    # ids are fixed by name order before any file is added, so the studio
+    # events' ids can be written into their .s64 first (idempotent)
+    sound_ids = {n: rtb.res_t(rtb.KIND_SOUND, i) for i, n in
+                 enumerate(sorted(n for k, n in refs if k == rtb.KIND_SOUND))}
+    sent_ids = {s.name.upper(): rtb.res_t(rtb.KIND_SENTENCE, i) for i, s in enumerate(keep)}
+    group_ids: Dict[str, int] = {}
+    nruns = 0
+    gprev = None
+    for s in keep:          # one group per run of equal group names (SGRP)
+        g = group_name(s.name).upper()
+        if g != gprev:
+            group_ids.setdefault(g, rtb.res_t(rtb.KIND_GROUP, nruns))
+            nruns += 1
+            gprev = g
+    for name, (data, evs) in studio_events.items():
+        patched = bytearray(data)
+        for at, (kind, rname) in evs:
+            r = {rtb.KIND_SOUND: sound_ids, rtb.KIND_SENTENCE: sent_ids,
+                 rtb.KIND_GROUP: group_ids}[kind].get(rname, 0)
+            struct.pack_into(">H", patched, at, r)
+        if patched != data:
+            with open(os.path.join(content_dir, cooked[name]), "wb") as f:
+                f.write(patched)
+
     res_id: Dict[Tuple[int, str], int] = {}
     for kind in rtb.FILE_KINDS:
         names = sorted(n for k, n in refs if k == kind)
         if len(names) > rtb.INDEX_MAX + 1:
             raise CookError(f"more than 8192 {rtb.KIND_NAMES[kind]} resources")
         for idx, name in enumerate(names):
-            rel = need(cart_file_of(kind, name), refs[(kind, name)])
+            if kind == rtb.KIND_MODEL and name in cooked:
+                rel = cooked[name]
+            else:
+                rel = need(cart_file_of(kind, name), refs[(kind, name)])
             flags = 0
             fi = add_file(rel)
-            if kind == rtb.KIND_MODEL:
+            if kind == rtb.KIND_MODEL and name not in cooked:
                 base = name[:-4]
                 companions = []
                 tex = content.find(base + "t.mdl")
