@@ -75,6 +75,9 @@ GAME_SRC_ITEMS := game/hl/weapons.c game/hl/weapon_crowbar.c game/hl/weapon_gloc
 GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
 	$(ENGINE_SRC_SND) $(ENGINE_SRC_FX) $(ENGINE_SRC_D2)
+# M4 Gate: the seam-window profiler (engine/test/seamprof.c: PROFILE carts,
+# every host build; empty otherwise)
+ENGINE_SRC += engine/test/seamprof.c
 GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO)
 # HLSDK sources kept as Valve wrote them: their unused locals, MSVC
 # pragmas and array-parameter styles are not ours to fix; HLSDK builds
@@ -117,7 +120,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest sndtest seamproftest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -375,6 +378,15 @@ SND_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(SND_BIN): $(SND_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 sndtest: $(SND_BIN)
+
+# Seam-window profiler driver (test/m4/gate_seamprof.c, run by
+# test/m4/gate_seamprof.py and test/run/m4.sh).
+SEAMPROF_BIN := $(BUILD_DIR)/host/hl64-seamprof
+SEAMPROF_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m4/gate_seamprof.o
+$(SEAMPROF_BIN): $(SEAMPROF_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+seamproftest: $(SEAMPROF_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 
