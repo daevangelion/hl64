@@ -1,0 +1,16 @@
+# old tree cart (ares) frame numbers per Uplink map visit: test/m5/old_frames.py
+# source: /scratch/quakegeneric/tmp/OldGreen3/r1/ares-uplink-playthrough.log (2026-11-13, old tree cart PROFILE playthrough ROM, route = n64/port/test/uplink_route.cfg + memstats lines, route PASS, 4 switches, hldemo2->hldemo3 forced on the cart)
+visit 1 hldemo1 windows=112 avg_ms=33.6 p90_ms=33.4 worst_ms=38.0
+visit 2 hldemo2 windows=154 avg_ms=37.2 p90_ms=45.5 worst_ms=66.2
+visit 3 hldemo3 windows=205 avg_ms=34.5 p90_ms=35.6 worst_ms=60.2
+visit 4 hldemo2 windows=44 avg_ms=42.7 p90_ms=59.2 worst_ms=64.9
+visit 5 hldemo1 windows=218 avg_ms=37.2 p90_ms=45.2 worst_ms=69.0
+pace hldemo1 hldemo1 frames=783 v1..v7+=0/781/1/0/0/0/1 over50=1
+pace flashlight-on hldemo2 frames=2341 v1..v7+=0/2286/50/3/0/2/0 over50=5
+pace flashlight-off hldemo2 frames=469 v1..v7+=0/410/57/2/0/0/0 over50=2
+pace flashlight-recharge hldemo2 frames=98 v1..v7+=0/62/32/3/0/0/1 over50=4
+pace hldemo2 hldemo2 frames=1595 v1..v7+=0/1178/317/85/13/1/1 over50=100
+pace hldemo3 hldemo3 frames=81 v1..v7+=0/57/21/1/1/1/0 over50=3
+pace hldemo2-return hldemo2 frames=4107 v1..v7+=0/3896/177/31/0/3/0 over50=34
+pace hldemo1-return hldemo1 frames=867 v1..v7+=0/503/246/107/9/1/1 over50=118
+pace final hldemo1 frames=4338 v1..v7+=0/3589/571/163/13/0/2 over50=178
