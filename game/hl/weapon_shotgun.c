@@ -148,8 +148,12 @@ static void Reload(int id)
 			return;
 		/* was waiting for gun to move to side */
 		w->m_fInSpecialReload = 2;
-		EMIT_SOUND_DYN(ENT_PLAYER, CHAN_ITEM, RANDOM_LONG(0, 1) ? RESID(W_RELOAD1)
-			: RESID(W_RELOAD3), 1, ATTN_NORM, 0, 85 + RANDOM_LONG(0, 0x1f));
+		{
+			/* draws in source order (argument order is unspecified, K10) */
+			res_t s = RANDOM_LONG(0, 1) ? RESID(W_RELOAD1) : RESID(W_RELOAD3);
+
+			EMIT_SOUND_DYN(ENT_PLAYER, CHAN_ITEM, s, 1, ATTN_NORM, 0, 85 + RANDOM_LONG(0, 0x1f));
+		}
 		W_SendWeaponAnim(SHOTGUN_RELOAD);
 		w->m_flNextReload = 0.5f;
 		w->m_flTimeWeaponIdle = 0.5f;

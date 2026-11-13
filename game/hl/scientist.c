@@ -419,12 +419,14 @@ static void CScientist_PainSound(int e)
 {
 	CScientist *s = SCI(e);
 	static const int16_t pain[5] = { R_SCI_PAIN1, R_SCI_PAIN2, R_SCI_PAIN3, R_SCI_PAIN4, R_SCI_PAIN5 };
+	res_t snd;
 
 	if (gtime() < s->m_painTime)
 		return;
 	s->m_painTime = gtime() + RANDOM_FLOAT(0.5f, 0.75f);
-	EMIT_SOUND_DYN(e, CHAN_VOICE, res_def(pain[RANDOM_LONG(0, 4)]), 1, ATTN_NORM, 0,
-		Tlk_GetVoicePitch(e));
+	/* the sample before the pitch: argument order is unspecified (K10) */
+	snd = res_def(pain[RANDOM_LONG(0, 4)]);
+	EMIT_SOUND_DYN(e, CHAN_VOICE, snd, 1, ATTN_NORM, 0, Tlk_GetVoicePitch(e));
 }
 
 static void CScientist_Killed(int e, int attacker, int iGib)

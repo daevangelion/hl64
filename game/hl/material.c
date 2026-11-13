@@ -123,6 +123,11 @@ float TEXTURETYPE_PlaySound(const col_trace_t *tr, const float src[3], const flo
 				ATTN_NORM, 0, 100);
 		}
 	}
-	snd_ambient(tr->end, s[RANDOM_LONG(0, cnt - 1)], fvol, fattn, 0, 96 + RANDOM_LONG(0, 0xf));
+	{
+		/* the sample before the pitch: argument order is unspecified (K10) */
+		res_t snd = s[RANDOM_LONG(0, cnt - 1)];
+
+		snd_ambient(tr->end, snd, fvol, fattn, 0, 96 + RANDOM_LONG(0, 0xf));
+	}
 	return fvolbar;
 }

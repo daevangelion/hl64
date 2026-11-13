@@ -19,6 +19,14 @@ void		eng_frame(void);
 /* Frames since boot (the frame being run; dbg commands and stats records
  * carry the same counter). */
 uint32_t	eng_frame_count(void);
+/* K10 triage (test builds, `trace FIRST LAST`): 1 while the frame being run
+ * is inside the trace window; modules then log `trace F <what> ...` lines
+ * of their decisions, the frame loop one `trace F frame` line per frame. */
+#ifdef HL64_TEST
+int		eng_trace(void);
+#else
+#define eng_trace()	0
+#endif
 
 /* The route eng_boot loads: "route.rbc" at the cart root unless the
  * platform names another before eng_boot (host --route). */

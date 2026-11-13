@@ -492,7 +492,11 @@ static void parse_dir(wld_layer_t *L, uint8_t *d, const char *file)
 			S32(&x->gid, 1);
 			S16(&x->first, 2);
 		}
-		S16(d + m->face_ofs, 5u * m->nface);
+		/* lo[2], hi[2] only: the u8 code / pad pair stays in file order
+		 * (swapped as one u16 the host read every mixed face's pad: 0,
+		 * concrete; the cart its code, K10) */
+		for (i = 0; i < m->nface; i++)
+			S16((w64_matface_t *)(d + m->face_ofs) + i, 4);
 #endif
 		st = (const uint16_t *)(d + m->start_ofs);
 		for (i = 0; i < dir->ncoll; i++)

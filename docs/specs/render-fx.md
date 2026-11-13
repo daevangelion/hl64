@@ -104,7 +104,10 @@ the CI4 TLUT range (old tree finding).
 - Drawing: after the opaque world, depth test with decal Z offset, texel =
   I4 alpha × the decal's tint (decal sheet cooked from the player's
   `decals.wad`).
-- Cost cap: 3 ms per frame for placement work; excess placements wait.
+- Cost cap: 3 ms per frame for placement work on the cart; excess
+  placements wait. Counted as work units (meshlets tested + indices
+  walked, 350 a frame ≈ 3 ms measured on the cart), not wall time, so host
+  and cart place the same decals in the same frames.
 
 ## 5. Temporary effects (game → engine effect API)
 

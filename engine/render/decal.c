@@ -25,7 +25,9 @@
  * decals move with the mover and a decal whose sector is evicted is kept
  * and drawn again when the sector returns. Pool HL64_FX_DECALS, oldest
  * replaced. Placements are queued (HL64_FX_DECAL_QUEUE): processed under
- * 3 ms a frame; one whose sector is not resident waits (4 retried per
+ * a work cap a frame (BUDGET_WORK: the spec's 3 ms, counted in walked
+ * meshlets and triangles so host and cart place the same decals in the
+ * same frames, K10); one whose sector is not resident waits (4 retried per
  * frame) and is dropped after 2 s.
  */
 #include <math.h>
@@ -34,6 +36,7 @@
 #include "hl64/ent.h"
 #include "hl64/grid.h"
 #include "hl64/limits.h"
+#include "engine/core/eng.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/io/io.h"
@@ -53,7 +56,12 @@
 #define REACH		4.0f		/* plane distance that receives the decal */
 #define PIECE_MAX	8		/* clip vertices kept per piece */
 #define PIECES		8		/* pieces per decal */
-#define BUDGET_US	3000
+/* placement work a frame (fx_decal_static and the queue): meshlets tested
+ * plus indices walked, the spec's 3 ms cost cap on the cart (measured on
+ * ares, m4 route frames 3860-4130: 8.4-8.9 us a unit); not wall time,
+ * which would make the placements (and infodecal's retries, a game
+ * decision) differ host / cart (K10) */
+#define BUDGET_WORK	350
 #define RETRIES		4
 #define QUEUE_LIFE	2.0
 #define MAX_CHUNKS	16		/* chunks one placement may touch */
@@ -98,7 +106,8 @@ static struct {
 	io_req_t	req;
 } slots[HL64_WORLD_LAYERS];
 static uint8_t		*slot_base;		/* region + align16(global sheet) */
-static uint32_t		slot_bytes, frames, spent_us;
+static uint32_t		slot_bytes, frames, spent_us;	/* spent_us: fx_decal_static's (stats) */
+static uint32_t		work;			/* placement work this frame (BUDGET_WORK) */
 static uint32_t		sheet_bytes, vert_bytes, region_bytes;
 static fxdecal_t	pool[HL64_FX_DECALS];
 static dvert_t		*verts;			/* HL64_FX_DECALS x HL64_FX_DECAL_VERTS */
@@ -155,7 +164,7 @@ void decal_init(void)
 	memset(tex, 0, sizeof(tex));
 	ntex = 0;
 	seq = 0;
-	frames = spent_us = 0;
+	frames = spent_us = work = 0;
 	sheet_bytes = 0;
 	vert_bytes = vbytes;
 	region_bytes = cap;
@@ -554,12 +563,13 @@ static void walk_chunk(place_t *P, const wld_layer_t *L, const uint8_t *ch, uint
 
 		if (!meshlet_ok(m, size))
 			continue;
-
+		work++;
 		for (k = 0; k < 3; k++)
 			if (P->q[k] + reach < m->bbox[k] || P->q[k] - reach > m->bbox[k + 3])
 				break;
 		if (k < 3)
 			continue;
+		work += (uint32_t)ni;
 		/* strips: a RESTART-flagged index starts one */
 		for (j = 0; j < ni; j++)
 		{
@@ -658,12 +668,13 @@ static int winding_sign(const place_t *P, const wld_layer_t *L, const uint8_t *c
 
 		if (!meshlet_ok(m, size))
 			continue;
-
+		work++;
 		for (k = 0; k < 3; k++)
 			if (P->q[k] + 1 < m->bbox[k] || P->q[k] - 1 > m->bbox[k + 3])
 				break;
 		if (k < 3)
 			continue;
+		work += (uint32_t)ni;
 		for (j = 0; j < ni; j++)
 		{
 			int a, b, c;
@@ -951,8 +962,13 @@ int fx_decal_static(int e, const float org[3], int decal)
 	float p[3];
 	int t = resolve(decal, eng_frame_layer()), r;
 
-	if (t == -2 || spent_us > BUDGET_US)
+	if (t == -2 || work >= BUDGET_WORK)
+	{
+		if (eng_trace())
+			log_printf("trace %lu decal static e=%d not now: %s\n",
+				(unsigned long)eng_frame_count(), e, t == -2 ? "sheet" : "budget");
 		return -1;
+	}
 	if (t < 0)
 	{
 		st.nosheet++;
@@ -991,8 +1007,13 @@ void decal_frame(void)
 			st.dropped++;
 			continue;
 		}
-		if (sys_time_us() - t0 + spent_us > BUDGET_US)
+		if (work >= BUDGET_WORK)
+		{
+			if (eng_trace())
+				log_printf("trace %lu decal budget: queue cut\n",
+					(unsigned long)eng_frame_count());
 			break;		/* excess placements wait */
+		}
 		if (q->tries && retries >= RETRIES)
 			continue;
 		if (q->tries)
@@ -1009,8 +1030,12 @@ void decal_frame(void)
 			st.placed++;
 	}
 	st.pending = (uint16_t)n;
-	st.place_us += (uint32_t)(sys_time_us() - t0) + spent_us;
-	spent_us = 0;
+	t0 = sys_time_us() - t0 + spent_us;
+	if (eng_trace() && work)
+		log_printf("trace %lu decal work=%lu us=%lu\n", (unsigned long)eng_frame_count(),
+			(unsigned long)work, (unsigned long)t0);
+	st.place_us += (uint32_t)t0;
+	spent_us = work = 0;
 }
 
 int decal_count(void)

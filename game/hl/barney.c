@@ -267,18 +267,22 @@ static void CBarney_PainSound(int e)
 {
 	static const int16_t s[3] = { R_BA_PAIN1, R_BA_PAIN2, R_BA_PAIN3 };
 	CBarney *b = BA(e);
+	res_t snd;
 
 	if (gtime() < b->m_painTime)
 		return;
 	b->m_painTime = gtime() + RANDOM_FLOAT(0.5f, 0.75f);
-	EMIT_SOUND_DYN(e, CHAN_VOICE, res_def(s[RANDOM_LONG(0, 2)]), 1, ATTN_NORM, 0, Tlk_GetVoicePitch(e));
+	/* the sample before the pitch: argument order is unspecified (K10) */
+	snd = res_def(s[RANDOM_LONG(0, 2)]);
+	EMIT_SOUND_DYN(e, CHAN_VOICE, snd, 1, ATTN_NORM, 0, Tlk_GetVoicePitch(e));
 }
 
 static void CBarney_DeathSound(int e)
 {
 	static const int16_t s[3] = { R_BA_DIE1, R_BA_DIE2, R_BA_DIE3 };
+	res_t snd = res_def(s[RANDOM_LONG(0, 2)]);	/* before the pitch (K10) */
 
-	EMIT_SOUND_DYN(e, CHAN_VOICE, res_def(s[RANDOM_LONG(0, 2)]), 1, ATTN_NORM, 0, Tlk_GetVoicePitch(e));
+	EMIT_SOUND_DYN(e, CHAN_VOICE, snd, 1, ATTN_NORM, 0, Tlk_GetVoicePitch(e));
 }
 
 static void CBarney_TraceAttack(int e, int attacker, float dmg, const float dir[3],

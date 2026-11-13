@@ -973,7 +973,10 @@ static void CGibShooter_LogicTimer(gid_t16 gid, uint16_t arg, int activator)
 		ent_set_origin(e, org);
 		VecScale(dir, velocity, v);
 		ent_set_velocity(e, v);
-		VecSet(v, RANDOM_FLOAT(100, 200), RANDOM_FLOAT(100, 300), 0);
+		/* draws in source order (argument order is unspecified, K10) */
+		v[0] = RANDOM_FLOAT(100, 200);
+		v[1] = RANDOM_FLOAT(100, 300);
+		v[2] = 0;
 		ent_set_avelocity(e, v);
 		g->m_lifeTime = life * RANDOM_FLOAT(0.95f, 1.05f);	/* +/- 5% */
 		if (g->m_lifeTime < think)

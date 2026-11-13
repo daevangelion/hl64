@@ -41,6 +41,7 @@
 #include "hl64/settings.h"
 #include "hl64/studio.h"
 #include "hl64/studio_fmt.h"
+#include "engine/core/eng.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/io/io.h"
@@ -1240,19 +1241,22 @@ int ent_illum(int e)
 	wld_layer_t *L;
 	const uint16_t *list;
 	float g[3];
-	int cnt, base, k, v;
+	int cnt, base, probe, k, v;
 
 	if (!ent_is_live(e) || !(L = wld_layer(ent_idc(e)->layer)))
 		return 0;
 	cv = ent_cv(e);
 	list = wld_leaf_sectors(L, wld_point_leaf(L, cv->origin), &cnt);
-	base = probe_at(L, list, cnt, cv->origin);
+	base = probe = probe_at(L, list, cnt, cv->origin);
 	if (base < 0)
 		base = illum[e] ? illum[e] : 128;
 	for (k = 0; k < 3; k++)
 		g[k] = cv->origin[k] + L->gofs[k];
 	v = ren_model_light(e, g, (float)base, -1, 0);
 	illum[e] = (uint8_t)(base > 0 ? base : 1);
+	if (eng_trace())
+		log_printf("trace %lu illum e=%d probe=%d base=%d v=%d\n",
+			(unsigned long)eng_frame_count(), e, probe, base, v);
 	return v;
 }
 

@@ -317,15 +317,22 @@ static void Z_AlertSound(int e)
 	EMIT_SOUND_DYN(e, CHAN_VOICE, RANDOM_SOUND_ARRAY(zAlert), 1.0f, ATTN_NORM, 0, pitch);
 }
 
+/* The sample (drawn by the caller, as an argument) before the pitch: in one
+ * argument list their order would be unspecified (K10) */
+static void z_sound(int e, int chan, res_t s)
+{
+	EMIT_SOUND_DYN(e, chan, s, 1.0f, ATTN_NORM, 0, 100 + RANDOM_LONG(-5, 5));
+}
+
 static void Z_IdleSound(int e)
 {
 	(void)RANDOM_LONG(0, 9);	/* HLSDK draws the unused pitch first */
-	EMIT_SOUND_DYN(e, CHAN_VOICE, RANDOM_SOUND_ARRAY(zIdle), 1.0f, ATTN_NORM, 0, 100 + RANDOM_LONG(-5, 5));
+	z_sound(e, CHAN_VOICE, RANDOM_SOUND_ARRAY(zIdle));
 }
 
 static void Z_AttackSound(int e)
 {
-	EMIT_SOUND_DYN(e, CHAN_VOICE, RANDOM_SOUND_ARRAY(zAttack), 1.0f, ATTN_NORM, 0, 100 + RANDOM_LONG(-5, 5));
+	z_sound(e, CHAN_VOICE, RANDOM_SOUND_ARRAY(zAttack));
 }
 
 static int Z_TakeDamage(int e, int inflictor, int attacker, float dmg, int bits)
@@ -361,10 +368,10 @@ static void z_hit(int e, const float *sk, float px, float pz, float side, float 
 			VecMA(v, fwd, gpGlobals.v_forward, v);
 			ent_set_velocity(hurt, v);
 		}
-		EMIT_SOUND_DYN(e, CHAN_WEAPON, RANDOM_SOUND_ARRAY(zHit), 1.0f, ATTN_NORM, 0, 100 + RANDOM_LONG(-5, 5));
+		z_sound(e, CHAN_WEAPON, RANDOM_SOUND_ARRAY(zHit));
 	}
 	else
-		EMIT_SOUND_DYN(e, CHAN_WEAPON, RANDOM_SOUND_ARRAY(zMiss), 1.0f, ATTN_NORM, 0, 100 + RANDOM_LONG(-5, 5));
+		z_sound(e, CHAN_WEAPON, RANDOM_SOUND_ARRAY(zMiss));
 	if (RANDOM_LONG(0, 1))
 		Z_AttackSound(e);
 }
