@@ -57,6 +57,8 @@ int	game_end_section(void);
 /* ---- frame (architecture.md 3.2) ------------------------------------------- */
 
 void	game_start_frame(void);		/* step 4, after rec_run_timers */
+/* GameMon: the `prof mon_us` roll-up line (eng.c rollup, weak). */
+void	game_mon_prof(void);
 
 /* ---- player ---------------------------------------------------------------- */
 

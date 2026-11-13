@@ -19,6 +19,10 @@
  *   W e                      gs_event_window
  *   G e group value          gs_set_bodygroup / gs_get_bodygroup
  *   K idx i value            gs_set_controller into a scratch ctl[4]
+ *   O map                    open the map at g_M (world + renderer state)
+ *   P e x y z                place e there (map-local, layer 0)
+ *   Q e                      ent_illum -> R Q value
+ *   D x y z radius           a dynamic light (map-local to layer 0), live for 1 s
  *   F                        frame boundary (studio_frame)
  *   S                        studio stats
  */
@@ -35,6 +39,8 @@
 #include "engine/io/io.h"
 #include "engine/mem/carve.h"
 #include "engine/phys/phys.h"
+#include "engine/render/ren.h"
+#include "engine/world/wld.h"
 #include "plat/host/host.h"
 
 static gs_animating_t	anim[HL64_MAX_ENTITIES];
@@ -171,6 +177,52 @@ int main(int argc, char **argv)
 				goto bad;
 			g = gs_set_controller(mdl(i), ctl, j, f);
 			printf("R K %.9g %d %d %d %d\n", g, ctl[0], ctl[1], ctl[2], ctl[3]);
+			break;
+		}
+		case 'O':
+		{
+			int map;
+
+			if (sscanf(line + 1, "%255s", a) != 1 || !wld_init() || (map = wld_map_find(a)) < 0)
+				goto bad;
+			wld_open(map);
+			ren_init();
+			break;
+		}
+		case 'P':
+		{
+			float o[3];
+
+			if (sscanf(line + 1, "%d %f %f %f", &e, &o[0], &o[1], &o[2]) != 4 || !ent_is_live(e))
+				goto bad;
+			ent_idc(e)->layer = 0;
+			memcpy(ent_cv(e)->origin, o, sizeof(o));
+			break;
+		}
+		case 'Q':
+			if (sscanf(line + 1, "%d", &e) != 1)
+				goto bad;
+			for (k = 0; k < 64; k++)	/* let the probe chunk land */
+			{
+				ent_illum(e);
+				io_pump();
+				wld_frame((uint32_t)k);
+			}
+			printf("R Q %d\n", ent_illum(e));
+			break;
+		case 'D':
+		{
+			ren_dlight_t *d;
+			float o[4];
+
+			if (sscanf(line + 1, "%f %f %f %f", &o[0], &o[1], &o[2], &o[3]) != 4)
+				goto bad;
+			d = ren_dlight_alloc(0, eng_time());
+			for (k = 0; k < 3; k++)
+				d->origin[k] = o[k] + (wld_layer(0) ? wld_layer(0)->gofs[k] : 0);
+			d->radius = o[3];
+			d->die = eng_time() + 1.0;
+			ren_dlight_frame(eng_time(), 0);
 			break;
 		}
 		case 'F':

@@ -61,7 +61,11 @@ GAME_SRC_CORE := game/hl/util.c game/hl/dispatch.c game/hl/world.c game/hl/trigg
 	game/hl/doors.c game/hl/buttons.c game/hl/lights.c game/hl/ambient.c \
 	game/hl/material.c game/hl/env.c game/hl/bmodels.c game/hl/plats.c \
 	game/hl/breakable.c
-GAME_SRC_MON :=
+GAME_SRC_MON := game/hl/monsters.c game/hl/schedule.c game/hl/defaultai.c game/hl/aicombat.c \
+	game/hl/aisound.c game/hl/nodes.c game/hl/scripted.c game/hl/sentences.c \
+	game/hl/talkmonster.c game/hl/scientist.c game/hl/monstermaker.c \
+	game/hl/barney.c game/hl/generic.c game/hl/headcrab.c \
+	game/hl/aisquad.c game/hl/houndeye.c game/hl/barnacle.c
 GAME_SRC_ITEMS :=
 GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
@@ -106,7 +110,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest gametest rectest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest gametest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -307,6 +311,14 @@ REC_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(REC_BIN): $(REC_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 rectest: $(REC_BIN)
+
+# Sound driver (test/m3/snd.c, run by test/m3/snd.sh: S1-S8 host parts).
+SND_BIN := $(BUILD_DIR)/host/hl64-snd
+SND_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/snd.o
+$(SND_BIN): $(SND_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+sndtest: $(SND_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 
