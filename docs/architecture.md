@@ -313,6 +313,8 @@ reads only at boot/New Game and for a collision chunk missing mid-trace
 KB/frame p50/p90/p99, `budget_over` (must be 0), blocked µs, host
 `pi_over`. ares models PI at a fixed 5.25 MB/s without bus contention;
 real hardware is checked per milestone when a flashcart is available.
+`HL64_TEST` builds plan each frame's pieces at its start and publish
+their completions at the next frame's start (15, K10).
 
 ### 5.3 Layers and residency
 
@@ -900,6 +902,34 @@ mostly block copies.
   p50/p99, pop-in, blocked I/O, position, time) printed as one text line
   per `STATS` op; field names follow the old tree's where comparable so
   old/new logs compare.
+- **Test-build determinism (K10: host = cart)**: in `HL64_TEST` builds
+  no simulation-affecting decision depends on PI timing, pump counts or
+  wall time, so the host's PI model and the cart's DMA give identical
+  route ops and entity records. Budgets count work (records per frame,
+  `REC_BUDGET_HOST`). I/O completes in frames (engine/io, 5.2): at
+  `io_frame_begin` the scheduler plans the frame's pieces from the queue
+  alone (priority order, the frame's byte budget, at most
+  `IO_TEST_PIECES`), they move during the frame (one in flight, pumped at
+  every frame step), and their completions (request done, callbacks,
+  chunk RESIDENT, studio info / anim landed) are published only at the
+  next `io_frame_begin`, before anything else of that frame; a planned
+  piece not moved by then is read there (late: `io: frame N late`,
+  stats `stream: late=frames/pieces`, blocked I/O; the M4 gate fails on
+  it). Synchronous reads (boot, New Game, loads, audio, `io_finish`,
+  `wld_chunk_sync`) keep their immediate semantics. Every residency-
+  driven decision is then the same frame on both: the map-open gate, the
+  precache hold, seam pins, studio info / anim availability and the
+  hitbox source (the box while an animation is not resident). A map
+  opened by a seam has one open gate after its layer and HLE reads: its
+  records hydrate once its precache infos and spawn windows are
+  resident, bounded (`REC_PRECACHE_FRAMES`; an expiry is logged, counted
+  in `stats N rec: expired=` and fails the M4 gate). Seam pins B as soon
+  as its layer is ready. Playable builds publish a request as soon as its
+  last piece lands and pump at `eng_frame`'s fixed points only. Triage:
+  `entsdump 1` makes every `stats` record also log one line per live
+  entity (`stats N ent E cls= gid= tn= id= cv= mot= ph= tm= rnd=`, part
+  hashes + render fields); the first differing line of two runs names
+  the entity and the component.
 - **PROFILE zones**: enum of ≈ 40 zones (frame, upd, phys, think, trace,
   hitbox, touch, link, pmove, stream, io, hydrate, wake, rnd, world,
   movers, studio, sbuild, bones, trans, decal, hud, snd …), µs and counts,

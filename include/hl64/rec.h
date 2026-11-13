@@ -222,6 +222,7 @@ typedef struct {
 	uint32_t	priv_bytes, priv_peak;
 	uint32_t	released_total;		/* since New Game */
 	uint32_t	store_used, store_peak;	/* dehydrate store bytes */
+	uint32_t	open_expired;		/* open gates (precache hold) expired with data pending */
 } rec_stats_t;
 void		rec_stats(rec_stats_t *s, int reset);
 /* O(REC_SLOTS), no record walk (per-frame profilers): HLE region bytes in

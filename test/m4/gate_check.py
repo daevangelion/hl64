@@ -15,7 +15,8 @@ Checks (one `check <name> PASS|FAIL <detail>` line each):
   stats-K     a stats record before and after the K-th switch
   over        every stats record over=0 (I/O budget)
   open-fail   no `seam: open_fail` line, every stats seam open_fail=0
-  blk1ms      every stats stream blk1ms=0 (no frame > 1 ms blocked I/O)
+  blk1ms      every stats stream blk1ms=0 (no frame > 1 ms blocked I/O) and
+              late=0/0 (no test-build I/O plan finished late)
   popin       every stats stream popin=0 (popin_tele allowed, reported)
   continuity  one continuity line per switch, each missing=0 extra=0, and
               stats seam continuity_bad=0
@@ -126,10 +127,14 @@ def main():
           "no stats seam lines" if not seam_recs else "%d open_fail lines, stats open_fail %s" % (
               len(of_lines), max((r.get("open_fail", 0) for r in seam_recs), default=0)))
 
+    # test builds also finish a frame's I/O plan late at the boundary
+    # (engine/io: late=frames/pieces): blocked I/O, 0 on the gate routes
     blk = [r.get("blk1ms") for r in stream_recs]
-    check("blk1ms", bool(stream_recs) and all(b == 0 for b in blk),
-          "no stats stream lines" if not stream_recs else "blk1ms max %s over %d records" % (
-              max(b or 0 for b in blk), len(blk)))
+    late = [r.get("late", (0, 0)) for r in stream_recs]
+    late_f = max((l[0] if isinstance(l, tuple) else l for l in late), default=0)
+    check("blk1ms", bool(stream_recs) and all(b == 0 for b in blk) and not late_f,
+          "no stats stream lines" if not stream_recs else "blk1ms max %s, io late %d frames "
+          "over %d records" % (max(b or 0 for b in blk), late_f, len(blk)))
     pop = [r.get("popin") for r in stream_recs]
     tele = max((r.get("popin_tele", 0) for r in stream_recs), default=0)
     check("popin", bool(stream_recs) and all(p == 0 for p in pop),
@@ -164,6 +169,10 @@ def main():
             rbad.append("stats %d: store=%s (cap %d)" % (n, store, cap))
         if rec["live"] > emax:
             rbad.append("stats %d: live=%d > %d" % (n, rec["live"], emax))
+        # a map's open gate (architecture.md 15) expired: its records
+        # hydrated with infos / spawn windows not resident
+        if rec.get("expired", 0):
+            rbad.append("stats %d: expired=%d open gates" % (n, rec["expired"]))
     last = next((r["rec"] for r in reversed(list(st.values())) if "rec" in r), None)
     check("rec", bool(mains) and not rbad, "; ".join(rbad[:4]) if rbad else "last: live=%s pending=%s "
           "dry=%s released=%s store=%s" % tuple(

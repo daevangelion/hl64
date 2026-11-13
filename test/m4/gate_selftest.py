@@ -23,8 +23,9 @@ ZONES = ["frame", "seam", "render"]
 REGIONS = [("render", 245760), ("components", 137216)]
 
 
-def stats(n, frame, seam, rec="live=40 pending=3 dry=0 released=0 store=0/0",
-          stream="popin=0 popin_tele=0 blk1ms=0 pins=0 prefetch=0 recompute=1 reassert=0", over=0):
+def stats(n, frame, seam, rec="live=40 pending=3 dry=0 released=0 store=0/0 expired=0",
+          stream="popin=0 popin_tele=0 blk1ms=0 pins=0 prefetch=0 recompute=1 reassert=0 late=0/0",
+          over=0):
     return ["stats %d frame=%d t=1 heap=1/1KB live=1KB peak=1KB fails=0 ioq=0 blkmax=0us over=%d "
             "fpu=0 stack=-1 pace" % (n, frame, over),
             "stats %d player: map=x org=0,0,0 vel=0,0,0 flags=0 hull=0 ground=0 water=0" % n,
@@ -114,6 +115,8 @@ def main():
                                "open_fail=1 late=0 twins=4 carried=1 continuity_bad=0 closes=1"),
          ["open-fail"])
     case("blk1ms", sub(c, "blk1ms=0", "blk1ms=2"), ["blk1ms"])
+    case("io-late", sub(c, "late=0/0", "late=1/3"), ["blk1ms"])
+    case("rec-expired", sub(c, "expired=0", "expired=1"), ["rec"])
     case("popin", sub(c, "popin=0 popin_tele=0", "popin=3 popin_tele=0"), ["popin"])
     case("popin-tele", sub(c, "popin=0 popin_tele=0", "popin=0 popin_tele=5"), [])
     case("continuity", sub(c, "carry=1 matched=1 missing=0 extra=0", "carry=1 matched=0 missing=1 extra=0"),

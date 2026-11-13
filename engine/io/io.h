@@ -25,6 +25,16 @@
  * the host reports the same per-frame traffic, budget and blocked time
  * (host: a sync read issued while a piece is in flight waits the piece's
  * whole modelled time, plat/host/io_host.c).
+ *
+ * HL64_TEST builds (host and cart, K10, architecture.md 15) complete I/O
+ * in frames: io_frame_begin plans the frame's pieces from the queue alone
+ * (priority order, budget, at most IO_TEST_PIECES), io_pump moves them,
+ * and their completions (done, state, callbacks) publish only at the next
+ * io_frame_begin, before anything else of that frame. A planned request
+ * reads IO_ACTIVE all frame. A plan the frame did not move is finished
+ * there synchronously: late (`io: frame N late: ...`, stats `late=`,
+ * blocked I/O). io_finish, io_cancel and sync / audio reads act at once.
+ * Playable builds publish a request as soon as its last piece lands.
  */
 #ifndef HL64_IO_H
 #define HL64_IO_H
@@ -34,6 +44,9 @@
 #define IO_PIECE		(16 * 1024)	/* one PI DMA ≈ 3.1 ms at 5.25 MB/s */
 #define IO_BUDGET		(64 * 1024)	/* bytes per frame, normal */
 #define IO_BUDGET_SEAM	(128 * 1024)	/* while a seam pin is outstanding */
+#define IO_TEST_PIECES	8		/* HL64_TEST: pieces planned per frame (the
+					   seam budget's; small requests are a
+					   piece each, one per pump) */
 #define IO_KB_BINS		66		/* per-frame async KB histogram: 0..64, more */
 
 enum { IO_PRIO_OPEN, IO_PRIO_SEAM, IO_PRIO_PREFETCH, IO_NPRIO };
@@ -54,7 +67,8 @@ typedef struct io_req_s
 	 * the visible set's render chunks queued past the teleport window
 	 * (test/m4/stream_open.route: popin 3, 0 without) */
 	uint8_t			front;
-	void			(*cb)(struct io_req_s *r);	/* on completion, from io_pump */
+	void			(*cb)(struct io_req_s *r);	/* on completion: io_pump (test
+							   builds io_frame_begin), io_finish */
 	int			user;
 } io_req_t;
 
@@ -90,6 +104,10 @@ typedef struct
 	/* frames > 1 ms blocked inside io_tele_window (blk1ms_tele): not in
 	 * life_frames_blocked_1ms / life_blocked_max_us, counted apart */
 	uint32_t	life_frames_blocked_1ms_tele;
+	/* HL64_TEST: frames whose plan was finished late at the boundary,
+	 * and its pieces (0 on the gate routes) */
+	uint32_t	life_late_frames;
+	uint32_t	life_late_pieces;
 } io_stats_t;
 
 void	io_init(void);
@@ -107,6 +125,22 @@ void	io_cancel(io_req_t *r);
  * `what` as io_read_sync's. */
 void	io_finish(io_req_t *r, const char *what);
 void	io_pump(void);
+/* Between the frame's steps (eng_frame, ren_frame): HL64_TEST builds pump
+ * there too, so a frame's plan lands within the frame (a 16 KB piece is
+ * 3.1 ms of PI on the cart; the host moves one piece per pump). The steps
+ * before the sound step pump short pieces (IO_PIECE_SHORT, 0.8 ms): the
+ * mixer's AUDIO reads there wait for the piece in flight, and a wait over
+ * 1 ms is a blocked frame. Playable builds pump at eng_frame's fixed
+ * points only. */
+#ifdef HL64_TEST
+#define IO_PIECE_SHORT		(4 * 1024)
+void	io_pump_short(void);
+#define IO_STEP_PUMP()		io_pump()
+#define IO_STEP_PUMP_SHORT()	io_pump_short()
+#else
+#define IO_STEP_PUMP()		((void)0)
+#define IO_STEP_PUMP_SHORT()	((void)0)
+#endif
 /* Blocking read outside the queue (waits for the piece in flight first);
  * `what` names the caller in the test builds' in-play `io: sync` line. */
 void	io_read_sync(void *dst, uint32_t rom, uint32_t len, const char *what);

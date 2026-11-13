@@ -34,6 +34,43 @@ static uint32_t		tele_until;	/* io_tele_window: teleport frames before this one 
 
 #define LOADING()	(loading > 0 || booting)
 
+#ifdef HL64_TEST
+/*
+ * Test builds (K10, architecture.md 15): I/O completes in frames. At
+ * io_frame_begin the scheduler plans the frame's pieces from the queue
+ * alone (priority order, up to the byte budget and IO_TEST_PIECES); they
+ * move during the frame as in play (one in flight, pumped), but nothing
+ * is published (request done / state, callbacks) until the next
+ * io_frame_begin, which first finishes a plan the frame did not move
+ * (late: blocked I/O, logged, counted) and then publishes it in plan
+ * order. A planned request is IO_ACTIVE for the whole frame and its
+ * `done` only advances there, so nothing the game sees depends on PI
+ * timing, pump counts or audio reads. io_finish / io_cancel / sync reads
+ * keep their immediate semantics.
+ */
+typedef struct
+{
+	io_req_t	*r;	/* NULL: published, finished or cancelled */
+	uint32_t	n;	/* bytes planned from r->done */
+	uint32_t	moved;	/* bytes landed */
+} plan_t;
+
+static plan_t		plan[IO_TEST_PIECES];
+static int		nplan, plan_cur;	/* entries; first one with bytes to launch */
+static plan_t		*act_p;			/* the entry owning the piece in flight */
+static uint32_t		life_late_frames, life_late_pieces;
+
+static plan_t *PlanOf(const io_req_t *r)
+{
+	int i;
+
+	for (i = 0; i < nplan; i++)
+		if (plan[i].r == r)
+			return &plan[i];
+	return NULL;
+}
+#endif
+
 /* ---- backend (sys_pi_*) ------------------------------------------------ */
 
 static void HwLaunch(uint8_t *dst, uint32_t rom, uint32_t len)
@@ -120,7 +157,8 @@ static void Complete(io_req_t *r)
 		r->cb(r);
 }
 
-/* Retire the piece in flight once the PI is idle. */
+/* Retire the piece in flight once the PI is idle (test builds: it landed
+ * in its plan entry; the request learns at the next io_frame_begin). */
 static void Retire(void)
 {
 	io_req_t *r = act;
@@ -128,14 +166,123 @@ static void Retire(void)
 	if (!r || sys_pi_busy())
 		return;
 	act = NULL;
+#ifdef HL64_TEST
+	act_p->moved += act_len;
+	act_p = NULL;
+#else
 	r->done += act_len;
 	q_bytes -= act_len;
-	act_len = 0;
 	if (r->done >= r->len)
 		Complete(r);
 	else
 		r->state = IO_QUEUED;
+#endif
+	act_len = 0;
 }
+
+#ifdef HL64_TEST
+static uint32_t		plan_budget;	/* the budget the frame planned with */
+static void Drain(int audio);
+
+/* Frame boundary, first: the closing frame's plan moved in full. A piece
+ * still in flight is waited for, pieces never launched are read now:
+ * late (blocked I/O of the closing frame, logged and counted). */
+static void PlanFinish(void)
+{
+	uint32_t pieces = 0, bytes = 0;
+	int i;
+
+	Retire();
+	for (i = 0; i < nplan; i++)
+	{
+		plan_t *e = &plan[i];
+		uint32_t at, n;
+
+		if (!e->r)
+			continue;
+		if (act_p == e)
+		{
+			pieces++;
+			bytes += act_len;
+			Drain(0);
+		}
+		if (e->moved >= e->n)
+			continue;
+		at = e->r->done + e->moved;
+		n = e->n - e->moved;
+		pieces += (n + IO_PIECE - 1) / IO_PIECE;
+		bytes += n;
+		HwSync(e->r->dst + at, e->r->rom + at, n, 0);
+		e->moved = e->n;
+	}
+	if (!pieces)
+		return;
+	life_late_frames++;
+	life_late_pieces += pieces;
+	log_printf("io: frame %lu late: %lu pieces %lu B of its plan (%d requests) finished at the "
+		"frame boundary\n", (unsigned long)life_frames, (unsigned long)pieces,
+		(unsigned long)bytes, nplan);
+}
+
+/* Then the plan's completions, in plan order: the requests' done / state
+ * and callbacks (which may finish, cancel or submit requests). */
+static void PlanPublish(void)
+{
+	int i;
+
+	for (i = 0; i < nplan; i++)
+	{
+		plan_t *e = &plan[i];
+		io_req_t *r = e->r;
+
+		if (!r)
+			continue;
+		e->r = NULL;
+		r->done += e->n;
+		q_bytes -= e->n;
+		if (r->done >= r->len)
+			Complete(r);
+		else
+			r->state = IO_QUEUED;
+	}
+	nplan = plan_cur = 0;
+}
+
+/* Then the new frame's plan, from the queue alone: requests in priority
+ * order, as much of each as the byte budget and IO_TEST_PIECES allow
+ * (a partial one stays 16-aligned and ends the plan). */
+static void PlanFrame(void)
+{
+	uint32_t left = budget, pieces = 0;
+	io_req_t *r;
+	int p;
+
+	plan_budget = budget;
+	for (p = 0; p < IO_NPRIO; p++)
+		for (r = q_head[p]; r; r = r->next)
+		{
+			uint32_t rem = r->len - r->done, n = rem;
+
+			if (nplan == IO_TEST_PIECES)
+				return;
+			if (n > left)
+				n = left & ~15u;
+			if (n > (IO_TEST_PIECES - pieces) * IO_PIECE)
+				n = (IO_TEST_PIECES - pieces) * IO_PIECE;
+			if (!n && rem)
+				return;
+			plan[nplan].r = r;
+			plan[nplan].n = n;
+			plan[nplan].moved = 0;
+			nplan++;
+			r->state = IO_ACTIVE;
+			left -= n;
+			pieces += (n + IO_PIECE - 1) / IO_PIECE;
+			if (n < rem || pieces >= IO_TEST_PIECES)
+				return;
+		}
+}
+#endif
 
 void io_init(void)
 {
@@ -155,10 +302,24 @@ void io_init(void)
 	life_blocked_1ms_tele = 0;
 	tele_until = 0;
 	memset(&st, 0, sizeof(st));
+#ifdef HL64_TEST
+	nplan = plan_cur = 0;
+	act_p = NULL;
+	plan_budget = IO_BUDGET;
+	life_late_frames = life_late_pieces = 0;
+#endif
 }
 
 void io_frame_begin(uint32_t frame_us)
 {
+	uint32_t cap = budget;
+
+#ifdef HL64_TEST
+	/* the closing frame's plan lands before the frame closes (a late
+	 * piece is its blocked time); its budget is the one it planned with */
+	PlanFinish();
+	cap = plan_budget;
+#endif
 	/* close the previous frame (the boot interval is load I/O: its
 	 * blocked time already went to the load counters) */
 	if (!booting && life_frames)
@@ -172,7 +333,7 @@ void io_frame_begin(uint32_t frame_us)
 
 			st.kb_hist[kb < IO_KB_BINS - 1 ? kb : IO_KB_BINS - 1]++;
 		}
-		if (fr_async > budget)
+		if (fr_async > cap)
 		{
 			st.frames_budget_over++;
 			life_budget_over++;
@@ -214,6 +375,11 @@ void io_frame_begin(uint32_t frame_us)
 	fr_audio_calls = fr_drain_us = 0;
 	st.frames++;
 	life_frames++;
+#ifdef HL64_TEST
+	/* the closing frame's completions first, then the new frame's plan */
+	PlanPublish();
+	PlanFrame();
+#endif
 }
 
 void io_set_seam(int on)
@@ -252,10 +418,43 @@ void io_promote(io_req_t *r, int prio)
 	st.promoted++;
 }
 
+#ifdef HL64_TEST
+static void Pump(uint32_t max);
+
+void io_pump(void)
+{
+	Pump(IO_PIECE);
+}
+
+void io_pump_short(void)
+{
+	Pump(IO_PIECE_SHORT);
+}
+
+static void Pump(uint32_t max)
+{
+	plan_t *e;
+	uint32_t at, n;
+
+	Retire();
+	if (act)
+		return;
+	while (plan_cur < nplan && (!plan[plan_cur].r || plan[plan_cur].moved >= plan[plan_cur].n))
+		plan_cur++;
+	if (plan_cur == nplan)
+		return;
+	e = &plan[plan_cur];
+	n = e->n - e->moved;
+	if (n > max)
+		n = max;
+	at = e->r->done + e->moved;
+	act = e->r;
+	act_p = e;
+#else
 void io_pump(void)
 {
 	io_req_t *r = NULL;
-	uint32_t left, n;
+	uint32_t left, n, at;
 	int p;
 
 	Retire();
@@ -277,12 +476,14 @@ void io_pump(void)
 			return;
 	}
 	r->state = IO_ACTIVE;
+	at = r->done;
 	act = r;
+#endif
 	act_len = n;
 	fr_async += n;
 	st.async_bytes += n;
 	st.async_pieces++;
-	HwLaunch(r->dst + r->done, r->rom + r->done, n);
+	HwLaunch(act->dst + at, act->rom + at, n);
 }
 
 /* Wait for the piece in flight (someone else's or r's) and retire it;
@@ -297,10 +498,23 @@ static void Drain(int audio)
 
 void io_cancel(io_req_t *r)
 {
+#ifdef HL64_TEST
+	plan_t *e = PlanOf(r);
+
+	if (e)
+	{
+		if (act_p == e)
+			Drain(0);
+		e->r = NULL;	/* its landed bytes are dropped */
+	}
+	if (r->state == IO_QUEUED || r->state == IO_ACTIVE)
+		Unlink(r);
+#else
 	if (r->state == IO_ACTIVE)
 		Drain(0);
 	if (r->state == IO_QUEUED)
 		Unlink(r);
+#endif
 	if (r->state != IO_DONE)
 		r->state = IO_IDLE;
 }
@@ -354,17 +568,33 @@ static void SyncCount(const char *what, uint32_t rom, uint32_t n)
 
 void io_finish(io_req_t *r, const char *what)
 {
-	uint32_t n, b0 = fr_blocked_us;
+	uint32_t n, at, b0 = fr_blocked_us;
+#ifdef HL64_TEST
+	plan_t *e = PlanOf(r);
 
+	if (r->state != IO_QUEUED && r->state != IO_ACTIVE)
+		return;
+	/* planned: its landed bytes publish now, the rest is read */
+	if (e && act_p == e)
+		Drain(0);
+	at = r->done + (e ? e->moved : 0);
+	if (e)
+		e->r = NULL;
+#else
 	if (r->state == IO_ACTIVE)
 		Drain(0);
 	if (r->state != IO_QUEUED)
 		return;
-	Drain(0);
-	n = r->len - r->done;
-	SyncCount(what, r->rom + r->done, n);
-	HwSync(r->dst + r->done, r->rom + r->done, n, 0);
-	q_bytes -= n;
+	at = r->done;
+#endif
+	n = r->len - at;
+	if (n)
+	{
+		Drain(0);
+		SyncCount(what, r->rom + at, n);
+		HwSync(r->dst + at, r->rom + at, n, 0);
+	}
+	q_bytes -= r->len - r->done;
 	r->done = r->len;
 	Complete(r);
 	LoadAccount(b0, n);
@@ -412,6 +642,10 @@ void io_stats(io_stats_t *out, int reset)
 	out->life_frames_blocked_1ms = life_blocked_1ms;
 	out->life_frames_budget_over = life_budget_over;
 	out->life_frames_blocked_1ms_tele = life_blocked_1ms_tele;
+#ifdef HL64_TEST
+	out->life_late_frames = life_late_frames;
+	out->life_late_pieces = life_late_pieces;
+#endif
 	if (reset)
 		memset(&st, 0, sizeof(st));
 }

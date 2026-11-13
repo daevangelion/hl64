@@ -114,7 +114,8 @@ static struct {
 	uint8_t		near_dead;		/* ... and no retry until the next one */
 	int		lmap[HL64_WORLD_LAYERS];	/* open layers seen by map, -1 */
 	uint8_t		ready;			/* the selected seam's B is ready */
-	int		aliased;		/* seam whose twins are aliased / pinned */
+	int		aliased;		/* seam whose twins are aliased */
+	int		pinned;			/* seam whose B is pinned */
 	uint8_t		hle_open[HL64_WORLD_LAYERS];
 	uint8_t		have_eye;
 	float		prev_eye[3];		/* home-local */
@@ -308,7 +309,7 @@ void seam_init(void)
 
 	memset(&G, 0, sizeof(G));
 	memset(&S, 0, sizeof(S));
-	S.home = S.near = S.armed = S.pending = S.aliased = -1;
+	S.home = S.near = S.armed = S.pending = S.aliased = S.pinned = -1;
 	memset(S.lmap, 0xFF, sizeof(S.lmap));
 	rom = sys_cart_addr(path, &size);
 	if (!rom)
@@ -668,6 +669,8 @@ static void close_layer(wld_layer_t *L, int leave)
 			S.lmap[k] = -1;
 	if (S.aliased >= 0 && seam_to(S.aliased) == map)
 		S.aliased = -1;
+	if (S.pinned >= 0 && seam_to(S.pinned) == map)
+		S.pinned = -1;
 	if (!leave)
 		return;
 	S.st.closes++;
@@ -773,6 +776,23 @@ static int neighbour(int si)
 			S.armed = -1;
 		return 0;
 	}
+	/* B's seam pins as soon as its layer is ready (residency only; the
+	 * records' readiness may wait on the open gate) */
+	if (S.pinned != si)
+	{
+		float mins[3], maxs[3];
+
+		wld_pin_seam(L, s.pool, s.npool);
+		/* B's collision at the arrival: the switch eye box in B's frame
+		 * minus the view offset, as player boxes (hull 0) */
+		for (k = 0; k < 3; k++)
+		{
+			mins[k] = s.sw_mins[k] + s.delta[k] - (k == 2 ? VIEW_Z : 0) + phy_pm_mins[0][k];
+			maxs[k] = s.sw_maxs[k] + s.delta[k] - (k == 2 ? VIEW_Z : 0) + phy_pm_maxs[0][k];
+		}
+		wld_pin_seam_window(L, mins, maxs);
+		S.pinned = si;
+	}
 	if (!S.hle_open[L->slot])
 	{
 		rec_map_open(L->slot);
@@ -783,21 +803,11 @@ static int neighbour(int si)
 	if (S.aliased != si)
 	{
 		const wld_layer_t *A = wld_layer_of_map(s.from);
-		float mins[3], maxs[3];
 
 		/* every pair before any crossing copies a twin */
 		for (k = 0; A && k < s.ntwin; k++)
 			rec_twin_alias(GID_MAKE(A->slot, s.twins[2 * k]),
 				GID_MAKE(L->slot, s.twins[2 * k + 1]));
-		wld_pin_seam(L, s.pool, s.npool);
-		/* B's collision at the arrival: the switch eye box in B's frame
-		 * minus the view offset, as player boxes (hull 0) */
-		for (k = 0; k < 3; k++)
-		{
-			mins[k] = s.sw_mins[k] + s.delta[k] - (k == 2 ? VIEW_Z : 0) + phy_pm_mins[0][k];
-			maxs[k] = s.sw_maxs[k] + s.delta[k] - (k == 2 ? VIEW_Z : 0) + phy_pm_maxs[0][k];
-		}
-		wld_pin_seam_window(L, mins, maxs);
 		S.aliased = si;
 	}
 	return 1;
@@ -847,7 +857,7 @@ static void approach(int si)
 
 			if (L)
 				wld_unpin_seam(L);
-			S.aliased = -1;
+			S.aliased = S.pinned = -1;
 		}
 		S.near = si;
 		S.near_failed = S.near_dead = 0;
@@ -1138,7 +1148,7 @@ static void cross(int si)
 	/* (6) changelevel touches ignored until a frame with none */
 	S.settle = 1;
 	S.settle_tick = S.tick;
-	S.pending = S.armed = S.near = S.aliased = -1;
+	S.pending = S.armed = S.near = S.aliased = S.pinned = -1;
 	S.ready = 0;
 	S.why = NULL;
 	S.have_eye = 0;
@@ -1206,7 +1216,7 @@ void seam_new_game(int map)
 	const wld_layer_t *L;
 
 	S.home = map;
-	S.near = S.armed = S.pending = S.aliased = -1;
+	S.near = S.armed = S.pending = S.aliased = S.pinned = -1;
 	S.why = NULL;
 	S.settle = S.have_eye = S.ready = S.near_failed = S.near_dead = S.cont_pending = 0;
 	memset(S.hle_open, 0, sizeof(S.hle_open));

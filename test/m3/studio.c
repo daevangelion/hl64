@@ -204,6 +204,8 @@ int main(int argc, char **argv)
 				goto bad;
 			for (k = 0; k < 64; k++)	/* let the probe chunk land */
 			{
+				/* test builds publish I/O at frame boundaries */
+				io_frame_begin(33333);
 				ent_illum(e);
 				io_pump();
 				wld_frame((uint32_t)k);
@@ -226,6 +228,7 @@ int main(int argc, char **argv)
 			break;
 		}
 		case 'F':
+			io_frame_begin(33333);
 			studio_frame();
 			io_pump();
 			break;

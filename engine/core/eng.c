@@ -70,6 +70,7 @@ static struct {
 	uint32_t	fixed_dt_us;	/* test builds; 0 = VI clock */
 	uint8_t		rollup;		/* 1 s roll-up line (DBG_PROF) */
 	uint8_t		world;		/* player content present */
+	uint8_t		ents_dump;	/* DBG_ENTS_DUMP: per-entity stats lines */
 	uint32_t	rollup_frames;
 	uint64_t	rollup_t0;
 	uint64_t	rollup_world_us;	/* world draw CPU in the roll-up window */
@@ -245,29 +246,26 @@ static uint32_t hash_f(uint32_t h, const float *f, int n)
 	return h;
 }
 
-/* Stats record `ents` (K9 step-all equivalence, K10 host = cart): live
- * entity count and a hash of every live entity's simulated state (slot,
- * identity, collision view, motion, physics, think times and functions,
- * animation). */
-static int ents_hash(uint32_t *out)
+/* One part of a live entity's simulated state into the hash (ENT_PARTS,
+ * in this order: identity, collision view, motion, physics, think times
+ * and functions, animation). */
+#define ENT_PARTS	6
+static uint32_t ent_part_hash(uint32_t h, int e, int part)
 {
-	uint32_t h = 2166136261u;
-	int e, live = 0;
+	const col_ent_t *cv = ent_cv(e);
+	const ent_mot_t *m = ent_mot(e);
+	const ent_phys_t *ph = ent_phys(e);
+	const ent_tm_t *tm = ent_tm(e);
+	const ent_rnd_t *r = ent_rnd(e);
+	const ent_id_t *id = ent_idc(e);
 
-	for (e = 0; e < HL64_MAX_ENTITIES; e++)
+	switch (part)
 	{
-		const col_ent_t *cv = ent_cv(e);
-		const ent_mot_t *m = ent_mot(e);
-		const ent_phys_t *ph = ent_phys(e);
-		const ent_tm_t *tm = ent_tm(e);
-		const ent_rnd_t *r = ent_rnd(e);
-		const ent_id_t *id = ent_idc(e);
-
-		if (!ent_is_live(e))
-			continue;
-		live++;
+	case 0:
 		h = hash_u32(h, (uint32_t)e << 16 | id->cls);
 		h = hash_u32(h, (uint32_t)id->gid << 16 | id->targetname);
+		break;
+	case 1:
 		h = hash_f(h, cv->origin, 3);
 		h = hash_f(h, cv->angles, 3);
 		h = hash_f(h, cv->mins, 3);
@@ -275,19 +273,67 @@ static int ents_hash(uint32_t *out)
 		h = hash_u32(h, cv->flags);
 		h = hash_u32(h, (uint32_t)cv->owner << 16 | cv->model);
 		h = hash_u32(h, (uint32_t)(uint16_t)cv->skin << 16 | (uint32_t)cv->solid << 8 | cv->movetype);
+		break;
+	case 2:
 		h = hash_f(h, m->velocity, 3);
 		h = hash_f(h, m->avelocity, 3);
 		h = hash_f(h, m->basevelocity, 3);
+		break;
+	case 3:
 		h = hash_u32(h, (uint32_t)ph->groundentity << 16 | ph->aiment);
 		h = hash_u32(h, (uint32_t)(uint8_t)ph->waterlevel << 8 | (uint8_t)ph->watertype);
 		h = hash_f(h, &ph->ideal_yaw, 1);
+		break;
+	case 4:
 		h = hash_f(h, &tm->nextthink, 1);
 		h = hash_f(h, &tm->ltime, 1);
 		h = hash_u32(h, (uint32_t)tm->think << 16 | tm->touch);
 		h = hash_u32(h, (uint32_t)tm->use << 16 | tm->blocked);
+		break;
+	default:
 		h = hash_u32(h, (uint32_t)r->model << 16 | r->sequence);
 		h = hash_f(h, &r->frame, 1);
 		h = hash_u32(h, (uint32_t)r->effects << 16 | (uint32_t)r->body << 8 | r->renderamt);
+		break;
+	}
+	return h;
+}
+
+/* Stats record `ents` (K9 step-all equivalence, K10 host = cart): live
+ * entity count and a hash of every live entity's simulated state. With
+ * `entsdump 1` (test builds) every live entity also logs a line of its
+ * parts' hashes (`stats N ent E cls= gid= tn= id= cv= mot= ph= tm= rnd=`):
+ * the first differing line of two runs names the entity and the part. */
+static int ents_hash(uint32_t *out, uint32_t label)
+{
+	uint32_t h = 2166136261u;
+	int e, p, live = 0;
+
+	for (e = 0; e < HL64_MAX_ENTITIES; e++)
+	{
+		if (!ent_is_live(e))
+			continue;
+		live++;
+		for (p = 0; p < ENT_PARTS; p++)
+			h = ent_part_hash(h, e, p);
+		if (eng.ents_dump)
+		{
+			const ent_id_t *id = ent_idc(e);
+			const ent_rnd_t *r = ent_rnd(e);
+			uint32_t ph[ENT_PARTS];
+
+			for (p = 0; p < ENT_PARTS; p++)
+				ph[p] = ent_part_hash(2166136261u, e, p);
+			log_printf("stats %lu ent %d cls=%u gid=%04x tn=%u id=%08lx cv=%08lx mot=%08lx "
+				"ph=%08lx tm=%08lx rnd=%08lx (model=%lx seq=%u frame=%.9g fx=%u body=%u "
+				"amt=%u)\n", (unsigned long)label, e, (unsigned)id->cls,
+				(unsigned)id->gid, (unsigned)id->targetname, (unsigned long)ph[0],
+				(unsigned long)ph[1], (unsigned long)ph[2], (unsigned long)ph[3],
+				(unsigned long)ph[4], (unsigned long)ph[5], (unsigned long)r->model,
+				(unsigned)r->sequence, (double)r->frame, (unsigned)r->effects,
+				(unsigned)r->body, (unsigned)r->renderamt);
+			log_flush();	/* 200 lines overrun the log ring */
+		}
 	}
 	*out = h;
 	return live;
@@ -342,7 +388,7 @@ static int cmd_stats(const dbg_cmd_t *c)
 			studio_stats(&sd, 0);
 			log_printf("stats %lu stream: popin=%lu popin_tele=%lu blk1ms=%lu "
 				"blk1ms_tele=%lu studio_sync=%lu pins=%lu prefetch=%lu recompute=%lu "
-				"reassert=%lu over=%lu tele=%lu open_async=%lu open_fail=%lu\n",
+				"reassert=%lu over=%lu tele=%lu open_async=%lu open_fail=%lu late=%lu/%lu\n",
 				(unsigned long)c->arg[0].u, (unsigned long)ss.popin,
 				(unsigned long)ss.popin_tele, (unsigned long)io.life_frames_blocked_1ms,
 				(unsigned long)io.life_frames_blocked_1ms_tele,
@@ -350,7 +396,8 @@ static int cmd_stats(const dbg_cmd_t *c)
 				(unsigned long)ss.prefetch, (unsigned long)ss.recompute,
 				(unsigned long)ss.reassert, (unsigned long)io.life_frames_budget_over,
 				(unsigned long)ss.teleports, (unsigned long)ss.open_async,
-				(unsigned long)ss.open_fail);
+				(unsigned long)ss.open_fail, (unsigned long)io.life_late_frames,
+				(unsigned long)io.life_late_pieces);
 		}
 	}
 	if (phy_player_active())
@@ -366,7 +413,7 @@ static int cmd_stats(const dbg_cmd_t *c)
 	}
 	{
 		uint32_t h;
-		int live = ents_hash(&h);
+		int live = ents_hash(&h, c->arg[0].u);
 
 		log_printf("stats %lu ents: live=%d hash=%08lx\n", (unsigned long)c->arg[0].u, live,
 			(unsigned long)h);
@@ -375,10 +422,11 @@ static int cmd_stats(const dbg_cmd_t *c)
 		rec_stats_t r;
 
 		rec_stats(&r, 0);
-		log_printf("stats %lu rec: live=%lu pending=%lu dry=%lu released=%lu store=%lu/%lu\n",
-			(unsigned long)c->arg[0].u, (unsigned long)r.live, (unsigned long)r.pending,
-			(unsigned long)r.dry, (unsigned long)r.released_total,
-			(unsigned long)r.store_used, (unsigned long)r.store_peak);
+		log_printf("stats %lu rec: live=%lu pending=%lu dry=%lu released=%lu store=%lu/%lu "
+			"expired=%lu\n", (unsigned long)c->arg[0].u, (unsigned long)r.live,
+			(unsigned long)r.pending, (unsigned long)r.dry, (unsigned long)r.released_total,
+			(unsigned long)r.store_used, (unsigned long)r.store_peak,
+			(unsigned long)r.open_expired);
 	}
 	return 0;
 }
@@ -435,6 +483,12 @@ static int cmd_flush(const dbg_cmd_t *c)
 static int cmd_step_all(const dbg_cmd_t *c)
 {
 	phy_set_step_all((int)c->arg[0].u);
+	return 0;
+}
+
+static int cmd_ents_dump(const dbg_cmd_t *c)
+{
+	eng.ents_dump = c->arg[0].u != 0;
 	return 0;
 }
 
@@ -498,6 +552,7 @@ void eng_boot(const char *platform)
 	dbg_handler_set(DBG_LOG_FLUSH, cmd_flush);
 	dbg_handler_set(DBG_QUIT, cmd_quit);
 	dbg_handler_set(DBG_STEP_ALL, cmd_step_all);
+	dbg_handler_set(DBG_ENTS_DUMP, cmd_ents_dump);
 	SEAMPROF_INIT();
 	ent_init();
 	eng.world = (uint8_t)wld_init();
@@ -749,9 +804,14 @@ void eng_frame(void)
 		ren_cam_update(dt);
 	SEAMPROF_STEP(INPUT);
 
-	/* 3 io */
+	/* 3 io (test builds: completions published, the frame's pieces
+	 * planned; short pieces until the sound step, io.h) */
 	io_frame_begin(dt);
+#ifdef HL64_TEST
+	io_pump_short();
+#else
 	io_pump();
+#endif
 	SEAMPROF_STEP(IO);
 
 	/* 4 game: the frame's clock (dt 0 in the settle frames), due logic
@@ -760,24 +820,29 @@ void eng_frame(void)
 	rec_run_timers(eng_clock_time(), gdt);
 	game_start_frame();
 	SEAMPROF_STEP(LOGIC);
+	IO_STEP_PUMP_SHORT();
 	/* 5 player: pmove host */
 	phy_player_frame(&cmd, eng.time);
 	SEAMPROF_STEP(PLAYER);
+	IO_STEP_PUMP_SHORT();
 	/* 6 active set */
 	phy_entities_frame(eng.time, gdt);
 	/* the clock advances by the frame time (f64) after step 6 */
 	eng_clock_advance();
 	eng.time = eng_clock_time();
 	SEAMPROF_STEP(ACTIVE);
+	IO_STEP_PUMP_SHORT();
 	/* 7-10 world, hydration, residency, sound (M1-M4) */
 	if (eng.world)
 	{
 		wld_frame(eng.frame);
 		SEAMPROF_STEP(STREAM);
+		IO_STEP_PUMP_SHORT();
 		/* 7 seams: approach, layer / HLE opens, pins, switch, crossing,
 		 * leave */
 		seam_frame();
 		SEAMPROF_STEP(SEAM);
+		IO_STEP_PUMP_SHORT();
 		/* 8 hydration pump around the seam anchors (global positions:
 		 * the player, and through the approached seam's T) */
 		{
@@ -787,6 +852,7 @@ void eng_frame(void)
 			rec_frame(n ? (const float (*)[3])anchors : NULL, n);
 		}
 		SEAMPROF_STEP(HYDRATE);
+		IO_STEP_PUMP_SHORT();
 		/* 9 residency target set (engine/world/stream.c): the player's
 		 * eye and velocity in its home frame; the free camera's view */
 		if (phy_player_active())
@@ -809,16 +875,19 @@ void eng_frame(void)
 			wld_stream_frame(ren_cam.map, eye, still);
 		}
 		SEAMPROF_STEP(STREAM);
+		IO_STEP_PUMP_SHORT();
 		wld_style_tick(eng.time);
 		ren_dlight_frame(eng.time, (double)dt * 1e-6);
 		ren_dlight_sources(eng.time);
 		studio_frame();
 		SEAMPROF_STEP(SCENE);
+		IO_STEP_PUMP_SHORT();
 	}
 	/* effects on the game clock: temp entities, particles, beams, decal
 	 * placements, persistent render fades, shake */
 	fx_frame(eng.time, gdt);
 	SEAMPROF_STEP(FXSIM);
+	IO_STEP_PUMP_SHORT();
 	/* 10 sound: listener = the view (global eye, right vector) of the last
 	 * drawn frame */
 	{
@@ -832,6 +901,7 @@ void eng_frame(void)
 		snd_frame(ren_cam.org, right, (double)dt * 1e-6);
 	}
 	SEAMPROF_STEP(SND);
+	IO_STEP_PUMP();
 
 	/* 11-12 render into a free framebuffer; submit for paced present */
 	while (!sys_frame_try_begin())

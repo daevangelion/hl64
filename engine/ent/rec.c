@@ -2857,7 +2857,12 @@ static int home_slot(const float g[3])
  * as GoldSrc precaches before the first spawn: a Spawn would otherwise
  * read its model's info synchronously; and for the collision cells of
  * the candidates in the spawn radius (scan names them), whose Spawn
- * traces would read them synchronously. Bounded, logged. */
+ * traces would read them synchronously. This is the map's one open
+ * gate (after its layer and HLE reads): released on residency, bounded;
+ * an expiry is logged and counted (stats `rec: expired=`, the M4 gate
+ * fails on it). Test builds publish I/O completions at frame boundaries
+ * (engine/io, architecture.md 15), so the release frame is the same on
+ * the host and the cart. */
 #define REC_PRECACHE_FRAMES	60
 static int precache_held(rmap_t *m, const float (*loc)[3], int n)
 {
@@ -2883,6 +2888,8 @@ static int precache_held(rmap_t *m, const float (*loc)[3], int n)
 		m->pre_wait++;
 		return 1;
 	}
+	if (ni || nw)
+		R.st.open_expired++;
 	log_printf("rec: %s precache %s after %u frames (%d infos, %d spawn windows pending)\n",
 		wld_map_name(m->map), ni || nw ? "timed out" : "landed", (unsigned)(m->pre_wait - 1),
 		ni, nw);
