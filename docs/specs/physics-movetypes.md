@@ -329,3 +329,21 @@ state. (Client-side: awaits the retail-client capture plan.)
 | P13 | active set: a resting crate, a resting gib and an idle func_wall are not stepped (zone counters 0) yet react on the frame something moves them | host counters |
 | P14 | water: toss/bounce/step entities reach waterlevel 3; entering liquid halves vz; SKY (−6) counts as liquid | **[probe:measured W-water]** |
 | P15 | SOLID_BSP with a movetype other than PUSH is a fatal error naming the class | **[probe:measured]** (Oracle2 run logs) + host spawn-all test |
+
+hl64 host results (`test/m3/phys.py`, every capture scenario rebuilt on
+the cooked maps and replayed frame by frame; origin / velocity ±0.001,
+flags, ground, water level and type, size, ltime / nextthink, thinks and
+blocks exact; 56 070 frames, 10 maps): P1 50/50, P2 80/80, P3 20/20
+(10 landings + 10 slide self-tests), P4 39/39, P5 = K4 52/52, P6 35/35,
+P7 3/3 (the bot rides by the pmove host), P9 38/39, P10 1942/2006 walk
+results, P11 181/181, P12 19/19, P13 10/10, P14 31/32, P15 10/10, P8 0/7.
+Residuals: P8 — every frame up to and including the corpse's collapse
+matches; from the frame the door passes the collapsed point (stuck at the
+blocker) GoldSrc lands it on the world each frame (FL_ONGROUND) while
+hl64's move query reports it all-solid inside the door, so it keeps
+falling in place without FL_ONGROUND (a start-held brush candidate on a
+zero-length world segment, trace-and-hulls.md 4.4 step 5, needs a
+capture); P9 hldemo3 `func_pushable` resting on two `momentary_door`s
+brakes every other frame in GoldSrc (none in hl64); P10 the top stair on
+t0a0b, t0a0b1, t0a0d (6 above); P14 t0a0b1: a monster sinking in deep
+water gets FL_ONGROUND 17 u above the floor in GoldSrc.
