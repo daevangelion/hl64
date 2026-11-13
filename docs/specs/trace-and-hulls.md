@@ -180,15 +180,19 @@ accepted within 0.001 u.
    T-allsolid, T-entities]**.
 
 ### 4.5 Hitboxes
-A zero-size line trace that hits the bounding box of a SOLID_SLIDEBOX or
-SOLID_BBOX entity with a studio model is refined against that model's
-hitboxes at the entity's current pose (sequence, frame, controllers,
-blending): each hitbox is an oriented box on its bone; the nearest hitbox
-entry replaces the bbox impact and sets `iHitgroup` to its group (head,
-chest, stomach, arms, legs per the model); a trace that passes the bbox but
-misses every hitbox does not hit the entity. Hull traces (non-zero boxes)
-use the bounding box only. **[probe T-hitbox]**; mechanism: pose computed on
-demand through `game_studio_setup_bones` and cached for the frame (D6 ii).
+A zero-size line trace against a SOLID_SLIDEBOX or SOLID_BBOX entity with a
+studio model is tested against that model's hitboxes at the entity's
+current pose (sequence, frame, controllers, blending) whenever the
+segment meets the entity's **linked box** (absmin/absmax,
+area-links-and-touch.md 1) — the gate is the linked box, not a hit on the
+bounding box: an arm that reaches past the bbox face is hit even where the
+segment misses the bbox **[probe:measured T-hitbox]**. Each hitbox is an
+oriented box on its bone; the nearest hitbox entry is the impact and sets
+`iHitgroup` to its group (head, chest, stomach, arms, legs per the model);
+a segment that meets the linked box but misses every hitbox does not hit
+the entity. Hull traces (non-zero boxes) use the bounding box only.
+Mechanism: pose computed on demand through `game_studio_setup_bones`
+(engine hook `col_set_hitbox_source`) and cached for the frame (D6 ii).
 
 ### 4.6 Position test
 An entity is stuck when `move(origin, mins, maxs, origin, 0, self)` is
@@ -214,6 +218,6 @@ materials"; HLSDK `TEXTURETYPE` letters).
 | T7 | rotated brushes at yaw 0/30/90/135° and pitched with a feet-origin box: end point and normal world space, distance model-frame (25 616 impacts) | **[probe:measured T-rotated]** |
 | T8 | layers: outside every layer is SOLID; a B-layer trace in global coordinates equals the B-local trace + `g_B` | self-contained |
 | T9 | all-solid result fields, including start-stuck entity candidates (fraction and end of the world trace) | **[probe:measured T-allsolid]**, T-entities |
-| T10 | hitboxes: head/chest/leg shots on scientist, barney, hgrunt, zombie at 4 poses give GoldSrc's hitgroups and end points ±0.01 u | probe T-hitbox |
+| T10 | hitboxes: hitgroups and end points ±0.01 u equal GoldSrc for line traces at scientist, barney, hgrunt, zombie in 4 poses, including hits on limbs outside the bbox but inside the linked box. The remaining 9 473 line traces per map need M3 studio poses (installed through `col_set_hitbox_source`) and are pending until then | **[probe:measured T-hitbox]** |
 | T11 | no allocation, hull-walk stack ≤ 192 entries (overflow → `sys_error`), no read outside a chunk for any input incl. NaN/inf (NaN → start-solid all-solid, logged once) | host fuzz |
 | T12 | ORDER classification: a mismatch counts as ORDER (known deviation, 4.4 step 7) only if GoldSrc's result equals the step-6 combination of hl64's own per-candidate results taken in some permutation; every other mismatch fails. ORDER counts are reported per capture and must not grow (baseline: T2 6 / 176 000, T9 25 / 80 000, T5 9 / 48 600) | **[probe:measured T-segments, T-allsolid, T-entities]** |
