@@ -37,6 +37,7 @@ static void PrimaryAttack(int id)
 	CBasePlayerWeapon *w = &p->wpn[id];
 	static const float VECTOR_CONE_3DEG[3] = { 0.02618f, 0.02618f, 0.02618f };
 	float src[3], aim[3], dir[2];
+	res_t s;
 
 	/* don't fire underwater */
 	if (phy_player()->waterlevel == 3)
@@ -64,8 +65,9 @@ static void PrimaryAttack(int id)
 	W_SendWeaponAnim(MP5_FIRE1 + RANDOM_LONG(0, 2));
 	W_PunchAxis(0, RANDOM_FLOAT(-2, 2));
 	W_EjectShell(RESID(W_SHELL), 20, -12, 4, 1);
-	EMIT_SOUND_DYN(ENT_PLAYER, CHAN_WEAPON, RANDOM_LONG(0, 1) ? RESID(W_HKS2) : RESID(W_HKS1), 1,
-		ATTN_NORM, 0, 94 + RANDOM_LONG(0, 0xf));
+	/* draws in source order (argument order is unspecified, K10) */
+	s = RANDOM_LONG(0, 1) ? RESID(W_HKS2) : RESID(W_HKS1);
+	EMIT_SOUND_DYN(ENT_PLAYER, CHAN_WEAPON, s, 1, ATTN_NORM, 0, 94 + RANDOM_LONG(0, 0xf));
 	if (!w->m_iClip && p->m_rgAmmo[AMMO_9MM] <= 0)
 		Player_SetSuitUpdate(RESID(SEN_HEV_AMO0), 0);
 	w->m_flNextPrimaryAttack = W_GetNextAttackDelay(id, 0.1f);
@@ -80,6 +82,7 @@ static void SecondaryAttack(int id)
 	CBasePlayerWeapon *w = &p->wpn[id];
 	const ent_player_t *pl = phy_player();
 	float src[3], vel[3];
+	res_t s;
 
 	/* don't fire underwater */
 	if (pl->waterlevel == 3)
@@ -108,8 +111,8 @@ static void SecondaryAttack(int id)
 	/* EV_FireMP52 */
 	W_SendWeaponAnim(MP5_LAUNCH);
 	W_PunchAxis(0, -10);
-	EMIT_SOUND_DYN(ENT_PLAYER, CHAN_WEAPON, RANDOM_LONG(0, 1) ? RESID(W_GLAUNCHER2)
-		: RESID(W_GLAUNCHER), 1, ATTN_NORM, 0, 94 + RANDOM_LONG(0, 0xf));
+	s = RANDOM_LONG(0, 1) ? RESID(W_GLAUNCHER2) : RESID(W_GLAUNCHER);	/* source order (K10) */
+	EMIT_SOUND_DYN(ENT_PLAYER, CHAN_WEAPON, s, 1, ATTN_NORM, 0, 94 + RANDOM_LONG(0, 0xf));
 	w->m_flNextPrimaryAttack = W_GetNextAttackDelay(id, 1);
 	w->m_flNextSecondaryAttack = 1;
 	w->m_flTimeWeaponIdle = 5;	/* idle pretty soon after shooting */

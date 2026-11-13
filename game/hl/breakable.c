@@ -404,10 +404,14 @@ static void CBreakable_TraceAttack(int e, int attacker, float damage, const floa
 		switch (p->m_Material)
 		{
 		case matComputer:
+		{
+			/* draws in source order (argument order is unspecified, K10) */
+			res_t s = RANDOM_LONG(0, 1) ? RESID(SPARK6) : RESID(SPARK5);
+
 			UTIL_Sparks(tr->end);
-			EMIT_SOUND(e, CHAN_VOICE, RANDOM_LONG(0, 1) ? RESID(SPARK6) : RESID(SPARK5),
-				RANDOM_FLOAT(0.7f, 1.0f), ATTN_NORM);
+			EMIT_SOUND(e, CHAN_VOICE, s, RANDOM_FLOAT(0.7f, 1.0f), ATTN_NORM);
 			break;
+		}
 		case matUnbreakableGlass:
 			UTIL_Ricochet(tr->end, RANDOM_FLOAT(0.5f, 1.5f));
 			break;

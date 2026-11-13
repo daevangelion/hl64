@@ -22,12 +22,32 @@ static dbg_handler_t	handlers[DBG_COUNT];
 static dbg_cmd_t	queue[HL64_DBG_QUEUE];
 static int		queued;
 static uint32_t		failures;
+static uint32_t		trace_first, trace_last, run_frame;	/* DBG_TRACE window */
+
+static int cmd_trace(const dbg_cmd_t *c)
+{
+	trace_first = c->arg[0].u;
+	trace_last = c->arg[1].u;
+	return 0;
+}
+
+int dbg_trace(void)
+{
+	return trace_last && run_frame >= trace_first && run_frame <= trace_last;
+}
+
+uint32_t dbg_trace_frame(void)
+{
+	return run_frame;
+}
 
 void dbg_init(void)
 {
 	memset(handlers, 0, sizeof(handlers));
 	queued = 0;
 	failures = 0;
+	trace_first = trace_last = run_frame = 0;
+	handlers[DBG_TRACE] = cmd_trace;
 }
 
 void dbg_handler_set(int op, dbg_handler_t fn)
@@ -53,6 +73,8 @@ int dbg_push(const dbg_cmd_t *c)
 uint32_t dbg_run(uint32_t frame)
 {
 	int i, kept = 0, n = queued;
+
+	run_frame = frame;	/* the frame the boundary opens */
 
 	for (i = 0; i < n; i++)
 	{

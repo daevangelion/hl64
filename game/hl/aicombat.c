@@ -152,9 +152,17 @@ void CGib_SpawnHeadGib(int victim)
 			v[2] += 100;
 		}
 		else
-			VecSet(v, RANDOM_FLOAT(-100, 100), RANDOM_FLOAT(-100, 100), RANDOM_FLOAT(200, 300));
+		{
+			/* draws in source order: argument evaluation order is
+			 * unspecified (host x86 and cart MIPS differ, K10) */
+			v[0] = RANDOM_FLOAT(-100, 100);
+			v[1] = RANDOM_FLOAT(-100, 100);
+			v[2] = RANDOM_FLOAT(200, 300);
+		}
 		ent_set_velocity(g, v);
-		VecSet(av, RANDOM_FLOAT(100, 200), RANDOM_FLOAT(100, 300), 0);
+		av[0] = RANDOM_FLOAT(100, 200);
+		av[1] = RANDOM_FLOAT(100, 300);
+		av[2] = 0;
 		ent_set_avelocity(g, av);
 		GIB(g)->m_bloodColor = BloodColor(victim);
 		gib_speed(g, victim);
@@ -188,7 +196,9 @@ void CGib_SpawnRandomGibs(int victim, int cGibs, int human)
 			v[2] += RANDOM_FLOAT(-0.25f, 0.25f);
 			VecScale(v, RANDOM_FLOAT(300, 400), v);
 			ent_set_velocity(g, v);
-			VecSet(av, RANDOM_FLOAT(100, 200), RANDOM_FLOAT(100, 300), 0);
+			av[0] = RANDOM_FLOAT(100, 200);
+			av[1] = RANDOM_FLOAT(100, 300);
+			av[2] = 0;
 			ent_set_avelocity(g, av);
 			GIB(g)->m_bloodColor = BloodColor(victim);
 			gib_speed(g, victim);
@@ -212,8 +222,9 @@ void CGib_SpawnStickyGibs(int victim, const float org[3], int cGibs)
 		ent_rnd(g)->body = (uint8_t)RANDOM_LONG(0, 2);
 		if (victim >= 0)
 		{
-			VecSet(o, org[0] + RANDOM_FLOAT(-3, 3), org[1] + RANDOM_FLOAT(-3, 3),
-				org[2] + RANDOM_FLOAT(-3, 3));
+			o[0] = org[0] + RANDOM_FLOAT(-3, 3);
+			o[1] = org[1] + RANDOM_FLOAT(-3, 3);
+			o[2] = org[2] + RANDOM_FLOAT(-3, 3);
 			ent_set_origin(g, o);
 			VecScale(g_vecAttackDir, -1, v);
 			v[0] += RANDOM_FLOAT(-0.15f, 0.15f);
@@ -221,7 +232,9 @@ void CGib_SpawnStickyGibs(int victim, const float org[3], int cGibs)
 			v[2] += RANDOM_FLOAT(-0.15f, 0.15f);
 			VecScale(v, 900, v);
 			ent_set_velocity(g, v);
-			VecSet(av, RANDOM_FLOAT(250, 400), RANDOM_FLOAT(250, 400), 0);
+			av[0] = RANDOM_FLOAT(250, 400);
+			av[1] = RANDOM_FLOAT(250, 400);
+			av[2] = 0;
 			ent_set_avelocity(g, av);
 			GIB(g)->m_bloodColor = BloodColor(victim);
 			gib_speed(g, victim);

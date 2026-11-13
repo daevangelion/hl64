@@ -61,8 +61,13 @@ static void GlockFire(int id, float flSpread, float flCycleTime, int fUseAutoAim
 	W_SendWeaponAnim(fUseAutoAim && w->m_iClip == 0 ? GLOCK_SHOOT_EMPTY : GLOCK_SHOOT);
 	W_PunchAxis(0, -2.0f);
 	W_EjectShell(RESID(W_SHELL), 20, -12, 4, 1);
-	EMIT_SOUND_DYN(ENT_PLAYER, CHAN_WEAPON, RESID(W_PL_GUN3), RANDOM_FLOAT(0.92f, 1.0f), ATTN_NORM,
-		0, 98 + RANDOM_LONG(0, 3));
+	{
+		/* draws in source order (argument order is unspecified, K10) */
+		float vol = RANDOM_FLOAT(0.92f, 1.0f);
+
+		EMIT_SOUND_DYN(ENT_PLAYER, CHAN_WEAPON, RESID(W_PL_GUN3), vol, ATTN_NORM, 0,
+			98 + RANDOM_LONG(0, 3));
+	}
 	w->m_flNextPrimaryAttack = w->m_flNextSecondaryAttack = W_GetNextAttackDelay(id, flCycleTime);
 	if (!w->m_iClip && p->m_rgAmmo[AMMO_9MM] <= 0)
 		/* HEV suit - indicate out of ammo condition */

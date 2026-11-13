@@ -80,8 +80,13 @@ static void PrimaryAttack(int id)
 	fx_muzzle_flash(ENT_PLAYER, 0, 0);
 	W_SendWeaponAnim(PYTHON_FIRE1);
 	W_PunchAxis(0, -10.0f);
-	EMIT_SOUND_DYN(ENT_PLAYER, CHAN_WEAPON, RANDOM_LONG(0, 1) ? RESID(W_357_SHOT2)
-		: RESID(W_357_SHOT1), RANDOM_FLOAT(0.8f, 0.9f), ATTN_NORM, 0, PITCH_NORM);
+	{
+		/* draws in source order (argument order is unspecified, K10) */
+		res_t s = RANDOM_LONG(0, 1) ? RESID(W_357_SHOT2) : RESID(W_357_SHOT1);
+
+		EMIT_SOUND_DYN(ENT_PLAYER, CHAN_WEAPON, s, RANDOM_FLOAT(0.8f, 0.9f), ATTN_NORM, 0,
+			PITCH_NORM);
+	}
 	if (!w->m_iClip && p->m_rgAmmo[AMMO_357] <= 0)
 		Player_SetSuitUpdate(RESID(SEN_HEV_AMO0), 0);
 	w->m_flNextPrimaryAttack = 0.75f;

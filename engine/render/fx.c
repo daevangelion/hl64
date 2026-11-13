@@ -247,7 +247,12 @@ void fx_gunshot(const float org[3])
 	/* particle puff [own: 6 grey points, 0.3-0.6 s] + ricochet sound */
 	for (i = 0; i < 6; i++)
 	{
-		float v[3] = { fx_randf(-40, 40), fx_randf(-40, 40), fx_randf(0, 60) };
+		float v[3];
+
+		/* draws in order: initializer side effects are unsequenced (K10) */
+		v[0] = fx_randf(-40, 40);
+		v[1] = fx_randf(-40, 40);
+		v[2] = fx_randf(0, 60);
 
 		part_add_rgb(g, v, dust, PT_GRAV, fx_randf(0.3f, 0.6f));
 	}
@@ -279,7 +284,11 @@ void fx_explosion(const float org[3], res_t sprite, int scale, int framerate, in
 	if (!(flags & FX_EXPL_NOPARTICLES))
 		for (i = 0; i < 16; i++)
 		{
-			float v[3] = { fx_randf(-120, 120), fx_randf(-120, 120), fx_randf(0, 200) };
+			float v[3];
+
+			v[0] = fx_randf(-120, 120);	/* in order (K10) */
+			v[1] = fx_randf(-120, 120);
+			v[2] = fx_randf(0, 200);
 
 			part_add_rgb(g, v, fire, PT_FADE, fx_randf(0.4f, 0.9f));
 		}

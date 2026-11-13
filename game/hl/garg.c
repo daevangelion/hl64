@@ -275,8 +275,12 @@ void CSmoker_Think(int e)
 	VecCopy(ent_cv(e)->origin, org);
 	org[0] += RANDOM_FLOAT(-p->dmg, p->dmg);
 	org[1] += RANDOM_FLOAT(-p->dmg, p->dmg);
-	fx_smoke(org, RESID(SPR_SMOKE), RANDOM_LONG((int)p->max_health, (int)(p->max_health * 1.1f)),
-		RANDOM_LONG(8, 14));
+	{
+		/* draws in source order (argument order is unspecified, K10) */
+		int scale = RANDOM_LONG((int)p->max_health, (int)(p->max_health * 1.1f));
+
+		fx_smoke(org, RESID(SPR_SMOKE), scale, RANDOM_LONG(8, 14));
+	}
 	p->health--;
 	if (p->health > 0)
 		ThinkIn(e, RANDOM_FLOAT(0.1f, 0.2f));
@@ -336,8 +340,11 @@ static void Ga_StompAttack(int e)
 	UTIL_TraceLine(start, end, ignore_monsters, e, &tr);
 	StompCreate(e, start, tr.end, 0);
 	UTIL_ScreenShake(ent_cv(e)->origin, 12.0f, 100.0f, 2.0f, 1000);
-	EMIT_SOUND_DYN(e, CHAN_WEAPON, RANDOM_SOUND_ARRAY(gaStomp), 1.0f, ATTN_GARG, 0,
-		PITCH_NORM + RANDOM_LONG(-10, 10));
+	{
+		res_t s = RANDOM_SOUND_ARRAY(gaStomp);	/* draws in source order (K10) */
+
+		EMIT_SOUND_DYN(e, CHAN_WEAPON, s, 1.0f, ATTN_GARG, 0, PITCH_NORM + RANDOM_LONG(-10, 10));
+	}
 	VecCopy(ent_cv(e)->origin, end);
 	end[2] -= 20;
 	UTIL_TraceLine(ent_cv(e)->origin, end, ignore_monsters, e, &tr);
@@ -683,6 +690,7 @@ static void Ga_HandleAnimEvent(int e, const MonsterEvent_t *ev)
 {
 	float	v[3];
 	int	hurt;
+	res_t	s;	/* drawn before the pitch: argument order is unspecified (K10) */
 
 	switch (ev->event)
 	{
@@ -705,26 +713,28 @@ static void Ga_HandleAnimEvent(int e, const MonsterEvent_t *ev)
 					ent_set_velocity(hurt, v);
 				}
 			}
-			EMIT_SOUND_DYN(e, CHAN_WEAPON, RANDOM_SOUND_ARRAY(gaAttackHit), 1.0f, ATTN_NORM, 0,
-				50 + RANDOM_LONG(0, 15));
+			s = RANDOM_SOUND_ARRAY(gaAttackHit);
+			EMIT_SOUND_DYN(e, CHAN_WEAPON, s, 1.0f, ATTN_NORM, 0, 50 + RANDOM_LONG(0, 15));
 		}
 		else	/* play a random attack miss sound */
-			EMIT_SOUND_DYN(e, CHAN_WEAPON, RANDOM_SOUND_ARRAY(gaAttackMiss), 1.0f, ATTN_NORM, 0,
-				50 + RANDOM_LONG(0, 15));
+		{
+			s = RANDOM_SOUND_ARRAY(gaAttackMiss);
+			EMIT_SOUND_DYN(e, CHAN_WEAPON, s, 1.0f, ATTN_NORM, 0, 50 + RANDOM_LONG(0, 15));
+		}
 		break;
 	case GARG_AE_RIGHT_FOOT:
 	case GARG_AE_LEFT_FOOT:
 		UTIL_ScreenShake(ent_cv(e)->origin, 4.0f, 3.0f, 1.0f, 750);
-		EMIT_SOUND_DYN(e, CHAN_BODY, RANDOM_SOUND_ARRAY(gaFoot), 1.0f, ATTN_GARG, 0,
-			PITCH_NORM + RANDOM_LONG(-10, 10));
+		s = RANDOM_SOUND_ARRAY(gaFoot);
+		EMIT_SOUND_DYN(e, CHAN_BODY, s, 1.0f, ATTN_GARG, 0, PITCH_NORM + RANDOM_LONG(-10, 10));
 		break;
 	case GARG_AE_STOMP:
 		Ga_StompAttack(e);
 		GARG(e)->m_seeTime = gtime() + 12;
 		break;
 	case GARG_AE_BREATHE:
-		EMIT_SOUND_DYN(e, CHAN_VOICE, RANDOM_SOUND_ARRAY(gaBreathe), 1.0f, ATTN_GARG, 0,
-			PITCH_NORM + RANDOM_LONG(-10, 10));
+		s = RANDOM_SOUND_ARRAY(gaBreathe);
+		EMIT_SOUND_DYN(e, CHAN_VOICE, s, 1.0f, ATTN_GARG, 0, PITCH_NORM + RANDOM_LONG(-10, 10));
 		break;
 	default:
 		CBaseMonster_HandleAnimEvent(e, ev);
@@ -792,7 +802,9 @@ static void Ga_GibDeath(int e)
 		GIB(gib)->m_material = -1;	/* matNone */
 		ent_set_origin(gib, ent_cv(e)->origin);
 		/* UTIL_RandomBloodVector */
-		VecSet(v, RANDOM_FLOAT(-1, 1), RANDOM_FLOAT(-1, 1), RANDOM_FLOAT(0, 1));
+		v[0] = RANDOM_FLOAT(-1, 1);	/* draws in source order (K10) */
+		v[1] = RANDOM_FLOAT(-1, 1);
+		v[2] = RANDOM_FLOAT(0, 1);
 		VecScale(v, RANDOM_FLOAT(300, 500), v);
 		ent_set_velocity(gib, v);
 		ThinkIn(gib, 1.25f);

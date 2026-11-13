@@ -113,9 +113,11 @@ HOST_SRC += plat/host/gpu_2d.c
 # must agree bit for bit on collision and physics, on the world draw list
 # (frustum, point -> leaf) the cook predicts, and on everything game logic
 # decides (entities, records, AI, studio poses: a route must take the same
-# path on both).
+# path on both). engine/core (the random stream, hlmath, the frame clock),
+# engine/in (the usercmd), engine/view (the drawn eye: residency input,
+# flashlight) and engine/test (route conditions) feed the simulation too.
 NOFASTMATH_DIRS := engine/coll engine/phys engine/render engine/world engine/ent engine/res \
-	engine/snd game/pm game/hl game/studio game/hud
+	engine/snd engine/core engine/in engine/view engine/test game/pm game/hl game/studio game/hud
 
 HL64_WARN := -Wall -Wextra -Werror
 HL64_DEFS :=
@@ -186,7 +188,6 @@ endif
 ROM_OBJS := $(addprefix $(BUILD_DIR)/,$(ENGINE_SRC:.c=.o) $(N64_SRC:.c=.o))
 
 $(foreach d,$(NOFASTMATH_DIRS),$(eval $(BUILD_DIR)/$(d)/%.o: CFLAGS += -fno-fast-math))
-$(BUILD_DIR)/engine/core/hlmath.o: CFLAGS += -fno-fast-math
 $(BUILD_DIR)/engine/%.o: CFLAGS += -std=c99
 $(addprefix $(BUILD_DIR)/,game/pm/pm_shared.o game/pm/pm_math.o): CFLAGS += $(HLSDK_CFLAGS)
 # game/hl private blocks are HLSDK class chains as flat C structs used

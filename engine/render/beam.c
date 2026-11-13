@@ -311,7 +311,12 @@ void beam_draw(int id, uint8_t blend)
 		amp = (i > 0 && i < n) ? b->noise * len * 0.25f : 0;
 		if (amp > 0)
 		{
-			float rnd[3] = { fx_randf(-1, 1), fx_randf(-1, 1), fx_randf(-1, 1) };
+			float rnd[3];
+
+			/* draws in order: initializer side effects are unsequenced (K10) */
+			rnd[0] = fx_randf(-1, 1);
+			rnd[1] = fx_randf(-1, 1);
+			rnd[2] = fx_randf(-1, 1);
 
 			cross(d, rnd, perp);
 			for (k = 0; k < 3; k++)

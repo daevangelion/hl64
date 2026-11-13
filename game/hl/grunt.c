@@ -353,7 +353,7 @@ static int VecCheckToss(int e, const float spot1[3], const float spot2in[3], flo
 	float out[3])
 {
 	col_trace_t	tr;
-	float		spot2[3], mid[3], up[3], apex[3], vel[3];
+	float		spot2[3], mid[3], up[3], apex[3], vel[3], r;
 	float		flGravity = settings.gravity * flGravityAdj, d1, d2, t1, t2;
 
 	VecSet(out, 0, 0, 0);
@@ -361,8 +361,13 @@ static int VecCheckToss(int e, const float spot1[3], const float spot2in[3], flo
 		return 0;	/* too high */
 	UTIL_MakeVectors(ent_cv(e)->angles);
 	/* a little to the left or right, not right down on the enemy's bean */
-	VecMA(spot2in, RANDOM_FLOAT(-8, 8) + RANDOM_FLOAT(-16, 16), gpGlobals.v_right, spot2);
-	VecMA(spot2, RANDOM_FLOAT(-8, 8) + RANDOM_FLOAT(-16, 16), gpGlobals.v_forward, spot2);
+	/* draws in source order (operand order is unspecified, K10) */
+	r = RANDOM_FLOAT(-8, 8);
+	r += RANDOM_FLOAT(-16, 16);
+	VecMA(spot2in, r, gpGlobals.v_right, spot2);
+	r = RANDOM_FLOAT(-8, 8);
+	r += RANDOM_FLOAT(-16, 16);
+	VecMA(spot2, r, gpGlobals.v_forward, spot2);
 	/* rough idea of how high it can be thrown */
 	VecSub(spot2, spot1, vel);
 	VecMA(spot1, 0.5f, vel, mid);
@@ -470,7 +475,10 @@ static void throw_item(int it)
 
 	if (it < 0)
 		return;
-	VecSet(v, RANDOM_FLOAT(-100, 100), RANDOM_FLOAT(-100, 100), RANDOM_FLOAT(200, 300));
+	/* draws in source order (argument order is unspecified, K10) */
+	v[0] = RANDOM_FLOAT(-100, 100);
+	v[1] = RANDOM_FLOAT(-100, 100);
+	v[2] = RANDOM_FLOAT(200, 300);
 	ent_set_velocity(it, v);
 	VecSet(v, 0, RANDOM_FLOAT(200, 400), 0);
 	ent_set_avelocity(it, v);

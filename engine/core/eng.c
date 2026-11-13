@@ -32,6 +32,7 @@
 #include "engine/core/eng.h"
 #include "engine/core/hlmath.h"
 #include "engine/core/log.h"
+#include "engine/core/rng.h"
 #include "engine/core/sys.h"
 #include "engine/ent/rec_int.h"
 #include "engine/io/io.h"
@@ -503,6 +504,32 @@ static int cmd_ents_dump(const dbg_cmd_t *c)
 	return 0;
 }
 
+#ifdef HL64_TEST
+/* The frame's simulated state: the random stream, the entities (with
+ * `entsdump 1` also one line per live entity, labelled by the frame) and
+ * the player. */
+static void trace_frame(void)
+{
+	uint32_t h, draws, rs = hl64_rand_state(&draws);
+	int live = ents_hash(&h, eng.frame);
+
+	log_printf("trace %lu frame rng=%08lx draws=%lu live=%d ents=%08lx\n",
+		(unsigned long)eng.frame, (unsigned long)rs, (unsigned long)draws, live,
+		(unsigned long)h);
+	if (phy_player_active())
+	{
+		const ent_player_t *pl = phy_player();
+
+		log_printf("trace %lu player org=%.9g,%.9g,%.9g vel=%.9g,%.9g,%.9g ang=%.9g,%.9g,%.9g "
+			"flags=%lu ground=%d\n", (unsigned long)eng.frame, (double)pl->origin[0],
+			(double)pl->origin[1], (double)pl->origin[2], (double)pl->velocity[0],
+			(double)pl->velocity[1], (double)pl->velocity[2], (double)pl->angles[0],
+			(double)pl->angles[1], (double)pl->angles[2], (unsigned long)pl->flags,
+			pl->groundentity);
+	}
+}
+#endif
+
 static int cmd_quit(const dbg_cmd_t *c)
 {
 	sys_exit((int)c->arg[0].u);
@@ -934,6 +961,10 @@ void eng_frame(void)
 	SEAMPROF_STEP(SUBMIT);
 
 	/* 13 test: debug commands at the frame boundary, route VM, roll-up, log */
+#ifdef HL64_TEST
+	if (dbg_trace())
+		trace_frame();
+#endif
 	eng.frame++;
 	dbg_run(eng.frame);
 	if (rt_active())
