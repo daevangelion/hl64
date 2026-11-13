@@ -241,7 +241,7 @@ int sys_cart_read(void *dst, size_t dst_cap, uint32_t rom, uint32_t rom_size,
 	return 1;
 }
 
-/* ---- engine/io backend: a piece lands by the next pump ------------------- */
+/* ---- engine/io backend: a piece lands when launched ----------------------- */
 
 static uint32_t io_pread(void *dst, uint32_t rom, uint32_t len)
 {
@@ -256,25 +256,16 @@ static uint32_t io_pread(void *dst, uint32_t rom, uint32_t len)
 	return n;
 }
 
-/* The piece launched last: its modelled PI time. A piece lands by the next
- * pump (sys_pi_busy 0), but a sync read issued before that pump waits for
- * it: the cart's DMA of up to IO_PIECE (3.1 ms) is still running when the
- * frame's logic reads right after the frame-start pump (the cart's
- * playable walk: 1-2 ms of a > 1 ms frame was this wait). The host has no
- * CPU clock to tell how much of it has passed, so a sync read is charged
- * the whole piece: worst case. The mixer's AUDIO reads come at the frame's
- * sound step, after the several ms of logic, physics and residency the
- * cart runs since the pump: the host charges them nothing (the cart's
- * `io: frame` line measures its own drains). engine/io only waits while it
- * holds a piece in flight (io.c Drain). */
-static uint32_t io_inflight_us;
-
+/* The host has no PI interrupt: engine/io runs its chain step at every io
+ * call, and a launched piece has landed (sys_pi_busy 0), so a frame's
+ * plan moves at once and a sync read never waits for a piece in flight.
+ * The pieces' modelled PI time is still summed per frame (io.c Account:
+ * frames_pi_over). */
 void sys_pi_launch(void *dst, uint32_t rom, uint32_t len)
 {
-	io_inflight_us = sys_pi_cost_us(io_pread(dst, rom, len));
+	io_pread(dst, rom, len);
 }
 
-/* one pump interval models a piece's PI time */
 int sys_pi_busy(void)
 {
 	return 0;
@@ -282,10 +273,21 @@ int sys_pi_busy(void)
 
 uint32_t sys_pi_wait(int audio)
 {
-	uint32_t w = audio ? 0 : io_inflight_us;
+	(void)audio;
+	return 0;
+}
 
-	io_inflight_us = 0;
-	return w;
+void sys_pi_set_isr(void (*isr)(void))
+{
+	(void)isr;
+}
+
+void sys_irq_off(void)
+{
+}
+
+void sys_irq_on(void)
+{
 }
 
 uint32_t sys_pi_read(void *dst, uint32_t rom, uint32_t len)

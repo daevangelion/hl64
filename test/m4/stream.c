@@ -58,10 +58,8 @@ static void check(const char *t, int ok, const char *fmt, ...)
 	fails += !ok;
 }
 
-/* One frame as eng_frame orders it on the host (test builds' pump
- * points): io step 3 and the step pumps before the stream (7, short),
- * the stream at step 9, the short ones up to the sound step (3), a piece
- * at the sound step, the wait, the render steps (3) and the frame's end.
+/* One frame as eng_frame orders it: io step 3, the stream at step 9, the
+ * render-time pumps (the host's chain moves a plan at its first io call).
  * home < 0: no stream frame. */
 static void frame(int home, const float eye[3], const float vel[3])
 {
@@ -69,15 +67,12 @@ static void frame(int home, const float eye[3], const float vel[3])
 
 	wld_frame(fr++);
 	io_frame_begin(33333);
-	for (i = 0; i < 7; i++)
-		io_pump_short();
+	io_pump();
 	now += 1.0 / 30.0;
 	eng_set_clock(now, 1.0 / 30.0);
 	if (home >= 0)
 		wld_stream_frame(home, eye, vel);
 	for (i = 0; i < 3; i++)
-		io_pump_short();
-	for (i = 0; i < 6; i++)
 		io_pump();
 	log_flush();
 }

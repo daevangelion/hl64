@@ -39,7 +39,6 @@
 #include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
-#include "engine/io/io.h"
 #include "engine/phys/player.h"
 #include "engine/mem/carve.h"
 #include "engine/render/gpu_fx.h"
@@ -1258,14 +1257,11 @@ void ren_frame(double time)
 			open_seams(L);
 		}
 	st.world_us = (uint32_t)(sys_time_us() - t0);
-	IO_STEP_PUMP();
 	/* frame step 11 (architecture.md 3.2): studio, particles,
 	 * translucent, decals, view model; the HUD follows */
 	studio_draw(time);
-	IO_STEP_PUMP();
 	fx_draw_particles();
 	fx_draw_trans();
-	IO_STEP_PUMP();
 	fx_draw_decals();
 	studio_draw_view();
 	gpu_end();

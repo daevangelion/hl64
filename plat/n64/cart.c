@@ -27,6 +27,7 @@
 
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
+#include "engine/io/io.h"
 #include "plat/n64/n64.h"
 
 /* libdragon's DFS lookups dereference its file table unchecked: with no
@@ -48,6 +49,9 @@ static const char *cart_dfs_path(const char *path)
 	return path;
 }
 
+/* DFS lookups and sys_cart_read DMA outside engine/io: the io chain is
+ * held around them, or each of their PI reads would wait for a chained
+ * piece (io_hold). */
 uint32_t sys_cart_addr(const char *path, uint32_t *out_size)
 {
 	const char *rel = cart_dfs_path(path);
@@ -58,11 +62,11 @@ uint32_t sys_cart_addr(const char *path, uint32_t *out_size)
 		*out_size = 0;
 	if (!cart_dfs || !rel || !rel[0])
 		return 0;
+	io_hold(1);
 	rom = dfs_rom_addr(rel);
-	if (!rom)
-		return 0;
-	sz = dfs_rom_size(rel);
-	if (sz <= 0)
+	sz = rom ? dfs_rom_size(rel) : 0;
+	io_hold(0);
+	if (!rom || sz <= 0)
 		return 0;
 	if (out_size)
 		*out_size = (uint32_t)sz;
@@ -92,6 +96,7 @@ int sys_cart_read(void *dst, size_t dst_cap, uint32_t rom, uint32_t rom_size,
 
 	if ((((uintptr_t)dst) & 0x20000000u) == 0)
 		data_cache_hit_writeback_invalidate(dst, dma_len);
+	io_hold(1);
 #ifdef HL64_PROFILE
 	{
 		uint32_t t0 = TICKS_READ();
@@ -102,6 +107,7 @@ int sys_cart_read(void *dst, size_t dst_cap, uint32_t rom, uint32_t rom_size,
 #else
 	dma_read(dst, src, dma_len);
 #endif
+	io_hold(0);
 	return 1;
 }
 
@@ -110,6 +116,31 @@ int sys_cart_read(void *dst, size_t dst_cap, uint32_t rom, uint32_t rom_size,
 static uint32_t pi_addr(uint32_t rom)
 {
 	return (rom | 0x10000000u) & 0x1FFFFFFFu;
+}
+
+/* The PI completion interrupt (libdragon clears it, then calls the
+ * handler with interrupts disabled): engine/io's chain step. */
+void sys_pi_set_isr(void (*isr)(void))
+{
+	static void (*cur)(void);
+
+	if (cur == isr)
+		return;
+	if (cur)
+		unregister_PI_handler(cur);
+	cur = isr;
+	register_PI_handler(isr);
+	set_PI_interrupt(1);
+}
+
+void sys_irq_off(void)
+{
+	disable_interrupts();
+}
+
+void sys_irq_on(void)
+{
+	enable_interrupts();
 }
 
 void sys_pi_launch(void *dst, uint32_t rom, uint32_t len)

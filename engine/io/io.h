@@ -4,11 +4,17 @@
  * the old tree's q64_io.h (audit entry source/q64_io.h CLEAN).
  *
  * Every streaming cart read goes through one queue of caller-owned
- * requests. io_pump(), called a few times per frame from the frame loop
- * (never from an interrupt), retires the PI piece in flight and launches
- * the next one: at most IO_PIECE bytes per PI DMA, highest priority first,
- * and never more than the frame's byte budget (64 KB; 128 KB while a seam
- * pin is outstanding).
+ * requests. The scheduler plans pieces from the queue (highest priority
+ * first, never more than the frame's byte budget: 64 KB; 128 KB while a
+ * seam pin is outstanding) into a plan array of PI DMAs of at most
+ * IO_PIECE bytes, and the PI completion interrupt chains them: the
+ * interrupt only launches the plan's next piece and marks the landed one
+ * (no queue or list work, no callbacks, no allocation); the main thread
+ * touches the plan and the in-flight state with interrupts off. The host
+ * build has no interrupt: every io call runs the same chain step, and a
+ * host piece lands when it is launched. io_pump() (the frame loop, after
+ * several frame steps) publishes landed pieces (playable builds: and
+ * plans more) and resumes a chain paused by a sync / audio read.
  *
  * Synchronous reads (layer open, a collision chunk missing in the middle
  * of a trace) bypass the budget and are counted as blocked I/O, except
@@ -17,36 +23,42 @@
  * blocked more than 1 ms logs `io: frame N blocked U us: S sync reads B B,
  * largest L B at R, A audio reads, drain D us`; inside a test teleport
  * window (io_tele_window) it counts as blk1ms_tele. Drain is the wait for
- * a queued piece still in flight when a sync / audio read starts. Test
- * builds also log each sync read in play: `io: sync <what> N B at R`.
+ * the chain's piece in flight when a sync / audio read starts: the read
+ * pauses the chain until the next io_pump, so the reads of one frame step
+ * wait for one IO_PIECE (0.4 ms) at most.
+ * Test builds also log each sync read in play: `io: sync <what> N B at R`.
  *
  * Shared by the cart and the host build: the backend (sys.h sys_pi_*) is
  * a PI DMA (cart) or a pread with a modelled PI cost per KB (host), so
- * the host reports the same per-frame traffic, budget and blocked time
- * (host: a sync read issued while a piece is in flight waits the piece's
- * whole modelled time, plat/host/io_host.c).
+ * the host reports the same per-frame traffic, budget and sync-read time.
  *
  * HL64_TEST builds (host and cart, K10, architecture.md 15) complete I/O
  * in frames: io_frame_begin plans the frame's pieces from the queue alone
- * (priority order, budget, at most IO_TEST_PIECES), io_pump moves them,
- * and their completions (done, state, callbacks) publish only at the next
- * io_frame_begin, before anything else of that frame. A planned request
- * reads IO_ACTIVE all frame. A plan the frame did not move is finished
- * there synchronously: late (`io: frame N late: ...`, stats `late=`,
- * blocked I/O). io_finish, io_cancel and sync / audio reads act at once.
- * Playable builds publish a request as soon as its last piece lands.
+ * (priority order, budget, at most IO_PLAN_UNITS requests and 16 KB
+ * units), the chain moves them during the frame, and their completions
+ * (done, state, callbacks) publish only at the next io_frame_begin,
+ * before anything else of that frame. A planned request reads IO_ACTIVE
+ * all frame. A plan the frame did not move is finished there
+ * synchronously: late (`io: frame N late: ...`, stats `late=`, blocked
+ * I/O). io_finish, io_cancel and sync / audio reads act at once.
+ * Playable builds publish a request as soon as its last piece lands (at
+ * the next io call) and plan again whenever the plan has landed; their
+ * chain runs across frame boundaries.
  */
 #ifndef HL64_IO_H
 #define HL64_IO_H
 
 #include <stdint.h>
 
-#define IO_PIECE		(16 * 1024)	/* one PI DMA ≈ 3.1 ms at 5.25 MB/s */
+#define IO_PIECE		(2 * 1024)	/* one PI DMA ≈ 0.4 ms at 5.25 MB/s: the
+					   longest wait of a frame step's sync /
+					   audio reads */
 #define IO_BUDGET		(64 * 1024)	/* bytes per frame, normal */
 #define IO_BUDGET_SEAM	(128 * 1024)	/* while a seam pin is outstanding */
-#define IO_TEST_PIECES	8		/* HL64_TEST: pieces planned per frame (the
-					   seam budget's; small requests are a
-					   piece each, one per pump) */
+#define IO_PLAN_UNIT	(16 * 1024)
+#define IO_PLAN_UNITS	8		/* a plan: at most 8 requests and 8 units
+					   (each request's bytes rounded up to
+					   units): the seam budget's */
 #define IO_KB_BINS		66		/* per-frame async KB histogram: 0..64, more */
 
 enum { IO_PRIO_OPEN, IO_PRIO_SEAM, IO_PRIO_PREFETCH, IO_NPRIO };
@@ -67,8 +79,10 @@ typedef struct io_req_s
 	 * the visible set's render chunks queued past the teleport window
 	 * (test/m4/stream_open.route: popin 3, 0 without) */
 	uint8_t			front;
-	void			(*cb)(struct io_req_s *r);	/* on completion: io_pump (test
-							   builds io_frame_begin), io_finish */
+	void			(*cb)(struct io_req_s *r);	/* on completion, main thread:
+							   the io call that publishes it
+							   (test builds io_frame_begin),
+							   io_finish */
 	int			user;
 } io_req_t;
 
@@ -124,23 +138,13 @@ void	io_cancel(io_req_t *r);
 /* Block until r is DONE (counted as blocked); r must be queued or active;
  * `what` as io_read_sync's. */
 void	io_finish(io_req_t *r, const char *what);
+/* Publish landed pieces (playable: plan more once the plan has landed);
+ * resume a paused chain. */
 void	io_pump(void);
-/* Between the frame's steps (eng_frame, ren_frame): HL64_TEST builds pump
- * there too, so a frame's plan lands within the frame (a 16 KB piece is
- * 3.1 ms of PI on the cart; the host moves one piece per pump). The steps
- * before the sound step pump short pieces (IO_PIECE_SHORT, 0.8 ms): the
- * mixer's AUDIO reads there wait for the piece in flight, and a wait over
- * 1 ms is a blocked frame. Playable builds pump at eng_frame's fixed
- * points only. */
-#ifdef HL64_TEST
-#define IO_PIECE_SHORT		(4 * 1024)
-void	io_pump_short(void);
-#define IO_STEP_PUMP()		io_pump()
-#define IO_STEP_PUMP_SHORT()	io_pump_short()
-#else
-#define IO_STEP_PUMP()		((void)0)
-#define IO_STEP_PUMP_SHORT()	((void)0)
-#endif
+/* While held (nests), the chain launches no new piece: cart file lookups
+ * and reads outside the queue (plat/n64/cart.c), which would otherwise
+ * wait for a piece per DMA. */
+void	io_hold(int on);
 /* Blocking read outside the queue (waits for the piece in flight first);
  * `what` names the caller in the test builds' in-play `io: sync` line. */
 void	io_read_sync(void *dst, uint32_t rom, uint32_t len, const char *what);

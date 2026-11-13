@@ -139,7 +139,7 @@ ids), which the cook reads too.
 |---|---|---|
 | 1 | plat | VI counter → `dt` (f64 s) = elapsed vblanks × VI period, clamped to [1/60, 0.1] s (D6 iii); `host_fixed_dt` in test builds |
 | 2 | in | pad → `usercmd` |
-| 3 | io | pump (also between steps 6/7, 9/10 and after the world draw) |
+| 3 | io | plan / publish (`io_frame_begin`, `io_pump`; the PI interrupt chains the plan's pieces through the frame; `io_pump` again after steps 6, 9 and 10 resumes a chain a sync / audio read paused) |
 | 4 | game | `game_start_frame`; logic timers due by `now + dt` (think-and-time.md 4) |
 | 5 | phys | player: prethink → think if due → pmove → link + touches → postthink |
 | 6 | phys | **active set** in ascending entity index: each entity's GoldSrc movetype step (think + motion) — only entities that are due to think, moving, falling, or pushers in motion (6.3) |
@@ -306,7 +306,13 @@ refers to files by index; no path lookups happen afterwards.
 
 Caller-owned requests (file, offset, length, destination, priority, done
 flag); priorities AUDIO > OPEN > SEAM (pins) > PREFETCH; promotion when a
-stronger class needs a queued request; one piece in flight ≤ 16 KB;
+stronger class needs a queued request; pieces ≤ 2 KB (0.4 ms of PI),
+planned into an array and chained by the PI completion interrupt (the
+handler only lands the piece and launches the plan's next one: no queue
+work, no callbacks, no allocation; the main thread shares the plan with
+interrupts off); a sync / audio read pauses the chain until the next
+`io_pump` (so one frame step's reads wait for one piece at most) and
+cart file lookups hold it;
 per-frame budget 64 KB (128 KB while a seam is approached); synchronous
 reads only at boot/New Game and for a collision chunk missing mid-trace
 (counted as blocked I/O, target 0 frames > 1 ms). Stats per route segment:
@@ -917,8 +923,9 @@ mostly block copies.
   completes in frames (engine/io, 5.2): at
   `io_frame_begin` the scheduler plans the frame's pieces from the queue
   alone (priority order, the frame's byte budget, at most
-  `IO_TEST_PIECES`), they move during the frame (one in flight, pumped at
-  every frame step), and their completions (request done, callbacks,
+  `IO_PLAN_UNITS` requests and 16 KB units), the PI completion interrupt
+  chains them through the frame (host: they move at its first io call),
+  and their completions (request done, callbacks,
   chunk RESIDENT, studio info / anim landed) are published only at the
   next `io_frame_begin`, before anything else of that frame; a planned
   piece not moved by then is read there (late: `io: frame N late`,
@@ -933,7 +940,8 @@ mostly block copies.
   resident, bounded (`REC_PRECACHE_FRAMES`; an expiry is logged, counted
   in `stats N rec: expired=` and fails the M4 gate). Seam pins B as soon
   as its layer is ready. Playable builds publish a request as soon as its
-  last piece lands and pump at `eng_frame`'s fixed points only. Triage:
+  last piece lands (at the next io call), plan again once a plan has
+  landed, and chain across frame boundaries. Triage:
   `entsdump 1` makes every `stats` record also log one line per live
   entity (`stats N ent E cls= gid= tn= id= cv= mot= ph= tm= rnd=`, part
   hashes + render fields); the first differing line of two runs names

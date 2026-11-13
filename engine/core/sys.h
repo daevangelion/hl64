@@ -90,13 +90,19 @@ int		sys_cart_read(void *dst, size_t dst_cap, uint32_t rom,
 			uint32_t rom_size, uint32_t off, uint32_t len);
 /* engine/io backend: start one piece, poll, wait (returns blocked us),
  * synchronous read (returns blocked us), modelled PI us (host; 0 cart).
- * sys_pi_wait's audio: the waiter is the mixer's AUDIO read (the host
- * charges a waiting sync read the in-flight piece's whole modelled time,
- * an audio read none: plat/host/io_host.c). */
+ * sys_pi_wait's audio: the waiter is the mixer's AUDIO read. A host
+ * piece lands when it is launched (sys_pi_busy is always 0 there). */
 void		sys_pi_launch(void *dst, uint32_t rom, uint32_t len);
 int		sys_pi_busy(void);
 uint32_t	sys_pi_wait(int audio);
 uint32_t	sys_pi_read(void *dst, uint32_t rom, uint32_t len);
 uint32_t	sys_pi_cost_us(uint32_t len);
+/* The PI completion interrupt's handler (cart: called in interrupt
+ * context after every PI DMA, the chain's or not; host: no interrupt,
+ * never called). Interrupts off / on around state a handler shares with
+ * the main thread (nest; host: nothing). */
+void		sys_pi_set_isr(void (*isr)(void));
+void		sys_irq_off(void);
+void		sys_irq_on(void);
 
 #endif

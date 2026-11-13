@@ -816,13 +816,9 @@ void eng_frame(void)
 	SEAMPROF_STEP(INPUT);
 
 	/* 3 io (test builds: completions published, the frame's pieces
-	 * planned; short pieces until the sound step, io.h) */
+	 * planned; the PI interrupt chains them through the frame, io.h) */
 	io_frame_begin(dt);
-#ifdef HL64_TEST
-	io_pump_short();
-#else
 	io_pump();
-#endif
 	SEAMPROF_STEP(IO);
 
 	/* 4 game: the frame's clock (dt 0 in the settle frames), due logic
@@ -831,29 +827,27 @@ void eng_frame(void)
 	rec_run_timers(eng_clock_time(), gdt);
 	game_start_frame();
 	SEAMPROF_STEP(LOGIC);
-	IO_STEP_PUMP_SHORT();
 	/* 5 player: pmove host */
 	phy_player_frame(&cmd, eng.time);
 	SEAMPROF_STEP(PLAYER);
-	IO_STEP_PUMP_SHORT();
 	/* 6 active set */
 	phy_entities_frame(eng.time, gdt);
 	/* the clock advances by the frame time (f64) after step 6 */
 	eng_clock_advance();
 	eng.time = eng_clock_time();
 	SEAMPROF_STEP(ACTIVE);
-	IO_STEP_PUMP_SHORT();
+	/* io: resume a chain paused by the steps' sync / audio reads (wave
+	 * loads of the sounds the game started), io.h */
+	io_pump();
 	/* 7-10 world, hydration, residency, sound (M1-M4) */
 	if (eng.world)
 	{
 		wld_frame(eng.frame);
 		SEAMPROF_STEP(STREAM);
-		IO_STEP_PUMP_SHORT();
 		/* 7 seams: approach, layer / HLE opens, pins, switch, crossing,
 		 * leave */
 		seam_frame();
 		SEAMPROF_STEP(SEAM);
-		IO_STEP_PUMP_SHORT();
 		/* 8 hydration pump around the seam anchors (global positions:
 		 * the player, and through the approached seam's T) */
 		{
@@ -863,7 +857,6 @@ void eng_frame(void)
 			rec_frame(n ? (const float (*)[3])anchors : NULL, n);
 		}
 		SEAMPROF_STEP(HYDRATE);
-		IO_STEP_PUMP_SHORT();
 		/* 9 residency target set (engine/world/stream.c): the player's
 		 * eye and velocity in its home frame; the free camera's view */
 		if (phy_player_active())
@@ -886,19 +879,17 @@ void eng_frame(void)
 			wld_stream_frame(ren_cam.map, eye, still);
 		}
 		SEAMPROF_STEP(STREAM);
-		IO_STEP_PUMP_SHORT();
+		io_pump();
 		wld_style_tick(eng.time);
 		ren_dlight_frame(eng.time, (double)dt * 1e-6);
 		ren_dlight_sources(eng.time);
 		studio_frame();
 		SEAMPROF_STEP(SCENE);
-		IO_STEP_PUMP_SHORT();
 	}
 	/* effects on the game clock: temp entities, particles, beams, decal
 	 * placements, persistent render fades, shake */
 	fx_frame(eng.time, gdt);
 	SEAMPROF_STEP(FXSIM);
-	IO_STEP_PUMP_SHORT();
 	/* 10 sound: listener = the view (global eye, right vector) of the last
 	 * drawn frame */
 	{
@@ -912,7 +903,7 @@ void eng_frame(void)
 		snd_frame(ren_cam.org, right, (double)dt * 1e-6);
 	}
 	SEAMPROF_STEP(SND);
-	IO_STEP_PUMP();
+	io_pump();
 
 	/* 11-12 render into a free framebuffer; submit for paced present */
 	while (!sys_frame_try_begin())
