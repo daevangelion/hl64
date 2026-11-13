@@ -178,6 +178,9 @@ int		rec_slot_held(int slot);
 /* Release one live entity now (dehydrate into the store, record DRY;
  * runtime entities by (map, runtime id)); 0 when the game refused it. */
 int		rec_release(int e);
+/* 1 while the closing release of `slot` dehydrates its entities (map close:
+ * game_dehydrate stores any state, as GoldSrc saves a level it leaves). */
+int		rec_slot_closing(int slot);
 /* Twin pair (cwg-format.md twins): names fired in either slot resolve to
  * the live copy; cleared with rec_twin_clear when either slot closes. */
 void		rec_twin_alias(gid_t16 a, gid_t16 b);
