@@ -2120,10 +2120,20 @@ static uint32_t store_need(uint32_t n)
 	return (uint32_t)sizeof(rstore_t) + ((n + 3u) & ~3u);
 }
 
+/* The slot whose closing release is dehydrating an entity (rec_slot_closing:
+ * the game stores a closing map's entities whatever their state). */
+static int closing_slot = -1;
+
+int rec_slot_closing(int slot)
+{
+	return slot >= 0 && slot == closing_slot;
+}
+
 /* Dehydrate entity e of an open slot into the store: record DRY / runtime
  * entry dry, entity freed. 1 when e is gone (released, or freed by the
- * game: transients), 0 refused (retry stamped). `closing`: a refusal frees
- * the entity anyway (its record respawns fresh; a runtime entity is lost). */
+ * game: transients), 0 refused (retry stamped). `closing`: the game does
+ * not refuse (rec_slot_closing); a refusal anyway (store full) frees the
+ * entity (its record respawns fresh; a runtime entity is lost). */
 static int release_one(int e, int closing)
 {
 	ent_id_t *id = ent_idc(e);
@@ -2180,7 +2190,9 @@ static int release_one(int e, int closing)
 	{
 		prev = eng_frame_layer();
 		eng_set_frame_layer(id->layer);
+		closing_slot = closing ? id->layer : -1;
 		n = game_dehydrate(e, at, room - (uint32_t)sizeof(rstore_t));
+		closing_slot = -1;
 		eng_set_frame_layer(prev);
 	}
 	else if (!R.store_full++)

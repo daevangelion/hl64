@@ -22,7 +22,7 @@ def run(args, label):
     p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     lines = [l for l in p.stdout.splitlines() if l.startswith("gamels ")]
     for l in lines:
-        if l.startswith(("gamels FAIL", "gamels   at", "gamels map", "gamels class",
+        if l.startswith(("gamels FAIL", "gamels   at", "gamels map", "gamels closing", "gamels class",
                          "gamels twin", "gamels cut")):
             print(l)
     ok = p.returncode == 0 and not any(l.startswith("gamels FAIL") for l in lines) and \
