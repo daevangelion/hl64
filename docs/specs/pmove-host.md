@@ -20,7 +20,11 @@ here).
    clamps); buttons (`IN_ATTACK`, `IN_JUMP`, `IN_DUCK`, `IN_USE`,
    `IN_ATTACK2`, `IN_RELOAD`, forward/back/left/right bits per HLSDK
    `in_buttons.h`); impulse.
-2. `game_player_prethink`.
+2. `game_player_prethink` (HLSDK `CBasePlayer::PreThink`). FL_INWATER is
+   set or cleared here from the water level the **previous** move left
+   (`WaterMove`), not by pmove or the engine; a player entering water gets
+   FL_INWATER on the frame after the move that put him there
+   **[probe:measured PM-bot]**.
 3. Player think if due (think-and-time.md 2).
 4. Base velocity: if the ground entity has FL_CONVEYOR, add
    `ground.speed · ground.movedir` to `basevelocity`; triggers that push
@@ -33,7 +37,10 @@ here).
    (FL_ONGROUND, FL_DUCKING, FL_WATERJUMP…), groundentity (physent index →
    entity), waterlevel/watertype, `bInDuck`, `flDuckTime`, `flSwimTime`,
    `flTimeStepSound`, `iStepLeft`, `flFallVelocity`, `punchangle`,
-   `oldbuttons`, `usehull` (box := hull 1 or hull 3 box).
+   `oldbuttons`, `usehull` (box := hull 1 or hull 3 box). The ground
+   entity is written only when pmove found ground: **while the player is
+   airborne it keeps the last ground entity** (FL_ONGROUND is what tells
+   airborne) **[probe:measured PM-bot]**.
 7. Link the player with trigger touch (area-links-and-touch.md 3), then
    run impact touches for every entry of the pmove touch list in order
    (each pair once per frame: player.touch(other), other.touch(player)).
@@ -49,8 +56,9 @@ here).
 - Then every linked entity whose linked box meets the player's move box
   for this frame (origin ± (box + |velocity|·dt + 18 + 1) on each axis),
   in ascending entity index (spatial grid query), except: the player,
-  SOLID_NOT and SOLID_TRIGGER
-  entities, entities owned by the player.
+  SOLID_NOT and SOLID_TRIGGER entities, entities owned by the player, and
+  **brush entities flagged FL_MONSTERCLIP** (`func_monsterclip` blocks
+  monsters only; it is never a player physent) **[probe:measured PM-bot]**.
   - SOLID_BSP entities: model physent (origin, angles, hulls of its
     model, `skin` contents if < −1, rendermode).
   - SOLID_BBOX / SOLID_SLIDEBOX: box physent (mins, maxs, origin).
@@ -71,7 +79,7 @@ here).
 | true point contents (p) | `PM_TruePointContents`: world contents only, CURRENT_* kept; brush entities, ladders included, never contribute **[probe:measured PM-bot]** |
 | hull point contents (hull, node, p) | walk a hull handle from node (trace-and-hulls.md 1); the handle is opaque to the game except for the root field pm_shared reads |
 | hull for bsp (physent, offset out) | the hull of that physent's model for the current `usehull` (0 → hull 1, 1 → hull 3, 2 → hull 0, 3 → hull 2), and the offset as trace-and-hulls.md 4.2 |
-| player trace (start, end, flags, ignore physent) | trace the player box for `usehull` against every physent in index order (flags: studio-ignore, glass-ignore, world-only per HLSDK `pm_defs.h`), combined as trace-and-hulls.md 4.4 step 5; **then if allsolid, set startsolid; if startsolid, fraction := 0** (the pmove rule, unlike server traces); `ent` = physent index, −1 none |
+| player trace (start, end, flags, ignore physent) | trace the player box for `usehull` against every physent in index order (flags: studio-ignore, glass-ignore, world-only per HLSDK `pm_defs.h`), combined as trace-and-hulls.md 4.4 step 6; **then if allsolid, set startsolid; if startsolid, fraction := 0 and the end point := the start** (the pmove rule, unlike server traces) **[probe:measured PM-bot]**; `ent` = physent index, −1 none |
 | trace line (start, end, flags, hull, ignore) | the same with an explicit hull |
 | test player position (pos) | physent index of the first solid the player box at pos is inside, −1 if free |
 | stuck touch (hit index, trace) | append to the touch list (deduplicated) |
@@ -99,8 +107,16 @@ mistakes. All on flat ground unless stated.
   speed; within 1 % of the cap from rest in under 0.5 s with accelerate 10.
 - Jump: initial vz = √(2·800·45) ≈ 268.3 u/s; apex 45 u above the start.
 - Steps up to 18 u are climbed without jumping; 19 u are not.
-- Ducking takes 0.4 s to switch hulls on the ground (eyes ease down) and
-  is instant in the air (feet lift 18 u).
+- Ducking on the ground: pressing duck sets the duck timer to 1000 ms; each
+  move lowers it by the move's msec; the hull switches (FL_DUCKING, duck
+  hull, view height) on the first move whose timer is **strictly below
+  600 ms**, i.e. strictly more than 0.4 s after the press: the 41st move
+  after the pressing move at msec 10, the 13th at msec 33, the 9th at msec
+  50. At exactly 600 ms GoldSrc does not
+  finish yet: it evaluates the compare in x87 extended precision, which puts
+  600 / 1000 above the double constant 1 − 0.4, one frame later than a
+  plain-double evaluation would **[probe:measured PM-bot]**. In the air the
+  switch is instant (feet lift 18 u).
 - Standing up is refused where the standing hull does not fit.
 - Ladder (pm_shared `PM_LadderMove`): holding forward on a ladder climbs at
   200 u/s with a level view and 282.84 u/s (200·√2) looking 45° up
@@ -126,10 +142,14 @@ from the probe runs.
 |---|---|---|
 | PM1 | adapter round trip: every field of section 1 step 6 written back unchanged when pm_shared does not touch it (identity move with zero cmd) | self-contained |
 | PM2 | section 5 properties and the PM-bot runs (walk, run, jump, duck, duck-jump, stairs, ladder, water, slopes): per-frame origin within 0.01 u and flags equal for 300 frames each | probe PM-bot runs on the player's maps |
-| PM3 | player trace: startsolid ⇒ fraction 0; allsolid ⇒ startsolid; hull per `usehull` mapping | self-contained |
+| PM3 | player trace: allsolid ⇒ startsolid; startsolid ⇒ fraction 0 and end point = start; hull per `usehull` mapping | **[probe:measured PM-bot]** pmove traces + self-contained |
 | PM4 | physents: a crate and a door near the player are physents; a trigger, a SOLID_NOT entity and the player's own grenades are not; a func_water volume changes waterlevel but not collision | synthetic |
 | PM5 | touch list: walking into a crate calls crate.touch once per frame; walking into a trigger calls trigger.touch through linking | synthetic |
 | PM6 | riding: standing on a moving lift keeps the player on it (pushed by the lift; FL_ONGROUND kept; no velocity added) | synthetic |
 | PM7 | caps: 70 crates around the player keep the 64 nearest, log once | synthetic |
 | PM8 | compiled route `m2-walk` in hldemo1 (stairs, duck crawl under pipes, ladder, drop) passes its `WAIT_NEAR` checks | route |
 | PM9 | ladder climb speed: 200 u/s at pitch 0 and 282.84 u/s at pitch −45 (±0.01), constant over the climb | **[probe:measured PM-bot]** ladder runs |
+| PM10 | duck finish on the ground on the 41st move after the press at msec 10 and the 13th at msec 33 (timer strictly below 600 ms; not at exactly 600); msec 50 (9th move) follows from the rule | **[probe:measured PM-bot]** duck runs (msec 10, 33) + self-contained (msec 50) |
+| PM11 | ground entity unchanged while airborne (jump, fall), FL_ONGROUND cleared; updated on landing | **[probe:measured PM-bot]** jump runs |
+| PM12 | FL_INWATER appears one frame after the move that raised waterlevel above 0 and clears one frame after it returned to 0 | **[probe:measured PM-bot]** water runs |
+| PM13 | a `func_monsterclip` brush is never in the player's physent list; the player walks through it | **[probe:measured PM-bot]** |

@@ -39,9 +39,13 @@ All offsets are bytes from the chunk start; every section starts 4-aligned
 targetname, 0xFFFF none), `flags`, `key_first`/`key_count`,
 `aux_first`/`aux_count` (fire list when `HLE_RF_AUXFIRE`, else lumplist —
 the multisource inputs), and three streaming fields: `sector` (0xFFFF =
-global), `twin` (reserved, always 0xFFFF; per-neighbour twins live in the
-[CWG3 seam table](cwg-format.md)), `res_first`/`res_count` (precache refs,
-0 count today).
+global), `trank` (cooked trigger touch rank, specs/area-links-and-touch.md
+3.1: written by the `touchrank` cook step after `hlecook` from the GoldSrc
+probe's A-order pairs — a topological order of the map's trigger pair
+graph, ties by lump, a cycle fails the cook; 0xFFFF for records that are
+not triggers or have no pair. The field was `twin`, reserved and always
+0xFFFF; per-neighbour twins live in the [CWG3 seam table](cwg-format.md)),
+`res_first`/`res_count` (precache refs, 0 count today).
 
 Key kinds: `HLE_KF` float (val = IEEE bits), `HLE_KV` vec3 (val = float
 index), `HLE_KS` string (val = string offset), `HLE_KN` name (val = name

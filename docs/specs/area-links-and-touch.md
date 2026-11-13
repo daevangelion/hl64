@@ -1,9 +1,10 @@
 # Linked boxes, spatial grid, touches
 
 Behaviour: which entities a move collides with and which triggers it
-touches, and in which order, as in GoldSrc. Mechanism: a uniform grid per
-open layer instead of GoldSrc's area-node tree, plus a cooked touch rank
-that reproduces GoldSrc's trigger touch order (3.1).
+touches, and in which order, as in GoldSrc. Mechanism: one hashed
+multi-level grid instead of GoldSrc's area-node tree, plus a cooked touch
+rank and a creation counter that reproduce GoldSrc's trigger touch order
+(3.1).
 Conventions and oracles: [README.md](README.md).
 
 ## 1. Linked box (absmin / absmax)
@@ -26,20 +27,37 @@ Recomputed on every link:
 
 ## 2. Spatial grid (mechanism)
 
-- Each open layer has a grid over its global box with 256 u cells (the COLL
-  grid's cells): one u16 list head per cell, one u16 next per entity
-  (singly linked per cell). An entity whose linked box spans more than 8
-  cells goes to the layer's **large** list instead. Entities link to the
-  layer containing their box centre; SOLID_NOT entities are not linked.
-- Triggers and solids share the grid; each entity carries its solid type,
-  so a query filters by one byte.
-- A query (box) walks the touched cells plus the large list and
-  deduplicates with a per-query stamp. Solid candidates (move queries) are
-  returned in ascending entity index (the order only matters for exact
-  fraction ties, trace-and-hulls.md 4.4); trigger candidates are returned
-  in touch-rank order (3.1).
-- Cost bound: a move box ≤ 512 u touches ≤ 27 cells; cell occupancy on
-  the Uplink route is expected ≤ 8 [EST, M3 measures].
+As built (M2, `engine/ent/grid.c`, Grid):
+
+- **One hashed grid over global coordinates** (not one per layer), so its
+  size does not depend on the maps (t0a0 alone would need 19 × 18 × 8
+  cells of 256 u) and entities outside every layer need no special case.
+- **Three levels**: 256 u cells (the COLL grid's), 1024 u and 4096 u. An
+  entity is a member of every cell its linked box touches, at the first
+  level where the box spans at most two cells on every axis; a box too big
+  for level 2 goes to the **huge** list, which every query walks.
+- **Multi-cell membership**: an entity's first membership lives in its
+  node, further ones come from a shared pool of 8 B entries (1485 entries,
+  carved inside the COMPONENTS region); when the pool runs dry the entity
+  goes to the huge list (slower, still exact).
+- **Node**: 16 B per entity (kind, query stamp, rounded box), one cache line
+  per rejected candidate. Cells map to hash buckets by one float-to-int
+  conversion per coordinate (any non-decreasing map keeps "boxes that meet
+  share a cell"); a 128 B bitmap of non-empty buckets lets queries skip
+  empty cells without touching their heads.
+- A query walks, on every non-empty level, the cells its box touches,
+  reports each entity once (per-query stamp), and scans the slots instead
+  when its box touches too many cells. Triggers, solids and contents
+  brushes (SOLID_NOT brushes with a contents skin: `func_ladder`,
+  `func_water`) share the grid; the node's kind filters them. Other
+  SOLID_NOT entities are not linked.
+- Order of results: solid candidates in ascending entity index (it only
+  matters for exact ties, trace-and-hulls.md 4.4 step 7); trigger
+  candidates in touch order (3.1).
+- Memory: the grid tables use 2 KB of the THINK_GRID region; nodes and the
+  membership pool are in COMPONENTS (architecture.md 4.1).
+- Cost on the cart (ares, `test/m2/grid_bench.sh`): **18.6 µs per query,
+  17.2 µs per relink** (measured, Grid).
 - Leaf/sector membership for visibility is not stored per link
   (architecture.md 5.5: sectors for rendering, exact leaf on demand).
 
@@ -71,22 +89,28 @@ candidate list taken before the first call, skipping entities freed since.
 
 ### 3.1 Touch order
 
-GoldSrc touches overlapping triggers in its area-node order, not entity
-index order (a trigger of index 180 was touched before one of index 10
-**[probe:measured A-touch]**). The order is observable when two triggers
-fire in the same link (one may kill or disable the other, or their fires
-race). hl64 reproduces it without GoldSrc's tree:
+GoldSrc touches overlapping triggers in its own (area-node) order, not in
+entity index order. Two cases:
 
-- The cook lists, per map, every pair of triggers whose linked boxes are
-  within 64 u of each other (a mover box can overlap both); the GoldSrc
-  probe places a mover overlapping both and records which is touched first
-  (capture **A-order**, owed before M3). The cook turns the pairwise orders
-  into a per-map **touch rank** (u16 in the HLE1 record; a topological
-  order of the pair graph, ties by lump) and fails if the pairs are
-  inconsistent (a cycle) — then the spec needs revisiting.
-- At run time trigger candidates are sorted by (map, rank); triggers
-  created at run time (none in Uplink/Hazard) rank after all map triggers,
-  by index.
+- **Triggers created at run time** touch in **creation order** (the order
+  they were allocated), not index order: a trigger of index 179 created
+  earlier touches before one of index 7 created later (the "index 180
+  before index 10" case of the first capture) **[probe:measured A-touch,
+  A-order]** (all 10 maps). Mechanism: every entity gets a creation
+  serial at allocation; runtime triggers sort by it.
+- **Map triggers** touch in the cooked **touch rank**: the cook lists, per
+  map, every pair of triggers whose linked boxes are within 64 u of each
+  other (a mover box can overlap both); the probe places a mover
+  overlapping both and records which is touched first (capture
+  **A-order**). The `touchrank` cook step (after `hlecook`) turns the
+  pairwise orders into a per-map rank stored in the HLE1 record field
+  `trank` (the former always-0xFFFF `twin`, `docs/formats/hle-format-v1.md`):
+  a topological order of the pair graph, ties by lump; a cycle is a cook
+  failure (the spec then needs revisiting).
+- At run time trigger candidates sort by map-trigger rank, then runtime
+  triggers after every map trigger in creation order. Whether GoldSrc
+  interleaves runtime triggers with map triggers differently is not yet
+  measured **[probe]**; Uplink and Hazard create no triggers at run time.
 - Known limit: in GoldSrc a trigger that is relinked (moved, re-enabled)
   can change its position in its area-node list; hl64's rank is static.
   Uplink and Hazard triggers do not move; the A-order capture also records
@@ -120,11 +144,11 @@ checks A's liveness before continuing.
 | # | property | data |
 |---|---|---|
 | A1 | linked box: unrotated box + 1 u on every axis for every solid type and flag (no 15 u widening for bit 256); rotated SOLID_BSP cube half-size = largest per-axis extent + 1 (e.g. (124, 173, 17) → 174) on all 10 maps; angled triggers keep unrotated boxes | **[probe:measured A-touch]**, A-shape |
-| A2 | grid: every entity found by any box query that overlaps its linked box, none returned twice; solids in ascending index, triggers in rank order; large-list entities found from every cell | randomised host test |
+| A2 | grid: every entity found by any box query that overlaps its linked box, none returned twice, at every level and through the huge list and a dry membership pool; solids in ascending index, triggers in touch order | randomised host test |
 | A3 | box trigger touched once per link when the real-box gap is ≤ 2.0 u on any one axis (and overlapping on the others), including face contact; not at 2.01 u; same for FLY movers and the player | **[probe:measured A-touch]** |
 | A4 | `set_origin` into a trigger touches nothing; the next physics move does | probe A-touch |
 | A5 | brush trigger fires iff the mover's origin is inside its hull-1 brush, trigger angles ignored (a yaw-30° trigger uses its unrotated shape); inside the bbox but outside the brush never fires | **[probe:measured A-shape]** (960 samples) |
 | A6 | touch that frees the trigger / another trigger / the toucher: no crash, no touch of freed entities | synthetic |
 | A7 | impact touch: A.touch(B) then B.touch(A); no B.touch(A) when A removed itself in A.touch(B); a SOLID_NOT mover passes through box entities with no impact and no touch | **[probe:measured A-touch]** |
 | A8 | pending record hydrated and touched in the same frame | synthetic |
-| A9 | touch order of every trigger pair within 64 u equals GoldSrc's (cooked rank), including the measured case: index 180 before index 10 | **[probe:measured A-touch]** for the known case; A-order capture (owed) for all pairs |
+| A9 | touch order: runtime-created triggers in creation order (index 179 created before index 7 touches first); map trigger pairs within 64 u in cooked-rank order | **[probe:measured A-touch, A-order]** (creation order, all 10 maps); A-order pairs → `trank` |

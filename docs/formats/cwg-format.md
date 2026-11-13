@@ -75,8 +75,9 @@ arbitrary sub-ULP fractional positions still obey ordinary float rounding.
 
 Twins are u16 A lump, B lump. Lumps are original BSP entity indices, with
 worldspawn 0, exactly HLE's `lump`/`lump2rec`, not compact HLE record indices.
-Each entity occurs at most once in a seam's twin slice. HLE's own `twin`
-field stays reserved. Sector-pool entries below `0x8000` name a B sector;
+Each entity occurs at most once in a seam's twin slice. HLE's former
+`twin` field is now `trank` (trigger touch rank, hle-format-v1.md); twins
+exist only here. Sector-pool entries below `0x8000` name a B sector;
 `0x8000 | n` names B BSP model `n`, which must have a MOVR chunk.
 Sector/model indices above `0x7FFF` cannot be encoded and are rejected.
 The runtime rejects a seam if B's directory CRC differs: sector indices

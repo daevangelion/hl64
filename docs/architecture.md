@@ -196,7 +196,7 @@ pointers, so `-m32` and LP64 sizes are identical.
 | resource table (cooked) | 12 (Uplink + Hazard ≈ 800 entries × 12 B; full HL ≈ 40) | precache name tables, sfx names, string interning | 6.5 |
 | sentence table (cooked) | 24 | parsed text in RAM | [EST] word ids, no strings |
 | lightstyle patterns + state | 4 | strings + 96 × value | lightstyles.md |
-| think heap, active bitsets, spatial grids | 12 | area tree + leaf lists in edicts | 6.3, 8 |
+| think heap, active bitsets, grid tables | 12 | area tree + leaf lists in edicts | 6.3, 8; the grid tables use 2 KB (measured), grid nodes (16 B each) and the 1485 × 8 B membership pool sit in the entity components region |
 | sound (16 voice buffers, 10 wav64, loops) | 96 | not measured | [EST] |
 | sprite cache / decal texels / particles | 64 / 48 / 12 | 64 / 8 / 512 Quake particles | render-fx.md |
 | dlight scratch + flashlight pool | 48 | same | |
@@ -360,7 +360,7 @@ Slot index u16, cap 495 (ceil(1.25 × measured host peak 396)). A handle
 | `xf` | origin f32[3], angles f32[3] | 24 | physics, render, sound, traces |
 | `mot` | velocity, avelocity, basevelocity f32[3] | 36 | physics |
 | `box` | mins, maxs, absmin, absmax f32[3] | 48 | traces, grid, touches |
-| `phys` | movetype u8, solid u8, waterlevel s8, watertype s8, flags u32, groundentity / owner / aiment u16, gravity f32 (0 = 1), friction f32, grid cell u16 + next u16 | 32 | physics, traces |
+| `phys` | movetype u8, solid u8, waterlevel s8, watertype s8, flags u32, groundentity / owner / aiment u16, gravity f32 (0 = 1), friction f32 (the grid node is a separate 16 B array, 8) | 32 | physics, traces |
 | `tm` | nextthink u64 µs (0 = none), ltime u64 µs (pushers), think / touch / use / blocked u16 function ids | 24 | think heap, pushers, dispatch |
 | `rnd` | modelindex `res_t` u16, sequence u16, frame f32, animtime u64 µs, framerate f32, scale u16 (8.8), skin s16, body u8, effects u16, controller u8[4], blending u8[2], rendermode, renderfx, renderamt u8, rendercolor u8[3], sectors u16[4] | 48 | render, studio |
 | `id` | serial u16, state u8, layer s8, class u16 (from `classes.def`), private handle u16, record gid u16, runtime id u16, targetname `name_t` u16 | 16 | names, hydration, save |
@@ -527,13 +527,17 @@ following the audit's §1.5 ranges (16.2; the Quake-interface glue is D9):
 - **Hitboxes**: line traces against studio-model monsters test the bounding
   box, then the current pose's hitboxes (GoldSrc hitgroups for damage);
   poses are computed on demand and cached per frame (trace-and-hulls.md 4.5).
-- **Spatial grid instead of an area tree**: each open layer has a uniform
-  grid over its global box with 256 u cells (the COLL grid's cells), a u16
-  head per cell and a u16 next per entity; entities whose box spans more
-  than 8 cells go to a per-layer "large" list. Queries walk the cells the
-  swept box touches; candidates are deduplicated by a per-query stamp and
-  ordered by entity index. Size: hldemo2's 16×15×5 = 1200 cells × 2 B ≈
-  2.4 KB per layer. specs/area-links-and-touch.md.
+- **Spatial grid instead of an area tree** (as built, M2): one hashed grid
+  over global coordinates with three levels — 256 u (the COLL grid's
+  cells), 1024 u and 4096 u — plus a huge-object list. An entity is a
+  member of every cell its linked box touches at the first level where the
+  box spans at most two cells per axis; further memberships come from a
+  shared pool of 8 B entries (1485); a 16 B node per entity holds kind,
+  query stamp and a rounded box; a 128 B bitmap of non-empty buckets skips
+  empty cells. Queries dedupe by per-query stamp; solids come back in
+  ascending index, triggers in GoldSrc touch order (cooked `trank` for map
+  triggers, creation order for runtime ones). Cart cost (ares): 18.6 µs
+  per query, 17.2 µs per relink (measured). specs/area-links-and-touch.md 2.
 - **Physics**: per-movetype GoldSrc semantics over the active set
   (physics-movetypes.md, think-and-time.md); the player is pmove
   (pmove-host.md, D2).
@@ -757,7 +761,7 @@ retarget.
 | `tools/w64c/hlecook.c` + `hl_entcook.h` | CLEAN | import; extended to cook names/classes/resources to ids |
 | `tools/studio_bake` | CLEAN, links `studio_geom.c` | retarget onto `game/studio`; D3(b) adds per-sequence animation chunks |
 | `hl_campaign.py`, `ui_bake`, `hlhud_bake`, `world_tex_bake`, `hl_stage_content.py`, `hl_sprite_cook.py`, `hl_gsfx.py`, sound scripts | CLEAN | import (staging retargeted to the hl64 layout) |
-| new tools | — | `restab` (campaign resource table + pattern table), `sentc` (sentences), `routec` (routes), all MIT |
+| new tools | — | `restab` (campaign resource table + pattern table), `sentc` (sentences), `routec` (routes), `touchrank` (HLE1 `trank` from the GoldSrc probe's A-order pairs, after `hlecook`), all MIT |
 | `q64mapc`, `q64zone`, `hl_world/*` | — | drop |
 | `w64-format.md`, `cwg-format.md`, `hle-format-v1.md` | CLEAN | import into `docs/formats/` with the audit's scrub; add `rtb-format.md`, `route-bytecode.md` in M0 |
 | `stream-arch-v2.md` | CLEAN | cite as history |
