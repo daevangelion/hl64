@@ -1322,6 +1322,15 @@ static int light_at(int e, wld_layer_t *L, const uint16_t *list, int cnt, const 
  * value (128 before the first). */
 static uint8_t	illum[HL64_MAX_ENTITIES];
 
+/* New Game (after ent_reset): entity serials restart with the slots, so
+ * no STEP placement or probe value of an old entity is kept (boot state) */
+void studio_new_game(void)
+{
+	memset(steps, 0, sizeof(steps));
+	memset(step_on, 0, sizeof(step_on));
+	memset(illum, 0, sizeof(illum));
+}
+
 int ent_illum(int e)
 {
 	const col_ent_t *cv;

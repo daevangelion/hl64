@@ -18,5 +18,8 @@ int	rt_start_map(void);
 /* Step 13: run ops until a wait is not yet satisfied (waits measure the
  * f64 game clock, s); PASS / FAIL exit. */
 void	rt_frame(double time);
+/* New Game mid-route (end section restart): the clock went from old_time
+ * to time; the current op keeps the game time it has waited. */
+void	rt_new_game(double old_time, double time);
 
 #endif

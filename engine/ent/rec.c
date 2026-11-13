@@ -1811,9 +1811,14 @@ static void chunk_done(rmap_t *m, const wld_layer_t *L)
 	prev = eng_frame_layer();
 	eng_set_frame_layer(m->slot);
 	game_map_opened(m->slot);
-	eng_set_frame_layer(prev);
 	m->pre_wait = 1;	/* its precache lands before its records hydrate */
 	thaw(m);
+	/* a reopened map's live logic records (frozen state thawed): the
+	 * class's Precache on restore (HLSDK DispatchRestore) */
+	for (i = 0; i < h->numrecs; i++)
+		if ((m->rt[i].flags & RT_LOGIC) && m->rt[i].state == REC_LIVE)
+			game_logic_restored(gid_of(m, (int)i));
+	eng_set_frame_layer(prev);
 	log_printf("rec: %s open in slot %d: %u records (%u logic, %u pending), chunk %lu B, "
 		"block %lu B\n", file, m->slot, m->h->numrecs, m->nlogic, m->npend,
 		(unsigned long)m->len, (unsigned long)m->block_len);

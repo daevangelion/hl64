@@ -88,6 +88,8 @@ typedef struct {
 /* Light for key (reused), else the first dead light, else light 0;
  * cleared, world-lighting. */
 ren_dlight_t	*ren_dlight_alloc(int key, double time);
+/* Every light dead, the pool's stream at its boot seed (New Game). */
+void		ren_dlight_reset(void);
 /* Before drawing, at game time `time` after a frame of dt s: kill lights
  * past their die time, decay the rest. */
 void		ren_dlight_frame(double time, double dt);

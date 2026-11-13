@@ -595,6 +595,15 @@ int phy_player_map(void)
 	return P.map;
 }
 
+void phy_player_reset(void)
+{
+	phy_player_prof_t prof = P.prof;
+
+	memset(&P, 0, sizeof(P));
+	P.map = WLD_NO_MAP;
+	P.prof = prof;
+}
+
 ent_player_t *phy_player(void)
 {
 	return &P.pl;

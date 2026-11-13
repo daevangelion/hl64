@@ -817,6 +817,19 @@ void snd_stop(int e, int chan)
 		stop_match(e, chan, 0, "stop");
 }
 
+void snd_stop_all(void)
+{
+	int i;
+
+	if (!S)
+		return;
+	for (i = 0; i < SND_LOOPS; i++)
+		S->l[i].used = 0;
+	for (i = 0; i < SND_VOICES; i++)
+		if (S->v[i].busy)
+			voice_free(i, "new game");
+}
+
 void snd_voice_info(int v, snd_voice_info_t *o)
 {
 	const voice_t *p = &S->v[v];

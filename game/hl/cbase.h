@@ -444,6 +444,8 @@ typedef struct game_class {
 	void	(*LogicUse)(gid_t16 gid, int activator, int caller, int use_type, float value);
 	void	(*LogicTimer)(gid_t16 gid, uint16_t arg, int activator);
 	int	(*LogicIsTriggered)(gid_t16 gid, int activator);	/* masters */
+	/* Precache on restore of a live logic record (game_logic_restored) */
+	void	(*LogicRestored)(gid_t16 gid);
 	/* slice extension: GameMon's monster table, Items' item info, ... */
 	const void	*ext;
 	/* Level state (levelstate.c): the save table of the private block's

@@ -347,9 +347,19 @@ static void CAutoTrigger_LogicTimer(gid_t16 gid, uint16_t arg, int activator)
 	}
 }
 
+/* DispatchRestore: Restore, then Precache: nextthink = time + 0.1 again
+ * (a level revisited re-tests the global, e.g. hldemo1's dish-state
+ * trigger_autos once hldemo3 set hldemo_global_dish_ms) */
+static void CAutoTrigger_LogicRestored(gid_t16 gid)
+{
+	rec_timer_cancel(gid);
+	rec_timer(gid, gtime() + 0.1f, 0, -1);
+}
+
 const game_class_t gc_TRIGGER_AUTO = {
 	.LogicSpawn = CAutoTrigger_LogicSpawn,
 	.LogicTimer = CAutoTrigger_LogicTimer,
+	.LogicRestored = CAutoTrigger_LogicRestored,
 };
 
 /* ---- env_global ------------------------------------------------------------- */
