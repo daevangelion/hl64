@@ -192,14 +192,14 @@ information only.
 
 | region | hl64 KB (carve) | M3 peak (use) | old tree | basis |
 |---|---:|---:|---:|---|
-| code + data + bss (cart image) | ≤ 900 **OVER** | 1475 KB cart image **measured** (M3Lead2) | 1428 **measured** (HL cart ELF) | flagged OVER until M3Lead2 reports the top contributors. `HL64_HOST_HEAP_KB` is now derived at build time from the cart image size, so the host heap tracks the cart's. With overlays (7.4) the resident target is ≈ 1370 KB and stays there for the full campaign (≈ 1.8 MB without) |
+| code + data + bss (cart image) | ≤ 900 **OVER** | **M4: 1674 KB** (`mem: image`; PROFILE + `HL64_TEST` cart, text 1009752 + data 158304 + bss 545496 B, main `f913147`); M3: 1475 KB | 1428 **measured** (HL cart ELF) | flagged OVER until M3Lead2 reports the top contributors (the playable image drops route VM, debug and PROFILE code: not yet measured). `HL64_HOST_HEAP_KB` is derived at build time from the cart image size, so the host heap tracks the cart's. With overlays (7.4) the resident image drops by ≈ 106 KB and stops growing with the campaign's class count |
 | code overlay arena (TLB frames, 7.4) | 192 [EST] | — (M6) | — | cook-proved: Uplink pair 132 KB / 18 TLB entries, retail [EST] ≈ 160 KB / ≈ 22 entries; 48 × 4 KB frames, ≤ 30 wired entries |
 | framebuffers ×2 + Z | 450 | — | 450 | measured |
 | rspq / tiny3d / matrices | 96 | not reported | (in heap) | [EST] |
 | render / texture / collision pools | 336 / 240 / 208 | M3: 117 KB (49%) / 99 KB (77%) / 55 KB (26%); **M4 want peak** 243104 B (71%) / 173376 B (71%) / 86736 B (41%) on ares (host route want peak 273792 / 190384 / 86528 B) | 240 / 128 / 208 | render and texture = host want peak × 1.25 (two layers: A's open set + B's seam pin + the arrival view exceed the cook's per-seam need: the cook proof does not cover that window yet); collision cook-proved (seam hldemo3→hldemo2, 206592 B) |
 | layer directories (2 open) | 267 | M4: 175456 B (64%) at hldemo2 + hldemo3 | 2 × 38–84 | cook-proved (`tools/cook/layerdirs.py`, every linked pair): worst t0a0b + t0a0a 218624 B × 1.25 |
 | campaign graph (CWG3) | 6 | 4730 B (Uplink + Hazard) | (parsed per map) | cook-proved (`stage.py` fails above the region) |
-| studio pool | 1024 (D3 b) | M3 225 KB (22%); **M4** resident 635104 B (61%) at hldemo2→hldemo3 with soft residency, want (live + pinned) 410032 B | 1536 | **measured** |
+| studio pool | 1024 (D3 b) | M3 225 KB (22%); **M4** resident 635104 B (61%) at hldemo2→hldemo3 with soft residency, want (live + pinned) 410032 B | 1536 | **measured**. Soft residency: meshes and animations of models no live entity uses are freed after 5 s unused (crossing-2 peak 94% → 61%) |
 | studio skinned-mesh tables, view model scratch | 192 | not reported | 256 heap reserve | [EST] |
 | entity components | 134 | 137168 of 137216 B (100%) | edicts 495 × 884 = 427 | **measured**, exact by construction: 495 × 228 B + 24308 B grid nodes, membership pool, touch rank, free times |
 | game private data | 160 | 30.6 KB (19%), 98 live entities | (inside the edicts) | **measured** ≈ 320 B per live entity; at the 495 cap ≈ 155 KB, so 160 stays |
@@ -223,14 +223,16 @@ high-water mark in every stats record from M4; each carve becomes
 peak × 1.25 (M4 for two layers, M6 for the full route). Region use above
 90% (decals) or a peak × 1.25 over the carve is a gate failure.
 
-**HLE slots for M4** (2 geometry layers + up to 4 HLE slots, 5.3). Four
+**HLE slots for M4** (2 geometry layers with full slots + 2 frozen maps, 5.3). Four
 full slots would need ≈ 4 × 65 KB + 16 KB ≈ 276 KB. hl64 instead defines
 what a closing map keeps:
 
 - **Open** map (geometry layer resident): full slot, chunk + runtime.
 - **Frozen** map (closed with frozen timers or logic still referenced):
   runtime only — record states (2 bits each: pending / live logic /
-  killed / dry), logic blocks (logic thinks, masters' state). Timers
+  killed / dry) and logic blocks (16 B per logic record): 2780 B for
+  hldemo1 (488 records, 166 logic). No master table or name index: names
+  belong to open slots. Timers
   frozen by remaining time, deferred uses by (map, lump) / runtime id and
   runtime entities by (map, runtime id) sit in the shared tables; deltas in
   the dehydrate store. The name index comes back with the chunk: no fire
@@ -276,11 +278,17 @@ tree's ≈ 27 ms p50. The old [EST] rows are replaced by this table.
 | overlay map (7.4, M6) | — | [EST] ≈ 0.05 ms CPU per unit on a frame that maps one, DMA async | at most one unit mapped per frame; measured in M6 |
 | snd | 1228 / 1514 / 6025 | **1500** (was 500) | the 500 µs [EST] was wrong: 1097 µs of the 1228 is the wav64 stream pump with ≤ 2 voices and 10 open waves; M6 measures the cost at 16 voices |
 
-Open items for M4/M6: single frames of 14–24 ms in game, ent, phys, mon
-and rec (with render on the same frame they can exceed 33 ms; causes to be
-attributed with the zone maxima);
-pmove's average over budget. RSP/RDP time runs in parallel (SA2 spike:
-≤ 4.1 ms for a full dome visible set); `disp` waits are not CPU budget.
+Open items for M6 (serious). M4 on ares (route `m4`, main `f913147`,
+`/scratch/hl64/tmp/FinalGate/final-f913147/`): frame avg **46.6 ms**,
+p90 93 ms, so the route runs well below 30 fps. The worst frames,
+**245–384 ms**, come from `monster_human_grunt` AI in hldemo2/3
+(`Mon_RunAI`: walk-move traces, node-graph cover search, route
+triangulation): 383969 µs in ent/phys/mon at hldemo2 frame ≈ 4780 (phys
+`step_us` avg 150747 µs, a 4.9 fps window), and 294 ms at the second seam
+switch + 14 frames (ent/mon 245 ms). M3's single 14–24 ms frames and
+pmove's average over budget remain. RSP/RDP time runs in parallel (SA2
+spike: ≤ 4.1 ms for a full dome visible set); `disp` waits are not CPU
+budget.
 
 ### 4.3 Allocation rules
 
@@ -332,8 +340,8 @@ their completions at the next frame's start (15, K10).
 
 A **layer** is an open map: its `.w64` directory (resident while open),
 pinned hull-0 COLL chunks, HLE1 blob, placement `g_M`. At most 2 geometry
-layers and 4 HLE slots (closing maps with frozen timers keep their logic
-slot).
+layers, each with a full HLE slot, plus 2 **frozen** maps (runtime part
+only, 4.1; a third freeze forgets the oldest, which reopens as cooked).
 
 Residency classes (strongest first; a request evicts only weaker classes;
 SA2 §4.2 as built):
@@ -375,12 +383,14 @@ translation `T`). Requirements:
    silently; `changetarget` fires in B; changelevel touches ignored until a
    frame with none.
 4. Leave: A's chunks drop by LRU; A's records dehydrate by distance
-   (release radius 1024 u, batches every 0.1 s); A closes when nothing of
-   it is resident or live, or, when another seam needs its layer, when
-   nothing of it is live within the release radius (what is left far
-   away refused dehydration for good, e.g. a monster idling in a script;
-   the closing release drops it and its record respawns fresh); its
-   timers freeze by remaining time and thaw on reopen.
+   (release radius 1024 u, batches every 0.1 s). An entity in a quiescent
+   state that must not be interrupted (a monster in a script) refuses
+   this **distance** release only. A **closes** when nothing of it is live
+   within 1024 u of the player (`rec_slot_held`), not when nothing of it
+   is live at all; closing stores **every** remaining entity in the
+   dehydrate store (scripted monsters keep their script; M4: 0 dropped),
+   freezes its timers by remaining time and keeps its frozen runtime part
+   (4.1); everything thaws on reopen.
 5. OPEN seams draw B's draw set translated by −T, scaled about the eye by
    1 + 1/256, limited to meshlets touching the carry box.
 
@@ -732,13 +742,14 @@ same-chapter pair (c3a1 + c3a1a, c2a5f + c2a5x) ≈ 103 KB in ≈ 13 units
 **192 KB** (48 frames); the cook fails a campaign over the frames or the
 entries.
 
-Resident image: today 1475 KB (all game code resident). Moving the
-Uplink class units out (≈ 93 KB) and dropping the route VM and debug
-commands from playable ROMs (12.5 KB) gives ≈ 1370 KB resident + 192 KB
-arena — about 87 KB **more** than today for Uplink alone. The gain is the
-full campaign: without overlays the ≈ 39 retail classes add [EST]
-≈ 310 KB (≈ 1.8 MB resident); with them the resident image stays
-≈ 1370 KB and the arena 192 KB however many classes exist.
+Resident image: 1674 KB at M4 (PROFILE + `HL64_TEST` cart, all game code
+resident; 1475 KB at M3). Moving the Uplink class units out (≈ 93 KB) and
+dropping the route VM and debug commands from playable ROMs (12.5 KB)
+saves ≈ 106 KB against a 192 KB arena — about 87 KB **more** memory than
+all-resident for Uplink alone. The gain is the full campaign: without
+overlays the ≈ 39 retail classes add [EST] ≈ 310 KB more resident code;
+with them the resident image stops growing and the arena stays 192 KB
+however many classes exist.
 
 **Load cost** [EST, M6 measures]: PI DMA at 195 µs/KB — grunt (≈ 20 KB
 with long calls) ≈ 4 ms of PI time, async; CPU ≈ 0.05 ms per unit; the
@@ -909,6 +920,11 @@ mostly block copies.
   compile time, so a renamed entity fails the compile, not the run. The VM
   executes ops at frame boundaries, logs `route: <op#> <label>` and
   reports `route FAIL` with the op's source line (kept in a debug table).
+  `WAIT_GONE` is met when every record of the name is killed or its live
+  entity is `SOLID_NOT` (GoldSrc keeps an `ambient_generic` sharing a
+  breakable's name; route-bytecode.md). `SETPOS` is a test-build teleport
+  (refused by builds without `HL64_TEST`); its 30-frame window counts
+  blocked frames separately (`blk1ms_tele=`, not `blk1ms=`).
 - **Stats records**: fixed struct (entities live/peak, records pending,
   pools used/peak, heap free/largest, fps + pacing histogram, DMA
   p50/p99, pop-in, blocked I/O, position, time) printed as one text line
@@ -925,7 +941,11 @@ mostly block copies.
   ulp apart). Every engine/, game/ and include/ call site uses them,
   renderer and sound included; `test/m4/hlmath.py` fails on a direct
   libm transcendental there and runs the accuracy driver (float results
-  correctly rounded on its arguments, double within 1-2.5 ulp). I/O
+  correctly rounded on its arguments, double within 1-2.5 ulp). No
+  `-ffast-math` in any simulation directory. Random draws are sequenced
+  (no draw inside an argument list or initializer whose evaluation order
+  C leaves unspecified), and the decal cap counts work units, not wall
+  time (infodecal retries differed host/cart). I/O
   completes in frames (engine/io, 5.2): at
   `io_frame_begin` the scheduler plans the frame's pieces from the queue
   alone (priority order, the frame's byte budget, at most
@@ -1083,7 +1103,7 @@ uses them (specs/README.md).
 | M3 | components, active sets, think heap, records, hydration (one layer), movetypes, resources, sound, studio, translucent/decals/sprites, HUD, game/ retargeted | compiled Uplink route segment A to the elevator `+use`, `WAIT_MOVED startele1`, changelevel fire logged; physics/think/sound/lightstyle/dlight/render-fx tests pass on their fixtures |
 | M4 | streaming crossings: CWG3, seams, twins, dehydrate/rehydrate, timers, async residency with change-driven recompute | route through hldemo1→2→3: PASS, 0 forced switches on host, `budget_over=0`, `open_fail=0`, 0 frames > 1 ms blocked I/O, pop-in only in teleport windows, entities continuous across seams |
 | M5 | full Uplink route (converted `uplink_route.cfg`) + Hazard routes | PASS on host and ares at the same checkpoints; any `WAIT_NEAR` radius widened versus the old route is listed with its GoldSrc-behaviour reason |
-| M6 | performance; code residency (7.4: TLB-mapped overlays, `tools/ovlx`, cook frame/entry proof) | ares median fps ≥ the old cart's at every stats step (same pacing); no frame > 50 ms within ±2 s of a seam switch (misses reported with zones); 4.1 and 4.2 [EST] rows replaced by measurements; flashcart run if available. Overlays: `test/m6/tlb` passes on ares (and the flashcart when available); on the Uplink route the resident code size, arena frame peak and TLB entry peak are reported and within 7.4's budget (≤ 192 KB, ≤ 30 entries), 0 frames > 1 ms blocked on overlay I/O, 0 calls into unmapped units (trap and TLB-exception count 0) |
+| M6 | performance; code residency (7.4: TLB-mapped overlays, `tools/ovlx`, cook frame/entry proof) | ares median fps ≥ the old cart's at every stats step (same pacing); no frame > 50 ms within ±2 s of a seam switch (misses reported with zones); 4.1 and 4.2 [EST] rows replaced by measurements; flashcart run if available. Overlays: `test/m6/tlb` passes on ares (and the flashcart when available); on the Uplink route the resident code size, arena frame peak and TLB entry peak are reported and within 7.4's budget (≤ 192 KB, ≤ 30 entries), 0 frames > 1 ms blocked on overlay I/O, 0 calls into unmapped units (trap and TLB-exception count 0). **Starting point (M4, ares, main `f913147`):** route `m4` frame avg 46.6 ms, p90 93 ms; 245–384 ms frames from `monster_human_grunt` AI (`Mon_RunAI` walk-move traces, node-graph cover search, route triangulation) in hldemo2/3; cart image 1674 KB vs the 900 KB budget (4.1, 4.2) |
 
 ---
 
