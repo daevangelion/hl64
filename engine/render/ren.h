@@ -39,6 +39,10 @@ void	ren_init(void);
  * at game time `time` (f64 s; texture animation r10 = floor(time x 10)). */
 void	ren_frame(double time);
 
+/* The frame's inward frustum side-plane normals (n . (p - eye) >= 0 inside;
+ * eye global), valid during ren_frame. */
+const float	(*ren_frustum(void))[3];
+
 typedef struct {
 	uint32_t	sectors, meshlets, verts, tris, binds;	/* drawn */
 	uint32_t	movers, relit, dlit, missing;

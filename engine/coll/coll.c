@@ -809,79 +809,64 @@ void col_set_hitbox_source(col_hitbox_fn fn)
 int col_trace_hitboxes(const col_hitbox_t *hb, int n, const float start[3], const float end[3],
 	col_trace_t *tr)
 {
-	float best = 2;
-	int i, k, hit = -1, best_axis = 0, best_sign = 0;
+	col_trace_t best, t;
+	src_t s;
+	int i, k, hit = -1;
 
+	/* each hitbox is the six-plane box tree of 4.3 in its bone frame,
+	 * walked like a hull (GoldSrc traces one box hull per hitbox): the
+	 * walk's plane epsilon decides grazing hits, and the reported plane
+	 * is the hit face's [probe:measured T-hitbox]; the nearest impact
+	 * wins, the first on a tie */
+	memset(&best, 0, sizeof(best));
+	best.frac = 2;
 	for (i = 0; i < n; i++)
 	{
 		const col_hitbox_t *b = &hb[i];
-		float s[3], e[3], enter = -1, leave = 1;
-		int axis = -1, sign = 0, startout = 0, miss = 0;
+		float ls[3], le[3];
 
 		/* bone frame: R^T (p - t) */
 		for (k = 0; k < 3; k++)
 		{
-			s[k] = b->bone[0][k] * (start[0] - b->bone[0][3])
+			ls[k] = b->bone[0][k] * (start[0] - b->bone[0][3])
 				+ b->bone[1][k] * (start[1] - b->bone[1][3])
 				+ b->bone[2][k] * (start[2] - b->bone[2][3]);
-			e[k] = b->bone[0][k] * (end[0] - b->bone[0][3])
+			le[k] = b->bone[0][k] * (end[0] - b->bone[0][3])
 				+ b->bone[1][k] * (end[1] - b->bone[1][3])
 				+ b->bone[2][k] * (end[2] - b->bone[2][3]);
 		}
-		/* six faces, outward normals: +k at maxs, -k at mins */
-		for (k = 0; k < 6 && !miss; k++)
-		{
-			int ax = k >> 1, sg = k & 1 ? -1 : 1;
-			float d1 = sg > 0 ? s[ax] - b->maxs[ax] : b->mins[ax] - s[ax];
-			float d2 = sg > 0 ? e[ax] - b->maxs[ax] : b->mins[ax] - e[ax];
-
-			if (d1 > 0)
-				startout = 1;
-			if (d1 > 0 && d2 >= d1)
-				miss = 1;		/* outside this face all along */
-			else if (d1 <= 0 && d2 <= 0)
-				continue;
-			else if (d1 > d2)
-			{
-				float f = (d1 - COL_EPS) / (d1 - d2);
-
-				if (f > enter)
-				{
-					enter = f;
-					axis = ax;
-					sign = sg;
-				}
-			}
-			else
-			{
-				float f = (d1 + COL_EPS) / (d1 - d2);
-
-				if (f < leave)
-					leave = f;
-			}
-		}
-		if (miss || !startout || axis < 0 || enter >= leave)
+		src_box(&s, b->mins, b->maxs);
+		tr_init(&t, end);
+		if (!walk_trace(&s, ls, le, &t) && !t.startsolid)
 			continue;
-		if (enter < 0)
-			enter = 0;
-		if (enter < best)
+		if (t.frac < best.frac || (t.startsolid && !best.startsolid))
 		{
-			best = enter;
+			float nb[3];
+
+			best = t;
 			hit = i;
-			best_axis = axis;
-			best_sign = sign;
+			memcpy(nb, t.normal, sizeof(nb));
+			for (k = 0; k < 3; k++)
+				best.normal[k] = b->bone[k][0] * nb[0] + b->bone[k][1] * nb[1]
+					+ b->bone[k][2] * nb[2];
+			/* the plane's distance in the caller's frame */
+			best.dist = t.dist + best.normal[0] * b->bone[0][3]
+				+ best.normal[1] * b->bone[1][3] + best.normal[2] * b->bone[2][3];
 		}
 	}
 	if (hit < 0)
 		return 0;
-	tr->frac = best;
+	tr->frac = best.frac;
+	tr->startsolid = best.startsolid;
+	tr->allsolid = best.allsolid;
+	tr->inopen = best.inopen;
+	tr->inwater = best.inwater;
 	for (k = 0; k < 3; k++)
 	{
-		tr->end[k] = start[k] + best * (end[k] - start[k]);
-		tr->normal[k] = (float)best_sign * hb[hit].bone[k][best_axis];
+		tr->end[k] = start[k] + best.frac * (end[k] - start[k]);
+		tr->normal[k] = best.normal[k];
 	}
-	tr->dist = tr->normal[0] * tr->end[0] + tr->normal[1] * tr->end[1]
-		+ tr->normal[2] * tr->end[2];
+	tr->dist = best.dist;
 	tr->hitgroup = hb[hit].group;
 	return 1;
 }
