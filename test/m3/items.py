@@ -272,6 +272,18 @@ def test_longjump(binary, content):
               f" punch {after['punch']} (want {want})")
 
 
+def test_pickup_keeps_records(binary, content):
+    """CItem::ItemTouch fires CBaseEntity::SUB_UseTargets (target only) and
+    a pick-up kills no other record. hldemo1's item_suit (picked up at the start) once
+    killed the map's first name (lumps 1, 2: the {rail2 func_doors
+    "dontopen" around the dome walkway, never drawn)."""
+    lines = run(binary, content, "hldemo1", ["frames 30", "rec 1", "rec 2"])
+    recs = grab(lines, "rec ")
+    check("pick-up keeps records (item_suit)",
+          any(ln.startswith("item: item_suit picked up") for ln in lines)
+          and recs == ["rec 1 state=0", "rec 2 state=0"], f"{recs}")
+
+
 def cook_c3a2d(a):
     out = os.path.join(a.scratch, "c3a2d")
     log = os.path.join(a.scratch, "cook-c3a2d.log")
@@ -303,6 +315,7 @@ def main():
     test_tripmine(a.bin, a.content)
     test_weaponbox(a.bin, wb)
     test_longjump(a.bin, a.content)
+    test_pickup_keeps_records(a.bin, a.content)
     good = all(results)
     print(f"items {'PASS' if good else 'FAIL'} ({sum(results)}/{len(results)} checks)")
     return 0 if good else 1

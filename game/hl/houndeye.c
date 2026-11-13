@@ -591,9 +591,18 @@ static const mon_vt_t he_mvt = {
 	.GetIdealState = CSquadMonster_GetIdealState,
 };
 
+/* HLSDK CHoundeye::m_SaveData */
+static const sv_field_t f_CHoundeye[] = {
+	SVF(CHoundeye, m_fAsleep, SV_U8, 0),
+	SVF(CHoundeye, m_fDontBlink, SV_U8, 0),
+	SVF(CHoundeye, m_vecPackCenter, SV_POS, 0),
+};
+static const sv_table_t sv_CHoundeye = SV_TABLE(&sv_CSquadMonster, f_CHoundeye);
+
 const game_class_t gc_MONSTER_HOUNDEYE = {
 	.size = sizeof(CHoundeye),
 	.Spawn = CHoundeye_Spawn,
 	.vt = &he_vt,
 	.ext = &he_mvt,
+	.save = &sv_CHoundeye,
 };

@@ -24,6 +24,7 @@
  *                           PHYSINFO" (LJ: m_fLongJump; physinfo "-" empty)
  *   inv                     "inv weapons=0xW active=A ammo=A1,A2,..."
  *   live E                  "live E 0|1 CLASSNAME"
+ *   rec LUMP                "rec LUMP state=S": MAP's record LUMP (REC_*)
  * Engine and game log lines come in between. Exit 0; 2 on a usage or
  * content error.
  */
@@ -216,6 +217,12 @@ static int line(char *s)
 			return -1;
 		log_printf("live %d %d %s\n", i, ent_is_live(i),
 			ent_is_live(i) ? cname(ent_idc(i)->cls) : "-");
+	}
+	else if (!strcmp(cmd, "rec"))
+	{
+		if (sscanf(s, "%d", &i) != 1)
+			return -1;
+		log_printf("rec %d state=%d\n", i, rec_state(GID_MAKE(slot, i)));
 	}
 	else
 		return -1;

@@ -713,11 +713,20 @@ static const mon_vt_t sci_mvt = {
 	.talk = 1,
 };
 
+/* HLSDK CScientist::m_SaveData */
+static const sv_field_t f_CScientist[] = {
+	SVF(CScientist, m_painTime, SV_TIME, 0),
+	SVF(CScientist, m_healTime, SV_TIME, 0),
+	SVF(CScientist, m_fearTime, SV_TIME, 0),
+};
+static const sv_table_t sv_CScientist = SV_TABLE(&sv_CTalkMonster, f_CScientist);
+
 const game_class_t gc_MONSTER_SCIENTIST = {
 	.size = sizeof(CScientist),
 	.Spawn = CScientist_Spawn,
 	.vt = &sci_vt,
 	.ext = &sci_mvt,
+	.save = &sv_CScientist,
 };
 
 /* ---- monster_scientist_dead (CDeadScientist) ------------------------------------------- */
@@ -766,4 +775,5 @@ const game_class_t gc_MONSTER_SCIENTIST_DEAD = {
 	.Spawn = CDeadScientist_Spawn,
 	.vt = &deadsci_vt,
 	.ext = &dead_mvt,
+	.save = &sv_CBaseMonster,
 };

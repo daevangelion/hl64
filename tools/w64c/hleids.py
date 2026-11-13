@@ -31,8 +31,9 @@ spaces first (restab.cook with the map list: ids depend on names only) and
 the same ids and that every res_t resolves inside its cart file
 (precache-and-resources.md R2). It also proves the HLE region: the bytes
 engine/ent/rec.c takes for the campaign's largest slots (architecture.md 4.1:
-2 x (chunk + runtime) + 2 x runtime + rec_init's tables, the sizes from
-engine/ent/rec_int.h) must fit HL64_HLE_BLOBS_KB of include/hl64/limits.h.
+an opening slot + an open slot + 2 frozen maps' runtime part + rec_init's
+tables, the sizes from engine/ent/rec_int.h) must fit HL64_HLE_BLOBS_KB of
+include/hl64/limits.h.
 
   python3 -m tools.w64c.hleids HLE --content DIR --defs DIR --maps M ...
   python3 -m tools.w64c.hleids --check CONTENT --defs DIR [--limits H] [--rec-int H]
@@ -355,23 +356,27 @@ def _a16(n: int) -> int:
 
 @dataclass
 class Slot:
-    """One map's bytes in the HLE region, as engine/ent/rec.c open_chunk
-    takes them: `need` while it opens (logic and pending space bounded by
-    the records), `block` once open (logic blocks of the logic records
-    only), `runtime` = block without the chunk."""
+    """One map's bytes in the HLE region, as engine/ent/rec.c takes them:
+    `need` while it opens (header_done: logic and pending space bounded by
+    the records), `block` once open (chunk_done: logic blocks of the logic
+    records only), `runtime` = block without the chunk, `frozen` = its
+    runtime part once closed (freeze_runtime: 2-bit record states padded
+    to 4 B + the logic blocks)."""
     name: str
     chunk: int
     need: int
     block: int
     runtime: int
+    frozen: int
 
 
 @dataclass
 class Region:
-    """2 x (chunk + runtime) + 2 x runtime + tables, with each slot block
-    16-aligned as heap_find places it: one open slot at its open-time
-    need (the next map opening), one resident open slot, two runtime-only
-    slots (frozen maps), rec_init's tables."""
+    """Opening + open + 2 x frozen + tables, with each block 16-aligned as
+    heap_find places it: one slot at its open-time need (the next map
+    opening; a closing map's block is never larger), one resident open
+    slot, two frozen maps' runtime parts (REC_FROZEN_MAPS), rec_init's
+    tables."""
     tables: int
     opening: Slot
     resident: Slot
@@ -392,7 +397,8 @@ def slot_bytes(name: str, chunk: bytes, rt_bytes: int, logic_bytes: int) -> Slot
     a = _a16(len(chunk))
     need = a + n * (rt_bytes + logic_bytes) + 2 * n + 16
     block = ((a + n * rt_bytes + nlog * logic_bytes + 3) & ~3) + 2 * n
-    return Slot(name, len(chunk), need, block, block - a)
+    frozen = (((n + 3) // 4 + 3) & ~3) + nlog * logic_bytes
+    return Slot(name, len(chunk), need, block, block - a, frozen)
 
 
 def hle_region(slots: Sequence[Slot], tables: int) -> Region:
@@ -400,8 +406,8 @@ def hle_region(slots: Sequence[Slot], tables: int) -> Region:
         raise IdError("no map chunks")
     opening = max(slots, key=lambda s: s.need)
     resident = max(slots, key=lambda s: s.block)
-    frozen = max(slots, key=lambda s: s.runtime)
-    total = (tables + _a16(opening.need) + _a16(resident.block) + 2 * _a16(frozen.runtime))
+    frozen = max(slots, key=lambda s: s.frozen)
+    total = (tables + _a16(opening.need) + _a16(resident.block) + 2 * _a16(frozen.frozen))
     return Region(tables, opening, resident, frozen, total)
 
 
@@ -417,8 +423,8 @@ def check_region(region: Region, limits: str) -> int:
 
 def describe(r: Region) -> str:
     return (f"tables {r.tables} + opening {r.opening.name} {r.opening.need} + open "
-            f"{r.resident.name} {r.resident.block} + 2 x frozen {r.frozen.name} runtime "
-            f"{r.frozen.runtime}, each 16-aligned")
+            f"{r.resident.name} {r.resident.block} + 2 x frozen {r.frozen.name} "
+            f"{r.frozen.frozen}, each 16-aligned")
 
 
 def accounting(rec_int: str) -> Tuple[int, int, int]:

@@ -514,9 +514,11 @@ static void build_physents(uint32_t dt_us)
 		const col_ent_t *e = ent_get(idx[i]);
 
 		/* func_monsterclip blocks monsters only: never a player physent
-		 * [probe:measured PM-bot] */
+		 * [probe:measured PM-bot]. The flag marks a clip only on a brush
+		 * (pmove-host.md 2): on a monster (SF_MONSTER_HITMONSTERCLIP) it
+		 * means "stopped by monster clips", and the monster stays solid. */
 		if (!e || e->index == ENT_PLAYER || e->owner == ENT_PLAYER
-			|| (e->flags & COL_FL_MONSTERCLIP))
+			|| ((e->flags & COL_FL_MONSTERCLIP) && e->solid == COL_SOLID_BSP))
 			continue;
 		if (e->solid == COL_SOLID_NOT && e->skin == COL_LADDER)
 		{
@@ -668,6 +670,33 @@ int phy_player_spawn_start(int map)
 	}
 	org[2] += 1;
 	return phy_player_spawn(map, org, ang);
+}
+
+/* Seam crossing (architecture.md 5.4 req. 3): the one place a home change
+ * re-bases the player. local += g_M(A) - g_M(B) + T moves the global
+ * position by exactly T (integer placements and landmarks: exact in
+ * binary32); the move state (velocity, base velocity, angles, punch, view
+ * offset, flags, duck, water, inventory) is kept. The entity takes B's
+ * layer and is relinked without touches (the crossing is not a move). */
+int phy_player_rebase(int map_b, const float T[3], int ground_b)
+{
+	const wld_layer_t *B;
+	const float *gb;
+	int k;
+
+	if (!P.active || map_b < 0 || map_b >= wld_map_count() || !(B = wld_layer_of_map(map_b)))
+		return -1;
+	gb = wld_map_origin(map_b);
+	for (k = 0; k < 3; k++)
+		P.pl.origin[k] += P.hofs[k] - gb[k] + T[k];
+	P.pl.groundentity = (int16_t)(ground_b < 0 ? -1 : ground_b);
+	P.map = map_b;
+	P.hofs = gb;
+	P.home = B;
+	sync_view();
+	ent_link(P.e);
+	ent_phys(ENT_PLAYER)->groundentity = ground_b < 0 ? ENT_NONE : (uint16_t)ground_b;
+	return 0;
 }
 
 void phy_player_frame(const in_cmd_t *cmd, double time)

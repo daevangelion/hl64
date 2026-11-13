@@ -58,4 +58,58 @@ void		seam_stats(seam_stats_t *s);
  * seam-window profiler. */
 uint32_t	seam_last_switch_frame(void);
 
+/* Roll-up and `mem` lines: `prof seam_us avg= max= frames=` (resets the
+ * window) and `mem seam: campaign used= size=` (the CWG3 file in the
+ * campaign region). */
+void		seam_prof_line(void);
+void		seam_mem_line(void);
+
+/* ---- the decoded graph (tests, the seam-window profiler) ---------------- */
+
+#define SEAM_F_CLOSED	1	/* closed verified */
+#define SEAM_F_NARROWED	2
+#define SEAM_F_VOLUME	4	/* transition volume */
+#define SEAM_F_OPEN	8	/* OPEN: cross-layer draw */
+
+typedef struct {
+	uint16_t	from, to;		/* CWG map indices */
+	uint16_t	trigger;		/* A changelevel entity lump */
+	uint16_t	kind;			/* 0 touch, 1 USEONLY */
+	uint16_t	flags;			/* SEAM_F_*; 0 = rejected at run time */
+	uint16_t	ntwin, npool, ndraw;
+	const char	*landmark;
+	const char	*changetarget;		/* NULL when absent */
+	const uint16_t	*twins;			/* ntwin pairs: A lump, B lump */
+	const uint16_t	*pool;			/* npool sector-pool entries */
+	float		delta[3];		/* landmark B - landmark A */
+	float		T[3];			/* g_B + delta - g_A */
+	float		sw_mins[3], sw_maxs[3];	/* switch eye box, A-local */
+	float		carry_mins[3], carry_maxs[3];
+	float		ap_mins[3], ap_maxs[3];	/* approach player-origin box */
+	uint32_t	need[3];		/* render, texture, collision bytes */
+	uint32_t	bcrc;			/* B .w64 directory CRC */
+} seam_info_t;
+
+typedef struct {
+	uint16_t	nmaps, nlandmarks, nlinks, nseams, ntwins, npool;
+	uint16_t	start, train;		/* 0xFFFF absent */
+	uint16_t	components;
+	uint32_t	strbytes, size;		/* string table, whole file */
+} seam_graph_t;
+
+typedef struct {
+	const char	*name;
+	uint16_t	component, first_landmark, nlandmarks, first_link, nlinks;
+	float		gofs[3], mins[3], maxs[3];
+} seam_map_t;
+
+/* 0 when loaded; -1 without a campaign (or a bad index). */
+int		seam_graph(seam_graph_t *g);
+int		seam_map(int map, seam_map_t *m);
+int		seam_landmark(int i, const char **name, float org[3]);
+/* dest map, landmark name, spawnflags, seam index (0xFFFF none) */
+int		seam_link(int i, uint16_t *dest, const char **landmark, uint16_t *spawnflags,
+			uint16_t *seam);
+int		seam_info(int i, seam_info_t *s);
+
 #endif

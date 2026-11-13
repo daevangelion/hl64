@@ -176,10 +176,21 @@ int		rec_release(int e);
  * the live copy; cleared with rec_twin_clear when either slot closes. */
 void		rec_twin_alias(gid_t16 a, gid_t16 b);
 void		rec_twin_clear(int slot);
+/* The other gid of a rec_twin_alias pair, GID_NONE when g has no twin. */
+gid_t16		rec_twin_of(gid_t16 g);
 /* A carried entity (seam crossing) leaves its record (moved: never
  * respawns in its map) and becomes a runtime entity of slot `slot` with a
  * durable runtime id; the caller has re-based its origin. */
 int		rec_rehome(int e, int slot);
+/* Durable runtime id of a live entity without a record (monstermaker
+ * child, created pickup): assigned on first call or first release, never
+ * reused before New Game, kept across rec_rehome; 0 for a map record's
+ * entity or a dead slot. */
+uint16_t	rec_runtime_id(int e);
+/* Live entity of a canonical reference: (CWG map, lump) of a record or
+ * (CWG map, runtime id); -1 when absent (map closed, entity dry or gone).
+ * Never hydrates. */
+int		rec_ref_entity(uint16_t map, uint16_t id, int runtime);
 /* New Game: open the start map, spawn its logic and its records within
  * the spawn radius of the player start, in entity order, at time 1.0; the
  * loop's next two frames are the settle frames (think-and-time.md 6,
@@ -200,8 +211,14 @@ typedef struct {
 	uint32_t	timers, timers_peak;
 	uint32_t	budget_us, budget_max_us;
 	uint32_t	priv_bytes, priv_peak;
+	uint32_t	released_total;		/* since New Game */
+	uint32_t	store_used, store_peak;	/* dehydrate store bytes */
 } rec_stats_t;
 void		rec_stats(rec_stats_t *s, int reset);
+/* O(REC_SLOTS), no record walk (per-frame profilers): HLE region bytes in
+ * use (tables + open slot blocks + frozen runtime) and dehydrate store
+ * bytes in use. */
+void		rec_mem_use(uint32_t *hle_bytes, uint32_t *store_bytes);
 
 /* ---- level state (dehydrate store, 6.4) ------------------------------------ */
 

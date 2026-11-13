@@ -639,11 +639,14 @@ static int CBasePlayer_SpawnRecord(int e, gid_t16 gid)
 		"a map's player entity is not spawned");
 }
 
+/* the player never dehydrates; its CBaseMonster level is what
+ * game_cut_refs clears */
 const game_class_t gc_PLAYER = {
 	.size = sizeof(CBaseMonster),
 	.Spawn = CBasePlayer_SpawnRecord,
 	.vt = &player_vt,
 	.ext = &player_mvt,
+	.save = &sv_CBaseMonster,
 };
 
 /* ---- component sync ------------------------------------------------------------ */

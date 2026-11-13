@@ -308,8 +308,33 @@ static const game_vt_t tripmine_vt = {
 	.Killed = CTripmineGrenade_Killed,
 };
 
+/* HLSDK CTripmineGrenade::m_SaveData. The beam is an effect (HLSDK saves
+ * the beam entity): killed with the release; after a restore m_pBeam is
+ * -1 and BeamBreakThink's "respawn detect" makes it again. A mine powering
+ * up or about to blow is not quiescent. */
+static int CTripmineGrenade_quiet(int e)
+{
+	fn_t t = ent_tm(e)->think;
+
+	return t != FN_CTripmineGrenade_PowerupThink && t != FN_CTripmineGrenade_DelayDeathThink;
+}
+
+static const sv_field_t f_CTripmineGrenade[] = {
+	SVF(CTripmineGrenade, m_flPowerUp, SV_TIME, 0),
+	SVF(CTripmineGrenade, m_vecDir, SV_VEC, 0),
+	SVF(CTripmineGrenade, m_vecEnd, SV_POS, 0),
+	SVF(CTripmineGrenade, m_flBeamLength, SV_F32, 0),
+	SVF(CTripmineGrenade, m_hOwner, SV_EH, 0),
+	SVF(CTripmineGrenade, m_posOwner, SV_POS, 0),
+	SVF(CTripmineGrenade, m_angleOwner, SV_VEC, 0),
+	SVF(CTripmineGrenade, m_pRealOwner, SV_IX32, 0),
+};
+static const sv_table_t sv_CTripmineGrenade = SV_TABLE(&sv_CGrenade, f_CTripmineGrenade,
+	.quiet = CTripmineGrenade_quiet, .released = KillBeam);
+
 const game_class_t gc_MONSTER_TRIPMINE = {
 	.size = sizeof(CTripmineGrenade),
 	.Spawn = CTripmineGrenade_Spawn,
 	.vt = &tripmine_vt,
+	.save = &sv_CTripmineGrenade,
 };

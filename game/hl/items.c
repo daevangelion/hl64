@@ -31,6 +31,12 @@ typedef struct {
 	uint8_t		pad[3];
 } CItem;
 
+/* HLSDK CItem has no m_SaveData: the item kind of our layout */
+static const sv_field_t f_CItem[] = {
+	SVF(CItem, kind, SV_U8, SVK),
+};
+static const sv_table_t sv_CItem = SV_TABLE(&sv_CBaseEntity, f_CItem);
+
 enum { ITEMK_SUIT, ITEMK_HEALTHKIT, ITEMK_BATTERY, ITEMK_LONGJUMP };
 
 /* MyTouch of each item */
@@ -111,7 +117,9 @@ void CItem_ItemTouch(int e, int other)
 	if (MyTouch(e, it))
 	{
 		log_printf("item: %s picked up\n", game_class_name(ent_idc(e)->cls));
-		SUB_UseTargets(e, other, USE_TOGGLE, 0);
+		/* CItem is a CBaseEntity: CBaseEntity::SUB_UseTargets (no delay,
+		 * no killtarget in its private block) */
+		CBaseEntity_SUB_UseTargets(e, other, USE_TOGGLE, 0);
 		SetTouch(e, FN_NONE);
 		UTIL_Remove(e);
 	}
@@ -145,7 +153,8 @@ static int CItem_Spawn(int e, res_t model, int kind)
 #define ITEM_CLASS(IDENT, MODEL, KIND) \
 	static int IDENT##_Spawn(int e, gid_t16 gid) \
 	{ (void)gid; return CItem_Spawn(e, RESID(MODEL), KIND); } \
-	const game_class_t gc_##IDENT = { .size = sizeof(CItem), .Spawn = IDENT##_Spawn };
+	const game_class_t gc_##IDENT = { .size = sizeof(CItem), .Spawn = IDENT##_Spawn, \
+		.save = &sv_CItem };
 
 ITEM_CLASS(ITEM_SUIT, I_W_SUIT, ITEMK_SUIT)
 ITEM_CLASS(ITEM_HEALTHKIT, I_W_MEDKIT, ITEMK_HEALTHKIT)

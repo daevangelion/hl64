@@ -16,8 +16,9 @@ PM12 water runs: FL_INWATER on a frame iff the previous move left
      waterlevel > 0, in the probe and in hl64;
 PM13 func_monsterclip brushes never in hl64's (or the probe's) physents;
 and the self-contained tests (PM1, PM3 rules, PM4-PM7, PM10 msec 10/33/50,
-PM13) on each map, at the first PM-bot run start or run position with the
-room they need (test/m2/pm.c spot_ok).
+PM13, PM14: a monster box with FL_MONSTERCLIP blocks the player) on each
+map, at the first PM-bot run start or run position with the room they need
+(test/m2/pm.c spot_ok).
 
   pmbot.py --bin BUILD/host/hl64-pm --content CONTENT --fixtures FIXTURES
            [--maps hldemo1 ...] [--verbose]
@@ -337,7 +338,7 @@ def main():
             fails += 1
             print(f"selftest FAIL {mp}:", *st, sep="\n  ")
         elif a.verbose:
-            print(f"selftest ok {mp} (PM1, PM3 rules, PM4-PM7, PM10, PM13)")
+            print(f"selftest ok {mp} (PM1, PM3 rules, PM4-PM7, PM10, PM13, PM14)")
         r3 = check_pm3(a.fixtures, mp, a.bin, a.content, a.verbose)
         if r3:
             n, bad, first = r3

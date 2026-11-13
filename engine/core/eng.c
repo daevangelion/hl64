@@ -25,6 +25,7 @@
 #include "hl64/game.h"
 #include "hl64/limits.h"
 #include "hl64/rec.h"
+#include "hl64/seam.h"
 #include "hl64/settings.h"
 #include "hl64/snd.h"
 #include "engine/core/dbg.h"
@@ -315,6 +316,18 @@ static int cmd_stats(const dbg_cmd_t *c)
 			(unsigned long)(w.pool_used[2] / 1024), (unsigned long)(w.pool_peak[2] / 1024));
 		log_draw("stats", c->arg[0].u);
 		{
+			seam_stats_t ss;
+
+			seam_stats(&ss);
+			log_printf("stats %lu seam: switches=%lu forced=%lu open_fail=%lu late=%lu "
+				"twins=%lu carried=%lu continuity_bad=%lu closes=%lu\n",
+				(unsigned long)c->arg[0].u, (unsigned long)ss.switches,
+				(unsigned long)ss.forced, (unsigned long)ss.open_fail,
+				(unsigned long)ss.late, (unsigned long)ss.twins,
+				(unsigned long)ss.carried, (unsigned long)ss.continuity_bad,
+				(unsigned long)ss.closes);
+		}
+		{
 			wld_stream_stats_t ss;
 			io_stats_t io;
 
@@ -348,6 +361,15 @@ static int cmd_stats(const dbg_cmd_t *c)
 		log_printf("stats %lu ents: live=%d hash=%08lx\n", (unsigned long)c->arg[0].u, live,
 			(unsigned long)h);
 	}
+	{
+		rec_stats_t r;
+
+		rec_stats(&r, 0);
+		log_printf("stats %lu rec: live=%lu pending=%lu dry=%lu released=%lu store=%lu/%lu\n",
+			(unsigned long)c->arg[0].u, (unsigned long)r.live, (unsigned long)r.pending,
+			(unsigned long)r.dry, (unsigned long)r.released_total,
+			(unsigned long)r.store_used, (unsigned long)r.store_peak);
+	}
 	return 0;
 }
 
@@ -360,6 +382,8 @@ static int cmd_mem(const dbg_cmd_t *c)
 	ent_mem_log();
 	res_mem_line();
 	rec_mem_line();
+	if (eng.world)
+		seam_mem_line();
 	decal_mem_line();
 	if (eng.world)
 	{
@@ -426,6 +450,7 @@ static void eng_new_game(int map)
 	org[2] += 1;
 	if (phy_player_spawn(map, org, ang))
 		sys_error("new game: player spawn on %s", wld_map_name(map));
+	seam_new_game(map);
 	/* the models with interest so far: their infos now (load I/O) */
 	studio_preload();
 }
@@ -463,6 +488,8 @@ void eng_boot(const char *platform)
 	dbg_handler_set(DBG_STEP_ALL, cmd_step_all);
 	ent_init();
 	eng.world = (uint8_t)wld_init();
+	if (eng.world)
+		seam_init();
 	res_init();
 	snd_init();
 	rec_init();
@@ -626,6 +653,8 @@ static void rollup(void)
 			(unsigned long)m.kind_us[PHY_K_PUSHSTEP] / n, (unsigned long)m.traces / n);
 	}
 	rec_prof_line();
+	if (eng.world)
+		seam_prof_line();
 	game_prof_line();
 	game_mon_prof();
 	if (eng.world)
@@ -672,6 +701,11 @@ static void rollup(void)
 	eng.rollup_t0 = t;
 }
 
+uint32_t eng_frame_count(void)
+{
+	return eng.frame;
+}
+
 void eng_frame(void)
 {
 	uint32_t vi = sys_vi_count();
@@ -716,17 +750,17 @@ void eng_frame(void)
 	if (eng.world)
 	{
 		wld_frame(eng.frame);
-		/* 8 hydration pump around the player (global position) */
-		if (phy_player_active())
+		/* 7 seams: approach, layer / HLE opens, pins, switch, crossing,
+		 * leave */
+		seam_frame();
+		/* 8 hydration pump around the seam anchors (global positions:
+		 * the player, and through the approached seam's T) */
 		{
-			const float *gm = wld_map_origin(phy_player_map());
-			const float *o = phy_player()->origin;
-			float anchor[1][3] = { { o[0] + gm[0], o[1] + gm[1], o[2] + gm[2] } };
+			float anchors[2][3];
+			int n = seam_anchors(anchors, 2);
 
-			rec_frame((const float (*)[3])anchor, 1);
+			rec_frame(n ? (const float (*)[3])anchors : NULL, n);
 		}
-		else
-			rec_frame(NULL, 0);
 		/* 9 residency target set (engine/world/stream.c): the player's
 		 * eye and velocity in its home frame; the free camera's view */
 		if (phy_player_active())

@@ -362,8 +362,32 @@ static int CBaseButton_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+/* HLSDK CBaseButton::m_SaveData (+ the locksound_t it keeps as members) */
+static const sv_field_t f_CBaseButton[] = {
+	SVF(CBaseButton, m_ls.sLockedSound, SV_RES, SVK),
+	SVF(CBaseButton, m_ls.sLockedSentence, SV_RES, SVK),
+	SVF(CBaseButton, m_ls.sUnlockedSound, SV_RES, SVK),
+	SVF(CBaseButton, m_ls.sUnlockedSentence, SV_RES, SVK),
+	SVF(CBaseButton, m_ls.iLockedSentence, SV_I16, 0),
+	SVF(CBaseButton, m_ls.iUnlockedSentence, SV_I16, 0),
+	SVF(CBaseButton, m_ls.flwaitSound, SV_TIME, 0),
+	SVF(CBaseButton, m_ls.flwaitSentence, SV_TIME, 0),
+	SVF(CBaseButton, m_ls.bEOFLocked, SV_U8, 0),
+	SVF(CBaseButton, m_ls.bEOFUnlocked, SV_U8, 0),
+	SVF(CBaseButton, m_fStayPushed, SV_U8, SVK),
+	SVF(CBaseButton, m_fRotating, SV_U8, SVK),
+	SVF(CBaseButton, m_bLockedSound, SV_U8, SVK),
+	SVF(CBaseButton, m_bLockedSentence, SV_U8, SVK),
+	SVF(CBaseButton, m_bUnlockedSound, SV_U8, SVK),
+	SVF(CBaseButton, m_bUnlockedSentence, SV_U8, SVK),
+	SVF(CBaseButton, m_sounds, SV_U8, SVK),
+	SVF(CBaseButton, m_strChangeTarget, SV_NAME, SVK),
+};
+static const sv_table_t sv_CBaseButton = SV_TABLE(&sv_CBaseToggle, f_CBaseButton);
+
 const game_class_t gc_FUNC_BUTTON = {
 	.size = sizeof(CBaseButton), .Spawn = CBaseButton_Spawn, .vt = &CBaseButton_vt,
+	.save = &sv_CBaseButton,
 };
 
 /* ---- func_rot_button ---------------------------------------------------------- */
@@ -404,6 +428,7 @@ static int CRotButton_Spawn(int e, gid_t16 gid)
 
 const game_class_t gc_FUNC_ROT_BUTTON = {
 	.size = sizeof(CBaseButton), .Spawn = CRotButton_Spawn, .vt = &CBaseButton_vt,
+	.save = &sv_CBaseButton,
 };
 
 /* ---- momentary_rot_button ----------------------------------------------------- */
@@ -601,7 +626,19 @@ static int CMomentaryRotButton_Spawn(int e, gid_t16 gid)
 	return 0;
 }
 
+/* HLSDK CMomentaryRotButton::m_SaveData */
+static const sv_field_t f_CMomentaryRotButton[] = {
+	SVF(CMomentaryRotButton, m_lastUsed, SV_I32, 0),
+	SVF(CMomentaryRotButton, m_direction, SV_I32, 0),
+	SVF(CMomentaryRotButton, m_returnSpeed, SV_F32, SVK),
+	SVF(CMomentaryRotButton, m_start, SV_VEC, SVK),
+	SVF(CMomentaryRotButton, m_end, SV_VEC, SVK),
+	SVF(CMomentaryRotButton, m_sounds, SV_I32, SVK),
+};
+static const sv_table_t sv_CMomentaryRotButton = SV_TABLE(&sv_CBaseToggle,
+	f_CMomentaryRotButton);
+
 const game_class_t gc_MOMENTARY_ROT_BUTTON = {
 	.size = sizeof(CMomentaryRotButton), .Spawn = CMomentaryRotButton_Spawn,
-	.vt = &CMomentaryRotButton_vt,
+	.vt = &CMomentaryRotButton_vt, .save = &sv_CMomentaryRotButton,
 };

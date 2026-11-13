@@ -302,10 +302,28 @@ static const game_vt_t grenade_vt = {
 	.Killed = CGrenade_KilledVt,
 };
 
+/* HLSDK CGrenade has no m_SaveData of its own: the members of our layout */
+static const sv_field_t f_CGrenade[] = {
+	SVF(CGrenade, m_flNextAttack, SV_TIME, 0),
+	SVF(CGrenade, m_fRegisteredSound, SV_U8, 0),
+};
+const sv_table_t sv_CGrenade = SV_TABLE(&sv_CBaseAnimating, f_CGrenade);
+
+/* a grenade in flight or fusing is a projectile: it does not persist */
+static int grenade_quiet(int e)
+{
+	(void)e;
+	return -1;
+}
+
+static const sv_table_t sv_GrenadeProjectile = { .base = &sv_CGrenade,
+	.quiet = grenade_quiet };
+
 const game_class_t gc_GRENADE = {
 	.size = sizeof(CGrenade),
 	.Spawn = CGrenade_SpawnEntry,
 	.vt = &grenade_vt,
+	.save = &sv_GrenadeProjectile,
 };
 
 static int new_grenade(int owner, const float start[3])

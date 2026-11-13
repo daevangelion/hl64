@@ -467,9 +467,20 @@ static const mon_vt_t ba_mvt = {
 	.talk = 1,
 };
 
+/* HLSDK CBarney::m_SaveData */
+static const sv_field_t f_CBarney[] = {
+	SVF(CBarney, m_fGunDrawn, SV_I32, 0),
+	SVF(CBarney, m_painTime, SV_TIME, 0),
+	SVF(CBarney, m_checkAttackTime, SV_TIME, 0),
+	SVF(CBarney, m_lastAttackCheck, SV_I32, 0),
+	SVF(CBarney, m_flPlayerDamage, SV_F32, 0),
+};
+static const sv_table_t sv_CBarney = SV_TABLE(&sv_CTalkMonster, f_CBarney);
+
 const game_class_t gc_MONSTER_BARNEY = {
 	.size = sizeof(CBarney),
 	.Spawn = CBarney_Spawn,
 	.vt = &ba_vt,
 	.ext = &ba_mvt,
+	.save = &sv_CBarney,
 };

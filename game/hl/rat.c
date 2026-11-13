@@ -56,4 +56,5 @@ const game_class_t gc_MONSTER_RAT = {
 	.Spawn = CRat_Spawn,
 	.vt = &rat_vt,
 	.ext = &rat_mvt,
+	.save = &sv_CBaseMonster,
 };

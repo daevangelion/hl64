@@ -269,6 +269,7 @@ const game_class_t gc_MONSTER_HEADCRAB = {
 	.Spawn = CHeadCrab_Spawn,
 	.vt = &hc_vt,
 	.ext = &hc_mvt,
+	.save = &sv_CBaseMonster,
 };
 
 /* ---- monster_zombie (CZombie) ------------------------------------------------------ */
@@ -444,9 +445,16 @@ static const mon_vt_t z_mvt = {
 	.CheckRangeAttack2 = NoAttack,
 };
 
+/* HLSDK CZombie has no m_SaveData: m_flNextFlinch of our layout */
+static const sv_field_t f_CZombie[] = {
+	SVF(CZombie, m_flNextFlinch, SV_TIME, 0),
+};
+static const sv_table_t sv_CZombie = SV_TABLE(&sv_CBaseMonster, f_CZombie);
+
 const game_class_t gc_MONSTER_ZOMBIE = {
 	.size = sizeof(CZombie),
 	.Spawn = CZombie_Spawn,
 	.vt = &z_vt,
 	.ext = &z_mvt,
+	.save = &sv_CZombie,
 };

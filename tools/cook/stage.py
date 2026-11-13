@@ -466,6 +466,18 @@ def cook_world(data: Data, maps: List[str], ct: Content, staging: Path, hlecook:
         ct.claim(f"maps/{m}.w64")
 
 
+def check_campaign_region(graph: Path, limits: str = restab.DEFAULT_LIMITS) -> int:
+    """The runtime reads maps/campaign.cwg whole (an even byte count) into
+    the campaign region (engine/world/seam.c seam_init): fail the cook when
+    it exceeds HL64_CAMPAIGN_KB; returns the bytes it needs."""
+    need = (graph.stat().st_size + 1) & ~1
+    kb = restab.read_limit(limits, "HL64_CAMPAIGN_KB")
+    if need > kb * 1024:
+        raise CookError(f"{graph}: {need} B exceed HL64_CAMPAIGN_KB {kb} ({kb * 1024} B, "
+                        f"the campaign region it is read into): raise it in {limits}")
+    return need
+
+
 def cook_campaign(data: Data, maps: List[str], ct: Content, staging: Path) -> None:
     env = {**os.environ, "PYTHONPATH": str(ROOT)}
     graph = staging / "campaign.cwg"
@@ -473,6 +485,9 @@ def cook_campaign(data: Data, maps: List[str], ct: Content, staging: Path) -> No
          "--maps", *maps, "-o", graph, "--json", staging / "campaign.json"], env=env, cwd=ROOT)
     run([PY, "-m", "tools.w64c.w64seam", graph, "--packages", ct.root / "maps",
          "--maps-dir", data.root / "maps", "--report", staging / "seams.json"], env=env, cwd=ROOT)
+    need = check_campaign_region(graph)
+    log(f"campaign region need {need} B of HL64_CAMPAIGN_KB "
+        f"{restab.read_limit(restab.DEFAULT_LIMITS, 'HL64_CAMPAIGN_KB')}")
     ct.put_file("maps/campaign.cwg", graph)
 
 

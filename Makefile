@@ -36,6 +36,8 @@ ENGINE_SRC := \
 	engine/mem/carve.c engine/mem/heap.c engine/mem/pool.c \
 	engine/render/cam.c engine/render/dlight.c engine/render/world.c \
 	engine/world/style.c engine/world/world.c
+# engine/world/seam.c: campaign seams, crossings (M4)
+ENGINE_SRC += engine/world/seam.c
 # engine/coll: traces, contents, hitboxes, collision residency (M2)
 ENGINE_SRC += engine/coll/coll.c engine/coll/colbench.c
 # engine/ent + engine/phys: entity slots, linked boxes, spatial grid, touches (M2)
@@ -73,9 +75,14 @@ GAME_SRC_ITEMS := game/hl/weapons.c game/hl/weapon_crowbar.c game/hl/weapon_gloc
 	game/hl/weapon_handgrenade.c game/hl/items.c game/hl/chargers.c game/hl/grenade.c \
 	game/hl/tripmine.c game/hl/weapon_tripmine.c game/hud/hud.c
 GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
+# M4 GameLS: level state (dehydrate / rehydrate, twins, carry, cut refs)
+GAME_SRC_LS := game/hl/levelstate.c
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
 	$(ENGINE_SRC_SND) $(ENGINE_SRC_FX) $(ENGINE_SRC_D2)
-GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO)
+# M4 Gate: the seam-window profiler (engine/test/seamprof.c: PROFILE carts,
+# every host build; empty otherwise)
+ENGINE_SRC += engine/test/seamprof.c
+GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO) $(GAME_SRC_LS)
 # M4 Stream: residency classes, target set, pins, prefetch, pop-in
 ENGINE_SRC += engine/world/stream.c
 # HLSDK sources kept as Valve wrote them: their unused locals, MSVC
@@ -119,7 +126,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest sndtest streamtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest rec4test sndtest gamelstest seamproftest seamtest streamtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -363,7 +370,8 @@ REC_BIN := $(BUILD_DIR)/host/hl64-rec
 # The driver's test game takes the record dispatch rec.c calls (--wrap);
 # the rest of game/ links as usual.
 REC_WRAP := game_spawn_record game_spawn_logic game_use game_logic_use game_logic_timer \
-	game_map_opened game_map_closing
+	game_map_opened game_map_closing game_dehydrate game_rehydrate game_cut_refs \
+	wld_layer_ready wld_layer_of_map
 REC_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 	$(BUILD_DIR)/host/test/m3/rec_test.o
 $(REC_BIN): $(REC_OBJS)
@@ -377,6 +385,15 @@ STREAM_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(STREAM_BIN): $(STREAM_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 streamtest: $(STREAM_BIN)
+# M4 level-state driver (test/m4/rec4_test.c, run by test/m4/rec.sh): async
+# open, release / rehydrate, frozen maps, twins, deferred uses, runtime ids
+# with a test game (--wrap as above, plus runtime spawns).
+REC4_BIN := $(BUILD_DIR)/host/hl64-rec4
+REC4_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m4/rec4_test.o
+$(REC4_BIN): $(REC4_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) $(foreach f,$(REC_WRAP) game_spawn_class,-Wl,--wrap=$(f))
+rec4test: $(REC4_BIN)
 
 # Sound driver (test/m3/snd.c, run by test/m3/snd.sh: S1-S8 host parts).
 SND_BIN := $(BUILD_DIR)/host/hl64-snd
@@ -385,6 +402,40 @@ SND_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(SND_BIN): $(SND_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 sndtest: $(SND_BIN)
+
+# Seam-window profiler driver (test/m4/gate_seamprof.c, run by
+# test/m4/gate_seamprof.py and test/run/m4.sh).
+SEAMPROF_BIN := $(BUILD_DIR)/host/hl64-seamprof
+SEAMPROF_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m4/gate_seamprof.o
+$(SEAMPROF_BIN): $(SEAMPROF_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+seamproftest: $(SEAMPROF_BIN)
+
+# Seam driver (test/m4/seam_test.c, run by test/m4/seam.sh): the seam
+# runtime over the real campaign parse, world layers, player re-base and
+# entities; the sibling M4 services it drives are the driver's doubles.
+SEAM_BIN := $(BUILD_DIR)/host/hl64-seam
+SEAM_WRAP := wld_open_async wld_layer_ready wld_layer_of_map wld_pin_seam wld_pin_seam_window \
+	wld_unpin_seam wld_stream_rebase rec_map_open rec_map_ready rec_map_close rec_slot_live \
+	rec_release rec_twin_alias rec_twin_clear rec_rehome rec_entity rec_state rec_kill rec_wake \
+	rec_origin \
+	rec_name_find rec_fire rec_fire_at rec_key_f game_twin_copy game_carry
+SEAM_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m4/seam_test.o
+$(SEAM_BIN): $(SEAM_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) $(foreach f,$(SEAM_WRAP),-Wl,--wrap=$(f))
+seamtest: $(SEAM_BIN)
+# Level-state driver (test/m4/gamels.c, run by test/m4/gamels.py: dehydrate
+# / rehydrate round trips, quiescence, twins, carry, cut refs). The record
+# layer's canonical-reference calls and seam_changelevel are the driver's.
+GAMELS_BIN := $(BUILD_DIR)/host/hl64-gamels
+GAMELS_WRAP := rec_runtime_id rec_ref_entity rec_twin_of seam_changelevel
+GAMELS_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m4/gamels.o
+$(GAMELS_BIN): $(GAMELS_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) $(foreach f,$(GAMELS_WRAP),-Wl,--wrap=$(f))
+gamelstest: $(GAMELS_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 
