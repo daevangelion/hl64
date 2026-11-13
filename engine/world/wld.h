@@ -216,6 +216,16 @@ void		wld_stream_rebase(const float T[3]);
  * BSP model); an input of the target set (OPEN COLL, and + v * 0.5 s for
  * prefetch). */
 void		wld_stream_coll(const float lo[3], const float hi[3], const uint32_t *models, int n);
+/* engine/ent rec, once per pump scan of a slot: the spawn boxes (map-local
+ * lo[3], hi[3]; a DROP_TO_FLOOR's reach below included) of its hydration
+ * candidates and prefetch ring, nearest first, and a brush record's own
+ * submodel (sub[i], -1 none): the grid cells of each box + 128 u (its
+ * first steps) and the submodel's COLL are prefetched (an input of the
+ * target set; n 0 clears). */
+void		wld_stream_spawns(int slot, const float (*box)[6], const int *sub, int n);
+/* 1 when every COLL chunk of a spawn window (as wld_stream_spawns names
+ * it) is resident (rec's map-open hold). */
+int		wld_spawn_resident(int slot, const float box[6], int sub);
 /* The renderer, once per drawn frame: chunks of the visible set it wanted
  * and found missing (pop-in, counted outside / inside teleport windows). */
 void		wld_stream_missing(uint32_t n);

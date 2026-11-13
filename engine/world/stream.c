@@ -68,6 +68,8 @@
 #define EW_REQUERY	30		/* frames between a window's model queries */
 #define GOAL_SPAN	1024.0f		/* a route span is prefetched this far at most */
 #define GOAL_MARGIN	40.0f		/* ... around the hull (a step up and down: 2 x 18 u) */
+#define SPAWN_WANTS	24		/* hydration windows per layer (wld_stream_spawns) */
+#define SPAWN_MARGIN	32.0f		/* around a record's spawn box */
 #define TELE_PINS	4		/* teleport destinations pinned at once */
 #define SEEN_MODELS	64		/* brush entities' hulls named in the eye's sectors */
 
@@ -100,6 +102,12 @@ typedef struct {
 	float		org[3];		/* the player origin it gives (map-local) */
 } tele_pin_t;
 
+/* a hydration candidate's spawn window (spawn_cells) */
+typedef struct {
+	int32_t		r[6];
+	int32_t		sub;		/* its own brush model, -1 none */
+} spawn_want_t;
+
 static struct {
 	/* inputs of the standing target set */
 	int		home_slot;
@@ -122,6 +130,9 @@ static struct {
 	/* moving entities' collision windows, in entity order (ent_scan) */
 	ewin_t		ew[ENT_WINDOWS];
 	int		nwin;
+	/* hydration windows per layer (wld_stream_spawns) */
+	spawn_want_t		spawn[HL64_WORLD_LAYERS][SPAWN_WANTS];
+	int		nspawn[HL64_WORLD_LAYERS];
 	/* reachable teleport destinations (ent_scan) */
 	tele_pin_t	tele[TELE_PINS];
 	int		ntele;
@@ -786,7 +797,8 @@ static void name_all(void)
 			}
 			else
 			{
-				/* moving entities' windows: prefetch (an OPEN set
+				/* moving entities' windows and the hydration
+				 * candidates' spawn windows: prefetch (an OPEN set
 				 * this wide overflowed the collision pool in the
 				 * warehouse fight; the sync fallback evicts them) */
 				for (i = 0; i < S.nwin; i++)
@@ -795,6 +807,12 @@ static void name_all(void)
 					name_cells(L, S.ew[i].g[s], cls);
 					if (S.ew[i].slot == s)
 						name_models(S.ew[i].m, S.ew[i].nm, cls);
+				}
+				for (i = 0; i < S.nspawn[s]; i++)
+				{
+					name_cells(L, S.spawn[s][i].r, cls);
+					if (S.spawn[s][i].sub >= 0)
+						name_model_coll(L, (unsigned)S.spawn[s][i].sub, cls);
 				}
 				if (s != S.home_slot)
 					continue;
@@ -1160,6 +1178,9 @@ void wld_stream_closed(int slot)
 	memset(&S.seam[slot], 0, sizeof(S.seam[slot]));
 	memset(S.ccell[slot], 0, sizeof(S.ccell[slot]));
 	/* the slot's cell ranges index its grid: none outlives the map */
+	if (S.nspawn[slot])
+		S.coll_gen++;
+	S.nspawn[slot] = 0;
 	{
 		int i, n = 0;
 
@@ -1250,6 +1271,25 @@ static int leaf_resident(const wld_layer_t *L, int leaf)
 	return each_mover((wld_layer_t *)(uintptr_t)L, list, cnt, 0, movr_ok);
 }
 
+/* Every COLL chunk the grid cells in range r list resident. */
+static int cells_resident(const wld_layer_t *L, const int32_t r[6])
+{
+	const w64_grid_t *g = L->grid;
+	int x, y, z, i;
+
+	for (z = r[2]; z <= r[5]; z++)
+		for (y = r[1]; y <= r[4]; y++)
+			for (x = r[0]; x <= r[3]; x++)
+			{
+				const uint16_t *v = L->glists + L->cells[x + g->dims[0] * (y + g->dims[1] * z)].list;
+
+				for (i = 1; i <= v[0]; i++)
+					if (!resident(L, L->dir->coll_first + v[i]))
+						return 0;
+			}
+	return 1;
+}
+
 int wld_pin_resident(const wld_layer_t *B)
 {
 	const seam_pin_t *p = &S.seam[B->slot];
@@ -1273,10 +1313,8 @@ int wld_pin_resident(const wld_layer_t *B)
 	}
 	if (p->win)
 	{
-		const w64_grid_t *g = B->grid;
 		float lo[3], hi[3];
 		int32_t r[6];
-		int x, y, z;
 
 		for (k = 0; k < 3; k++)
 		{
@@ -1284,22 +1322,74 @@ int wld_pin_resident(const wld_layer_t *B)
 			hi[k] = p->box[k + 3] + COL_WIN;
 		}
 		cell_range(B, lo, hi, r);
-		for (z = r[2]; z <= r[5]; z++)
-			for (y = r[1]; y <= r[4]; y++)
-				for (x = r[0]; x <= r[3]; x++)
-				{
-					const uint16_t *v = B->glists
-						+ B->cells[x + g->dims[0] * (y + g->dims[1] * z)].list;
-
-					for (i = 1; i <= v[0]; i++)
-						if (!resident(B, B->dir->coll_first + v[i]))
-							return 0;
-				}
+		if (!cells_resident(B, r))
+			return 0;
 		nl = arrival_leaves(B, p, leaves);
 		for (i = 0; i < nl; i++)
 			if (!leaf_resident(B, leaves[i]))
 				return 0;
 	}
+	return 1;
+}
+
+/* ---- hydration windows ------------------------------------------------------------- */
+
+/* A record's spawn window: its spawn box grown by SPAWN_MARGIN as grid
+ * cells of L, and a brush record's own submodel (-1 none). */
+static void spawn_cells(const wld_layer_t *L, const float box[6], int sub, spawn_want_t *w)
+{
+	float lo[3], hi[3];
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		lo[k] = box[k] - SPAWN_MARGIN;
+		hi[k] = box[k + 3] + SPAWN_MARGIN;
+	}
+	cell_range(L, lo, hi, w->r);
+	w->sub = sub >= 0 && (unsigned)sub < L->dir->nsub ? sub : -1;
+}
+
+void wld_stream_spawns(int slot, const float (*box)[6], const int *sub, int n)
+{
+	const wld_layer_t *L = wld_layer(slot);
+	spawn_want_t w[SPAWN_WANTS];
+	int i, j, m = 0;
+
+	for (i = 0; L && i < n && m < SPAWN_WANTS; i++)
+	{
+		spawn_cells(L, box[i], sub[i], &w[m]);
+		for (j = 0; j < m && memcmp(&w[j], &w[m], sizeof(w[m])); j++)
+			;
+		if (j == m)
+			m++;
+	}
+	if (m != S.nspawn[slot] || memcmp(w, S.spawn[slot], (size_t)m * sizeof(w[0])))
+	{
+		memcpy(S.spawn[slot], w, (size_t)m * sizeof(w[0]));
+		S.nspawn[slot] = m;
+		S.coll_gen++;
+	}
+}
+
+int wld_spawn_resident(int slot, const float box[6], int sub)
+{
+	const wld_layer_t *L = wld_layer(slot);
+	const w64_model_t *md;
+	spawn_want_t w;
+	unsigned c;
+
+	if (!L)
+		return 1;
+	spawn_cells(L, box, sub, &w);
+	if (!cells_resident(L, w.r))
+		return 0;
+	if (w.sub < 0)
+		return 1;
+	md = &L->models[w.sub];
+	for (c = 0; c < md->coll_count && md->coll_first + c < L->dir->ncoll; c++)
+		if (!resident(L, L->dir->coll_first + (int)(md->coll_first + c)))
+			return 0;
 	return 1;
 }
 

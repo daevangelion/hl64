@@ -2612,20 +2612,48 @@ static void cand_add(uint16_t *c, float *cd, int *nc, int max, uint16_t v, float
 	}
 }
 
-static void pump(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, uint32_t *done)
+#define REC_DROP	256.0f	/* DROP_TO_FLOOR's trace below a spawn */
+
+/* Candidate c's spawn box (map-local): the record's bounds or a released
+ * runtime entity's origin, down to where a DROP_TO_FLOOR can reach; its
+ * own brush submodel (a trigger, a door), -1 none. */
+static int spawn_box(const rmap_t *m, uint16_t c, float b[6])
+{
+	res_t r;
+	int k;
+
+	for (k = 0; k < 3; k++)
+		if (c & CAND_RT)
+		{
+			b[k] = R.run[c & ~CAND_RT].org[k] - 16;
+			b[k + 3] = R.run[c & ~CAND_RT].org[k] + 16;
+		}
+		else
+		{
+			b[k] = m->rt[c].lo[k];
+			b[k + 3] = m->rt[c].hi[k];
+		}
+	b[2] -= REC_DROP;
+	if (c & CAND_RT)
+		return -1;
+	r = rec_key_res(gid_of(m, c), RK_MODEL);
+	return r != RES_NONE && RES_KIND(r) == RES_K_SUBMODEL && (int)RES_SUB_SLOT(r) == m->slot
+		? (int)RES_SUB_NUM(r) : -1;
+}
+
+/* The slot's hydration candidates within the spawn radius of an anchor
+ * (nearest first; runtime entries | CAND_RT) and its prefetch ring; their
+ * spawn boxes go to the stream, which prefetches their collision cells
+ * (a Spawn traces: drop_to_floor, a monster's first step). */
+static void scan(rmap_t *m, const float (*loc)[3], int n, uint16_t *cand, float *cd, int *nc,
+	uint16_t *ring, float *rd, int *nr)
 {
 	const float r2 = REC_SPAWN_R * REC_SPAWN_R;
 	const float o2 = (REC_SPAWN_R + REC_PREFETCH_R) * (REC_SPAWN_R + REC_PREFETCH_R);
-	uint16_t cand[CAND], ring[REC_RING];
-	float cd[CAND], rd[REC_RING];
-	int nc = 0, nr = 0, a, i;
+	float box[CAND + REC_RING][6];
+	int sub[CAND + REC_RING], a, i, nb = 0;
 
-	/* nothing changed and the anchor stayed put since a scan that found
-	 * nothing to spawn: skip the scan */
-	if (m->idle && m->idle_gen == m->pgen
-		&& fabsf(loc[0][0] - m->idle_at[0]) < 16 && fabsf(loc[0][1] - m->idle_at[1]) < 16
-		&& fabsf(loc[0][2] - m->idle_at[2]) < 16)
-		return;
+	*nc = *nr = 0;
 	for (i = 0; i < m->npend; i++)
 	{
 		int ri = m->plist[i];
@@ -2641,9 +2669,9 @@ static void pump(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, uint32_t 
 				d = x;
 		}
 		if (d <= r2)
-			cand_add(cand, cd, &nc, CAND, (uint16_t)ri, d);
+			cand_add(cand, cd, nc, CAND, (uint16_t)ri, d);
 		else if (d <= o2)
-			cand_add(ring, rd, &nr, REC_RING, (uint16_t)ri, d);
+			cand_add(ring, rd, nr, REC_RING, (uint16_t)ri, d);
 	}
 	/* released runtime entities of the map, by where they were released */
 	for (i = 0; i < REC_RUNTIME; i++)
@@ -2661,8 +2689,28 @@ static void pump(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, uint32_t 
 				d = x;
 		}
 		if (d <= r2)
-			cand_add(cand, cd, &nc, CAND, (uint16_t)(i | CAND_RT), d);
+			cand_add(cand, cd, nc, CAND, (uint16_t)(i | CAND_RT), d);
 	}
+	for (i = 0; i < *nc; i++, nb++)
+		sub[nb] = spawn_box(m, cand[i], box[nb]);
+	for (i = 0; i < *nr; i++, nb++)
+		sub[nb] = spawn_box(m, ring[i], box[nb]);
+	wld_stream_spawns(m->slot, (const float (*)[6])box, sub, nb);
+}
+
+static void pump(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, uint32_t *done)
+{
+	uint16_t cand[CAND], ring[REC_RING];
+	float cd[CAND], rd[REC_RING];
+	int nc, nr, i;
+
+	/* nothing changed and the anchor stayed put since a scan that found
+	 * nothing to spawn: skip the scan */
+	if (m->idle && m->idle_gen == m->pgen
+		&& fabsf(loc[0][0] - m->idle_at[0]) < 16 && fabsf(loc[0][1] - m->idle_at[1]) < 16
+		&& fabsf(loc[0][2] - m->idle_at[2]) < 16)
+		return;
+	scan(m, loc, n, cand, cd, &nc, ring, rd, &nr);
 	/* prefetch ring: the nearest pending records' models */
 	for (i = 0; i < nr; i++)
 	{
@@ -2807,22 +2855,37 @@ static int home_slot(const float g[3])
 /* A newly opened map's records wait for its level-load precache (the
  * interest game_map_opened declared; studio infos land asynchronously),
  * as GoldSrc precaches before the first spawn: a Spawn would otherwise
- * read its model's info synchronously. Bounded, logged. */
+ * read its model's info synchronously; and for the collision cells of
+ * the candidates in the spawn radius (scan names them), whose Spawn
+ * traces would read them synchronously. Bounded, logged. */
 #define REC_PRECACHE_FRAMES	60
-static int precache_held(rmap_t *m)
+static int precache_held(rmap_t *m, const float (*loc)[3], int n)
 {
-	int n;
+	uint16_t cand[CAND], ring[REC_RING];
+	float cd[CAND], rd[REC_RING], b[6];
+	int ni, nc = 0, nr, i, nw = 0;
 
 	if (!m->pre_wait)
 		return 0;
-	n = studio_infos_pending();
-	if (n && m->pre_wait < REC_PRECACHE_FRAMES)
+	ni = studio_infos_pending();
+	if (n > 0)
+	{
+		scan(m, loc, n, cand, cd, &nc, ring, rd, &nr);
+		for (i = 0; i < nc; i++)
+		{
+			int sub = spawn_box(m, cand[i], b);
+
+			nw += !wld_spawn_resident(m->slot, b, sub);
+		}
+	}
+	if ((ni || nw) && m->pre_wait < REC_PRECACHE_FRAMES)
 	{
 		m->pre_wait++;
 		return 1;
 	}
-	log_printf("rec: %s precache %s after %u frames (%d infos pending)\n",
-		wld_map_name(m->map), n ? "timed out" : "landed", (unsigned)(m->pre_wait - 1), n);
+	log_printf("rec: %s precache %s after %u frames (%d infos, %d spawn windows pending)\n",
+		wld_map_name(m->map), ni || nw ? "timed out" : "landed", (unsigned)(m->pre_wait - 1),
+		ni, nw);
 	m->pre_wait = 0;
 	return 0;
 }
@@ -2847,7 +2910,12 @@ void rec_frame(const float (*anchors)[3], int nanchors)
 		int i;
 
 		advance(m);
-		if (!m->open || !(L = wld_layer(s)) || precache_held(m))
+		if (!m->open || !(L = wld_layer(s)))
+			continue;
+		for (a = 0; a < n; a++)
+			for (k = 0; k < 3; k++)
+				loc[s][a][k] = anchors[a][k] - L->gofs[k];
+		if (precache_held(m, (const float (*)[3])loc[s], n))
 			continue;
 		/* a newly opened map's logic records: all at once (no entities) */
 		if (m->logic_pending)
@@ -2856,9 +2924,6 @@ void rec_frame(const float (*anchors)[3], int nanchors)
 				spawn_logic(m, i);
 			m->logic_pending = 0;
 		}
-		for (a = 0; a < n; a++)
-			for (k = 0; k < 3; k++)
-				loc[s][a][k] = anchors[a][k] - L->gofs[k];
 		live |= 1u << s;
 	}
 	if (R.sweep)
