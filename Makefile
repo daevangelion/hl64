@@ -36,6 +36,8 @@ ENGINE_SRC := \
 	engine/mem/carve.c engine/mem/heap.c engine/mem/pool.c \
 	engine/render/cam.c engine/render/dlight.c engine/render/world.c \
 	engine/world/style.c engine/world/world.c
+# engine/world/seam.c: campaign seams, crossings (M4)
+ENGINE_SRC += engine/world/seam.c
 # engine/coll: traces, contents, hitboxes, collision residency (M2)
 ENGINE_SRC += engine/coll/coll.c engine/coll/colbench.c
 # engine/ent + engine/phys: entity slots, linked boxes, spatial grid, touches (M2)
@@ -117,7 +119,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest sndtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest sndtest seamtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -375,6 +377,20 @@ SND_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(SND_BIN): $(SND_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 sndtest: $(SND_BIN)
+
+# Seam driver (test/m4/seam_test.c, run by test/m4/seam.sh): the seam
+# runtime over the real campaign parse, world layers, player re-base and
+# entities; the sibling M4 services it drives are the driver's doubles.
+SEAM_BIN := $(BUILD_DIR)/host/hl64-seam
+SEAM_WRAP := wld_open_async wld_layer_ready wld_layer_of_map wld_pin_seam wld_pin_seam_window \
+	wld_unpin_seam wld_stream_rebase rec_map_open rec_map_ready rec_map_close rec_slot_live \
+	rec_release rec_twin_alias rec_twin_clear rec_rehome rec_entity rec_wake rec_origin \
+	rec_name_find rec_fire rec_fire_at rec_key_f game_twin_copy game_carry
+SEAM_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m4/seam_test.o
+$(SEAM_BIN): $(SEAM_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) $(foreach f,$(SEAM_WRAP),-Wl,--wrap=$(f))
+seamtest: $(SEAM_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 

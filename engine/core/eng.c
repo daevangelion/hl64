@@ -631,6 +631,11 @@ static void rollup(void)
 	eng.rollup_t0 = t;
 }
 
+uint32_t eng_frame_count(void)
+{
+	return eng.frame;
+}
+
 void eng_frame(void)
 {
 	uint32_t vi = sys_vi_count();
