@@ -529,7 +529,7 @@ int phy_player_spawn_start(int map)
 	return phy_player_spawn(map, org, ang);
 }
 
-void phy_player_frame(const in_cmd_t *cmd, uint64_t now_us)
+void phy_player_frame(const in_cmd_t *cmd, double time)
 {
 	ent_player_t *pl = &P.pl;
 	uint64_t t0;
@@ -561,7 +561,7 @@ void phy_player_frame(const in_cmd_t *cmd, uint64_t now_us)
 	/* steps 4-5: physents and the move */
 	phy_pm.pl = pl;
 	phy_pm.cmd = *cmd;
-	phy_pm.time_ms = (float)(now_us / 1000u);
+	phy_pm.time_ms = (float)(time * 1000.0);
 	phy_pm.ntouch = 0;
 	build_physents((uint32_t)cmd->msec * 1000u);
 	game_pm_move(&phy_pm);

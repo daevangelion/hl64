@@ -29,8 +29,9 @@ int		phy_player_map(void);
 ent_player_t	*phy_player(void);
 
 /* Frame step 5 (pmove-host.md 1): physents, game_pm_move, write-back,
- * link with trigger touches, impact touches for the pmove touch list. */
-void		phy_player_frame(const in_cmd_t *cmd, uint64_t now_us);
+ * link with trigger touches, impact touches for the pmove touch list.
+ * time: the frame's game clock (f64 s; pm_shared sees it as ms). */
+void		phy_player_frame(const in_cmd_t *cmd, double time);
 
 typedef struct {
 	uint32_t	frames;		/* moves in the window */

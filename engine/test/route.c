@@ -73,7 +73,7 @@ static struct {
 	uint32_t	pc;		/* byte offset of the current op */
 	uint16_t	op;		/* its index */
 	uint8_t		started;	/* the current op's start time is set */
-	uint64_t	t0;		/* game time the current op started */
+	double		t0;		/* game time (s) the current op started */
 } rt;
 
 static uint32_t rd32(const uint8_t *p)
@@ -325,12 +325,12 @@ static void push(int op, uint32_t arg)
 		fail("debug queue full");
 }
 
-/* A wait op: 1 done, 0 not yet (fails past its timeout). */
-static int wait_until(int ok, uint32_t timeout, uint64_t now_us)
+/* A wait op: 1 done, 0 not yet (fails past its timeout, bytecode µs). */
+static int wait_until(int ok, uint32_t timeout_us, double time)
 {
 	if (ok)
 		return 1;
-	if (now_us - rt.t0 > timeout)
+	if ((time - rt.t0) * 1e6 > (double)timeout_us)
 		fail("timeout");
 	return 0;
 }
@@ -354,7 +354,7 @@ static int near(const float *w, int inside_map)
 	return d2 <= w[3] * w[3];
 }
 
-void rt_frame(uint64_t now_us)
+void rt_frame(double time)
 {
 	while (rt_active())
 	{
@@ -368,7 +368,7 @@ void rt_frame(uint64_t now_us)
 		if (!rt.started)
 		{
 			rt.started = 1;
-			rt.t0 = now_us;
+			rt.t0 = time;
 			if (code == OP_SHOT || code == OP_STATS)
 				log_printf("route: %u %s %s\n", rt.op, ops[code].name, str_at(b));
 			else
@@ -377,15 +377,15 @@ void rt_frame(uint64_t now_us)
 		switch (code)
 		{
 		case OP_WAIT:
-			if (now_us - rt.t0 < rd32(p + 4))
+			if ((time - rt.t0) * 1e6 < (double)rd32(p + 4))
 				return;
 			break;
 		case OP_WAIT_MAP:
-			if (!wait_until(home, rd32(p + 4), now_us))
+			if (!wait_until(home, rd32(p + 4), time))
 				return;
 			break;
 		case OP_WAIT_NEAR:
-			if (!wait_until(near(w, home), rd32(p + 20), now_us))
+			if (!wait_until(near(w, home), rd32(p + 20), time))
 				return;
 			break;
 		case OP_LOOK:

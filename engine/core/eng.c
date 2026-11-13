@@ -35,7 +35,8 @@
 const char *eng_route_path = "route.rbc";
 static struct {
 	uint32_t	frame;		/* frames completed */
-	uint64_t	now_us;		/* game time */
+	double		time;		/* game clock, f64 s from 1.0 (think-and-time.md 1) */
+	uint64_t	now_us;		/* engine timing of the M1 world effects (lightstyles, dlights, draw) */
 	uint32_t	last_vi;
 	float		timescale;
 	uint32_t	fixed_dt_us;	/* test builds; 0 = VI clock */
@@ -287,6 +288,7 @@ void eng_boot(const char *platform)
 	}
 
 	eng.frame = 0;
+	eng.time = 1.0;
 	eng.now_us = 0;
 	eng.timescale = 1.0f;
 	eng.fixed_dt_us = 0;
@@ -370,7 +372,9 @@ void eng_frame(void)
 	io_pump();
 
 	/* 4 game (M3); 5 player: pmove host; 6 active set (M3) */
-	phy_player_frame(&cmd, eng.now_us);
+	phy_player_frame(&cmd, eng.time);
+	/* the clock advances by dt (f64) after step 6 */
+	eng.time += (double)dt * 1e-6;
 	eng.now_us += dt;
 	/* 7-10 world, hydration, residency, sound (M1-M4) */
 	if (eng.world)
@@ -388,7 +392,7 @@ void eng_frame(void)
 	{
 		ren_stats_t r;
 
-		ren_view_frame(eng.now_us, dt);
+		ren_view_frame(eng.time, (double)dt * 1e-6);
 		ren_frame(eng.now_us);
 		ren_stats(&r);
 		eng.rollup_world_us += r.world_us;
@@ -402,7 +406,7 @@ void eng_frame(void)
 	eng.frame++;
 	dbg_run(eng.frame);
 	if (rt_active())
-		rt_frame(eng.now_us);
+		rt_frame(eng.time);
 	rollup();
 	log_flush();
 }

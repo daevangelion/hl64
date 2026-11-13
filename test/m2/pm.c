@@ -179,7 +179,7 @@ static void move(float t, const float ang[3], float fm, float sm, float um, int 
 	c.upmove = um;
 	c.buttons = (uint16_t)buttons;
 	c.msec = (uint8_t)msec;
-	phy_player_frame(&c, (uint64_t)((double)t * 1e6 + 0.5));
+	phy_player_frame(&c, (double)t);
 }
 
 /* world-only physent list of the open map (the home world at the origin) */

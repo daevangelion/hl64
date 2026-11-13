@@ -11,7 +11,7 @@
 #include "engine/view/view.h"
 #include "engine/world/wld.h"
 
-void ren_view_frame(uint64_t now_us, uint32_t dt_us)
+void ren_view_frame(double time, double dt)
 {
 	game_view_t v;
 	const float *g;
@@ -19,7 +19,7 @@ void ren_view_frame(uint64_t now_us, uint32_t dt_us)
 
 	if (!phy_player_active())
 		return;
-	game_calc_view(phy_player(), (float)((double)now_us * 1e-6), (float)dt_us * 1e-6f, &v);
+	game_calc_view(phy_player(), (float)time, (float)dt, &v);
 	ren_cam.map = phy_player_map();
 	g = wld_map_origin(ren_cam.map);
 	/* the view is home-local; the camera global */
