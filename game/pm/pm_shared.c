@@ -24,7 +24,8 @@
  *   PM_TraceTexture returns the texture-type character, so the
  *   materials.txt loader, its 512-name table and PM_FindTextureType are
  *   gone;
- * - the physics info string is always empty ("tfc", "slj" read as 0);
+ * - the physics info string ("tfc", "slj") is the engine player's
+ *   (pm_defs.h caps it at 32 bytes; the reads are HLSDK's own);
  * - no visents (PM_GetVisEntInfo removed);
  * - min/max from here instead of public/minmax.h; no pm_debug.
  * Movement maths are unchanged.
@@ -40,6 +41,7 @@
 #include <stdio.h>  // NULL
 #include <math.h>   // sqrt
 #include <string.h> // strcpy
+#include <stdlib.h> // atoi
 
 #ifndef min
 #define min(a,b)  (((a) < (b)) ? (a) : (b))
@@ -2337,7 +2339,7 @@ void PM_Jump (void)
 		return;
 	}
 
-	tfc = false;	// hl64: empty physics info string
+	tfc = atoi( pmove->PM_Info_ValueForKey( pmove->physinfo, "tfc" ) ) == 1 ? true : false;
 
 	// Spy that's feigning death cannot jump
 	if ( tfc && 
@@ -2422,7 +2424,7 @@ void PM_Jump (void)
 	}
 
 	// See if user can super long jump?
-	cansuperjump = false;	// hl64: empty physics info string
+	cansuperjump = atoi( pmove->PM_Info_ValueForKey( pmove->physinfo, "slj" ) ) == 1 ? true : false;
 
 	// Acclerate upward
 	// If we are ducking...
@@ -2560,7 +2562,7 @@ void PM_CheckFalling( void )
 		else if ( pmove->flFallVelocity > PLAYER_MAX_SAFE_FALL_SPEED / 2 )
 		{
 			qboolean tfc = false;
-			tfc = false;	// hl64: empty physics info string
+			tfc = atoi( pmove->PM_Info_ValueForKey( pmove->physinfo, "tfc" ) ) == 1 ? true : false;
 
 			if ( tfc )
 			{

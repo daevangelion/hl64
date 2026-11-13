@@ -215,10 +215,12 @@ static const wrects_t wrects[WPN_SLOTS] = {
 		{ 2, 48, 24, 24, 24 } },
 	[WEAPON_HANDGRENADE] = { { 0, 160, 0, 80, 20 }, { 0, 160, 20, 80, 20 },
 		{ 1, 36, 34, 18, 18 }, { -1 }, { -1 } },
+	[WEAPON_TRIPMINE] = { { 0, 160, 80, 80, 20 }, { 0, 160, 100, 80, 20 },
+		{ 1, 72, 34, 18, 18 }, { -1 }, { -1 } },
 };
 /* ammo type -> the weapon whose ammo icon it is (GetAmmoPicFromWeapon) */
 static const uint8_t ammo_weapon[MAX_AMMO_TYPES] = {
-	0, WEAPON_GLOCK, WEAPON_PYTHON, WEAPON_SHOTGUN, 0, WEAPON_HANDGRENADE
+	0, WEAPON_GLOCK, WEAPON_PYTHON, WEAPON_SHOTGUN, 0, WEAPON_HANDGRENADE, WEAPON_TRIPMINE
 };
 
 static void scale(const uint8_t c[3], int a, uint8_t out[3])

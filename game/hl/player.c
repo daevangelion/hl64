@@ -631,12 +631,12 @@ static const mon_vt_t player_mvt = {
 };
 
 /* "player" is never spawned from a record: the engine creates slot 1 and
- * calls game_player_spawn */
+ * calls game_player_spawn (GoldSrc's ClientPutInServer) */
 static int CBasePlayer_SpawnRecord(int e, gid_t16 gid)
 {
 	(void)e; (void)gid;
-	log_printf("game: player records are not spawned\n");
-	return -1;
+	return SpawnRefuse("player: the engine creates the client entity (ClientPutInServer), "
+		"a map's player entity is not spawned");
 }
 
 const game_class_t gc_PLAYER = {
@@ -729,7 +729,9 @@ void game_player_spawn(int e)
 	p->m_bitsHUDDamage = -1;
 	m->m_bitsDamageType = 0;
 	p->m_afPhysicsFlags = 0;
-	p->m_fLongJump = 0;
+	p->m_fLongJump = 0;	/* no longjump module */
+	phy_player_set_physinfo("slj", "0");
+	phy_player_set_physinfo("hl", "1");
 	m->m_flFieldOfView = 0.5f;
 	m->m_bloodColor = BLOOD_COLOR_RED;
 	p->m_flNextAttack = 0;	/* UTIL_WeaponTimeBase() */
@@ -1179,8 +1181,8 @@ static void Impulse101(void)
 	static const cls_t give[] = {
 		CLS_ITEM_SUIT, CLS_ITEM_BATTERY, CLS_WEAPON_CROWBAR, CLS_WEAPON_9MMHANDGUN,
 		CLS_AMMO_9MMCLIP, CLS_WEAPON_SHOTGUN, CLS_AMMO_BUCKSHOT, CLS_WEAPON_9MMAR,
-		CLS_AMMO_9MMAR, CLS_AMMO_ARGRENADES, CLS_WEAPON_HANDGRENADE, CLS_WEAPON_357,
-		CLS_AMMO_357,
+		CLS_AMMO_9MMAR, CLS_AMMO_ARGRENADES, CLS_WEAPON_HANDGRENADE, CLS_WEAPON_TRIPMINE,
+		CLS_WEAPON_357, CLS_AMMO_357,
 	};
 	unsigned i;
 
