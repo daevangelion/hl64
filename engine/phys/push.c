@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "hl64/ent.h"
+#include "hl64/rec.h"
 #include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/ent/ent.h"
@@ -128,11 +129,25 @@ static void undo(int upto)
 }
 
 /* Candidates: entities whose linked box meets [mins, maxs] (the pusher's
- * frame), ascending index, the pusher excluded. */
+ * frame), ascending index, the pusher excluded. Pending and dry records
+ * in the box hydrate first (architecture.md 6.4: moves wake the records
+ * in their box): GoldSrc's pusher meets every map entity, near the
+ * player or not (hldemo3's dish momentary_doors carry the func_pushable
+ * through the `on` trigger 1300 u from the control room). */
 static int gather(int e, const float mins[3], const float maxs[3])
 {
-	int n = ent_query_in(eng_frame_layer(), mins, maxs, ENT_Q_SOLID | ENT_Q_TRIGGER, P.found,
-		PUSH_MAX), i, j = 0;
+	const float *gm = eng_layer_origin(eng_frame_layer());
+	float gmins[3], gmaxs[3];
+	int n, i, j = 0, k;
+
+	for (k = 0; k < 3; k++)
+	{
+		gmins[k] = mins[k] + gm[k];
+		gmaxs[k] = maxs[k] + gm[k];
+	}
+	rec_wake_box(gmins, gmaxs);
+	n = ent_query_in(eng_frame_layer(), mins, maxs, ENT_Q_SOLID | ENT_Q_TRIGGER, P.found,
+		PUSH_MAX);
 
 	if (n == PUSH_MAX && !P.warned)
 	{

@@ -112,6 +112,7 @@ static struct {
 	uint32_t	settle_tick;		/* ... while one came in this tick */
 	uint8_t		near_failed;		/* open_fail counted for this approach */
 	uint8_t		near_dead;		/* ... and no retry until the next one */
+	uint32_t	wait_frame;		/* B's open waits on a held neighbour since (+1), 0 not */
 	int		lmap[HL64_WORLD_LAYERS];	/* open layers seen by map, -1 */
 	uint8_t		ready;			/* the selected seam's B is ready */
 	int		aliased;		/* seam whose twins are aliased */
@@ -733,10 +734,20 @@ static int neighbour(int si)
 			{
 				char why[96];
 
-				/* retried every frame: Rec releases N's entities by distance */
+				/* retried every frame: Rec releases N's entities by
+				 * distance. A wait until it holds up a switch (B's
+				 * changelevel touched or used: pending), then a failure */
 				snprintf(why, sizeof(why), "both layers in use: %s held=%d",
 					wld_map_name(N->map), live);
-				open_fail(si, why, 0);
+				if (S.pending == si)
+					open_fail(si, why, 0);
+				else if (!S.wait_frame)
+				{
+					S.wait_frame = eng_frame_count() + 1;
+					S.st.open_wait++;
+					log_printf("seam: open_wait %s->%s (%s)\n", wld_map_name(seam_from(si)),
+						wld_map_name(to), why);
+				}
 				return 0;
 			}
 			close_layer(N, 1);
@@ -748,6 +759,12 @@ static int neighbour(int si)
 		}
 		known_add(to);
 		log_printf("seam: open %s layer=%d\n", wld_map_name(to), L->slot);
+		if (S.wait_frame)
+		{
+			log_printf("seam: open_wait %s ended after %lu frames\n", wld_map_name(to),
+				(unsigned long)(eng_frame_count() + 1 - S.wait_frame));
+			S.wait_frame = 0;
+		}
 	}
 	known_add(to);
 	r = wld_layer_ready(L);
@@ -861,6 +878,7 @@ static void approach(int si)
 		}
 		S.near = si;
 		S.near_failed = S.near_dead = 0;
+		S.wait_frame = 0;
 		if (si >= 0)
 		{
 			S.st.approaches++;
@@ -1219,6 +1237,7 @@ void seam_new_game(int map)
 	S.near = S.armed = S.pending = S.aliased = S.pinned = -1;
 	S.why = NULL;
 	S.settle = S.have_eye = S.ready = S.near_failed = S.near_dead = S.cont_pending = 0;
+	S.wait_frame = 0;
 	memset(S.hle_open, 0, sizeof(S.hle_open));
 	memset(S.lmap, 0xFF, sizeof(S.lmap));
 	if (map >= 0)

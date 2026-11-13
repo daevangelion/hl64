@@ -1,0 +1,112 @@
+# hl64 M5 checkpoint oracle: uplink (test/m5/checkpoints.py oracle; old tree, black box)
+# cfg: ~/src/ports/quakegeneric/n64/port/test/uplink_route.cfg sha256 b672d4ab42667dbde9f2ce44cc414ea532b211927057117a728096c5d39e088e
+# log: /scratch/hl64/tmp/Gate/old-uplink/host-uplink-parity.log (route PASS (482.7 s))
+# run: n64/port/test/run_uplink_host_playthrough.sh (MODE=parity, 30 fps) on old tree d9ae231, 2026-11-13, rerun by M5Lead.Gate (the saved out/host-uplink-parity.log predates the cfg)
+cp waitmap hldemo1
+cp shot start
+cp stats hldemo1
+cp shot dome-scene
+cp waitmoved startele1
+cp waitclass weapon_9mmar -2000 -620 112 32
+cp shot elevator
+cp waitmap hldemo2
+switch hldemo1 hldemo2
+cp shot seam1-at
+cp waitmap hldemo2
+cp waitmoved startele1
+cp shot hldemo2-arrival
+cp waitmoved soda_room_door
+cp waitgone busted_pipes_cover
+cp waitgone busted_pipes_smoke
+cp shot duct-dark
+cp shot duct-flashlight
+cp stats flashlight-on
+cp shot vent-flashlight
+cp waitgone shotgun_ventbreak
+cp waitgone shotgun_ceiling
+cp stats flashlight-off
+cp stats flashlight-recharge
+cp waitgone zombie_crates
+cp waitmoved warehouse_gate_1
+cp waitmoved warehouse_crane
+cp shot grunts-fight
+cp stats hldemo2
+cp shot hldemo2-exit
+cp waitmap hldemo3
+switch hldemo2 hldemo3
+cp shot seam2-at
+cp waitmap hldemo3
+cp shot hldemo3-arrival
+cp stats hldemo3
+cp waitclass monster_human_grunt -672 -64 -512 16
+cp waitgone hellbox_exp_1
+cp waitmoved intro_domedoor_1
+cp waitmoved inner_domedoor
+cp waitmoved domelift
+cp waitglobal hldemo_global_dish_ms on
+cp shot dish-activated
+cp waitgone gauge_steam_hurt
+cp shot hldemo3-exit
+cp waitmap hldemo2
+switch hldemo3 hldemo2
+cp shot seam3-at
+cp waitmap hldemo2
+cp shot hldemo2-return
+cp stats hldemo2-return
+cp waitmoved 2nd_pass_broken_door
+cp shot elevator-return
+cp waitmap hldemo1
+switch hldemo2 hldemo1
+cp shot seam4-at
+cp waitmap hldemo1
+cp shot hldemo1-return
+cp stats hldemo1-return
+cp waitclass weapon_9mmar -2000 -620 112 32
+cp waitmoved startele1
+cp waitmoved nrcdoor
+cp waitgone zombie_cpu_script_trigger
+cp waitgone glimpse_garg
+cp waitgone pop
+cp waitgone vent_fall_crate_2
+cp waitgone garg_vent_break
+cp waitgone cpu_debris_3
+cp shot garg
+cp shot garg-look
+cp waitgone garg
+cp shot end-fade
+cp waitend
+end _oem_end_demo
+restart hldemo1
+cp shot end-restart
+cp pass
+waitnear 1 -2048 744 36 48 60 22
+waitnear 10 -452 -100 196 1 0 60
+waitnear 15 -266 384 178 6 10 106
+waitnear 15 -240 384 178 6 10 109
+waitnear 18 -229 566 178 6 10 126
+waitnear 19 16 568 426 12 20 130
+waitnear 26 1830 1072 -60 100 4 227
+waitnear 26 2352 1170 196 40 5 240
+waitnear 26 2466 780 0 90 4 253
+waitnear 32 -438 -576 -476 1 0 305
+waitnear 41 688 0 -476 4 20 411
+waitnear 42 -8 -272 -1188 8 15 430
+waitnear 42 -404 -344 -1187.5 16 8 441
+waitnear 42 -490 -344 -1187.5 16 4 442
+waitnear 42 -404 -344 -1187.5 16 8 452
+waitnear 42 -104 -344 -1187.5 16 8 453
+waitnear 42 190 -1736 -764 24 20 488
+waitnear 42 170 -1870 -782 32 6 497
+waitnear 46 2528 -48 -348 1 0 529
+waitnear 48 2228 -200 -366 24 8 542
+waitnear 48 2228 -456 -348 10 8 544
+waitnear 48 2208 -456 75 20 8 548
+waitnear 49 1700 960 -60 40 8 586
+waitnear 49 890 -440 196 40 12 597
+waitnear 49 -282 -206 196 24 20 628
+waitnear 49 -470 -130 196 40 6 637
+waitnear 53 -2488 -100 196 1 0 657
+waitnear 62 1200 -232 400 40 30 704
+waitnear 62 2083 -232 518 6 60 706
+waitnear 62 2072 64 482 16 20 709
+waitnear 67 -3248 2656 48 80 10 727

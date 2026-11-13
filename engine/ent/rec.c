@@ -2755,6 +2755,21 @@ static void pump(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, uint32_t 
 	}
 }
 
+/* e stands on a pusher that is moving: the pusher carries it this frame
+ * and wakes it again if released (push.c gather), so it stays (hldemo3's
+ * func_pushable on the dish momentary_doors, 1300 u from the player). */
+static int rides_moving_pusher(int e)
+{
+	int g = ent_phys(e)->groundentity;
+	const ent_mot_t *mo;
+
+	if (!(ent_cv(e)->flags & FL_ONGROUND) || g == ENT_NONE || !ent_is_live(g)
+		|| ent_cv(g)->movetype != MOVETYPE_PUSH)
+		return 0;
+	mo = ent_mot(g);
+	return memcmp(mo->velocity, zero3, sizeof(zero3)) || memcmp(mo->avelocity, zero3, sizeof(zero3));
+}
+
 /* One release batch of a slot every 0.1 s: live entities whose box is
  * beyond 1024 u of every anchor dehydrate, at least REC_RELEASE_BATCH
  * tries, more while the budget lasts; a refusal waits 0.5 s. 1 when a
@@ -2788,6 +2803,8 @@ static int release_pass(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, ui
 		if (a < n)
 			continue;
 		if ((double)R.retry[e] > now && (double)R.retry[e] <= now + REC_RELEASE_RETRY)
+			continue;
+		if (rides_moving_pusher(e))
 			continue;
 		if (tried >= REC_RELEASE_BATCH && !budget_left(t0, *done))
 			break;

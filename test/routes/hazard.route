@@ -9,7 +9,10 @@
 # waitmap for the next map. Conversion: the old `god` (no argument) is
 # `god 1` (the generator's rule: set, never toggle); the old `hl_trace 1`
 # (an old-engine console switch logging entity fires) has no route op and
-# is dropped. Positions are map-local.
+# is dropped. Positions are map-local. The old walk booted with `map t0a0`
+# on the runner's command line (run_hl_walk_host.sh); here that is the
+# route's `startmap t0a0` (without it New Game boots the campaign start).
+startmap t0a0
 # ---- t0a0 (visit 1/8)
 waitmap t0a0 300
 -duck
@@ -313,7 +316,19 @@ wait 0.4
 -duck
 stats t0a0b1-walked
 -duck
-setpos -916 828 -122 0 0
+# M5: -916 828 -122 -> -853 828 -97: the generator's hop lands "through the
+# seam's trigger into its switch box"; -916 is the trigger's centre (the
+# Oct 16 walk this route was converted from switched there at once), but the
+# c7 cook narrows t0a0b12's switch (eye) box to x -856..-824 (views of t0a0b1
+# and t0a0b2 disagree west of it), and the old generator's current walk does
+# the same: it walks from -916 828 -122 east through the trigger to
+# -853 828 -97 (/scratch/quakegeneric/tmp/OldGreen3/gates/h32/hz/
+# hl-walk-t0a0_.cfg, "closed seam, 13 hops"); this hop is that walk's last
+# point. Both points touch the trigger_changelevel brush (x -1016..-816,
+# y 824..832; GoldSrc fires on touch anywhere in it: HLSDK
+# CChangeLevel::TouchChangeLevel), so the GoldSrc behaviour is the same; at
+# -916 the seam only switched as forced after 1 s.
+setpos -853 828 -97 0 0
 # ---- t0a0b2 (visit 4/8)
 waitmap t0a0b2 300
 -duck

@@ -159,8 +159,9 @@
 #define HL64_DEHYDRATE_KB		64	/* dehydrate store */
 /* Measured (ares, test/m3/snd_ares.sh): 78144 B peak = tables 3424 + AUDIO
  * bounce 2048 + 16 voice buffers (4096 + VADPCM state 48 + arena header)
- * + 10 open wav64 (state, codebook); x 1.25 = 97680 B. */
-#define HL64_SOUND_KB			96
+ * + 10 open wav64 (state, codebook). M5 hazard route on ares: 80272 B peak
+ * x 1.25 = 100340 B (test/run/m5.sh region table). */
+#define HL64_SOUND_KB			100
 #define HL64_SPRITE_CACHE_KB		64
 /* Decal region: HLSDK sheet (29856 B) + 96 x 24 piece vertices (23040 B)
  * + 2 per-map placed-decal (infodecal) sheet slots of the largest map's

@@ -1624,10 +1624,13 @@ int wld_spawn_resident(int slot, const float box[6], int sub)
 	if (!L)
 		return 1;
 	spawn_cells(L, box, sub, &w);
-	if (!cells_resident(L, w.r))
-		return 0;
 	if (w.sub < 0)
-		return 1;
+		return cells_resident(L, w.r);
+	/* a brush record: its own submodel only. A brush entity's Spawn
+	 * traces nothing (HLSDK InitTrigger, CBaseDoor::Spawn,
+	 * CBreakable::Spawn: SET_MODEL + UTIL_SetOrigin); the world cells
+	 * around it stay a prefetch (a trigger_hurt spanning 40 cells of a
+	 * map opened beside a full collision pool never landed them) */
 	md = &L->models[w.sub];
 	for (c = 0; c < md->coll_count && md->coll_first + c < L->dir->ncoll; c++)
 		if (!resident(L, L->dir->coll_first + (int)(md->coll_first + c)))
