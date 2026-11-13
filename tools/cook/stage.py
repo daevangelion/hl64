@@ -32,11 +32,15 @@ sounds are derived from those maps' entity lumps, the class table
                         <staging>/maps/<m>.wci4 (embedded and WAD
                         textures), hlecook -> <m>.hle, tools/w64c/touchrank.py
                         (trigger touch ranks into the .hle),
-                        tools/w64c/w64c.py (docs/formats/w64-format.md)
+                        tools/w64c/hleids.py (class / key / typed value ids
+                        into the .hle, from the id spaces restab gives the
+                        staged names), tools/w64c/w64c.py
+                        (docs/formats/w64-format.md)
   maps/campaign.cwg     tools/cook/hl_campaign.py graph + tools/w64c/w64seam.py
                         seams (docs/formats/cwg-format.md)
 
-`make cook` then runs tools/restab over the directory (campaign.rtb).
+`make cook` then runs tools/restab over the directory (campaign.rtb) and
+`tools/w64c/hleids --check` (the packages' ids equal the final table's).
 Intermediates (.wci4, .hle, the unproved graph, hl_hud_rects.h generated
 from the player's hud.txt, converted sounds) stay in the staging directory.
 Rerunning rewrites the same bytes and touches nothing unchanged; files a
@@ -70,6 +74,7 @@ from tools.cook import hl_sprite_cook
 from tools.cook.data import Data, DataError
 from tools.cook.hl_classes import BspError
 from tools.restab import restab, rtb
+from tools.w64c import hleids
 
 ROOT = Path(__file__).resolve().parents[2]
 PY = sys.executable
@@ -408,7 +413,7 @@ def stage_sounds(data: Data, maps: List[str], ents, models: Dict[str, bytes],
 
 
 def cook_world(data: Data, maps: List[str], ct: Content, staging: Path, hlecook: Path,
-               ref_palette_path: Optional[Path], jobs: int) -> None:
+               ref_palette_path: Optional[Path], jobs: int, ids: hleids.Ids) -> None:
     cook = staging / "maps"
     cook.mkdir(parents=True, exist_ok=True)
     out_dir = ct.root / "maps"
@@ -427,6 +432,9 @@ def cook_world(data: Data, maps: List[str], ct: Content, staging: Path, hlecook:
         run(tex, env=env, cwd=ROOT)
         run([hlecook, bsp, cook / f"{m}.hle"])
         run([PY, "-m", "tools.w64c.touchrank", bsp, cook / f"{m}.hle"], env=env, cwd=ROOT)
+        hle = cook / f"{m}.hle"
+        log(f"+ hleids {hle}")
+        hle.write_bytes(hleids.apply(hle.read_bytes(), ids, m))
         run([PY, "-m", "tools.w64c.w64c", bsp, cook / f"{m}.wci4", out_dir / f"{m}.w64",
              "--hle", cook / f"{m}.hle", "--materials", materials,
              "--json", cook / f"{m}.json"], env=env, cwd=ROOT,
@@ -471,6 +479,8 @@ def verify(data: Data, maps: List[str], ents, ct: Content) -> List[str]:
         raw = w64_ents(ct.root / "maps" / f"{m}.w64")
         if not raw.startswith(b"HLE1"):
             fails.append(f"{m}.w64 has no HLE1 entity chunk")
+        elif not struct.unpack_from("<H", raw, 6)[0] & hleids.HLE_F_IDS:
+            fails.append(f"{m}.w64 entity chunk has no ids")
         src = {e.get("classname", "") for e in ents[m]}
         for cls in ("multi_manager", "trigger_changelevel", "info_landmark",
                     "info_teleport_destination"):
@@ -558,14 +568,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         stage_decals(data, ct)
         log("== palettes, HUD and UI -> gfx/ ==")
         stage_2d(data, ct, staging, ref)
+        log("== HLE1 id spaces (restab names) ==")
+        ids = hleids.Ids.from_table(restab.cook(str(content), str(a.defs), maps),
+                                    hleids.read_keys_def(str(a.defs)))
         log("== world packages -> maps/*.w64 ==")
-        cook_world(data, maps, ct, staging, a.hlecook.resolve(), a.ref_palette, a.jobs)
+        cook_world(data, maps, ct, staging, a.hlecook.resolve(), a.ref_palette, a.jobs, ids)
         log("== campaign graph + seams -> maps/campaign.cwg ==")
         cook_campaign(data, maps, ct, staging)
         log("== verification ==")
         fails = verify(data, maps, ents, ct)
         stale = ct.finish()
-    except (CookError, DataError, BspError, OSError) as e:
+    except (CookError, DataError, BspError, OSError, hleids.IdError, restab.CookError) as e:
         print(f"stage: error: {e}", file=sys.stderr)
         return 1
     for f in fails:

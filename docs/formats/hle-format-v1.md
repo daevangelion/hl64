@@ -10,10 +10,11 @@ chunk ([w64-format.md](w64-format.md)); the engine's record module
 (`engine/ent`, architecture.md 6.4) uses it in place after one
 endian/validation pass (`hle_fixup`).
 
-hl64 extends the cook in M1 so that string-valued keys arrive as ids
-(`name_t`, `res_t`, sentence and pattern ids from
-[rtb-format.md](rtb-format.md)); until then the layout below is the cooked
-byte format.
+hl64's cook writes cooked ids into the chunk (section "Ids" below:
+`tools/w64c/hleids.py`, the HLE1 id step): classes, key names and the
+string-valued keys arrive as `cls_t`, key ids, `res_t`, pattern, global-state
+and title ids from [rtb-format.md](rtb-format.md); names stay name indices.
+The engine accepts only chunks that carry them.
 
 ## Layout
 
@@ -25,18 +26,18 @@ All offsets are bytes from the chunk start; every section starts 4-aligned
 | header | `hle_header_t` (96 B) | — | magic, version, flags, sizes, offsets |
 | records | `hle_rec_t` (24 B) | `numrecs` | kept entities, BSP lump order |
 | lump2rec | u16 | `numlumps` | BSP lump → record, 0xFFFF = not kept |
-| classes | `{u32 str; u16 flags; u16 pad}` | `numclasses` | classname string + `HLE_CF_*` |
-| keynames | `{u32 str; u16 kind; u16 pad}` | `numkeynames` | interned key names + value kind |
+| classes | `{u32 str; u16 flags; u16 id}` | `numclasses` | classname string + `HLE_CF_*`; `id` = classes.def id |
+| keynames | `{u32 str; u16 kind; u16 id}` | `numkeynames` | interned key names + value kind; `id` = keys.def id |
 | names | `{u32 str; u16 first, count; u16 flags, pad}` | `numnames` | targetname-like strings → lumplist slice |
 | hash | u16 | `hashsize` (pow2) | open-addressed FNV-1a of name strings → name index |
-| keys | `{u16 kn; u16 pad; u32 val}` | `numkeys` | typed key values |
+| keys | `{u16 kn; u16 id; u32 val}` | `numkeys` | typed key values; `id` = the value's cooked id |
 | lumplist | u16 | `numlumplist` | name lists, then multisource input lists (BSP lumps) |
 | fire | `{u16 name; u16 pad; f32 delay}` | `numfire` | multi_manager fire lists, sorted by delay |
 | floats | f32 | `numfloats` | vec3 values |
 | strings | bytes | `strsize` | names region `[0, namestr_end)`, then other strings |
 
 `hle_rec_t`: `lump` (BSP entity index), `cls`, `tname` (name index of the
-targetname, 0xFFFF none), `flags`, `key_first`/`key_count`,
+targetname, 0xFFFF none), `flags`, `key_first`/`key_num`,
 `aux_first`/`aux_count` (fire list when `HLE_RF_AUXFIRE`, else lumplist —
 the multisource inputs), and three streaming fields: `sector` (0xFFFF =
 global), `trank` (cooked trigger touch rank, specs/area-links-and-touch.md
@@ -73,6 +74,44 @@ every multi-byte field once when the chunk's order differs from the host
 count and index (hostile-input safe; idempotent). The cook writes little
 endian; the cart fixes the order once when the chunk is opened.
 
+## Ids
+
+Written by the id step after `touchrank`, before `w64c` packs the chunk
+(`tools/cook/stage.py`); header flag `HLE_F_IDS` (2) says it ran. The step
+only writes the three `id` fields and the flag; every offset and string
+stays, so `rec_key_str` keeps working at spawn time.
+
+- `class.id`: line order of the classname in `game/defs/classes.def`
+  (case-insensitive), 0xFFFF for a class the game lacks.
+- `keyname.id`: line order of the key name in `game/defs/keys.def`
+  (exact); a key the cook keeps that keys.def lacks stops the cook.
+- `key.id` by value kind, 0xFFFF when none:
+  - `HLE_KS`: `pattern` → lightstyle pattern id; `globalstate` →
+    global-state id; monstermaker `monstertype` → classes.def id;
+    env_message `message`, worldspawn `chaptertitle` → title id (0xFFFF
+    when titles.txt lacks it: the game shows the string); a resource value
+    → `res_t`: model / sprite / sound names as restab names them, `*N` →
+    `RES_K_SUBMODEL` index N (the runtime ORs the slot: `RES_SUBMODEL(slot,
+    N)`), `!NAME` in `message`, `sentence`, `noise*`, `UseSentence`,
+    `UnUseSentence` → `RES_K_SENTENCE`, a speaker's `message` (no `preset`)
+    and a talk monster's plain `UseSentence` / `UnUseSentence` →
+    `RES_K_GROUP`.
+  - `HLE_KN`: the classes.def id when the name is a classname
+    (`m_iszEntity "monster_barney"`).
+  - `HLE_KF`, `HLE_KV`: 0xFFFF.
+
+The ids come from the campaign resource table's name sections. The table
+lists the map packages (whose CRCs depend on the chunk), so the stage asks
+restab for the id spaces first (`restab.cook` with the map list and no
+packages: ids depend on names only) and `make cook` checks afterwards
+(`hleids --check`) that the final `campaign.rtb` gives every packaged chunk
+identical ids and that every `res_t` lies in the table and inside its cart
+file (precache-and-resources.md R2). The engine (`engine/ent/rec_hle.c`)
+rejects a chunk without `HLE_F_IDS`, an id outside its space (classes,
+keys.def, patterns, global states, titles, each `res_t` kind's count,
+submodels of the layer), a lump map that disagrees with its record, and
+name / multisource lists naming dropped lumps.
+
 ## Cook rules
 
 - Classes: only `hle_classes[]` (what the native game spawns); others are
@@ -102,9 +141,10 @@ endian; the cart fixes the order once when the chunk is opened.
   `CMultiSource::Register` order); multi_manager fire lists (stable sort by
   delay, HLSDK bubble sort order).
 
-## Runtime requirements (hl64 `engine/ent`)
+## Runtime requirements (hl64 `engine/ent/rec.c`)
 
-- Up to 4 resident chunks (the HLE slots of architecture.md 5.3); global
+- Up to 4 resident chunks (the HLE slots of architecture.md 5.3, the same
+  slot number as the world layer); global
   record id `gid = slot << 10 | lump`, carried in the entity's `id`
   component (architecture.md 6.2); names resolve in the caller's source
   map, callers without one use the home map (cross-map `changetarget`
@@ -114,10 +154,13 @@ endian; the cart fixes the order once when the chunk is opened.
   a small per-record state block plus a class handler; point records are
   queried by name or class.
 - Delays (multi_manager steps, CBaseDelay `delay`, fire-and-die, logic
-  thinks) run from a bounded 128-entry timer queue in µs, serviced at the
+  thinks) run from a bounded 128-entry timer queue holding the f32
+  nextthink HLSDK would write (specs/think-and-time.md 5), serviced at the
   start of the game frame — no helper entities are created for them.
 - The `mem` debug command reports per-map chunk / record / runtime bytes and
-  the timer peak.
+  the timer peak. Measured (hl64 cook, M3): hldemo1 48,912 B chunk (447
+  records: 166 logic, 275 physical) + 14,278 B runtime (24 B per record,
+  16 B per logic record, the pending list); hldemo2 44,624 B (420 records).
 
 ## Node graph (`HLN1`, optional tail)
 

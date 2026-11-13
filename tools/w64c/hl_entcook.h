@@ -43,6 +43,7 @@
 #define HLE_MAGIC_SW	0x484C4531u	/* the same bytes on the other order */
 #define HLE_VERSION	1
 #define HLE_F_BIGENDIAN	1		/* header.flags: multi-byte fields BE */
+#define HLE_F_IDS	2		/* the id step ran: class / keyname / key ids */
 
 #define HLE_NONE	0xFFFFu		/* u16 "no index" */
 #define HLE_MAX_LUMP	1024		/* lump < 1024: gid = slot << 10 | lump */
@@ -86,7 +87,7 @@ typedef struct
 	uint16_t	cls;		/* class index */
 	uint16_t	tname;		/* name index of targetname, HLE_NONE */
 	uint16_t	flags;		/* HLE_CF_* of the class | HLE_RF_* */
-	uint16_t	key_first, key_count;
+	uint16_t	key_first, key_num;
 	uint16_t	aux_first, aux_count;	/* multi_manager: fire[];
 						   multisource: lumplist[] */
 	uint16_t	sector;		/* streaming sector, HLE_NONE = global */
@@ -97,13 +98,15 @@ typedef struct
 typedef struct
 {
 	uint32_t	str;
-	uint16_t	flags, pad;
+	uint16_t	flags;
+	uint16_t	id;		/* classes.def id (cls_t), 0xFFFF none */
 } hle_class_t;
 
 typedef struct
 {
 	uint32_t	str;
-	uint16_t	kind, pad;
+	uint16_t	kind;
+	uint16_t	id;		/* keys.def id (key_t16) */
 } hle_keyname_t;
 
 typedef struct
@@ -113,10 +116,14 @@ typedef struct
 	uint16_t	flags, pad;
 } hle_name_t;
 
+/* key.id (HLE_F_IDS, hle-format-v1.md "Ids"): HLE_KS values: res_t of a
+ * resource value (submodel '*N' as RES_K_SUBMODEL index N), the pattern id
+ * of a `pattern` key, the global-state id of a `globalstate` key; HLE_KN
+ * values: the classes.def id of a classname value; 0xFFFF none */
 typedef struct
 {
 	uint16_t	kn;		/* keyname index */
-	uint16_t	pad;
+	uint16_t	id;		/* typed id, 0xFFFF none */
 	uint32_t	val;
 } hle_key_t;
 
@@ -190,12 +197,14 @@ static inline void hle_swap_body (uint8_t *b, const hle_header_t *h, int to_host
 		hle_class_t *c = (hle_class_t *)(b + h->ofs_classes) + i;
 		c->str = hle_sw32 (c->str);
 		c->flags = hle_sw16 (c->flags);
+		c->id = hle_sw16 (c->id);
 	}
 	for (i = 0; i < h->numkeynames; i++)
 	{
 		hle_keyname_t *k = (hle_keyname_t *)(b + h->ofs_keynames) + i;
 		k->str = hle_sw32 (k->str);
 		k->kind = hle_sw16 (k->kind);
+		k->id = hle_sw16 (k->id);
 	}
 	for (i = 0; i < h->numnames; i++)
 	{
@@ -215,6 +224,7 @@ static inline void hle_swap_body (uint8_t *b, const hle_header_t *h, int to_host
 	{
 		hle_key_t *k = (hle_key_t *)(b + h->ofs_keys) + i;
 		k->kn = hle_sw16 (k->kn);
+		k->id = hle_sw16 (k->id);
 		k->val = hle_sw32 (k->val);
 	}
 	hle_sw16a (b + h->ofs_lumplist, h->numlumplist);
@@ -314,7 +324,7 @@ static inline const char *hle_fixup (void *blob, uint32_t len)
 		const hle_rec_t *r = (const hle_rec_t *)(b + h->ofs_recs) + i;
 		if (r->lump >= h->numlumps || r->cls >= h->numclasses
 			|| (r->tname != HLE_NONE && r->tname >= h->numnames)
-			|| (uint32_t)r->key_first + r->key_count > h->numkeys)
+			|| (uint32_t)r->key_first + r->key_num > h->numkeys)
 			return "record index out of range";
 		if ((uint32_t)r->aux_first + r->aux_count
 			> ((r->flags & HLE_RF_AUXFIRE) ? h->numfire : h->numlumplist))
@@ -521,6 +531,16 @@ static const struct { const char *name; uint16_t kind; } hle_xkeys[] = {
 	{"pitchstart",HLE_KF}, {"spinup",HLE_KF}, {"spindown",HLE_KF},
 	{"fadein",HLE_KF}, {"fadeout",HLE_KF}, {"volstart",HLE_KF},
 	{"lfotype",HLE_KF}, {"type",HLE_KF}, {"damagetype",HLE_KF},
+	/* M3 (game/defs/keys.def appends): the switchable lightstyle pattern,
+	 * door / button sound-set indices, breakable gibs, env_shooter,
+	 * pushables, ambient_generic LFO / spin-up, worldspawn */
+	{"pattern",HLE_KS}, {"locked_sound",HLE_KF}, {"unlocked_sound",HLE_KF},
+	{"locked_sentence",HLE_KF}, {"unlocked_sentence",HLE_KF},
+	{"gibmodel",HLE_KS}, {"shootsounds",HLE_KF}, {"healthvalue",HLE_KF},
+	{"buoyancy",HLE_KF}, {"lforate",HLE_KF}, {"lfomodpitch",HLE_KF},
+	{"lfomodvol",HLE_KF}, {"cspinup",HLE_KF}, {"startdark",HLE_KF},
+	{"WaveHeight",HLE_KF}, {"MaxRange",HLE_KF}, {"chaptertitle",HLE_KS},
+	{"gametitle",HLE_KF}, {"m_flRepeat",HLE_KF}, {"m_iFinishSchedule",HLE_KF},
 	{NULL, 0}
 };
 
@@ -1263,7 +1283,7 @@ static const char *hle_build (const char *src, int len, int big_endian,
 			if (e->nfire)
 				rec.flags |= HLE_RF_AUXFIRE;
 			rec.key_first = (uint16_t)keyi;
-			rec.key_count = (uint16_t)e->nkv;
+			rec.key_num = (uint16_t)e->nkv;
 			rec.sector = HLE_NONE;
 			rec.trank = HLE_NONE;	/* touchrank fills it after the cook */
 			if (e->nfire)
@@ -1426,7 +1446,7 @@ static const char *hle_build (const char *src, int len, int big_endian,
 
 			cl.str = cofs[i];
 			cl.flags = clsflags[i];
-			cl.pad = 0;
+			cl.id = HLE_NONE;	/* the id step (tools/w64c/hleids.py) */
 			hlec_put (&b, &cl, sizeof (cl));
 		}
 		/* keynames */
@@ -1438,7 +1458,7 @@ static const char *hle_build (const char *src, int len, int big_endian,
 
 			kn.str = kofs[i];
 			kn.kind = hlec_keykind (keynames.v[i]);
-			kn.pad = 0;
+			kn.id = HLE_NONE;
 			hlec_put (&b, &kn, sizeof (kn));
 		}
 		/* names */
@@ -1503,7 +1523,7 @@ static const char *hle_build (const char *src, int len, int big_endian,
 					float		f[3];
 
 					key.kn = (uint16_t)hlec_pool_find (&keynames, e->kv[j].k);
-					key.pad = 0;
+					key.id = HLE_NONE;
 					switch (e->kv[j].kind)
 					{
 					case HLE_KF:

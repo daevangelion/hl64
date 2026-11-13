@@ -874,7 +874,9 @@ static void scan_ents(wld_layer_t *L)
 {
 	const char *file = maps[L->map].name;
 	const w64_chunk_t *ck;
-	uint8_t *b = mem_region(MEM_HLE_BLOBS);
+	/* scratch, not the HLE region: engine/ent/rec.c keeps the open slots'
+	 * chunks there */
+	uint8_t *b = mem_region(MEM_SCRATCH);
 	uint32_t size, nrecs, nkn, nkeys, nfloats, strsize, ncls;
 	uint32_t o_recs, o_cls, o_kn, o_keys, o_floats, o_str, i, k;
 	int kn_model = -1, kn_origin = -1, kn_angles = -1, kn_rmode = -1;
@@ -884,7 +886,7 @@ static void scan_ents(wld_layer_t *L)
 		return;
 	ck = &L->chunks[L->dir->ents_chunk];
 	size = ck->size;
-	if (size > mem_region_bytes(MEM_HLE_BLOBS) || size < 96)
+	if (size > mem_region_bytes(MEM_SCRATCH) || size < 96)
 		bad(file, ck->ofs, "ENTS size");
 	io_read_sync(b, L->rom + ck->ofs, (size + 1) & ~1u);
 	if (le32(b) != 0x31454C48u || le16(b + 4) != 1 || (le16(b + 6) & 1) || le32(b + 8) > size)
@@ -969,7 +971,11 @@ static void scan_ents(wld_layer_t *L)
 			else if ((int)kn == kn_pattern && (uint64_t)o_str + val < size)
 				pattern = val;
 		}
-		if (hle_str(b, size, o_str, le32(b + o_cls + 8 * cls), "info_player_start"))
+		/* the first info_player_start in lump order: HLSDK
+		 * EntSelectSpawnPoint (single player, no startspot) takes
+		 * UTIL_FindEntityByClassname(NULL, ...) */
+		if (!L->has_start
+			&& hle_str(b, size, o_str, le32(b + o_cls + 8 * cls), "info_player_start"))
 		{
 			memcpy(L->start_org, org, sizeof(org));
 			memcpy(L->start_ang, ang, sizeof(ang));

@@ -54,6 +54,19 @@ int		rec_key_v(gid_t16 gid, key_t16 k, float out[3]);
 name_t		rec_key_name(gid_t16 gid, key_t16 k);	/* NAME_NONE absent */
 res_t		rec_key_res(gid_t16 gid, key_t16 k);	/* RES_NONE absent */
 const char	*rec_key_str(gid_t16 gid, key_t16 k);	/* NULL absent; spawn only */
+/* Cooked typed ids (hle-format-v1.md "Ids"): global-state id of a
+ * `globalstate` key, lightstyle pattern id of a `pattern` key (letters:
+ * res_pattern), -1 when absent; classes.def id of a name key whose value
+ * is a classname (m_iszEntity "monster_barney"), CLS_NONE otherwise.
+ * rec_key_name also resolves a string key whose value is a name of the
+ * record's map (changelevel / landmark message, netname): spawn only. */
+int		rec_key_global(gid_t16 gid, key_t16 k);
+/* env_message `message` / worldspawn `chaptertitle`: title id
+ * (res_title), -1 when absent or not in titles.txt (rec_key_str then has
+ * the text GoldSrc would show). */
+int		rec_key_title(gid_t16 gid, key_t16 k);
+int		rec_key_pattern(gid_t16 gid, key_t16 k);
+cls_t		rec_key_cls(gid_t16 gid, key_t16 k);
 /* Key iteration for the game's KeyValue dispatch (multi_manager targets
  * arrive as the fire list, not keys): i < rec_key_count(gid). */
 int		rec_key_count(gid_t16 gid);
@@ -86,6 +99,19 @@ name_t		rec_name_in(name_t n, int slot);
 int		rec_next_named(name_t n, int *it);
 /* A runtime entity takes a map name (monstermaker netname). */
 void		rec_name_hold(int e, name_t n);
+/* A name string of HLE slot `slot` (HLE hash), NAME_NONE when the map has
+ * no such name; spawn only (monstermaker netname). */
+name_t		rec_name_find(int slot, const char *s);
+/* The slot's HLN1 node graph (hle-format-v1.md "Node graph"), validated
+ * and in host byte order (tools/w64c/hl_nodecook.h HLN_FORMAT_ONLY
+ * structs); NULL when the map has none. */
+const void	*rec_node_graph(int slot, uint32_t *size);
+
+/* Pending-record wake (area-links-and-touch.md 3 "Pending-record wake",
+ * architecture.md 6.4): hydrate the pending records of every open slot
+ * whose cooked box meets the GLOBAL box (links with touch, moves);
+ * returns the number hydrated. */
+int		rec_wake_box(const float gmins[3], const float gmaxs[3]);
 
 /* HLSDK FireTargets: every live / woken entity with the name gets
  * game_use; logic records get game_logic_use; caller is an entity slot or
@@ -126,8 +152,9 @@ void		rec_fire_at(float t, name_t target, name_t killtarget, int activator,
 int		rec_map_open(int layer);
 void		rec_map_close(int slot);
 /* New Game: open the start map, spawn its logic and its records within
- * the spawn radius of the player start, run the settle frames
- * (think-and-time.md 6). */
+ * the spawn radius of the player start, in entity order, at time 1.0; the
+ * loop's next two frames are the settle frames (think-and-time.md 6,
+ * eng_clock_new_game). */
 void		rec_new_campaign(int map);
 /* Step 8: hydration pump / release under the entity budget around the
  * anchors (global positions). */
@@ -162,19 +189,47 @@ void		res_init(void);
 int		res_count(int kind);
 /* Cart file and byte range of a file-kind id; 0 bad id. */
 int		res_file(res_t r, int *file, uint32_t *ofs, uint32_t *size);
+/* PI address and size of a cart file of the table (resolved once at
+ * res_init); 0 for a bad index. */
+uint32_t	res_file_rom(int file, uint32_t *size);
 uint8_t		res_flags(res_t r);		/* MODEL: EXTTEX, sequence groups */
 /* game/defs/res.def line -> res_t (DEFS section); RES_NONE when absent. */
 res_t		res_def(int line);
 /* pfnModelFrames: sprite frame count (cooked .sc4 header), studio model
  * body combinations (studio_body_count), 1 for brush models / none. */
 int		res_model_frames(res_t r);
-/* Residency interest (precache-and-resources.md 2): never fails. */
+/* Residency interest (precache-and-resources.md 2): never fails;
+ * res_interest tells the residency owners (studio, sound) it was declared. */
 void		res_precache(res_t r);
+int		res_interest(res_t r);
 /* Sentence words and groups (rtb SENT / WORD / SGRP). */
+typedef struct {
+	res_t		res;		/* SOUND */
+	uint8_t		pitch, volume, start, end, time, pad;
+} res_word_t;			/* 8; sound.md 4 modifiers */
 int		res_sentence_words(uint16_t sentence, int *first);
+const res_word_t *res_word(int i);	/* NULL out of range */
 int		res_group(uint16_t group, uint16_t *first_sentence);
-/* Lightstyle pattern letters (0..25), length. */
+/* Lightstyle pattern letters (0..25), length; NULL bad id. */
 const uint8_t	*res_pattern(uint16_t pattern, int *len);
+int		res_patterns(void);		/* PATN count */
+int		res_globals(void);		/* global-state ids (GLOB count) */
+int		res_classes(void);		/* classes.def lines (CLAS count) */
+/* titles.txt messages (rtb TITL / TTXT; HLSDK client_textmessage_t):
+ * title id = staged titles.txt order; env_message `message` and worldspawn
+ * `chaptertitle` keys carry it (rec_key_title). */
+typedef struct {
+	float		x, y;		/* -1 = centred */
+	float		fadein, fadeout, holdtime, fxtime;
+	uint32_t	text;		/* offset in the text pool (res_title_text) */
+	uint16_t	text_len;	/* bytes, NUL not counted */
+	uint8_t		effect;		/* 0 fade, 1 flicker, 2 write-out */
+	uint8_t		pad;
+	uint8_t		color1[4], color2[4];	/* r g b a */
+} res_title_t;			/* 40 */
+const res_title_t *res_title(uint16_t id);	/* NULL bad id */
+const char	*res_title_text(uint16_t id);	/* NUL-terminated, NULL bad id */
+int		res_titles(void);
 /* Host / debug builds: the name of an id ("" on the cart). */
 const char	*res_name(res_t r);
 

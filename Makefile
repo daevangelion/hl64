@@ -51,7 +51,7 @@ GAME_SRC := game/pm/pm_shared.c game/pm/pm_math.c game/pm/pm_host.c game/hl/play
 # (merges stay trivial; local://M3-contract.md).
 ENGINE_SRC_ENT := engine/ent/heap.c engine/ent/pass.c engine/ent/priv.c
 ENGINE_SRC_PHYS :=
-ENGINE_SRC_REC :=
+ENGINE_SRC_REC := engine/ent/rec.c engine/ent/rec_hle.c engine/res/res.c engine/res/rtb.c
 ENGINE_SRC_STUDIO :=
 ENGINE_SRC_SND :=
 ENGINE_SRC_FX :=
@@ -95,7 +95,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest area pmtest enttest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest area pmtest enttest rectest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -259,6 +259,14 @@ $(PM_BIN): $(PM_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 pmtest: $(PM_BIN)
 
+# Records / resources driver (test/m3/rec_test.c, run by test/m3/rec.py).
+REC_BIN := $(BUILD_DIR)/host/hl64-rec
+REC_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m3/rec_test.o
+$(REC_BIN): $(REC_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+rectest: $(REC_BIN)
+
 # ---- content, routes, gates --------------------------------------------------
 
 # Host cook tool (native, not HOST_M32): BSP30 entity lump -> HLE1 + HLN1.
@@ -274,6 +282,7 @@ cook: $(HLECOOK)
 		--hlecook $(HLECOOK) $(if $(MAPS),--maps $(foreach m,$(MAPS),'$(m)')) \
 		$(if $(HL64_REF_PALETTE),--ref-palette '$(HL64_REF_PALETTE)'))
 	python3 -m tools.restab.restab --content $(HL64_CONTENT) --defs game/defs -o $(HL64_CONTENT)/campaign.rtb
+	$(if $(HL64_DATA),python3 -m tools.w64c.hleids --check $(HL64_CONTENT) --defs game/defs)
 
 ROUTES := $(wildcard test/routes/*.route)
 routes: cook
@@ -289,7 +298,7 @@ test-host: $(HLECOOK)
 	python3 -m unittest tools.restab.test_restab tools.routec.test_routec
 	HL64_HLECOOK=$(HLECOOK) python3 -m unittest tools.cook.test_cook tools.cook.test_hl_campaign \
 		tools.w64c.test_w64c tools.w64c.test_w64check tools.w64c.test_w64seam \
-		tools.w64c.test_hlecook
+		tools.w64c.test_hlecook tools.w64c.test_hleids
 
 test-ares:
 	BUILD_DIR=$(BUILD_DIR) test/run/m0.sh --ares
