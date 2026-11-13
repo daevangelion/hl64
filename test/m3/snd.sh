@@ -23,15 +23,19 @@ DEFS="$OUT/defs"
 fail() { echo "SND FAIL: $*" >&2; exit 1; }
 
 cd "$ROOT"
+mkdir -p "$BUILD_DIR"
 make --no-print-directory BUILD_DIR="$BUILD_DIR" sndtest >"$OUT.build.log" 2>&1 \
 	|| { tail -30 "$OUT.build.log" >&2; fail "build"; }
 grep -E 'warning:' "$OUT.build.log" && fail "build has warnings"
 
+rm -rf "$CONTENT" "$DEFS"     # synthetic set is rebuilt from scratch each run
 python3 - "$CONTENT" "$DEFS" <<'EOF'
 import os, struct, sys
 from tools.restab.testdata import make_cwg
 content, defs = sys.argv[1], sys.argv[2]
-os.makedirs(os.path.join(content, "maps"), exist_ok=True)
+for d in ("maps", os.path.join("sound", "t")):
+    os.makedirs(os.path.join(content, d), exist_ok=True)
+os.makedirs(defs, exist_ok=True)
 with open(os.path.join(content, "maps", "campaign.cwg"), "wb") as f:
     f.write(make_cwg([]))     # no maps: the sound tests need resources only
 

@@ -168,19 +168,22 @@ class HleIds(unittest.TestCase):
         with self.assertRaises(hleids.IdError):
             hleids.apply(self.blob, ids, "m")
 
-    def test_missing_title_class_sentence_are_none(self) -> None:
+    def test_missing_title_class_sentence_sound_are_none(self) -> None:
         """titles.txt lacks it / the game lacks the class / restab dropped
-        a sentence or group whose sounds are all missing: no id"""
+        a sentence or group whose sounds are all missing / the player's data
+        lacks a keyed sound (restab tables it absent): no id"""
         t = table()
         t.group_names[0] = "X"
         t.sentence_names[2] = "X"
         t.titles, t.title_names = [], []
         t.class_names = t.class_names[:-1]
+        t.res_names[1] = "ambience/x.wav"
         keys, cls, _kn, _f = self.parse(hleids.apply(self.blob, hleids.Ids.from_table(t, keys_def()), "m"))
         self.assertEqual(keys[(9, "message")], hleids.NONE)
         self.assertEqual(keys[(10, "monstertype")], hleids.NONE)
         self.assertEqual(keys[(5, "message")], hleids.NONE)
         self.assertEqual(keys[(6, "sentence")], hleids.NONE)
+        self.assertEqual(keys[(4, "message")], hleids.NONE)
 
     def test_malformed_chunks(self) -> None:
         for bad in (b"", self.blob[:50], b"HLX1" + self.blob[4:],

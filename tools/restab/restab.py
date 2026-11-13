@@ -504,6 +504,15 @@ def cook(content_dir: str, defs_dir: str, map_names: Optional[List[str]] = None)
             sp = spawned.get(name, [])
             targets.append((mi, name, names.get(name, []) + sp, len(sp)))
 
+    # a sound a map key names that the player's data lacks (the stage warned:
+    # tools/cook/stage.py stage_sounds) is absent, as GoldSrc plays nothing
+    # for it: no id, the key's HLE1 id is 0xFFFF (RES_NONE at run time)
+    for rk in sorted(k for k in refs if k[0] == rtb.KIND_SOUND):
+        if not content.find(cart_file_of(*rk)):
+            print(f"restab: note: {refs[rk]}: no {cart_file_of(*rk)}: absent, no id",
+                  file=sys.stderr)
+            del refs[rk]
+
     # definitions (game/defs arrives with game/ in M3; absent = no lines)
     if not os.path.isdir(defs_dir):
         print(f"restab: note: no definitions directory {defs_dir}: "
@@ -516,6 +525,7 @@ def cook(content_dir: str, defs_dir: str, map_names: Optional[List[str]] = None)
                     "SOUND": rtb.KIND_SOUND, "SENTENCE": rtb.KIND_SENTENCE,
                     "GROUP": rtb.KIND_GROUP}
     def_keys: List[Tuple[int, str]] = []
+    def_where: Dict[Tuple[int, str], str] = {}
     for ln, (kw, _ident, value) in res_lines:
         kind = kind_by_word[kw]
         where = f"res.def:{ln}"
@@ -529,6 +539,7 @@ def cook(content_dir: str, defs_dir: str, map_names: Optional[List[str]] = None)
             name = rk[1]
             refs.setdefault(rk, where)
         def_keys.append((kind, name))
+        def_where.setdefault((kind, name), where)
     style_lines = read_defs(defs_dir, "lightstyles.def")
 
     # cooked studio models (tools/studio, studio-format.md): every model has
@@ -606,15 +617,27 @@ def cook(content_dir: str, defs_dir: str, map_names: Optional[List[str]] = None)
                     dropped_sentences.add(s.name.upper())
                     continue
                 keep.append(Sentence(s.name, s.line, words))
+
+    # a sentence or group only maps (or studio events) name that the
+    # player's sentences.txt lacks is absent, as one whose words are all
+    # missing (the stage warned): no id; res.def names stay required
     for name, where in sorted(sentence_refs.items()):
         if name not in by_name:
-            raise CookError(f"{where}: sentence {name} not in sound/sentences.txt")
+            if (rtb.KIND_SENTENCE, name) in def_where:
+                raise CookError(f"{def_where[(rtb.KIND_SENTENCE, name)]}: sentence {name} "
+                                f"not in sound/sentences.txt")
+            print(f"restab: note: {where}: sentence {name} not in sound/sentences.txt: "
+                  f"absent, no id", file=sys.stderr)
     groups_present = {group_name(s.name).upper() for s in keep}
     groups_listed = {group_name(s.name).upper() for s in all_sent}
     for name, where in sorted(group_refs.items()):
         if name not in groups_listed:
-            raise CookError(f"{where}: sentence group {name} not in sound/sentences.txt")
-        if name not in groups_present:
+            if (rtb.KIND_GROUP, name) in def_where:
+                raise CookError(f"{def_where[(rtb.KIND_GROUP, name)]}: sentence group {name} "
+                                f"not in sound/sentences.txt")
+            print(f"restab: note: {where}: sentence group {name} not in sound/sentences.txt: "
+                  f"absent, no id", file=sys.stderr)
+        elif name not in groups_present:
             print(f"restab: warning: {where}: sentence group {name}: no sentence left "
                   f"(missing sounds): no id", file=sys.stderr)
     for kind, name in def_keys:
