@@ -194,6 +194,57 @@ class CookTest(Base):
         ents = testdata.ENTS_A + b'{\n"classname" "x"\n"model" "models/bart.mdl"\n}\n'
         self.assertCookFails("both a model", files=self.files_with(maps__mapa_DOT_ent=ents))
 
+    TITLES = (b"// titles\n$position -1 0.7\n$effect 2\n$color 100 100 100\n"
+              b"$color2 240 110 0 200\n$fadein 0.02\n$fadeout 1.5\n$holdtime 3.5\n"
+              b"$fxtime 0.25\nDEMOTXT1\n{\nSUBJECT:\nGORDON\n}\n$effect 0\n"
+              b"T0A0TITLE\n{\nHAZARD COURSE\n}\ndemotxt1\n{\nduplicate\n}\n")
+
+    def test_titles(self) -> None:
+        t = self.cook(files=self.files_with(titles_DOT_txt=self.TITLES))
+        self.assertEqual(t.title_names, ["DEMOTXT1", "T0A0TITLE"])
+        a, b = t.titles
+        self.assertEqual((a.effect, a.color1, a.color2, a.x, a.y, a.text),
+                         (2, (100, 100, 100, 0), (240, 110, 0, 200), -1.0, 0.7, b"SUBJECT:\nGORDON"))
+        self.assertEqual((b.effect, b.fadeout, b.holdtime, b.text), (0, 1.5, 3.5, b"HAZARD COURSE"))
+        r = rtb.read(rtb.write(t))
+        self.assertEqual(r.title_names, t.title_names)
+        self.assertEqual([x.text for x in r.titles], [a.text, b.text])
+        self.assertAlmostEqual(r.titles[0].y, 0.7, places=6)
+        self.assertEqual(r.title_id("t0a0title"), 1)
+        for bad, rule in ((b"$effect 7\nX\n{\nx\n}\n", "effect"),
+                          (b"$color 300 0 0\nX\n{\nx\n}\n", "colour"),
+                          (b"$bogus 1\n", "directive"), (b"X\n{\nno end\n", "closing"),
+                          (b"{\nx\n}\n", "without a message name"),
+                          (b"$fadein nan\nX\n{\nx\n}\n", "range")):
+            with self.subTest(rule=rule):
+                self.assertCookFails(rule, files=self.files_with(titles_DOT_txt=bad))
+
+    def test_speaker_group(self) -> None:
+        ents = testdata.ENTS_A + b'{\n"classname" "speaker"\n"message" "HG_ALERT"\n}\n'
+        defs = dict(testdata.DEFS)
+        defs["res.def"] = b"RES(MODEL, GUN, \"models/gun.mdl\")\n"
+        t = self.cook(files=self.files_with(maps__mapa_DOT_ent=ents), defs=defs)
+        self.assertIn("HG_ALERT", t.group_names)
+        ents = testdata.ENTS_A + b'{\n"classname" "speaker"\n"message" "NOPE"\n}\n'
+        self.assertCookFails("NOPE", files=self.files_with(maps__mapa_DOT_ent=ents))
+        ents = testdata.ENTS_A + (b'{\n"classname" "speaker"\n"message" "NOPE"\n'
+                                  b'"preset" "2"\n}\n')
+        self.cook(files=self.files_with(maps__mapa_DOT_ent=ents))  # preset: no group
+
+    def test_prepass_ids_equal_final(self) -> None:
+        """the HLE1 id step's prepass: no campaign graph, no packages, same ids"""
+        content, defs_dir = testdata.build(tempfile.mkdtemp(dir=self.root))
+        final = restab.cook(content, defs_dir)
+        os.remove(os.path.join(content, "maps", "campaign.cwg"))
+        for m in ("mapa", "mapb"):
+            os.remove(os.path.join(content, "maps", m + ".w64"))
+        pre = restab.cook(content, defs_dir, ["mapb", "mapa"])
+        self.assertEqual(pre.map_files, [])
+        for f in ("res_names", "sentence_names", "group_names", "patterns", "global_names",
+                  "class_names", "defs", "title_names"):
+            self.assertEqual(getattr(pre, f), getattr(final, f), f)
+        self.assertEqual([(r.kind, r.flags) for r in pre.res], [(r.kind, r.flags) for r in final.res])
+
 
 class ReaderTest(Base):
     def setUp(self) -> None:

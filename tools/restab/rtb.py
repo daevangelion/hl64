@@ -40,16 +40,18 @@ SECTIONS: Tuple[Tuple[str, int], ...] = (
     # cart: loaded at boot
     ("FILE", 12), ("STRS", 1), ("MAPS", 4), ("KIND", 4), ("RES_", 12),
     ("SENT", 4), ("WORD", 8), ("SGRP", 4), ("PATN", 4), ("PPOL", 1),
-    ("DEFS", 2), ("CLAS", 0), ("GLOB", 0),
+    ("DEFS", 2), ("CLAS", 0), ("GLOB", 0), ("TITL", 40), ("TTXT", 1),
     # test builds: route VM target resolution
     ("TARG", 8), ("TLMP", 2),
     # host / debug side tables (the cart never loads these)
     ("NMAP", 4), ("NRES", 4), ("NSEN", 4), ("NSGR", 4), ("NCLS", 4),
-    ("NTGT", 4), ("NGLB", 4), ("NSTR", 1),
+    ("NTGT", 4), ("NGLB", 4), ("NTTL", 4), ("NSTR", 1),
 )
 SECTION_INDEX = {name: i for i, (name, _) in enumerate(SECTIONS)}
-CART_SECTIONS = 13          # FILE .. GLOB
-TEST_SECTIONS = 15          # + TARG, TLMP
+CART_SECTIONS = 15          # FILE .. TTXT
+TEST_SECTIONS = 17          # + TARG, TLMP
+TITLE_TEXT_MAX = 1023       # bytes of one title's text (NUL not counted)
+TITLE_VALUE_MAX = 1048576.0  # |position, fade, hold, fx times| < 2^20
 
 
 def res_t(kind: int, index: int) -> int:
@@ -106,6 +108,21 @@ class Word:
 
 
 @dataclass
+class Title:
+    """One titles.txt message (HLSDK client_textmessage_t)."""
+    effect: int = 0
+    color1: Tuple[int, int, int, int] = (255, 255, 255, 0)
+    color2: Tuple[int, int, int, int] = (255, 255, 255, 0)
+    x: float = -1.0
+    y: float = -1.0
+    fadein: float = 0.0
+    fadeout: float = 0.0
+    holdtime: float = 0.0
+    fxtime: float = 0.0
+    text: bytes = b""
+
+
+@dataclass
 class Table:
     """In-memory form of a campaign.rtb (writer input, reader output)."""
     cwg_crc: int = 0
@@ -127,6 +144,8 @@ class Table:
     defs: List[int] = field(default_factory=list)          # res_t per res.def line
     class_names: List[str] = field(default_factory=list)
     global_names: List[str] = field(default_factory=list)
+    titles: List[Title] = field(default_factory=list)
+    title_names: List[str] = field(default_factory=list)
     build_id: int = 0
 
     # ---- counts and lookups (host side) ----
@@ -184,6 +203,13 @@ class Table:
             return self.global_names.index(name)
         except ValueError:
             return None
+
+    def title_id(self, name: str) -> Optional[int]:
+        """Titles match case-insensitively (GoldSrc TextMessageGet)."""
+        for i, n in enumerate(self.title_names):
+            if n.upper() == name.upper():
+                return i
+        return None
 
 
 # --------------------------------------------------------------------------
@@ -254,10 +280,23 @@ def write(t: Table) -> bytes:
     body["DEFS"] = (b"".join(struct.pack(">H", d) for d in t.defs), len(t.defs))
     body["CLAS"] = (b"", len(t.class_names))
     body["GLOB"] = (b"", len(t.global_names))
+    ttxt = bytearray()
+    titl = b""
+    for ti in t.titles:
+        if len(ti.text) > TITLE_TEXT_MAX or b"\0" in ti.text:
+            raise ValueError(f"title text longer than {TITLE_TEXT_MAX} bytes or with NUL")
+        if not 0 <= ti.effect <= 2:
+            raise ValueError(f"title effect {ti.effect} out of range")
+        titl += struct.pack(">6fIHBB4B4B", ti.x, ti.y, ti.fadein, ti.fadeout, ti.holdtime,
+                            ti.fxtime, len(ttxt), len(ti.text), ti.effect, 0,
+                            *ti.color1, *ti.color2)
+        ttxt += ti.text + b"\0"
+    body["TITL"] = (titl, len(t.titles))
+    body["TTXT"] = (bytes(ttxt), len(ttxt))
     for sec, names in (("NMAP", t.map_names), ("NRES", t.res_names),
                        ("NSEN", t.sentence_names), ("NSGR", t.group_names),
                        ("NCLS", t.class_names), ("NTGT", t.target_names),
-                       ("NGLB", t.global_names)):
+                       ("NGLB", t.global_names), ("NTTL", t.title_names)):
         body[sec] = (b"".join(struct.pack(">I", nstr.add(n)) for n in names), len(names))
     body["NSTR"] = (bytes(nstr.data), len(nstr.data))
 
@@ -446,13 +485,23 @@ def read(data: bytes) -> Table:
             raise RtbError(where("DEFS", i), f"DEFS[{i}]: res {d:#x} not in the table")
         t.defs.append(d)
 
+    ttxt = raw("TTXT")
+    for i, (x, y, fi, fo, ht, fx, to, tl, eff, res, *cols) in enumerate(recs("TITL", ">6fIHBB4B4B")):
+        if (eff > 2 or res or tl > TITLE_TEXT_MAX or to + tl >= len(ttxt) or ttxt[to + tl] != 0
+                or 0 in ttxt[to:to + tl] or any(not abs(v) < TITLE_VALUE_MAX for v in (x, y, fi, fo, ht, fx))):
+            raise RtbError(where("TITL", i), f"TITL[{i}]: bad text range, effect or value")
+        t.titles.append(Title(eff, tuple(cols[:4]), tuple(cols[4:]), x, y, fi, fo, ht, fx,
+                              bytes(ttxt[to:to + tl])))
+    if ttxt and ttxt[-1] != 0:
+        raise RtbError(secs["TTXT"][0], "TTXT does not end with NUL")
+
     nstr = raw("NSTR")
     if nstr and nstr[-1] != 0:
         raise RtbError(secs["NSTR"][0], "NSTR does not end with NUL")
     expect_counts = {"NMAP": len(t.map_files), "NRES": len(t.res),
                      "NSEN": len(t.sentences), "NSGR": len(t.groups),
                      "NCLS": secs["CLAS"][2], "NTGT": len(t.targets),
-                     "NGLB": secs["GLOB"][2]}
+                     "NGLB": secs["GLOB"][2], "NTTL": len(t.titles)}
     names: Dict[str, List[str]] = {}
     for sec, cnt in expect_counts.items():
         if secs[sec][2] != cnt:
@@ -466,6 +515,9 @@ def read(data: bytes) -> Table:
     t.class_names = names["NCLS"]
     t.target_names = names["NTGT"]
     t.global_names = names["NGLB"]
+    t.title_names = names["NTTL"]
+    if len({n.upper() for n in t.title_names}) != len(t.title_names):
+        raise RtbError(secs["NTTL"][0], "duplicate title name")
     if len(set(t.map_names)) != len(t.map_names):
         raise RtbError(secs["NMAP"][0], "duplicate map name")
     if len(set(t.class_names)) != len(t.class_names):

@@ -313,10 +313,16 @@ def collect(data: Data, maps: Iterable[str], models: Dict[str, bytes],
                 add_sentence_ref(refs, e.get("message", ""), sent_table, groups)
             elif cn == "env_message" and e.get("message", "").upper() in titles:
                 refs.titles.add(e["message"].upper())
+            elif cn == "worldspawn" and e.get("chaptertitle", "").upper() in titles:
+                refs.titles.add(e["chaptertitle"].upper())
             elif cn == "env_shooter" and e.get("shootmodel"):
                 refs.models.add(e["shootmodel"].lower())
             elif cn == "gibshooter":
                 refs.models.add("models/hgibs.mdl")
+            # talk monsters (HLSDK CTalkMonster): a group name or !NAME
+            for k in ("UseSentence", "UnUseSentence"):
+                if e.get(k):
+                    add_sentence_ref(refs, e[k], sent_table, groups)
 
     refs.samples.update(ESSENTIAL)
     refs.samples.update(samples)
