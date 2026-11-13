@@ -47,6 +47,22 @@ ENGINE_SRC += engine/core/rng.c engine/in/in.c engine/phys/pmove.c engine/test/r
 # pm_shared and its adapter (D2), the player's pre-move think, the view
 GAME_SRC := game/pm/pm_shared.c game/pm/pm_math.c game/pm/pm_host.c game/hl/player.c \
 	game/hud/view.c
+# M3 slices: each slice adds its own sources on its own line only
+# (merges stay trivial; local://M3-contract.md).
+ENGINE_SRC_ENT :=
+ENGINE_SRC_PHYS :=
+ENGINE_SRC_REC :=
+ENGINE_SRC_STUDIO :=
+ENGINE_SRC_SND :=
+ENGINE_SRC_FX :=
+ENGINE_SRC_D2 :=
+GAME_SRC_CORE :=
+GAME_SRC_MON :=
+GAME_SRC_ITEMS :=
+GAME_SRC_STUDIO :=
+ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
+	$(ENGINE_SRC_SND) $(ENGINE_SRC_FX) $(ENGINE_SRC_D2)
+GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO)
 # HLSDK sources kept as Valve wrote them: their unused locals, MSVC
 # pragmas and array-parameter styles are not ours to fix; HLSDK builds
 # them without strict aliasing (mathlib.h IS_NAN)
@@ -59,9 +75,12 @@ HOST_SRC := plat/host/gpu.c plat/host/heap_host.c plat/host/io_host.c plat/host/
 	plat/host/sys.c
 
 # Directories built without -ffast-math on the cart (18.2): host and cart
-# must agree bit for bit on collision and physics, and on the world
-# draw list (frustum, point -> leaf) the cook predicts.
-NOFASTMATH_DIRS := engine/coll engine/phys engine/render engine/world game/pm
+# must agree bit for bit on collision and physics, on the world draw list
+# (frustum, point -> leaf) the cook predicts, and on everything game logic
+# decides (entities, records, AI, studio poses: a route must take the same
+# path on both).
+NOFASTMATH_DIRS := engine/coll engine/phys engine/render engine/world engine/ent engine/res \
+	engine/snd game/pm game/hl game/studio game/hud
 
 HL64_WARN := -Wall -Wextra -Werror
 HL64_DEFS :=
