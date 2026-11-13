@@ -1109,6 +1109,8 @@ void	mon_stats(mon_stats_t *s, int reset);
 void	mon_stats_frame(void);
 void	mon_stats_route(void);
 void	mon_stats_script(void);
+/* monster think us since boot (dispatch.c, game_prof_us) */
+extern uint32_t	game_mon_us_sum;
 
 /* misc */
 #define g_flMeleeRange	64.0f

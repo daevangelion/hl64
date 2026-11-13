@@ -66,7 +66,7 @@ map (the VM adds the map's CWG placement `g_M`; architecture.md 5.4).
 | 0x0F | `GOD` | 0 / 1 | 0 | — | debug invulnerability off / on (test builds) |
 | 0x10 | `SHOT` | 0 | label | — | request a screenshot tagged with the label (ares harness dump / host recorder) |
 | 0x11 | `STATS` | 0 | label | — | print one stats record line tagged with the label |
-| 0x12 | `PASS` | 0 | 0 | — | the route passed: log `route PASS`, harness exit 0; runs in the frame after it is reached, so the `STATS` / `SHOT` commands queued just before it still run |
+| 0x12 | `PASS` | 0 | 0 | — | the route passed: log `route PASS`, harness exit 0; runs in the frame after it is reached, so the `STATS` / `SHOT` commands queued just before it still run; a PROFILE build queues the `mem` command when it is reached (it runs with those: the gates' memory tables read it) |
 | 0x13 | `START` | 0 | map | — | test builds only, first op only: boot runs New Game on `map` instead of the campaign start (its records, the player at its first `info_player_start`; the free camera's start layer is closed); the VM passes over it. A build without `HL64_TEST` rejects the route |
 
 Ids: map = CWG map index, name id = `TARG` index (its map is the

@@ -154,10 +154,8 @@ rm -rf "$BC"
 mkdir -p "$ROMDIR"
 cp -al "$CONTENT" "$BC"
 cp "$RBC" "$BC/route.rbc"
-# `mem` at the route's last stats record (frames match the host's: K10)
-LAST="$(sed -n 's/^stats [0-9]* frame=\([0-9]*\) .*/\1/p' "$OUT/host-a.log" | tail -1)"
-[[ -n "$LAST" ]] || fail "no stats record in the host run"
-"$B/hl64-host" --write-cmds "$ROMDIR/m3.cmd" "${CMDS[@]}" --cmd "@$LAST mem"
+# the PROFILE route's PASS runs `mem` with the last stats record
+"$B/hl64-host" --write-cmds "$ROMDIR/m3.cmd" "${CMDS[@]}"
 make -C "$ROOT" --no-print-directory BUILD_DIR="$ROMDIR" HL64_TEST=1 PROFILE=1 \
 	HL64_CONTENT="$BC" HL64_CMDS="$ROMDIR/m3.cmd" rom >"$OUT/rom-build.log" 2>&1 \
 	|| { tail -40 "$OUT/rom-build.log" >&2; fail "PROFILE rom build"; }

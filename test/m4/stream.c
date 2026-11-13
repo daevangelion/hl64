@@ -11,7 +11,9 @@
  *      set + window pinned: resident before a simulated switch, the 128 KB
  *      seam budget while missing, the switch re-base is not a teleport.
  *   T3 change-driven target set: recompute only on eye leaf / cell /
- *      velocity bucket / pins / collision window changes, else reassert.
+ *      velocity bucket / pins / collision window changes, else reassert;
+ *      a new hydration window is named into the standing generation
+ *      (delta), not a rebuild.
  *   T4 eviction classes: weaker never evicts stronger, stronger evicts
  *      weaker, prefetch spares chunks used in the last 30 frames, queued-
  *      not-started reads go first, promotion of a queued read.
@@ -429,6 +431,56 @@ static void t3_recompute(const char *name)
 	check("T3 recompute", b.recompute == a.recompute + 2,
 		"collision window: new (+1), same (+0), 600 u up (+1): recompute +%lu",
 		(unsigned long)(b.recompute - a.recompute));
+	/* a new hydration window: its COLL chunks named into the standing
+	 * generation (delta), no rebuild; a chunk the generation did not
+	 * name before (positive control) */
+	{
+		const w64_grid_t *g = L->grid;
+		float box[1][6];
+		int sub[1] = { -1 }, c = -1, k, n = g->dims[0] * g->dims[1] * g->dims[2];
+		uint16_t gen = wld_tgen;
+
+		/* the first grid cell (a 16 u box at its centre) listing one */
+		for (i = 0; i < n && c < 0; i++)
+		{
+			const uint16_t *v = L->glists + L->cells[i].list;
+			int32_t ix[3] = { i % g->dims[0], i / g->dims[0] % g->dims[1],
+				i / (g->dims[0] * g->dims[1]) };
+
+			for (k = 1; k <= v[0] && L->ch[L->dir->coll_first + v[k]].want == gen; k++)
+				;
+			if (k > v[0])
+				continue;
+			c = L->dir->coll_first + v[k];
+			for (k = 0; k < 3; k++)
+			{
+				float m = g->origin[k] + ((float)ix[k] + 0.5f) * (float)g->cell;
+
+				box[0][k] = m - 8;
+				box[0][k + 3] = m + 8;
+			}
+		}
+		check("T3 delta", c >= 0, "a COLL chunk the standing generation does not name: %d", c);
+		if (c >= 0)
+		{
+			a = b;
+			wld_stream_spawns(L->slot, (const float (*)[6])box, sub, 1);
+			frame(map, eye, vel);
+			wld_stream_stats(&b, 0);
+			check("T3 delta", b.recompute == a.recompute && b.delta == a.delta + 1
+				&& wld_tgen == gen && L->ch[c].want == gen,
+				"new hydration window: recompute +%lu delta +%lu, generation %s, its chunk %s",
+				(unsigned long)(b.recompute - a.recompute), (unsigned long)(b.delta - a.delta),
+				wld_tgen == gen ? "kept" : "new", L->ch[c].want == gen ? "named" : "not named");
+			a = b;
+			wld_stream_spawns(L->slot, (const float (*)[6])box, sub, 0);
+			frame(map, eye, vel);
+			wld_stream_stats(&b, 0);
+			check("T3 delta", b.recompute == a.recompute && b.delta == a.delta,
+				"window gone: recompute +%lu delta +%lu (its names lapse with the generation)",
+				(unsigned long)(b.recompute - a.recompute), (unsigned long)(b.delta - a.delta));
+		}
+	}
 	wld_close(L);
 	frames(3);
 }

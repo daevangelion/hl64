@@ -6,8 +6,10 @@
  * Per frame it records the CPU of each eng_frame step (marks around steps
  * 3-12) and of the subsystems behind their own roll-up APIs (cumulative
  * counters read with reset = 0 and differenced frame to frame, re-zeroed
- * when the 1 s roll-up resets them), plus the bytes in use of the carve
- * regions a crossing loads. The last 2 s of frames stay in a ring. When a
+ * when the 1 s roll-up resets them; the game / monster dispatch and the
+ * stream's sub-steps and room making count since boot), plus the bytes in
+ * use of the carve regions a crossing loads. The last 2 s of frames stay
+ * in a ring. When a
  * seam switch happens (seam_last_switch_frame changes) or the test-only
  * `seamprof_mark` command opens one, a window collects until 2 s of frame
  * time after the switch frame and then logs, for the frames within
@@ -54,6 +56,14 @@
 	X(PHYS, "phys")			/* phy_motion_prof us */ \
 	X(STUDIO, "studio")		/* studio_stats us_sum */ \
 	X(FX, "fx")			/* fx_stats us (sim + draw) */ \
+	X(GAME, "game")			/* game_prof_us dispatch */ \
+	X(MON, "mon")			/* ... its monster thinks */ \
+	X(ST_OPEN, "st_open")		/* wld_stream_stats sub_us: async opens, PVS step */ \
+	X(ST_SCAN, "st_scan")		/* ... entity windows, inputs */ \
+	X(ST_NAME, "st_name")		/* ... target set naming (rebuild / retry) */ \
+	X(ST_MOVERS, "st_movers")	/* ... standing movers */ \
+	X(ST_PINS, "st_pins")		/* ... seam pins' residency */ \
+	X(ST_ROOM, "st_room")		/* room_us: requests' room making, anywhere */ \
 	X(WORLD, "world")		/* ren_stats world_us */
 
 enum {
@@ -62,10 +72,12 @@ enum {
 #undef SEAMPROF_ZONE_ENUM
 	SEAMPROF_ZONE_COUNT
 };
-/* Zones fed by a cumulative roll-up counter: [SEAMPROF_Z_COUNTERS,
+/* Zones fed by a cumulative counter: [SEAMPROF_Z_COUNTERS,
  * SEAMPROF_Z_WORLD); the ones before are steps, WORLD is the drawn
- * frame's own value. */
+ * frame's own value. [SEAMPROF_Z_SINCE_BOOT, SEAMPROF_Z_WORLD) count
+ * since boot (the roll-up does not reset them). */
 #define SEAMPROF_Z_COUNTERS	SEAMPROF_Z_PMOVE
+#define SEAMPROF_Z_SINCE_BOOT	SEAMPROF_Z_GAME
 
 /* Carve regions sampled every frame (engine/mem/carve.h names). */
 #define SEAMPROF_REGIONS(X) \

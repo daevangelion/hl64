@@ -782,6 +782,12 @@ void rt_frame(double time)
 				log_printf("route: %u %s %s\n", rt.op, ops[code].name, str_at(b));
 			else
 				log_printf("route: %u %s\n", rt.op, ops[code].name);
+#ifdef HL64_PROFILE
+			/* PROFILE: the memory report with the last STATS record
+			 * (the same frame boundary; the gate tables read it) */
+			if (code == OP_PASS)
+				push(DBG_MEM, 0);
+#endif
 			/* the name's records (checked at load) */
 			if (code == OP_WAIT_MOVED || code == OP_WAIT_GONE || (code == OP_LOOK_AT && !a))
 				tg_get(b, &rt.tg);

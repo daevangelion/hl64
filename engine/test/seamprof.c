@@ -10,6 +10,7 @@
 
 #include "hl64/ent.h"
 #include "hl64/fx.h"
+#include "hl64/game.h"
 #include "hl64/limits.h"
 #include "hl64/rec.h"
 #include "hl64/snd.h"
@@ -252,7 +253,8 @@ void seamprof_step(int z)
 
 void seamprof_rollup_reset(void)
 {
-	memset(&sp.prev, 0, sizeof(sp.prev));
+	memset(&sp.prev[SEAMPROF_Z_COUNTERS], 0,
+		(SEAMPROF_Z_SINCE_BOOT - SEAMPROF_Z_COUNTERS) * sizeof(sp.prev[0]));
 }
 
 /* Bytes in use of the layer-directory region: each open layer's directory
@@ -290,6 +292,7 @@ void seamprof_end(uint32_t frame, uint32_t dt_us, uint32_t switch_frame)
 	ren_stats_t rs;
 	wld_stats_t ws;
 	ent_priv_stats_t ps;
+	wld_stream_stats_t st;
 	uint32_t hle, store;
 	int mark = sp.mark;
 
@@ -306,6 +309,14 @@ void seamprof_end(uint32_t frame, uint32_t dt_us, uint32_t switch_frame)
 	cum[SEAMPROF_Z_PHYS] = mp.us;
 	cum[SEAMPROF_Z_STUDIO] = ss.us_sum;
 	cum[SEAMPROF_Z_FX] = fs.us;
+	game_prof_us(&cum[SEAMPROF_Z_GAME], &cum[SEAMPROF_Z_MON]);
+	wld_stream_stats(&st, 0);
+	cum[SEAMPROF_Z_ST_OPEN] = st.sub_us[WLD_SS_OPEN];
+	cum[SEAMPROF_Z_ST_SCAN] = st.sub_us[WLD_SS_SCAN];
+	cum[SEAMPROF_Z_ST_NAME] = st.sub_us[WLD_SS_NAME];
+	cum[SEAMPROF_Z_ST_MOVERS] = st.sub_us[WLD_SS_MOVERS];
+	cum[SEAMPROF_Z_ST_PINS] = st.sub_us[WLD_SS_PINS];
+	cum[SEAMPROF_Z_ST_ROOM] = st.room_us;
 	seamprof_counters(f, cum);
 	/* world_us is the drawn frame's own */
 	ren_stats(&rs);

@@ -30,6 +30,10 @@ void		wld_open_step(wld_layer_t *L, uint32_t crc_budget);
 /* Counters of world.c's request side (stream stats). */
 extern uint32_t		wld_n_promoted, wld_n_evict_queued, wld_n_prefetch_req;
 extern uint32_t		wld_n_open_async, wld_n_open_fail;
+/* Room making (request / sync read: weaker queued reads, LRU search):
+ * CPU us and full LRU scans, cumulative since boot (the seam-window
+ * profiler differences them). */
+extern uint32_t		wld_us_room, wld_n_room_scans;
 /* wld_close: the slot's seam pin goes. */
 void		wld_stream_closed(int slot);
 /* After the stream named a generation: the bytes its open + pin classes

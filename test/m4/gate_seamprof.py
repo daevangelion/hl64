@@ -18,7 +18,8 @@ import gate_parse as gp
 
 ZONES = ["frame", "input", "io", "logic", "player", "active", "seam", "hydrate", "stream", "scene",
          "fxsim", "snd", "wait", "render", "hud", "submit", "test", "pmove", "ent", "phys",
-         "studio", "fx", "world"]
+         "studio", "fx", "game", "mon", "st_open", "st_scan", "st_name", "st_movers", "st_pins",
+         "st_room", "world"]
 # (windows in log order: case, n, frame, frames, mark, cut)
 WINDOWS = [("switch", 1, 100, 121, False, False), ("spike", 1, 300, 239, False, False),
            ("early", 1, 5, 65, False, False), ("overlap", 1, 100, 111, False, True),

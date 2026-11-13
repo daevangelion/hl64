@@ -11,8 +11,8 @@ roll-ups carry no per-frame samples), max = the worst single frame.
 
 Memory: peak bytes per carved region (the `carve:` table: the
 include/hl64/limits.h sizes) from the reporting lines: `mem:` / `mem rec:`
-/ `mem res:` / `mem fx:` / `mem world:` (the `mem` command, run at the
-route's last stats frame), the roll-ups' pool / region peaks (studio,
+/ `mem res:` / `mem fx:` / `mem world:` (the `mem` command the PROFILE
+route's PASS runs with its last stats record), the roll-ups' pool / region peaks (studio,
 sound). The world pools render / texture / collision are LRU caches that
 fill to their size: their peak is the run's WANT peak (`mem world:
 <pool>_want_peak=`: the open + pin class chunks wanted at once); the

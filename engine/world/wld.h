@@ -52,6 +52,7 @@ typedef struct {
 	uint8_t		cls;		/* WLD_CLS_* of the target generation that named it */
 	uint16_t	want;		/* target generation that last named it */
 	uint16_t	style_base;	/* first styled-meshlet slot, W64_NONE unassigned */
+	uint8_t		retry;		/* engine/world/stream.c: on its retry list (RETRY_*) */
 } wld_chunk_t;
 
 enum { WLD_CH_ABSENT, WLD_CH_LOADING, WLD_CH_RESIDENT, WLD_CH_PINNED };
@@ -241,12 +242,23 @@ typedef struct {
 } wld_stats_t;
 void		wld_stats(wld_stats_t *s);
 
+/* wld_stream_frame's sub-steps (seam-window profiler zones): async layer
+ * opens + PVS row step, entity windows / inputs scan, the target set's
+ * naming (rebuild or retry), the standing movers, the seam pins'
+ * residency check. */
+enum { WLD_SS_OPEN, WLD_SS_SCAN, WLD_SS_NAME, WLD_SS_MOVERS, WLD_SS_PINS, WLD_SS_N };
+
 /* Stream counters since boot (stats record `stream:`); us / frames since
- * the last reset (prof roll-up). */
+ * the last reset (prof roll-up). delta: frames whose moved entity /
+ * spawn windows were named into the standing generation (no rebuild).
+ * sub_us (per WLD_SS_*) and room_us (chunk
+ * requests' and sync reads' room making: weaker queued reads, LRU
+ * search, anywhere in the frame) are cumulative since boot (u32, wrap). */
 typedef struct {
-	uint32_t	popin, popin_tele, pins, prefetch, recompute, reassert;
+	uint32_t	popin, popin_tele, pins, prefetch, recompute, reassert, delta;
 	uint32_t	teleports, promoted, evict_queued, open_async, open_fail;
 	uint32_t	frames, us_sum, us_max;
+	uint32_t	sub_us[WLD_SS_N], room_us;
 } wld_stream_stats_t;
 void		wld_stream_stats(wld_stream_stats_t *s, int reset);
 
