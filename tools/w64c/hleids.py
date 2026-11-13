@@ -28,10 +28,13 @@ packages that table lists embed the chunk, so the stage computes the id
 spaces first (restab.cook with the map list: ids depend on names only) and
 `--check` proves afterwards that the final campaign.rtb gives every chunk
 the same ids and that every res_t resolves inside its cart file
-(precache-and-resources.md R2).
+(precache-and-resources.md R2). It also proves the HLE region: the bytes
+engine/ent/rec.c takes for the campaign's largest slots (architecture.md 4.1:
+2 x (chunk + runtime) + 2 x runtime + rec_init's tables, the sizes from
+engine/ent/rec_int.h) must fit HL64_HLE_BLOBS_KB of include/hl64/limits.h.
 
   python3 -m tools.w64c.hleids HLE --content DIR --defs DIR --maps M ...
-  python3 -m tools.w64c.hleids --check CONTENT --defs DIR
+  python3 -m tools.w64c.hleids --check CONTENT --defs DIR [--limits H] [--rec-int H]
 """
 from __future__ import annotations
 
@@ -52,6 +55,7 @@ HLE_REC = 24
 HLE_F_BIGENDIAN = 1
 HLE_F_IDS = 2
 HLE_KF, HLE_KV, HLE_KS, HLE_KN = 1, 2, 3, 4
+HLE_CF_LOGIC = 1
 NONE = 0xFFFF
 SUBMODEL_MAX = 1024          # RES_K_SUBMODEL index = slot << 10 | submodel
 
@@ -257,15 +261,103 @@ def w64_ents(b: bytes, where: str) -> bytes:
     return b[o:o + sz]
 
 
-def check(content: str, defs: str) -> List[str]:
+# ---- HLE region proof (architecture.md 4.1 "HLE slots for M4") ---------------
+
+DEFAULT_REC_INT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "engine", "ent", "rec_int.h")
+
+
+def _a16(n: int) -> int:
+    return (n + 15) & ~15
+
+
+@dataclass
+class Slot:
+    """One map's bytes in the HLE region, as engine/ent/rec.c open_chunk
+    takes them: `need` while it opens (logic and pending space bounded by
+    the records), `block` once open (logic blocks of the logic records
+    only), `runtime` = block without the chunk."""
+    name: str
+    chunk: int
+    need: int
+    block: int
+    runtime: int
+
+
+@dataclass
+class Region:
+    """2 x (chunk + runtime) + 2 x runtime + tables, with each slot block
+    16-aligned as heap_find places it: one open slot at its open-time
+    need (the next map opening), one resident open slot, two runtime-only
+    slots (frozen maps), rec_init's tables."""
+    tables: int
+    opening: Slot
+    resident: Slot
+    frozen: Slot
+    total: int
+
+
+def slot_bytes(name: str, chunk: bytes, rt_bytes: int, logic_bytes: int) -> Slot:
+    """open_chunk's byte accounting for one packaged ENTS chunk."""
+    if len(chunk) < HLE_HDR or struct.unpack_from("<I", chunk)[0] != HLE_MAGIC:
+        raise IdError(f"{name}: not a little-endian HLE1 chunk")
+    n = struct.unpack_from("<H", chunk, 18)[0]
+    o_recs = struct.unpack_from("<I", chunk, 52)[0]
+    if o_recs > len(chunk) or HLE_REC * n > len(chunk) - o_recs:
+        raise IdError(f"{name}: HLE1 records outside the chunk")
+    nlog = sum(1 for r in range(n)
+               if struct.unpack_from("<H", chunk, o_recs + HLE_REC * r + 6)[0] & HLE_CF_LOGIC)
+    a = _a16(len(chunk))
+    need = a + n * (rt_bytes + logic_bytes) + 2 * n + 16
+    block = ((a + n * rt_bytes + nlog * logic_bytes + 3) & ~3) + 2 * n
+    return Slot(name, len(chunk), need, block, block - a)
+
+
+def hle_region(slots: Sequence[Slot], tables: int) -> Region:
+    if not slots:
+        raise IdError("no map chunks")
+    opening = max(slots, key=lambda s: s.need)
+    resident = max(slots, key=lambda s: s.block)
+    frozen = max(slots, key=lambda s: s.runtime)
+    total = (tables + _a16(opening.need) + _a16(resident.block) + 2 * _a16(frozen.runtime))
+    return Region(tables, opening, resident, frozen, total)
+
+
+def check_region(region: Region, limits: str) -> int:
+    """Fail when the region need exceeds HL64_HLE_BLOBS_KB; returns the
+    carve in bytes."""
+    kb = restab.read_limit(limits, "HL64_HLE_BLOBS_KB")
+    if region.total > kb * 1024:
+        raise IdError(f"HLE region need {region.total} B ({describe(region)}) exceeds "
+                      f"HL64_HLE_BLOBS_KB {kb} ({kb * 1024} B): raise it in {limits}")
+    return kb * 1024
+
+
+def describe(r: Region) -> str:
+    return (f"tables {r.tables} + opening {r.opening.name} {r.opening.need} + open "
+            f"{r.resident.name} {r.resident.block} + 2 x frozen {r.frozen.name} runtime "
+            f"{r.frozen.runtime}, each 16-aligned")
+
+
+def accounting(rec_int: str) -> Tuple[int, int, int]:
+    """(REC_RT_BYTES, REC_LOGIC_BYTES, REC_TABLE_BYTES) of engine/ent/rec_int.h"""
+    return tuple(restab.read_limit(rec_int, n)        # type: ignore[return-value]
+                 for n in ("REC_RT_BYTES", "REC_LOGIC_BYTES", "REC_TABLE_BYTES"))
+
+
+def check(content: str, defs: str, limits: str = restab.DEFAULT_LIMITS,
+          rec_int: str = DEFAULT_REC_INT) -> Tuple[List[str], Optional[Region]]:
     """Every map chunk of content/campaign.rtb carries exactly the ids the
     final table gives (the prepass agreed), and every res_t resolves to an
     entry whose byte range lies inside its cart file (R2); the DEFS ids
-    too. Returns failures."""
+    too; the HLE region need of the campaign's chunks fits
+    HL64_HLE_BLOBS_KB. Returns failures and the region need."""
     with open(os.path.join(content, "campaign.rtb"), "rb") as f:
         t = rtb.read(f.read())
     ids = Ids.from_table(t, read_keys_def(defs))
+    rt_bytes, logic_bytes, tables = accounting(rec_int)
     fails: List[str] = []
+    slots: List[Slot] = []
     counts = {k: t.kind_count(k) for k in range(8)}
 
     def res_ok(r: int, at: str) -> None:
@@ -291,6 +383,7 @@ def check(content: str, defs: str) -> List[str]:
             with open(path, "rb") as f:
                 blob = w64_ents(f.read(), path)
             again, written = apply_typed(blob, ids, name)
+            slots.append(slot_bytes(name, blob, rt_bytes, logic_bytes))
         except (IdError, OSError, struct.error) as e:
             fails.append(f"{name}: {e}")
             continue
@@ -311,7 +404,13 @@ def check(content: str, defs: str) -> List[str]:
                 fails.append(f"{at}: class id {tid}")
             elif ty == "res":
                 res_ok(tid, at)
-    return fails
+    region = hle_region(slots, tables) if slots else None
+    if region:
+        try:
+            check_region(region, limits)
+        except IdError as e:
+            fails.append(str(e))
+    return fails, region
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -321,12 +420,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--defs", required=True, help="game/defs directory")
     ap.add_argument("--maps", nargs="*", default=None, help="campaign map names (prepass)")
     ap.add_argument("--check", metavar="CONTENT", help="verify the packages against campaign.rtb")
+    ap.add_argument("--limits", default=restab.DEFAULT_LIMITS,
+                    help="include/hl64/limits.h (HL64_HLE_BLOBS_KB)")
+    ap.add_argument("--rec-int", default=DEFAULT_REC_INT,
+                    help="engine/ent/rec_int.h (REC_RT_BYTES, REC_LOGIC_BYTES, REC_TABLE_BYTES)")
     a = ap.parse_args(argv)
     try:
         if a.check:
-            fails = check(a.check, a.defs)
+            fails, region = check(a.check, a.defs, a.limits, a.rec_int)
             for f in fails:
                 print(f"hleids: FAIL {f}", file=sys.stderr)
+            if region and not fails:
+                kb = restab.read_limit(a.limits, "HL64_HLE_BLOBS_KB")
+                print(f"hleids: HLE region need {region.total} B of HL64_HLE_BLOBS_KB {kb} "
+                      f"({kb * 1024} B): {describe(region)}")
             print(f"hleids: check {a.check}: {'FAIL' if fails else 'ok'}")
             return 1 if fails else 0
         if not a.content or a.maps is None:

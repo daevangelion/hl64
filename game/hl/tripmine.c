@@ -18,9 +18,8 @@
  * tripmine.c -- monster_tripmine (CTripmineGrenade, HLSDK dlls/tripmine.cpp):
  * powers up against the surface behind it, then a laser beam
  * (fx_beam, sprites/laserbeam.spr) whose break or a moved mount sets it
- * off. weapon_tripmine (the player's tripmine weapon) is not in
- * classes.def: Uplink / Hazard do not hand it out, so a moved mount just
- * removes the mine instead of dropping a weapon_tripmine.
+ * off; a mount that moves while it powers up turns it back into a
+ * weapon_tripmine. The player's tripmine weapon is weapon_tripmine.c.
  */
 #include "game/hl/grenade.h"
 #include "game/hl/player.h"
@@ -67,14 +66,26 @@ static void MakeBeam(int e)
 	/* CBeam::BeamCreate(laserbeam, 10) PointEntInit(end, self), colour
 	 * 0 214 198, scroll 255, brightness 64 */
 	t->m_pBeam = fx_beam(-1, end, e, NULL, RESID(SPR_LASERBEAM), 10, 0, 0, 214, 198, 64, 255, 0);
+	log_printf("tripmine: %d powered up at %.3f, beam %d length %.1f\n", e, (double)gtime(),
+		t->m_pBeam, (double)(2048 * t->m_flBeamLength));
+}
+
+/* m_hOwner as CBaseEntity::Instance does: the world (slot 0, no live
+ * entity in hl64) is an owner that never moves */
+static int owner_of(ent_h h)
+{
+	return h == EHANDLE(ENT_WORLD) ? ENT_WORLD : EHGet(h);
 }
 
 static int owner_moved(CTripmineGrenade *t)
 {
-	int o = EHGet(t->m_hOwner);
+	int o = owner_of(t->m_hOwner);
+	static const float zero[3] = { 0, 0, 0 };
 
-	return o < 0 || !VecEq(t->m_posOwner, ent_cv(o)->origin) ||
-		!VecEq(t->m_angleOwner, ent_cv(o)->angles);
+	if (o < 0)
+		return 1;
+	return !VecEq(t->m_posOwner, o == ENT_WORLD ? zero : ent_cv(o)->origin) ||
+		!VecEq(t->m_angleOwner, o == ENT_WORLD ? zero : ent_cv(o)->angles);
 }
 
 void CTripmineGrenade_PowerupThink(int e)
@@ -106,8 +117,16 @@ void CTripmineGrenade_PowerupThink(int e)
 
 			c->owner = (uint16_t)o;
 			t->m_hOwner = EHANDLE(o);
-			VecCopy(ent_cv(o)->origin, t->m_posOwner);
-			VecCopy(ent_cv(o)->angles, t->m_angleOwner);
+			if (o == ENT_WORLD)
+			{
+				VecSet(t->m_posOwner, 0, 0, 0);
+				VecSet(t->m_angleOwner, 0, 0, 0);
+			}
+			else
+			{
+				VecCopy(ent_cv(o)->origin, t->m_posOwner);
+				VecCopy(ent_cv(o)->angles, t->m_angleOwner);
+			}
 		}
 		else
 		{
@@ -123,9 +142,16 @@ void CTripmineGrenade_PowerupThink(int e)
 	}
 	else if (owner_moved(t))
 	{
-		/* the mount moved: HLSDK drops a weapon_tripmine (not in the game) */
+		/* disable */
+		float org[3];
+		int mine;
+
 		STOP_SOUND(e, CHAN_VOICE, RESID(W_MINE_DEPLOY));
 		STOP_SOUND(e, CHAN_BODY, RESID(W_MINE_CHARGE));
+		VecMA(c->origin, 24, t->m_vecDir, org);
+		mine = CBaseEntity_Create(CLS_WEAPON_TRIPMINE, org, c->angles, -1);
+		if (mine >= 0)
+			CBase(mine)->spawnflags |= SF_NORESPAWN;
 		SetThink(e, FN_SUB_Remove);
 		KillBeam(e);
 		ThinkIn(e, 0.1f);
@@ -181,6 +207,8 @@ void CTripmineGrenade_BeamBreakThink(int e)
 	if (bBlowup)
 	{
 		/* a trace line doesn't hit pev->owner: the real owner gets credit */
+		log_printf("tripmine: %d beam broken at %.3f (hit %d)\n", e, (double)gtime(),
+			tr.ent);
 		ent_cv(e)->owner = t->m_pRealOwner >= 0 ? (uint16_t)t->m_pRealOwner : COL_NONE;
 		t->g.health = 0;
 		CTripmineGrenade_Killed(e, t->m_pRealOwner, GIB_NORMAL);

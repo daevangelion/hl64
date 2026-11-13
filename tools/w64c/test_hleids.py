@@ -1,16 +1,19 @@
 # SPDX-License-Identifier: MIT
-"""hleids (the HLE1 id step) unit tests on synthetic maps only: a cooked
+"""hleids (the HLE1 id step) unit tests on synthetic maps: a cooked
 chunk gets classes.def / keys.def ids and typed key ids (models, submodels,
 sounds, sentences, speaker groups, patterns, global states, titles,
 classname references), the step is idempotent and touches nothing but the
 id fields and the HLE_F_IDS flag, unknown names stop it with the record,
-and keys.def is parsed strictly. Uses hlecook (HL64_HLECOOK or a build
-into a temporary directory).
+and keys.def is parsed strictly; the HLE region proof (engine/ent/rec.c's
+bytes, fails above HL64_HLE_BLOBS_KB), also on the cooked campaign when
+HL64_CONTENT is set. Uses hlecook (HL64_HLECOOK or a build into a
+temporary directory).
 
-  python3 -m unittest tools.w64c.test_hleids
+  [HL64_CONTENT=DIR] python3 -m unittest tools.w64c.test_hleids
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import struct
@@ -65,6 +68,10 @@ def table() -> rtb.Table:
 
 def keys_def() -> list:
     return hleids.read_keys_def(os.path.join(ROOT, "game", "defs"))
+
+
+def a16(n: int) -> int:
+    return (n + 15) & ~15
 
 
 class HleIds(unittest.TestCase):
@@ -199,6 +206,67 @@ class HleIds(unittest.TestCase):
         names = re.findall(r'\{"([^"]+)",HLE_K[FVSN]\}', body)
         self.assertEqual(names, keys_def()[:len(names)])
         self.assertEqual(len(names), len(keys_def()))
+
+    def limits(self, kb: int) -> str:
+        path = os.path.join(self.tmp, f"limits{kb}.h")
+        with open(path, "w") as f:
+            f.write(f"#define HL64_HLE_BLOBS_KB\t{kb}\t/* test */\n")
+        return path
+
+    def test_hle_region_accounting(self) -> None:
+        """open_chunk's bytes for the synthetic chunk: need bounds logic and
+        pending space by the records, the open block keeps logic blocks of
+        the logic records only"""
+        rt, logic, tables = hleids.accounting(hleids.DEFAULT_REC_INT)
+        self.assertEqual((rt, logic), (24, 16))
+        blob = self.blob + bytes(-len(self.blob) % 16)
+        n = struct.unpack_from("<H", blob, 18)[0]
+        o = struct.unpack_from("<I", blob, 52)[0]
+        nlog = [struct.unpack_from("<H", blob, o + 24 * r + 6)[0] & 1 for r in range(n)].count(1)
+        self.assertGreater(nlog, 0)
+        s = hleids.slot_bytes("m", blob, rt, logic)
+        self.assertEqual(s.need, len(blob) + 42 * n + 16)
+        self.assertEqual(s.block, ((len(blob) + 24 * n + 16 * nlog + 3) & ~3) + 2 * n)
+        self.assertEqual(s.runtime, s.block - len(blob))
+        empty = blob[:18] + bytes(2) + blob[20:96] + bytes(16)                # no records
+        small = hleids.slot_bytes("s", empty, rt, logic)
+        self.assertEqual((small.need, small.block), (112 + 16, 112))
+        r = hleids.hle_region([small, s], tables)
+        self.assertIs(r.opening, s)
+        self.assertEqual(r.total, tables + a16(s.need) + a16(s.block) + 2 * a16(s.runtime))
+        for bad in (b"", blob[:50], b"HLX1" + blob[4:], blob[:52] + struct.pack("<I", len(blob)) + blob[56:]):
+            with self.assertRaises(hleids.IdError):
+                hleids.slot_bytes("m", bad, rt, logic)
+
+    def test_hle_region_carve(self) -> None:
+        """positive control: the largest whole-KB carve below the need fails
+        the cook, the need rounded up to KB passes, and so does limits.h's"""
+        rt, logic, tables = hleids.accounting(hleids.DEFAULT_REC_INT)
+        r = hleids.hle_region([hleids.slot_bytes("m", self.blob, rt, logic)], tables)
+        with self.assertRaisesRegex(hleids.IdError, r"HLE region need \d+ B .* exceeds HL64_HLE_BLOBS_KB"):
+            hleids.check_region(r, self.limits((r.total - 1) // 1024))
+        self.assertEqual(hleids.check_region(r, self.limits((r.total + 1023) // 1024)),
+                         (r.total + 1023) // 1024 * 1024)
+        hleids.check_region(r, os.path.join(ROOT, "include", "hl64", "limits.h"))
+
+    def test_hle_region_real_cook(self) -> None:
+        """the cooked campaign (HL64_CONTENT) fits limits.h's carve, and the
+        largest whole-KB carve below its need fails --check"""
+        content = os.environ.get("HL64_CONTENT")
+        if not content:
+            self.skipTest("HL64_CONTENT not set")
+        defs = os.path.join(ROOT, "game", "defs")
+        fails, r = hleids.check(content, defs)
+        self.assertEqual(fails, [])
+        self.assertIsNotNone(r)
+        assert r is not None
+        tight = self.limits((r.total - 1) // 1024)
+        fails, _ = hleids.check(content, defs, tight)
+        self.assertEqual(len(fails), 1)
+        self.assertIn("exceeds HL64_HLE_BLOBS_KB", fails[0])
+        with open(os.devnull, "w") as null, contextlib.redirect_stderr(null), \
+                contextlib.redirect_stdout(null):
+            self.assertEqual(hleids.main(["--check", content, "--defs", defs, "--limits", tight]), 1)
 
 
 if __name__ == "__main__":

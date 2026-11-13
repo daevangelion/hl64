@@ -126,6 +126,31 @@ void W_Precache(void)
 		WEAPON_NOCLIP, ITEM_FLAG_LIMITINWORLD | ITEM_FLAG_EXHAUSTIBLE, HANDGRENADE_WEIGHT,
 		HANDGRENADE_DEFAULT_GIVE, CLS_WEAPON_HANDGRENADE, RESID(W_V_GRENADE),
 		RESID(W_P_GRENADE), RESID(W_W_GRENADE));
+	/* the world tripmine is v_tripmine's TRIPMINE_GROUND sequence */
+	info(WEAPON_TRIPMINE, 4, 2, AMMO_TRIPMINE, TRIPMINE_MAX_CARRY, AMMO_NONE, -1,
+		WEAPON_NOCLIP, ITEM_FLAG_LIMITINWORLD | ITEM_FLAG_EXHAUSTIBLE, TRIPMINE_WEIGHT,
+		TRIPMINE_DEFAULT_GIVE, CLS_WEAPON_TRIPMINE, RESID(W_V_TRIPMINE),
+		RESID(W_P_TRIPMINE), RESID(W_V_TRIPMINE));
+}
+
+int MaxAmmoCarry(int ammo)
+{
+	int i;
+
+	if (ammo <= AMMO_NONE)
+		return -1;
+	for (i = 1; i < WPN_SLOTS; i++)
+	{
+		const ItemInfo *ii = &item_info[i];
+
+		if (!ii->cls)
+			continue;
+		if (ii->iAmmo1 == ammo)
+			return ii->iMaxAmmo1;
+		if (ii->iAmmo2 == ammo)
+			return ii->iMaxAmmo2;
+	}
+	return -1;
 }
 
 static const weapon_vt_t *wvt(int id)
@@ -138,6 +163,7 @@ static const weapon_vt_t *wvt(int id)
 	case WEAPON_MP5: return &wvt_mp5;
 	case WEAPON_SHOTGUN: return &wvt_shotgun;
 	case WEAPON_HANDGRENADE: return &wvt_handgrenade;
+	case WEAPON_TRIPMINE: return &wvt_tripmine;
 	default: return NULL;
 	}
 }
@@ -209,11 +235,16 @@ void DecalGunshot(const col_trace_t *tr, int iBulletType)
 	int hit = tr->ent >= 0 ? tr->ent : 0;
 	const col_ent_t *c;
 
-	if (!ent_is_live(hit))
-		return;
-	c = ent_cv(hit);
-	if (c->solid != SOLID_BSP && c->movetype != MOVETYPE_PUSHSTEP)
-		return;
+	/* UTIL_IsValidEntity: the world (slot 0, SOLID_BSP in HLSDK; no live
+	 * entity in hl64) or a live entity */
+	if (hit != ENT_WORLD)
+	{
+		if (!ent_is_live(hit))
+			return;
+		c = ent_cv(hit);
+		if (c->solid != SOLID_BSP && c->movetype != MOVETYPE_PUSHSTEP)
+			return;
+	}
 	switch (iBulletType)
 	{
 	case BULLET_PLAYER_CROWBAR:
@@ -851,7 +882,7 @@ static int weapon_spawn(int e, gid_t16 gid, int id)
 
 	(void)gid;
 	if (!ii)
-		return -1;
+		return SpawnRefuse("CBasePlayerItem: weapon not registered (no GetItemInfo)");
 	it->m_iId = (int16_t)id;
 	it->m_iDefaultAmmo = ii->iDefaultAmmo;
 	it->m_iClip = ii->iMaxClip < 1 ? WEAPON_NOCLIP : 0;
@@ -881,6 +912,33 @@ WEAPON_CLASS(WEAPON_SHOTGUN, WEAPON_SHOTGUN)
 WEAPON_CLASS(WEAPON_9MMAR, WEAPON_MP5)
 WEAPON_CLASS(WEAPON_MP5, WEAPON_MP5)
 WEAPON_CLASS(WEAPON_HANDGRENADE, WEAPON_HANDGRENADE)
+
+/* CTripmine::Spawn: the ground pose of v_tripmine (body 3, TRIPMINE_GROUND,
+ * still), FallInit, then single player's pick-up box; Precache takes
+ * monster_tripmine's (UTIL_PrecacheOther) */
+#define TRIPMINE_GROUND		8
+
+static int WEAPON_TRIPMINE_Spawn(int e, gid_t16 gid)
+{
+	static const float mins[3] = { -16, -16, 0 }, maxs[3] = { 16, 16, 28 };
+
+	if (weapon_spawn(e, gid, WEAPON_TRIPMINE) < 0)
+		return -1;
+	PRECACHE(RESID(W_MINE_DEPLOY));
+	PRECACHE(RESID(W_MINE_ACTIVATE));
+	PRECACHE(RESID(W_MINE_CHARGE));
+	ent_rnd(e)->frame = 0;
+	ent_rnd(e)->body = 3;
+	ent_rnd(e)->sequence = TRIPMINE_GROUND;
+	ent_rnd(e)->framerate = 0;
+	UTIL_SetSize(e, mins, maxs);
+	return 0;
+}
+
+const game_class_t gc_WEAPON_TRIPMINE = {
+	.size = sizeof(CBasePlayerItem),
+	.Spawn = WEAPON_TRIPMINE_Spawn,
+};
 
 /* ---- ammo (CBasePlayerAmmo) ----------------------------------------------------------- */
 
@@ -943,25 +1001,34 @@ AMMO_CLASS(AMMO_357, W_W_357AMMOBOX, AMMO_357, AMMO_357BOX_GIVE, _357_MAX_CARRY)
 
 /* ---- weaponbox (CWeaponBox) ------------------------------------------------------------ */
 
+/* m_rgiszAmmo / m_rgAmmo: named ammo slots in pack order (slot 0 unused,
+ * as HLSDK's GiveAmmo); a slot holds an AMMO_* type, 0 = free. */
+#define WEAPONBOX_AMMO_SLOTS	MAX_AMMO_TYPES
+
 typedef struct {
 	CBASEENTITY_FIELDS
 	uint16_t	weapons;		/* weapon id bits packed */
 	int16_t		clip[WPN_SLOTS];
-	int16_t		m_rgAmmo[MAX_AMMO_TYPES];
+	uint8_t		m_rgiszAmmo[WEAPONBOX_AMMO_SLOTS];
+	int16_t		m_rgAmmo[WEAPONBOX_AMMO_SLOTS];
 } CWeaponBox;
 
-static int ammo_max(int ammo)
-{
-	switch (ammo)
-	{
-	case AMMO_9MM: return _9MM_MAX_CARRY;
-	case AMMO_357: return _357_MAX_CARRY;
-	case AMMO_BUCKSHOT: return BUCKSHOT_MAX_CARRY;
-	case AMMO_ARGRENADES: return M203_GRENADE_MAX_CARRY;
-	case AMMO_HANDGRENADE: return HANDGRENADE_MAX_CARRY;
-	default: return -1;
-	}
-}
+/* the HLSDK ammo names a map's weaponbox keys carry (keys.def) and the
+ * game's ammo type of each; AMMO_NONE: no weapon of the game uses it */
+static const struct { key_t16 key; uint8_t ammo; const char *name; } ammo_keys[] = {
+	{ K_AMMO_9MM, AMMO_9MM, "9mm" },
+	{ K_AMMO_357, AMMO_357, "357" },
+	{ K_AMMO_BUCKSHOT, AMMO_BUCKSHOT, "buckshot" },
+	{ K_AMMO_BOLTS, AMMO_NONE, "bolts" },
+	{ K_AMMO_ROCKETS, AMMO_NONE, "rockets" },
+	{ K_AMMO_URANIUM, AMMO_NONE, "uranium" },
+	{ K_AMMO_HORNETS, AMMO_NONE, "Hornets" },
+	{ K_AMMO_HAND_GRENADE, AMMO_HANDGRENADE, "Hand Grenade" },
+	{ K_AMMO_SATCHEL_CHARGE, AMMO_NONE, "Satchel Charge" },
+	{ K_AMMO_TRIP_MINE, AMMO_TRIPMINE, "Trip Mine" },
+	{ K_AMMO_SNARKS, AMMO_NONE, "Snarks" },
+	{ K_AMMO_ARGRENADES, AMMO_ARGRENADES, "ARgrenades" },
+};
 
 void CWeaponBox_Touch(int e, int other)
 {
@@ -973,10 +1040,15 @@ void CWeaponBox_Touch(int e, int other)
 	if (!IsPlayer(other) || !IsAlive(other))
 		return;
 	/* dole out ammo */
-	for (i = 1; i < MAX_AMMO_TYPES; i++)
-		if (b->m_rgAmmo[i])
+	for (i = 0; i < WEAPONBOX_AMMO_SLOTS; i++)
+		if (b->m_rgiszAmmo[i])
 		{
-			Player_GiveAmmo(b->m_rgAmmo[i], i, ammo_max(i));
+			/* there's some ammo of this type */
+			Player_GiveAmmo(b->m_rgAmmo[i], b->m_rgiszAmmo[i],
+				MaxAmmoCarry(b->m_rgiszAmmo[i]));
+			/* now empty the ammo from the weaponbox since we just
+			 * gave it to the player */
+			b->m_rgiszAmmo[i] = 0;
 			b->m_rgAmmo[i] = 0;
 		}
 	/* go through my weapons and try to give the usable ones to the player */
@@ -984,11 +1056,12 @@ void CWeaponBox_Touch(int e, int other)
 		if (b->weapons & (1u << i))
 			Player_AddPlayerItem(i, 0, b->clip[i]);
 	EMIT_SOUND(other, CHAN_ITEM, RESID(I_GUNPICKUP2), 1, ATTN_NORM);
+	log_printf("item: weaponbox %d picked up\n", e);
 	SetTouch(e, FN_NONE);
 	UTIL_Remove(e);
 }
 
-/* PackWeapon / PackAmmo of a runtime weaponbox */
+/* PackWeapon of a runtime weaponbox */
 int CWeaponBox_PackWeapon(int e, int id, int clip)
 {
 	CWeaponBox *b = PRIV(CWeaponBox, e);
@@ -1000,28 +1073,80 @@ int CWeaponBox_PackWeapon(int e, int id, int clip)
 	return 1;
 }
 
-int CWeaponBox_PackAmmo(int e, int ammo, int count)
+/* CWeaponBox::GiveAmmo: the slot of the type (topped up to iMax), else a
+ * fresh slot holding iCount as given; -1 nothing added */
+static int CWeaponBox_GiveAmmo(CWeaponBox *b, int iCount, int ammo, int iMax)
 {
-	CWeaponBox *b = PRIV(CWeaponBox, e);
-	int max = ammo_max(ammo), add;
+	int i;
 
-	if (max == -1 || count <= 0)
+	for (i = 1; i < WEAPONBOX_AMMO_SLOTS && b->m_rgiszAmmo[i]; i++)
+		if (b->m_rgiszAmmo[i] == ammo)
+		{
+			int iAdd = iCount < iMax - b->m_rgAmmo[i] ? iCount : iMax - b->m_rgAmmo[i];
+
+			if (iCount == 0 || iAdd > 0)
+			{
+				b->m_rgAmmo[i] = (int16_t)(b->m_rgAmmo[i] + iAdd);
+				return i;
+			}
+			return -1;
+		}
+	if (i < WEAPONBOX_AMMO_SLOTS)
+	{
+		b->m_rgiszAmmo[i] = (uint8_t)ammo;
+		b->m_rgAmmo[i] = (int16_t)iCount;
+		return i;
+	}
+	log_printf("game: out of named ammo slots\n");
+	return i;
+}
+
+/* CWeaponBox::PackAmmo (by ammo type; name for the log) */
+static int CWeaponBox_PackAmmo(int e, int ammo, const char *name, int iCount)
+{
+	int iMaxCarry = MaxAmmoCarry(ammo);
+
+	if (iMaxCarry == -1)
+	{
+		log_printf("game: MaxAmmoCarry() doesn't recognize '%s'!\n", name);
 		return 0;
-	add = max - b->m_rgAmmo[ammo];
-	if (count < add)
-		add = count;
-	if (add > 0)
-		b->m_rgAmmo[ammo] = (int16_t)(b->m_rgAmmo[ammo] + add);
-	return 1;
+	}
+	if (iCount > 0)
+	{
+		CWeaponBox_GiveAmmo(PRIV(CWeaponBox, e), iCount, ammo, iMaxCarry);
+		log_printf("weaponbox: %d packed %d %s\n", e, iCount, name);
+		return 1;
+	}
+	return 0;
+}
+
+/* CWeaponBox::KeyValue: every key of the entity is an ammo name packed
+ * with atoi of its value. The cook keeps the HLSDK ammo names
+ * (keys.def K_AMMO_*); the entity's other keys name no ammo, which
+ * HLSDK's PackAmmo turns away the same way. */
+static void CWeaponBox_KeyValues(int e, gid_t16 gid)
+{
+	int n = rec_key_count(gid), i;
+	unsigned j;
+
+	for (i = 0; i < n; i++)
+	{
+		key_t16 k = rec_key_id(gid, i);
+		float v;
+
+		for (j = 0; j < sizeof(ammo_keys) / sizeof(ammo_keys[0]); j++)
+			if (ammo_keys[j].key == k && rec_key_f(gid, k, &v))
+				CWeaponBox_PackAmmo(e, ammo_keys[j].ammo, ammo_keys[j].name, (int)v);
+	}
 }
 
 static int CWeaponBox_Spawn(int e, gid_t16 gid)
 {
 	static const float zero[3] = { 0, 0, 0 };
 
-	/* the map's ammo-name keys (CWeaponBox::KeyValue) are not cooked:
-	 * single-player maps place no weaponbox */
-	(void)gid;
+	if (gid != GID_NONE)
+		CWeaponBox_KeyValues(e, gid);
+	PRECACHE(RESID(W_W_WEAPONBOX));
 	ent_set_movetype(e, MOVETYPE_TOSS);
 	ent_set_solid(e, SOLID_TRIGGER);
 	UTIL_SetSize(e, zero, zero);
