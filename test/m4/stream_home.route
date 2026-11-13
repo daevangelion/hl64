@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Stream host test (test/m4/stream.sh): a hldemo1 pose in the approach box
+# of the closed seam hldemo1 -> hldemo2 (the elevator). hldemo2 opens and
+# its records near the mapped anchor hydrate; nothing of hldemo2 draws:
+# the world draws the home layer only and hldemo2's studio entities are
+# counted as other_ents, never drawn (ren: oseam_ents=0).
+# Syntax and semantics: docs/formats/route-bytecode.md.
+startmap hldemo1
+setpos -2327 -230 196 0 180
+wait 6
+shot home-layer
+stats home-layer
+pass

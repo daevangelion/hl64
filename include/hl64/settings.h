@@ -49,6 +49,9 @@ typedef struct {
 	/* render / debug */
 	uint8_t		show_fps;
 	uint8_t		debug_overlay;
+	/* OPEN-seam cross-layer draw (cwg-format.md): 0 off, 1 on, 2 on and
+	 * log the meshlets drawn per frame (`ren: open seam ...`) */
+	uint8_t		r_openseam;
 } settings_t;
 
 extern settings_t settings;
@@ -83,7 +86,8 @@ extern settings_t settings;
 	X(INVERT_Y, invert_y, U8, 0, 1, 1) \
 	X(STICK_DEADZONE, stick_deadzone, U8, 0, 64, 1) \
 	X(SHOW_FPS, show_fps, U8, 0, 1, 1) \
-	X(DEBUG_OVERLAY, debug_overlay, U8, 0, 1, 0)
+	X(DEBUG_OVERLAY, debug_overlay, U8, 0, 1, 0) \
+	X(R_OPENSEAM, r_openseam, U8, 0, 2, 0)
 
 enum {
 #define SETTINGS_ENUM(id, field, type, lo, hi, persist) SET_##id,

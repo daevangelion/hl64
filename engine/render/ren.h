@@ -50,8 +50,22 @@ typedef struct {
 	uint32_t	dropped;	/* over HL64_REN_VIS_MAX / HL64_REN_MOVERS_MAX */
 	uint32_t	leaf, r10;	/* eye leaf, floor(time x 10) used */
 	uint32_t	world_us;	/* CPU: list build + submit */
+	/* OPEN seams (cwg-format.md): B meshlets / studio entities drawn
+	 * across layers (not in meshlets / the studio counts); other_ents:
+	 * studio entities of a non-home layer not drawn */
+	uint32_t	oseam_meshlets, oseam_ents, other_ents;
 } ren_stats_t;
 void	ren_stats(ren_stats_t *s);
+
+/* During ren_frame: layer slot is the B layer of an OPEN seam the player
+ * approaches (cwg-format.md "OPEN seams"; setting r_openseam on). Then
+ * off = the global offset its content draws at (-T: B's landmark onto
+ * A's), lo / hi = the carry box in B's frame (only what touches it
+ * draws). 0 for every other slot (non-home layers never draw). */
+int	ren_open_layer(int slot, float off[3], float lo[3], float hi[3]);
+/* studio_draw: a studio entity of a non-home layer, drawn through an
+ * OPEN seam (1: oseam_ents) or not drawn (0: other_ents). */
+void	ren_other_layer_ent(int drawn);
 
 /* Texture drawn for texture t with entity frame `frame` at r10 =
  * floor(time x 10) (world-surfaces.md 4). */

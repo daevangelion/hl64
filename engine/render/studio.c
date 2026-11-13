@@ -1439,6 +1439,49 @@ static void timed(uint64_t t0)
 		st.us_max = (uint32_t)(t1 - t0);
 }
 
+/* A non-home layer's studio entities: none draws (counted, ren
+ * other_ents), except, through an OPEN seam whose B layer this is
+ * (ren_open_layer), the opaque ones whose origin is in the carry box,
+ * drawn at B's origin - T: what the eye sees of B through the seam. */
+static void draw_other_layer(wld_layer_t *L, double time, const float eye[3])
+{
+	static wld_layer_t bt;		/* L with its content's draw origin */
+	float off[3] = { 0, 0, 0 }, lo[3] = { 0, 0, 0 }, hi[3] = { 0, 0, 0 }, eye_l[3];
+	const uint16_t *list = NULL;
+	int e, k, cnt = 0, open = ren_open_layer(L->slot, off, lo, hi);
+
+	if (open)
+	{
+		bt = *L;
+		for (k = 0; k < 3; k++)
+		{
+			bt.gofs[k] = L->gofs[k] + off[k];
+			eye_l[k] = eye[k] - bt.gofs[k];
+		}
+		list = wld_leaf_sectors(L, wld_point_leaf(L, eye_l), &cnt);
+	}
+	for (e = 2; e < HL64_MAX_ENTITIES; e++)
+	{
+		const col_ent_t *cv;
+		uint8_t a;
+
+		if (!is_studio(e) || ent_idc(e)->layer != L->slot || (ent_rnd(e)->effects & EF_NODRAW))
+			continue;
+		cv = ent_cv(e);
+		for (k = 0; open && k < 3; k++)
+			if (cv->origin[k] < lo[k] || cv->origin[k] > hi[k])
+				break;
+		if (!open || k < 3 || blend_mode(e, &a) != GPU_STUDIO_OPAQUE
+			|| !visible(&bt, list, cnt, cv, eye))
+		{
+			ren_other_layer_ent(0);
+			continue;
+		}
+		draw_entity(e, time, &bt, list, cnt, eye, -1, 0);
+		ren_other_layer_ent(1);
+	}
+}
+
 void studio_draw(double time)
 {
 	static cand_t cand[HL64_STUDIO_DRAWN];
@@ -1458,6 +1501,9 @@ void studio_draw(double time)
 
 		lay_list[li] = NULL;
 		lay_cnt[li] = 0;
+		/* a non-home layer draws nothing, unless through an OPEN seam */
+		if (L && L->map != ren_cam.map)
+			draw_other_layer(L, time, eye);
 		if (!L || L->map != ren_cam.map)
 			continue;
 		for (k = 0; k < 3; k++)

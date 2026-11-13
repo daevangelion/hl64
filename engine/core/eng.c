@@ -155,14 +155,18 @@ static void log_draw(const char *what, uint32_t label)
 	gpu_stats(&g);
 	log_printf("%s %lu ren: map=%s eye=%.9g,%.9g,%.9g ang=%.9g,%.9g,%.9g leaf=%lu r10=%lu "
 		"sectors=%lu movers=%lu meshlets=%lu verts=%lu tris=%lu binds=%lu relit=%lu "
-		"dlit=%lu missing=%lu dropped=%lu world_us=%lu\n", what, (unsigned long)label,
+		"dlit=%lu missing=%lu dropped=%lu world_us=%lu oseam=%lu oseam_ents=%lu "
+		"other_ents=%lu\n", what,
+		(unsigned long)label,
 		wld_map_name(ren_cam.map), (double)ren_cam.org[0], (double)ren_cam.org[1],
 		(double)ren_cam.org[2], (double)ren_cam.ang[0], (double)ren_cam.ang[1],
 		(double)ren_cam.ang[2], (unsigned long)r.leaf, (unsigned long)r.r10,
 		(unsigned long)r.sectors, (unsigned long)r.movers, (unsigned long)r.meshlets,
 		(unsigned long)r.verts, (unsigned long)r.tris, (unsigned long)r.binds,
 		(unsigned long)r.relit, (unsigned long)r.dlit, (unsigned long)r.missing,
-		(unsigned long)r.dropped, (unsigned long)r.world_us);
+		(unsigned long)r.dropped, (unsigned long)r.world_us,
+		(unsigned long)r.oseam_meshlets, (unsigned long)r.oseam_ents,
+		(unsigned long)r.other_ents);
 	log_printf("%s %lu gpu: binds=%lu meshlets=%lu verts=%lu tris=%lu hash=%08lx\n", what,
 		(unsigned long)label, (unsigned long)g.binds, (unsigned long)g.meshlets,
 		(unsigned long)g.verts, (unsigned long)g.tris, (unsigned long)g.hash);
@@ -397,10 +401,12 @@ static int cmd_mem(const dbg_cmd_t *c)
 
 		wld_stats(&w);
 		log_printf("mem world: layerdirs=%lu peak=%lu size=%lu render_peak=%lu "
-			"texture_peak=%lu collision_peak=%lu\n", (unsigned long)w.dirs_used,
+			"texture_peak=%lu collision_peak=%lu render_want_peak=%lu "
+			"texture_want_peak=%lu collision_want_peak=%lu\n", (unsigned long)w.dirs_used,
 			(unsigned long)w.dirs_peak, (unsigned long)w.dirs_size,
 			(unsigned long)w.pool_peak[0], (unsigned long)w.pool_peak[1],
-			(unsigned long)w.pool_peak[2]);
+			(unsigned long)w.pool_peak[2], (unsigned long)w.want_peak[0],
+			(unsigned long)w.want_peak[1], (unsigned long)w.want_peak[2]);
 	}
 	mem_heap_lifetime(&total_mal, &total_fr, &fails, &live_n, &live_kb, &peak_kb);
 	log_printf("mem: allocs %u frees %u fails %u live %u (%u KB) peak %u KB stack %d\n",
