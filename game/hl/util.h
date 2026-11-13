@@ -323,6 +323,9 @@ void		CBaseEntity_Killed(int e, int attacker, int gib);
 void		CBaseEntity_TraceAttack(int e, int attacker, float damage, const float dir[3],
 			const col_trace_t *tr, int bits);
 int		CBaseEntity_DamageDecal(int e, int bits);
+/* CBaseEntity::TraceBleed; combat.cpp SpawnBlood */
+void		TraceBleed(int e, float damage, const float dir[3], const col_trace_t *tr, int bits);
+void		SpawnBlood(const float org[3], int color, float damage);
 /* multi-damage (combat.cpp) */
 void		ClearMultiDamage(void);
 void		ApplyMultiDamage(int inflictor, int attacker);

@@ -27,8 +27,6 @@
 #define SF_WORLD_TITLE		0x0002
 
 /* lightstyles.def line order: 0..12 are styles 0..12, 13 is style 63 */
-#define LS_COUNT		14
-
 void world_lightstyles(void)
 {
 	int i;
@@ -38,14 +36,36 @@ void world_lightstyles(void)
 	fx_lightstyle(63, 13);
 }
 
+void	ShowChapterTitle(int title);
+
+/* rec_logic-free state of the world: the chapter title shown 0.3 s after
+ * the world spawned (CWorld::Precache's one-shot env_message) */
+static int	world_chapter_title = -1;
+
+void CWorld_ChapterTitle(int e)
+{
+	SetThink(e, FN_NONE);
+	ShowChapterTitle(world_chapter_title);
+	world_chapter_title = -1;
+}
+
 static int CWorld_Spawn(int e, gid_t16 gid)
 {
-	(void)e;
-	(void)gid;
 	/* CWorld::Precache: the C-physics sounds, lightstyles (the gib models
 	 * and ricochet sounds belong to the classes that use them) */
 	PRECACHE(RESID(SND_NULL));
 	world_lightstyles();
+	if (gid != GID_NONE)
+	{
+		world_chapter_title = rec_key_title(gid, K_CHAPTERTITLE);
+		if (world_chapter_title >= 0)
+		{
+			SetThink(e, FN_CWorld_ChapterTitle);
+			ThinkIn(e, 0.3f);
+		}
+		if (KeyF(gid, K_STARTDARK, 0) != 0)
+			log_printf("world: startdark (v_dark: engine fade from black)\n");
+	}
 	return 0;
 }
 
@@ -83,6 +103,8 @@ typedef struct {
 static int CPathCorner_Spawn(int e, gid_t16 gid)
 {
 	PRIV(CPathCorner, e)->m_flWait = KeyF(gid, K_WAIT, 0);
+	/* message: the name a train fires on arrival (plats.c) */
+	PRIV(CPathCorner, e)->message = gid == GID_NONE ? NAME_NONE : rec_key_name(gid, K_MESSAGE);
 	if (ent_idc(e)->targetname == NAME_NONE)
 		log_printf("game: path_corner without a targetname (entity %d)\n", e);
 	return CPointEntity_Spawn(e, gid);
@@ -148,3 +170,32 @@ const game_class_t gc_PATH_TRACK = {
 	.Spawn = CPathTrack_Spawn,
 	.vt = &CPointEntity_vt,
 };
+
+/* ---- info_* points (subs.cpp / triggers.cpp CPointEntity): cooked point
+ * records, never hydrated; the entries let a runtime Create spawn one ---- */
+
+const game_class_t gc_INFO_PLAYER_START = { .size = sizeof(CBaseEntity), .Spawn = CPointEntity_Spawn, .vt = &CPointEntity_vt };
+const game_class_t gc_INFO_PLAYER_DEATHMATCH = { .size = sizeof(CBaseEntity), .Spawn = CPointEntity_Spawn, .vt = &CPointEntity_vt };
+const game_class_t gc_INFO_PLAYER_COOP = { .size = sizeof(CBaseEntity), .Spawn = CPointEntity_Spawn, .vt = &CPointEntity_vt };
+const game_class_t gc_INFO_TELEPORT_DESTINATION = { .size = sizeof(CBaseEntity), .Spawn = CPointEntity_Spawn, .vt = &CPointEntity_vt };
+const game_class_t gc_INFO_LANDMARK = { .size = sizeof(CBaseEntity), .Spawn = CPointEntity_Spawn, .vt = &CPointEntity_vt };
+const game_class_t gc_INFO_TARGET = { .size = sizeof(CBaseEntity), .Spawn = CPointEntity_Spawn, .vt = &CPointEntity_vt };
+
+/* ---- bodyque (world.cpp CCorpse: no Spawn, FCAP_DONT_SAVE) ------------ */
+
+static int CCorpse_Spawn(int e, gid_t16 gid)
+{
+	(void)e;
+	(void)gid;
+	return 0;
+}
+
+static int CCorpse_ObjectCaps(int e)
+{
+	(void)e;
+	return FCAP_DONT_SAVE;
+}
+
+static const game_vt_t CCorpse_vt = { .ObjectCaps = CCorpse_ObjectCaps };
+
+const game_class_t gc_BODYQUE = { .size = sizeof(CBaseEntity), .Spawn = CCorpse_Spawn, .vt = &CCorpse_vt };

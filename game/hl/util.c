@@ -1075,7 +1075,7 @@ void Killed(int e, int attacker, int gib)
 }
 
 /* CBaseEntity::TraceBleed */
-static void TraceBleed(int e, float damage, const float dir[3], const col_trace_t *ptr, int bits)
+void TraceBleed(int e, float damage, const float dir[3], const col_trace_t *ptr, int bits)
 {
 	col_trace_t btr;
 	float tdir[3], to[3], noise;
@@ -1113,6 +1113,12 @@ static void TraceBleed(int e, float damage, const float dir[3], const col_trace_
 	}
 }
 
+/* combat.cpp SpawnBlood */
+void SpawnBlood(const float org[3], int color, float damage)
+{
+	UTIL_BloodDrips(org, g_vecAttackDir, color, (int)damage);
+}
+
 void CBaseEntity_TraceAttack(int e, int attacker, float damage, const float dir[3],
 	const col_trace_t *tr, int bits)
 {
@@ -1126,7 +1132,7 @@ void CBaseEntity_TraceAttack(int e, int attacker, float damage, const float dir[
 		blood = BloodColor(e);
 		if (blood != DONT_BLEED)
 		{
-			UTIL_BloodDrips(org, g_vecAttackDir, blood, (int)damage);	/* SpawnBlood */
+			SpawnBlood(org, blood, damage);	/* a little surface blood */
 			TraceBleed(e, damage, dir, tr, bits);
 		}
 	}
