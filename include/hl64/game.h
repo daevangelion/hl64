@@ -16,6 +16,10 @@
 
 /* Boot, once: the game's tables (dispatch, class table, precache lists). */
 void	game_init(void);
+/* PROFILE roll-up line `prof game_us avg= max= thinks= uses= fires=`
+ * (the game's dispatch time per frame over the window; window totals),
+ * then resets the window. */
+void	game_prof_line(void);
 /* New Game: global state, skill, the player's inventory reset. */
 void	game_new_campaign(void);
 /* An HLE slot opened / is closing (its records' game state). */

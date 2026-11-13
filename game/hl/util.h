@@ -351,6 +351,22 @@ void		GlobalReset(void);
 /* trigger_endsection fire count (game_end_section) := 0, New Game */
 void		EndSectionReset(void);
 
+/* ---- target fires (counted for the prof game_us roll-up) ----------------- */
+
+extern uint32_t	game_fires;
+static inline void GameFire(name_t n, int activator, int caller, gid_t16 caller_gid,
+	int use_type, float value)
+{
+	game_fires++;
+	rec_fire(n, activator, caller, caller_gid, use_type, value);
+}
+static inline void GameFireAt(float t, name_t target, name_t killtarget, int activator,
+	int caller, int use_type, float value)
+{
+	game_fires++;
+	rec_fire_at(t, target, killtarget, activator, caller, use_type, value);
+}
+
 /* ---- decals (HLSDK decals.h order; FX owns the cooked sheet) --------------- */
 
 enum {

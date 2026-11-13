@@ -20,9 +20,11 @@
  * (CEnvExplosion, also created at run time by ExplosionCreate),
  * spark_shower (CShower), env_shake, env_fade, env_message, env_render
  * (triggers.cpp CRenderFxManager), env_spark (buttons.cpp CEnvSpark),
- * env_beverage and item_sodacan. env_shake / fade / message / render /
- * spark / explosion map records are logic records (no entity): their
- * state is the record's rec_logic_t and their thinks record timers.
+ * env_beverage, item_sodacan, gibshooter (CGibShooter) and env_shooter
+ * (CEnvShooter, gibs through GameMon's game/hl/gib.h CGib). env_shake /
+ * fade / message / render / spark / explosion / shooter map records are
+ * logic records (no entity): their state is the record's rec_logic_t and
+ * their thinks record timers.
  * Retargets the old tree's hl_env.c 372-1166 (audit entry: HLSDK +
  * QUAKE-INTERFACE) and gsfx_sv.c env_sprite (HLSDK) by rewriting them
  * from effects.cpp / explode.cpp on the effects API; their own parts
@@ -33,6 +35,7 @@
 
 #include "game/hl/breakable.h"
 #include "game/hl/doors.h"
+#include "game/hl/gib.h"
 
 #define SF_SPRITE_STARTON		0x0001
 #define SF_SPRITE_ONCE			0x0002
@@ -450,7 +453,7 @@ static void CFade_LogicUse(gid_t16 gid, int activator, int caller, int use_type,
 	/* CBaseEntity::SUB_UseTargets(this, USE_TOGGLE, 0) */
 	target = rec_key_name(gid, K_TARGET);
 	if (target != NAME_NONE)
-		rec_fire(target, -1, -1, gid, USE_TOGGLE, 0);
+		GameFire(target, -1, -1, gid, USE_TOGGLE, 0);
 }
 
 const game_class_t gc_ENV_FADE = { .LogicUse = CFade_LogicUse };
@@ -520,7 +523,7 @@ static void CMessage_LogicUse(gid_t16 gid, int activator, int caller, int use_ty
 	if (sf & SF_MESSAGE_ONCE)
 		rec_kill(gid);
 	if (target != NAME_NONE)
-		rec_fire(target, -1, -1, gid, USE_TOGGLE, 0);
+		GameFire(target, -1, -1, gid, USE_TOGGLE, 0);
 }
 
 const game_class_t gc_ENV_MESSAGE = {
@@ -738,4 +741,189 @@ static int CItemSoda_Spawn(int e, gid_t16 gid)
 
 const game_class_t gc_ITEM_SODACAN = {
 	.size = sizeof(CBaseEntity), .Spawn = CItemSoda_Spawn,
+};
+
+/* ---- gibshooter / env_shooter (CGibShooter / CEnvShooter) ------------------- */
+
+#define SF_GIBSHOOTER_REPEATABLE	1	/* allows a gibshooter to be refired */
+
+/* Logic records. rec_logic_t: a = m_iGibs, b = m_iGibCapacity, f = m_flDelay;
+ * m_flGibVelocity / m_flVariance / m_flGibLife, the model, the material and
+ * the gib render keys are read from the record when a gib is thrown. */
+static res_t shooter_model(gid_t16 gid)
+{
+	return rec_class(gid) == CLS_ENV_SHOOTER ? rec_key_res(gid, K_SHOOTMODEL)
+		: RESID(MON_HGIBS);
+}
+
+/* CEnvShooter::KeyValue "shootsounds" -> m_iGibMaterial */
+static int shooter_material(gid_t16 gid)
+{
+	switch ((int)KeyF(gid, K_SHOOTSOUNDS, -1))
+	{
+	case 0: return matGlass;
+	case 1: return matWood;
+	case 2: return matMetal;
+	case 3: return matFlesh;
+	case 4: return matRocks;
+	default: return matNone;
+	}
+}
+
+static void CGibShooter_LogicSpawn(gid_t16 gid)
+{
+	rec_logic_t *l = rec_logic(gid);
+	res_t model = shooter_model(gid);
+
+	/* Precache */
+	PRECACHE(model);
+	if (rec_class(gid) == CLS_ENV_SHOOTER)
+		MaterialSoundPrecache(shooter_material(gid));
+	/* KeyValue m_iGibs; Spawn: m_flDelay 0 -> 0.1 (m_flGibLife 0 -> 25 at
+	 * the throw) */
+	l->a = l->b = (int32_t)KeyF(gid, K_M_IGIBS, 0);
+	l->f = KeyF(gid, K_DELAY, 0);
+	if (l->f == 0)
+		l->f = 0.1f;
+	l->flags = 0;
+}
+
+static void CGibShooter_LogicUse(gid_t16 gid, int activator, int caller, int use_type,
+	float value)
+{
+	(void)activator;
+	(void)caller;
+	(void)use_type;
+	(void)value;
+	/* SetThink(ShootThink); pev->nextthink = gpGlobals->time */
+	rec_logic(gid)->flags = 1;
+	rec_timer(gid, gtime(), 0, -1);
+}
+
+/* CreateGib: hgibs body 1..body-1, red blood (gibshooter); the shooter's
+ * model, render keys and material, no blood (env_shooter). */
+static int CGibShooter_CreateGib(gid_t16 gid, res_t model)
+{
+	int body = res_model_frames(model), e;
+	CGib *g;
+
+	e = CGib_Create();
+	if (e < 0)
+		return -1;
+	CGib_Spawn(e, model);
+	g = GIB(e);
+	if (rec_class(gid) == CLS_ENV_SHOOTER)
+	{
+		col_ent_t *c = ent_cv(e);
+		ent_rnd_t *r = ent_rnd(e);
+		float color[3] = { 0, 0, 0 };
+
+		ent_rnd(e)->body = (uint8_t)(body > 1 ? RANDOM_LONG(0, body - 1) : 0);
+		g->m_bloodColor = DONT_BLEED;
+		g->m_material = shooter_material(gid);
+		c->rendermode = (uint8_t)KeyF(gid, K_RENDERMODE, 0);
+		r->renderamt = (uint8_t)KeyF(gid, K_RENDERAMT, 0);
+		rec_key_v(gid, K_RENDERCOLOR, color);
+		r->rendercolor[0] = (uint8_t)color[0];
+		r->rendercolor[1] = (uint8_t)color[1];
+		r->rendercolor[2] = (uint8_t)color[2];
+		r->renderfx = (uint8_t)KeyF(gid, K_RENDERFX, 0);
+		r->scale = KeyF(gid, K_SCALE, 0);
+		c->skin = (int16_t)KeyF(gid, K_SKIN, 0);
+	}
+	else
+	{
+		g->m_bloodColor = BLOOD_COLOR_RED;
+		if (body <= 1)
+			log_printf("GibShooter Body is <= 1!\n");
+		/* avoid throwing random amounts of the 0th gib (skull) */
+		ent_rnd(e)->body = (uint8_t)RANDOM_LONG(1, body - 1);
+	}
+	return e;
+}
+
+/* ShootThink */
+static void CGibShooter_LogicTimer(gid_t16 gid, uint16_t arg, int activator)
+{
+	rec_logic_t *l = rec_logic(gid);
+	float ang[3], movedir[3], dir[3], org[3], v[3], save[3][3];
+	float velocity = KeyF(gid, K_M_FLVELOCITY, 0), variance = KeyF(gid, K_M_FLVARIANCE, 0);
+	float life = KeyF(gid, K_M_FLGIBLIFE, 0);
+	int e;
+
+	(void)arg;
+	(void)activator;
+	if (!l->flags)
+		return;
+	rec_timer(gid, gtime() + l->f, 0, -1);
+	if (life == 0)
+		life = 25;
+	/* Spawn's SetMovedir of the record's angles (it leaves gpGlobals' vectors
+	 * as they were: ShootThink reads whatever MakeVectors ran last) */
+	rec_angles(gid, ang);
+	if (ang[0] == 0 && ang[1] == -1 && ang[2] == 0)
+		VecSet(movedir, 0, 0, 1);
+	else if (ang[0] == 0 && ang[1] == -2 && ang[2] == 0)
+		VecSet(movedir, 0, 0, -1);
+	else
+	{
+		VecCopy(gpGlobals.v_forward, save[0]);
+		VecCopy(gpGlobals.v_right, save[1]);
+		VecCopy(gpGlobals.v_up, save[2]);
+		UTIL_MakeVectors(ang);
+		VecCopy(gpGlobals.v_forward, movedir);
+		VecCopy(save[0], gpGlobals.v_forward);
+		VecCopy(save[1], gpGlobals.v_right);
+		VecCopy(save[2], gpGlobals.v_up);
+	}
+	VecMA(movedir, RANDOM_FLOAT(-1, 1) * variance, gpGlobals.v_right, dir);
+	VecMA(dir, RANDOM_FLOAT(-1, 1) * variance, gpGlobals.v_forward, dir);
+	VecMA(dir, RANDOM_FLOAT(-1, 1) * variance, gpGlobals.v_up, dir);
+	VecNorm(dir, dir);
+	e = CGibShooter_CreateGib(gid, shooter_model(gid));
+	if (e >= 0)
+	{
+		CGib *g = GIB(e);
+		float think = ent_tm(e)->nextthink - gtime();
+
+		rec_origin(gid, org);
+		ent_set_origin(e, org);
+		VecScale(dir, velocity, v);
+		ent_set_velocity(e, v);
+		VecSet(v, RANDOM_FLOAT(100, 200), RANDOM_FLOAT(100, 300), 0);
+		ent_set_avelocity(e, v);
+		g->m_lifeTime = life * RANDOM_FLOAT(0.95f, 1.05f);	/* +/- 5% */
+		if (g->m_lifeTime < think)
+		{
+			ent_think_at(e, gtime() + g->m_lifeTime);
+			g->m_lifeTime = 0;
+		}
+	}
+	if (--l->a <= 0)
+	{
+		if (logic_spawnflags(gid) & SF_GIBSHOOTER_REPEATABLE)
+		{
+			l->a = l->b;
+			l->flags = 0;	/* SetThink(NULL) */
+			rec_timer_cancel(gid);
+		}
+		else
+		{
+			/* SetThink(SUB_Remove) */
+			rec_timer_cancel(gid);
+			rec_kill(gid);
+		}
+	}
+}
+
+const game_class_t gc_GIBSHOOTER = {
+	.LogicSpawn = CGibShooter_LogicSpawn,
+	.LogicUse = CGibShooter_LogicUse,
+	.LogicTimer = CGibShooter_LogicTimer,
+};
+
+const game_class_t gc_ENV_SHOOTER = {
+	.LogicSpawn = CGibShooter_LogicSpawn,
+	.LogicUse = CGibShooter_LogicUse,
+	.LogicTimer = CGibShooter_LogicTimer,
 };
