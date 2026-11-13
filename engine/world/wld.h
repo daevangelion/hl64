@@ -120,6 +120,13 @@ wld_layer_t	*wld_layer(int slot);		/* NULL when closed */
 int		wld_point_leaf(const wld_layer_t *L, const float p[3]);
 /* Sectors visible from a leaf (vis list: count, then sector indices). */
 const uint16_t	*wld_leaf_sectors(const wld_layer_t *L, int leaf, int *count);
+/* The decoded PVS row of BSP leaf `leaf` (bit i = visleaf i + 1) from the
+ * layer's VISR chunk, cached one row per layer (architecture.md 5.5): the
+ * offset pair and the row's compressed bytes are read synchronously on a
+ * cache miss. *visleafs = the map's visleaf count (0: no vis). NULL when
+ * everything is visible (no vis, leaf 0 or past visleafs, empty row). The
+ * row stays valid until the next call for this layer. */
+const uint8_t	*wld_pvs_row(wld_layer_t *L, int leaf, int *visleafs);
 
 /* ---- residency ----------------------------------------------------------- */
 
