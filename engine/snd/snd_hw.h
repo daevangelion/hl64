@@ -1,0 +1,76 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * snd_hw.h -- the sound backend under engine/snd/snd.c (docs/architecture.md
+ * 10): mixer voices playing wav64 waves. plat/n64/audio.c drives the
+ * libdragon mixer over cart-streamed wav64 (WAV64_STREAMING_FULL, wave
+ * reads in the engine/io AUDIO class); plat/host/audio_host.c is the null
+ * output of the host build: it reads the same wav64 headers through the
+ * same I/O path and models each voice's play position from its rate and
+ * the frame time, so voice allocation, loops and sentences run the same.
+ *
+ * Also the snd.c internals the host tests (test/m3/snd.c) call directly.
+ */
+#ifndef HL64_SND_HW_H
+#define HL64_SND_HW_H
+
+#include <stdint.h>
+
+#define SND_VOICES		16	/* mixer voices */
+#define SND_LOOPS		32	/* loop slots (sound.md 3) */
+#define SND_WAVES		10	/* open wav64 streams */
+#define SND_HZ			22050	/* output rate */
+#define SND_PITCH_CAP		130	/* playback rate cap, % of SND_HZ */
+#define SND_AUDIBLE		0.002f	/* loop ear-gain sum that holds a voice */
+#define SND_CLIP_DIST		1000.0f	/* nominal clip distance (sound.md 2) */
+/* Per-voice sample buffer (bytes, 16-bit mono): 2048 samples hold one
+ * 40 ms AI buffer (882 samples) at the 130 % rate cap (1147) plus VADPCM
+ * frame rounding. */
+#define SND_VOICE_BUF		4096
+
+typedef struct {
+	uint32_t	freq;		/* sample rate, Hz */
+	uint32_t	len;		/* samples */
+	uint32_t	loop_len;	/* samples looped at the end, 0 = one-shot */
+	uint8_t		format;		/* wav64 format: 0 raw, 1 VADPCM, 3 Opus */
+	uint8_t		channels;
+} snd_wave_info_t;
+
+/* Boot: SND_VOICES voices at SND_HZ; mem/bytes = the SOUND region's
+ * remainder after snd.c's tables (backend allocations live there). */
+void		snd_hw_init(void *mem, uint32_t bytes);
+/* Open the wav64 at cart range [rom, rom + size) into *wave: 0 ok, -1 not
+ * a readable wav64 (never retried), -2 the backend's room is full now. */
+int		snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave);
+/* Close a wave no voice plays (waits for the RSP first on the cart). */
+void		snd_hw_close(void *wave);
+/* Start wave on voice v from sample pos (0, or the loop start). */
+void		snd_hw_play(int v, void *wave, uint32_t pos);
+void		snd_hw_stop(int v);
+int		snd_hw_playing(int v);
+uint32_t	snd_hw_pos(int v);		/* samples played */
+void		snd_hw_rate(int v, float hz);
+void		snd_hw_vol(int v, float left, float right);
+/* Feed the output (cart: mixer_try_play; host: advance by dt). */
+void		snd_hw_pump(double dt);
+/* Backend bytes in use now / at peak inside its part of the region. */
+void		snd_hw_mem(uint32_t *now, uint32_t *peak);
+/* Host: seconds into the last pump at which voice v's wave ended
+ * (-1 still playing); 0 on the cart. */
+double		snd_hw_end_offset(int v);
+
+/* ---- snd.c internals used by the tests ------------------------------------- */
+
+/* Ear gains of a source (sound.md 2) before master volume; self = the
+ * listener's own sound. */
+void		snd_gains(const float src[3], float vol, float attn, int self, float *left,
+			float *right);
+/* Playback rate of a sample rate at pitch (1..255), capped (sound.md 1). */
+float		snd_pitch_rate(uint32_t freq, int pitch);
+/* Event log lines ("snd ...") on / off; on by default in test builds. */
+void		snd_log_set(int on);
+/* Open waves now (S8). */
+int		snd_waves_open(void);
+/* A voice holding an open wave's slot (S8 invariant check): -1 none. */
+int		snd_wave_voice_check(void);
+
+#endif

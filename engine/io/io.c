@@ -276,6 +276,19 @@ void io_read_sync(void *dst, uint32_t rom, uint32_t len)
 	LoadAccount(b0, len);
 }
 
+void io_read_audio(void *dst, uint32_t rom, uint32_t len)
+{
+	uint32_t b0;
+
+	Drain();
+	b0 = fr_blocked_us;
+	HwSync(dst, rom, len);
+	st.audio_calls++;
+	st.audio_bytes += len;
+	st.audio_us += fr_blocked_us - b0;
+	fr_blocked_us = b0;
+}
+
 int io_busy(void)
 {
 	return act != NULL || q_len > 0;

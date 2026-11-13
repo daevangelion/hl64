@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "hl64/ent.h"
+#include "hl64/snd.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/ent/ent.h"
@@ -244,6 +245,7 @@ void ent_destroy(int e)
 	ent_priv_free(e);
 	ent_s.freetime[e] = (float)eng_clock_time();
 	ent_c.id[e].serial++;
+	snd_entity_freed(e);
 	clear_slot(e);
 	ent_s.live--;
 }

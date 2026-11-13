@@ -18,10 +18,6 @@
 #include "engine/ent/ent.h"
 #include "engine/phys/phys.h"
 
-/* Slice Phys defines phy_step_motion (engine/phys/move.c); until it is
- * linked, the motion movetypes think only and pushers do nothing. */
-#pragma weak phy_step_motion
-
 ent_pass_t	ent_pass;
 
 static phy_game_hooks_t hooks;
@@ -229,10 +225,7 @@ static void step(int e, double time, double dt)
 	case MOVETYPE_BOUNCE:
 	case MOVETYPE_BOUNCEMISSILE:
 	case MOVETYPE_PUSHSTEP:
-		if (phy_step_motion)
-			phy_step_motion(e, time, dt);
-		else if (mt != MOVETYPE_PUSH)
-			phy_run_think(e, time, dt);
+		phy_step_motion(e, time, dt);
 		break;
 	default:
 		sys_error("ent %d (%s): bad movetype %d", e, ent_class_name(e), mt);

@@ -1,0 +1,949 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * snd.c -- sound services (include/hl64/snd.h; docs/architecture.md 10,
+ * docs/specs/sound.md): GoldSrc channel semantics over SND_VOICES mixer
+ * voices, loops in SND_LOOPS virtualised slots, SND_WAVES open wav64
+ * streams with LRU close, sentences word after word, spatialisation from
+ * the listener's view origin and right vector. The backend (snd_hw.h) is
+ * the libdragon mixer on the cart and a null output on the host; both run
+ * this file unchanged, so the host's event log is the cart's policy.
+ *
+ * Retargeted from the old tree's n64/port/snd_n64.c (audit entry
+ * n64/port/snd_n64.c QUAKE-INTERFACE / CLEAN, docs/provenance-audit.md):
+ * its voice policy (free voice, oldest one-shot, loop voice last), the
+ * virtualised loop slots, the open-wave LRU (never closed under a voice,
+ * RSP wait before close) and the word-after-word sentence voice are kept;
+ * every Quake binding (S_* API, sfx_t names and the name registry, cvars,
+ * commands, cl./sv. state, channel_t vocabulary) is replaced by res_t
+ * ids, the rtb file table (res_file), the SENT / WORD tables and the
+ * engine's component arrays. The spatialisation (audit-flagged range of
+ * the old file, not read) is written from sound.md 2.
+ *
+ * Positions are global (map-local origin + g_M of the entity's layer), so
+ * sources in both open layers spatialise without conversion. Nothing is
+ * allocated: the tables live in the SOUND region, the backend uses the
+ * rest of it.
+ */
+#include <math.h>
+#include <stdarg.h>
+#include <string.h>
+
+#include "hl64/coll.h"
+#include "hl64/ent.h"
+#include "hl64/rec.h"
+#include "hl64/settings.h"
+#include "hl64/snd.h"
+#include "engine/core/log.h"
+#include "engine/core/sys.h"
+#include "engine/mem/carve.h"
+#include "engine/snd/snd_hw.h"
+
+/* The listener's own entity (the player, engine/phys/player.h slot 1):
+ * its sounds are not spatialised (sound.md 1, 2). */
+#define SND_SELF	1
+#define SENT_NONE	0xFFFF
+#define SND_MAX_SOUNDS	8192	/* res_t index range (rtb KIND counts) */
+
+typedef struct {
+	void		*hw;		/* NULL = free slot */
+	res_t		res;
+	uint32_t	lru;		/* higher = used more recently */
+	snd_wave_info_t	inf;
+} wave_t;
+
+typedef struct {
+	uint8_t		busy;
+	int8_t		wave;		/* wave slot while a sample plays, -1 none */
+	int8_t		loop;		/* owning loop slot, -1 = one-shot */
+	int8_t		chan;
+	uint16_t	ent;		/* ENT_NONE: fixed point (snd_ambient) */
+	uint8_t		follow;		/* origin follows ent */
+	uint8_t		pitch;		/* emit / sentence pitch */
+	res_t		res;		/* sample playing */
+	float		vol, attn;	/* emit / sentence volume, attenuation */
+	float		org[3];		/* global */
+	uint32_t	seq;		/* start order (stealing) */
+	uint16_t	sent;		/* sentence id, SENT_NONE for a sample */
+	uint16_t	word;		/* next word (WORD index) */
+	uint8_t		left;		/* words still to start */
+	uint8_t		wpitch;		/* word modifiers, % (100 = none) */
+	uint8_t		wvol;
+	uint8_t		pad;
+	uint32_t	end_pos;	/* word end (sample), 0 = the wave's end */
+} voice_t;
+
+typedef struct {
+	uint8_t		used;
+	int8_t		voice;		/* -1 = virtual */
+	int8_t		chan;
+	uint8_t		follow;
+	uint16_t	ent;
+	res_t		res;
+	float		vol, attn;
+	float		org[3];
+	uint32_t	seq;
+	uint8_t		pitch;
+	uint8_t		pad[3];
+} loop_t;
+
+typedef struct {
+	voice_t		v[SND_VOICES];
+	loop_t		l[SND_LOOPS];
+	wave_t		w[SND_WAVES];
+	uint8_t		missing[SND_MAX_SOUNDS / 8];	/* SOUND ids that failed to open */
+	float		lis[3], right[3];
+	uint32_t	seq, clock, frame;
+	double		last_dt;
+	int		keep;		/* voice a wave-cap steal must not take */
+	int		log;
+	uint32_t	tables;		/* region bytes used by this file */
+	snd_stats_t	st;
+	uint32_t	frames;
+	uint64_t	us_sum;
+} snd_state_t;
+
+static snd_state_t	*S;
+
+/* ---- helpers ---------------------------------------------------------------- */
+
+static float clampf(float x, float lo, float hi)
+{
+	return x < lo ? lo : x > hi ? hi : x;
+}
+
+static int clamp_pitch(int p)
+{
+	return p < 1 ? 1 : p > 255 ? 255 : p;
+}
+
+static float master(void)
+{
+	return (float)settings.vol_master * (float)settings.vol_sfx * 1e-4f;
+}
+
+/* Global position of entity e's sound source: its origin; brush
+ * entities (origin at the map origin) sound from the centre of their box
+ * (sound.md 1). 0 when e is not live. */
+static int ent_pos(int e, float out[3])
+{
+	const col_ent_t *cv;
+	const float *g;
+	int k;
+
+	if (!ent_is_live(e))
+		return 0;
+	cv = ent_cv(e);
+	g = eng_layer_origin(ent_idc(e)->layer);
+	for (k = 0; k < 3; k++)
+	{
+		out[k] = cv->origin[k] + g[k];
+		if (cv->model != COL_NONE)
+			out[k] += 0.5f * (cv->mins[k] + cv->maxs[k]);
+	}
+	return 1;
+}
+
+static void snd_logf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void snd_logf(const char *fmt, ...)
+{
+	va_list ap;
+
+	if (!S->log)
+		return;
+	va_start(ap, fmt);
+	log_vprintf(fmt, ap);
+	va_end(ap);
+}
+
+static const char *rname(res_t r)
+{
+	const char *n = res_name(r);
+
+	return n && n[0] ? n : "-";
+}
+
+void snd_gains(const float src[3], float vol, float attn, int self, float *left, float *right)
+{
+	float d[3], dist, g, s, l, r;
+	int k;
+
+	vol = clampf(vol, 0.0f, 1.0f);
+	if (self || attn <= 0.0f)
+	{
+		*left = *right = vol;
+		return;
+	}
+	for (k = 0; k < 3; k++)
+		d[k] = src[k] - S->lis[k];
+	dist = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+	g = 1.0f - dist * attn / SND_CLIP_DIST;
+	if (g <= 0.0f)
+	{
+		*left = *right = 0.0f;
+		return;
+	}
+	s = 0.0f;
+	if (dist > 1.0f)
+		s = (S->right[0] * d[0] + S->right[1] * d[1] + S->right[2] * d[2]) / dist;
+	l = vol * g * (1.0f - s);
+	r = vol * g * (1.0f + s);
+	*left = l > 1.0f ? 1.0f : l;
+	*right = r > 1.0f ? 1.0f : r;
+}
+
+float snd_pitch_rate(uint32_t freq, int pitch)
+{
+	float rate = (float)freq * (float)clamp_pitch(pitch) * 0.01f;
+	float cap = (float)SND_HZ * (SND_PITCH_CAP * 0.01f);
+
+	return rate > cap ? cap : rate;
+}
+
+void snd_log_set(int on)
+{
+	if (S)
+		S->log = on;
+}
+
+/* ---- waves ------------------------------------------------------------------ */
+
+static int wave_in_use(int w)
+{
+	int v;
+
+	for (v = 0; v < SND_VOICES; v++)
+		if (S->v[v].busy && S->v[v].wave == w)
+			return 1;
+	return 0;
+}
+
+int snd_waves_open(void)
+{
+	int w, n = 0;
+
+	for (w = 0; w < SND_WAVES; w++)
+		n += S->w[w].hw != NULL;
+	return n;
+}
+
+int snd_wave_voice_check(void)
+{
+	int v;
+
+	for (v = 0; v < SND_VOICES; v++)
+		if (S->v[v].busy && S->v[v].wave >= 0
+			&& (!S->w[S->v[v].wave].hw || S->w[S->v[v].wave].res != S->v[v].res))
+			return v;
+	return -1;
+}
+
+static void voice_free(int v, const char *why);
+
+/* An open wave slot no voice plays, the least recently used; -1 none. */
+static int wave_lru_unused(void)
+{
+	int w, best = -1;
+
+	for (w = 0; w < SND_WAVES; w++)
+		if (S->w[w].hw && !wave_in_use(w) && (best < 0 || S->w[w].lru < S->w[best].lru))
+			best = w;
+	return best;
+}
+
+/* The playing one-shot (or sentence) started least recently, except
+ * S->keep; -1 none. */
+static int oldest_oneshot(void)
+{
+	int v, best = -1;
+
+	for (v = 0; v < SND_VOICES; v++)
+		if (S->v[v].busy && S->v[v].loop < 0 && v != S->keep
+			&& (best < 0 || S->v[v].seq < S->v[best].seq))
+			best = v;
+	return best;
+}
+
+/* Open sound r (or find it open): its wave slot, -1 when it cannot play. */
+static int wave_get(res_t r)
+{
+	unsigned idx = RES_INDEX(r);
+	int w, file, rc;
+	uint32_t ofs, size, rom;
+
+	if (RES_KIND(r) != RES_K_SOUND || idx >= SND_MAX_SOUNDS || (S->missing[idx >> 3] >> (idx & 7) & 1))
+		return -1;
+	for (w = 0; w < SND_WAVES; w++)
+		if (S->w[w].hw && S->w[w].res == r)
+		{
+			S->w[w].lru = ++S->clock;
+			return w;
+		}
+	for (w = 0; w < SND_WAVES && S->w[w].hw; w++)
+		;
+	if (w == SND_WAVES)
+	{
+		/* every wave open: close the LRU one no voice plays; when every
+		 * open wave is under a voice, the oldest one-shots give way */
+		while ((w = wave_lru_unused()) < 0)
+		{
+			int v = oldest_oneshot();
+
+			if (v < 0)
+			{
+				snd_logf("snd %lu drop s%u %s wave-cap\n", (unsigned long)S->frame,
+					(unsigned)r, rname(r));
+				return -1;
+			}
+			S->st.stolen++;
+			voice_free(v, "steal-wave");
+		}
+		snd_logf("snd %lu close s%u %s\n", (unsigned long)S->frame, (unsigned)S->w[w].res,
+			rname(S->w[w].res));
+		snd_hw_close(S->w[w].hw);
+		S->w[w].hw = NULL;
+	}
+	if (!res_file(r, &file, &ofs, &size) || !(rom = res_file_rom(file, NULL)))
+		rc = -1;
+	else
+		rc = snd_hw_open(rom + ofs, size, &S->w[w].inf, &S->w[w].hw);
+	if (rc)
+	{
+		S->w[w].hw = NULL;
+		if (rc == -1)
+			S->missing[idx >> 3] |= (uint8_t)(1u << (idx & 7));
+		snd_logf("snd %lu drop s%u %s %s\n", (unsigned long)S->frame, (unsigned)r, rname(r),
+			rc == -1 ? "missing" : "no-room");
+		return -1;
+	}
+	S->w[w].res = r;
+	S->w[w].lru = ++S->clock;
+	rc = snd_waves_open();
+	if ((uint32_t)rc > S->st.waves_peak)
+		S->st.waves_peak = (uint32_t)rc;
+	return w;
+}
+
+/* ---- voices ----------------------------------------------------------------- */
+
+static void voice_apply(int v)
+{
+	voice_t *p = &S->v[v];
+	float l, r, m = master();
+
+	snd_gains(p->org, p->vol * p->wvol * 0.01f, p->attn, p->ent == SND_SELF, &l, &r);
+	snd_hw_vol(v, l * m, r * m);
+}
+
+static void voice_rate(int v)
+{
+	voice_t *p = &S->v[v];
+
+	snd_hw_rate(v, snd_pitch_rate(S->w[p->wave].inf.freq, p->pitch * p->wpitch / 100));
+}
+
+static uint32_t voices_busy(void)
+{
+	uint32_t n = 0;
+	int v;
+
+	for (v = 0; v < SND_VOICES; v++)
+		n += S->v[v].busy;
+	return n;
+}
+
+/* Start voice v's wave slot w from sample pos (fields set by the caller). */
+static void voice_start(int v, int w, uint32_t pos, const char *what)
+{
+	voice_t *p = &S->v[v];
+	float l, r;
+	uint32_t n;
+
+	p->busy = 1;
+	p->wave = (int8_t)w;
+	p->res = S->w[w].res;
+	snd_hw_play(v, S->w[w].hw, pos);
+	voice_rate(v);
+	voice_apply(v);
+	S->w[w].lru = ++S->clock;
+	S->st.started++;
+	n = voices_busy();
+	if (n > S->st.voices_peak)
+		S->st.voices_peak = n;
+	if (S->log)
+	{
+		snd_gains(p->org, p->vol * p->wvol * 0.01f, p->attn, p->ent == SND_SELF, &l, &r);
+		snd_logf("snd %lu %s v%d e%d c%d s%u %s l=%.3f r=%.3f rate=%d pos=%lu\n",
+			(unsigned long)S->frame, what, v, p->ent == ENT_NONE ? -1 : (int)p->ent,
+			(int)p->chan, (unsigned)p->res, rname(p->res), (double)l, (double)r,
+			(int)(snd_pitch_rate(S->w[w].inf.freq, p->pitch * p->wpitch / 100) + 0.5f),
+			(unsigned long)pos);
+	}
+}
+
+/* Stop voice v; a loop that owned it goes virtual. */
+static void voice_free(int v, const char *why)
+{
+	voice_t *p = &S->v[v];
+
+	if (!p->busy)
+		return;
+	snd_hw_stop(v);
+	if (p->loop >= 0 && S->l[p->loop].voice == v)
+		S->l[p->loop].voice = -1;
+	snd_logf("snd %lu %s v%d e%d c%d s%u %s\n", (unsigned long)S->frame, why, v,
+		p->ent == ENT_NONE ? -1 : (int)p->ent, (int)p->chan, (unsigned)p->res, rname(p->res));
+	memset(p, 0, sizeof(*p));
+	p->wave = -1;
+	p->loop = -1;
+	p->sent = SENT_NONE;
+}
+
+/* A voice for a new sound: an idle one (a finished one-shot is reaped);
+ * else (steal) the one-shot started least recently; a loop's voice only
+ * when every voice holds a loop. -1 when steal is 0 and none is idle. */
+static int voice_pick(int steal)
+{
+	int v, best = -1;
+
+	for (v = 0; v < SND_VOICES; v++)
+		if (!S->v[v].busy)
+			return v;
+	for (v = 0; v < SND_VOICES; v++)
+		if (S->v[v].loop < 0 && S->v[v].sent == SENT_NONE && !snd_hw_playing(v))
+		{
+			voice_free(v, "end");
+			return v;
+		}
+	if (!steal)
+		return -1;
+	if ((best = oldest_oneshot()) < 0)
+		for (v = 0; v < SND_VOICES; v++)
+			if (v != S->keep && (best < 0 || S->v[v].seq < S->v[best].seq))
+				best = v;
+	if (best < 0)
+		return -1;
+	S->st.stolen++;
+	voice_free(best, S->v[best].loop >= 0 ? "steal-loop" : "steal");
+	return best;
+}
+
+static void voice_init(int v, int e, int chan, float vol, float attn, int pitch,
+	const float org[3], int follow)
+{
+	voice_t *p = &S->v[v];
+
+	memset(p, 0, sizeof(*p));
+	p->wave = -1;
+	p->loop = -1;
+	p->sent = SENT_NONE;
+	p->chan = (int8_t)chan;
+	p->ent = (uint16_t)e;
+	p->follow = (uint8_t)follow;
+	p->pitch = (uint8_t)clamp_pitch(pitch);
+	p->vol = clampf(vol, 0.0f, 1.0f);
+	p->attn = attn > 0.0f ? attn : 0.0f;
+	p->wvol = 100;
+	p->wpitch = 100;
+	memcpy(p->org, org, sizeof(p->org));
+	p->seq = ++S->seq;
+}
+
+/* ---- sentences -------------------------------------------------------------- */
+
+/* Start the next playable word on voice v, or free it at the end. */
+static void sentence_next(int v, double gap)
+{
+	voice_t *p = &S->v[v];
+
+	S->keep = v;
+	while (p->left)
+	{
+		const res_word_t *wd = res_word(p->word);
+		int w;
+
+		p->word++;
+		p->left--;
+		if (!wd || (w = wave_get(wd->res)) < 0)
+			continue;
+		p->wvol = wd->volume;
+		p->wpitch = wd->pitch;
+		p->end_pos = wd->end > 0 && wd->end < 100
+			? (uint32_t)((uint64_t)S->w[w].inf.len * wd->end / 100) : 0;
+		voice_start(v, w, 0, "word");
+		if (gap >= 0.0)
+			snd_logf("snd %lu gap v%d sent%u word%u gap_us=%lu\n", (unsigned long)S->frame,
+				v, (unsigned)p->sent, (unsigned)(p->word - 1), (unsigned long)(gap * 1e6 + 0.5));
+		S->keep = -1;
+		return;
+	}
+	S->keep = -1;
+	voice_free(v, "end");
+}
+
+/* ---- loops ------------------------------------------------------------------ */
+
+static uint32_t loops_used(void)
+{
+	uint32_t n = 0;
+	int i;
+
+	for (i = 0; i < SND_LOOPS; i++)
+		n += S->l[i].used;
+	return n;
+}
+
+static void loop_follow(loop_t *lp)
+{
+	if (lp->ent == SND_SELF)
+		memcpy(lp->org, S->lis, sizeof(lp->org));
+	else if (lp->follow && !ent_pos(lp->ent, lp->org))
+		lp->follow = 0;
+}
+
+/* Give an audible loop a voice (a new loop may steal; a returning one
+ * takes an idle voice only), take it from an inaudible one, else set its
+ * ear gains. */
+static void loop_update(int i, int fresh)
+{
+	loop_t *lp = &S->l[i];
+	float l, r;
+	int v, w;
+
+	loop_follow(lp);
+	snd_gains(lp->org, lp->vol, lp->attn, lp->ent == SND_SELF, &l, &r);
+	if (l + r < SND_AUDIBLE)
+	{
+		if (lp->voice >= 0)
+			voice_free(lp->voice, "virtual");
+		return;
+	}
+	if (lp->voice >= 0)
+	{
+		voice_t *p = &S->v[(int)lp->voice];
+
+		memcpy(p->org, lp->org, sizeof(p->org));
+		voice_apply(lp->voice);
+		return;
+	}
+	if ((w = wave_get(lp->res)) < 0)
+		return;
+	if ((v = voice_pick(fresh)) < 0)
+		return;
+	voice_init(v, lp->ent, lp->chan, lp->vol, lp->attn, lp->pitch, lp->org, lp->follow);
+	S->v[v].seq = lp->seq;
+	S->v[v].loop = (int8_t)i;
+	lp->voice = (int8_t)v;
+	voice_start(v, w, fresh ? 0 : S->w[w].inf.len - S->w[w].inf.loop_len,
+		fresh ? "start" : "resume");
+}
+
+static void loop_start(int e, int chan, res_t r, float vol, float attn, int pitch,
+	const float org[3], int follow)
+{
+	loop_t *lp;
+	uint32_t n;
+	int i;
+
+	for (i = 0; i < SND_LOOPS && S->l[i].used; i++)
+		;
+	if (i == SND_LOOPS)
+	{
+		S->st.dropped++;
+		snd_logf("snd %lu drop s%u %s loops-full\n", (unsigned long)S->frame, (unsigned)r,
+			rname(r));
+		return;
+	}
+	lp = &S->l[i];
+	memset(lp, 0, sizeof(*lp));
+	lp->used = 1;
+	lp->voice = -1;
+	lp->chan = (int8_t)chan;
+	lp->ent = (uint16_t)e;
+	lp->follow = (uint8_t)follow;
+	lp->res = r;
+	lp->vol = clampf(vol, 0.0f, 1.0f);
+	lp->attn = attn > 0.0f ? attn : 0.0f;
+	lp->pitch = (uint8_t)clamp_pitch(pitch);
+	memcpy(lp->org, org, sizeof(lp->org));
+	lp->seq = ++S->seq;
+	n = loops_used();
+	if (n > S->st.loops_peak)
+		S->st.loops_peak = n;
+	snd_logf("snd %lu loop L%d e%d c%d s%u %s\n", (unsigned long)S->frame, i,
+		e == ENT_NONE ? -1 : e, chan, (unsigned)r, rname(r));
+	loop_update(i, 1);
+	if (lp->voice < 0)
+		snd_logf("snd %lu virtual L%d\n", (unsigned long)S->frame, i);
+}
+
+/* ---- channel operations ------------------------------------------------------ */
+
+/* (e, chan) matches; chan < 0 = every channel; for ent ENT_NONE (fixed
+ * points) the sound r identifies the source. */
+static int match(uint16_t ent, int8_t chan, res_t res, int e, int c, res_t r)
+{
+	if (ent != (uint16_t)e)
+		return 0;
+	if (e == ENT_NONE)
+		return res == r;
+	return c < 0 || chan == c;
+}
+
+static void stop_match(int e, int c, res_t r, const char *why)
+{
+	int i;
+
+	for (i = 0; i < SND_VOICES; i++)
+	{
+		voice_t *p = &S->v[i];
+
+		if (p->busy && p->loop < 0 && match(p->ent, p->chan, p->res, e, c, r))
+			voice_free(i, why);
+	}
+	for (i = 0; i < SND_LOOPS; i++)
+	{
+		loop_t *lp = &S->l[i];
+
+		if (lp->used && match(lp->ent, lp->chan, lp->res, e, c, r))
+		{
+			if (lp->voice >= 0)
+				voice_free(lp->voice, why);
+			lp->used = 0;
+			snd_logf("snd %lu loop-end L%d %s\n", (unsigned long)S->frame, i, why);
+		}
+	}
+}
+
+static void change_match(int e, int c, res_t r, int flags, float vol, int pitch)
+{
+	int i;
+
+	vol = clampf(vol, 0.0f, 1.0f);
+	pitch = clamp_pitch(pitch);
+	for (i = 0; i < SND_LOOPS; i++)
+	{
+		loop_t *lp = &S->l[i];
+
+		if (!lp->used || !match(lp->ent, lp->chan, lp->res, e, c, r))
+			continue;
+		if (flags & SND_CHANGE_VOL)
+			lp->vol = vol;
+		if (flags & SND_CHANGE_PITCH)
+			lp->pitch = (uint8_t)pitch;
+	}
+	for (i = 0; i < SND_VOICES; i++)
+	{
+		voice_t *p = &S->v[i];
+
+		if (!p->busy)
+			continue;
+		if (p->loop >= 0)
+		{
+			loop_t *lp = &S->l[p->loop];
+
+			if (!match(lp->ent, lp->chan, lp->res, e, c, r))
+				continue;
+		}
+		else if (!match(p->ent, p->chan, p->res, e, c, r))
+			continue;
+		if (flags & SND_CHANGE_VOL)
+			p->vol = vol;
+		if (flags & SND_CHANGE_PITCH)
+			p->pitch = (uint8_t)pitch;
+		if (p->wave >= 0)
+		{
+			voice_rate(i);
+			voice_apply(i);
+		}
+		snd_logf("snd %lu change v%d vol=%.3f pitch=%d\n", (unsigned long)S->frame, i,
+			(double)p->vol, (int)p->pitch);
+	}
+}
+
+/* Shared start path of snd_emit / snd_ambient (flags without STOP /
+ * CHANGE_*). */
+static void start_sample(int e, int chan, res_t r, float vol, float attn, int pitch,
+	const float org[3], int follow)
+{
+	float l, r2;
+	int w, v;
+
+	if (chan != CHAN_AUTO && e != ENT_NONE)
+		stop_match(e, chan, r, "replace");
+	if ((w = wave_get(r)) < 0)
+	{
+		S->st.dropped++;
+		return;
+	}
+	if (S->w[w].inf.loop_len)
+	{
+		loop_start(e, chan, r, vol, attn, pitch, org, follow);
+		return;
+	}
+	snd_gains(org, vol, attn, e == SND_SELF, &l, &r2);
+	if (l + r2 <= 0.0f)
+	{
+		S->st.dropped++;
+		snd_logf("snd %lu drop s%u %s silent\n", (unsigned long)S->frame, (unsigned)r, rname(r));
+		return;
+	}
+	S->keep = -1;
+	if ((v = voice_pick(1)) < 0)
+	{
+		S->st.dropped++;
+		return;
+	}
+	voice_init(v, e, chan, vol, attn, pitch, org, follow);
+	voice_start(v, w, 0, "start");
+}
+
+/* ---- API --------------------------------------------------------------------- */
+
+void snd_emit(int e, int chan, res_t sound, float vol, float attn, int flags, int pitch)
+{
+	float org[3];
+
+	if (!S)
+		return;
+	S->st.emits++;
+	if (flags & SND_STOP)
+	{
+		stop_match(e, chan, sound, "stop");
+		return;
+	}
+	if (flags & (SND_CHANGE_VOL | SND_CHANGE_PITCH))
+	{
+		change_match(e, chan, sound, flags, vol, pitch);
+		return;
+	}
+	if (e == SND_SELF)
+		memcpy(org, S->lis, sizeof(org));
+	else if (!ent_pos(e, org))
+	{
+		S->st.dropped++;
+		return;
+	}
+	start_sample(e, chan, sound, vol, attn, pitch, org, 1);
+}
+
+void snd_ambient(const float org[3], res_t sound, float vol, float attn, int flags, int pitch)
+{
+	const float *g;
+	float p[3];
+	int k;
+
+	if (!S)
+		return;
+	S->st.emits++;
+	if (flags & SND_STOP)
+	{
+		stop_match(ENT_NONE, CHAN_STATIC, sound, "stop");
+		return;
+	}
+	if (flags & (SND_CHANGE_VOL | SND_CHANGE_PITCH))
+	{
+		change_match(ENT_NONE, CHAN_STATIC, sound, flags, vol, pitch);
+		return;
+	}
+	g = eng_layer_origin(eng_frame_layer());
+	for (k = 0; k < 3; k++)
+		p[k] = org[k] + g[k];
+	start_sample(ENT_NONE, CHAN_STATIC, sound, vol, attn, pitch, p, 0);
+}
+
+void snd_sentence(int e, int chan, uint16_t sentence, float vol, float attn, int flags,
+	int pitch)
+{
+	float org[3], l, r;
+	int first, n, v;
+
+	if (!S)
+		return;
+	S->st.emits++;
+	if (flags & SND_STOP)
+	{
+		stop_match(e, chan, 0, "stop");
+		return;
+	}
+	if (flags & (SND_CHANGE_VOL | SND_CHANGE_PITCH))
+	{
+		change_match(e, chan, 0, flags, vol, pitch);
+		return;
+	}
+	if (e == SND_SELF)
+		memcpy(org, S->lis, sizeof(org));
+	else if (!ent_pos(e, org))
+	{
+		S->st.dropped++;
+		return;
+	}
+	if (chan != CHAN_AUTO)
+		stop_match(e, chan, 0, "replace");
+	n = res_sentence_words(sentence, &first);
+	snd_gains(org, vol, attn, e == SND_SELF, &l, &r);
+	if (n <= 0 || l + r <= 0.0f)
+	{
+		S->st.dropped++;
+		snd_logf("snd %lu drop sent%u %s\n", (unsigned long)S->frame, (unsigned)sentence,
+			n <= 0 ? "unknown" : "silent");
+		return;
+	}
+	S->keep = -1;
+	if ((v = voice_pick(1)) < 0)
+	{
+		S->st.dropped++;
+		return;
+	}
+	voice_init(v, e, chan, vol, attn, pitch, org, 1);
+	S->v[v].busy = 1;
+	S->v[v].sent = sentence;
+	S->v[v].word = (uint16_t)first;
+	S->v[v].left = (uint8_t)(n > 255 ? 255 : n);
+	snd_logf("snd %lu sentence v%d e%d c%d sent%u words=%d\n", (unsigned long)S->frame, v, e,
+		chan, (unsigned)sentence, n);
+	sentence_next(v, -1.0);
+}
+
+void snd_stop(int e, int chan)
+{
+	if (S)
+		stop_match(e, chan, 0, "stop");
+}
+
+void snd_entity_freed(int e)
+{
+	int i;
+
+	if (!S)
+		return;
+	for (i = 0; i < SND_VOICES; i++)
+		if (S->v[i].busy && S->v[i].ent == (uint16_t)e)
+			S->v[i].follow = 0;
+	for (i = 0; i < SND_LOOPS; i++)
+		if (S->l[i].used && S->l[i].ent == (uint16_t)e)
+			S->l[i].follow = 0;
+}
+
+void snd_init(void)
+{
+	uint8_t *m = mem_region(MEM_SOUND);
+	uint32_t n = mem_region_bytes(MEM_SOUND), t = ((uint32_t)sizeof(snd_state_t) + 15u) & ~15u;
+	int v;
+
+	if (!m || n < t)
+		sys_error("snd: SOUND region %lu B under the %lu B tables", (unsigned long)n,
+			(unsigned long)t);
+	S = (snd_state_t *)m;
+	memset(S, 0, sizeof(*S));
+	S->tables = t;
+	S->keep = -1;
+	S->right[1] = -1.0f;
+#ifdef HL64_TEST
+	S->log = 1;
+#endif
+	for (v = 0; v < SND_VOICES; v++)
+	{
+		S->v[v].wave = -1;
+		S->v[v].loop = -1;
+		S->v[v].sent = SENT_NONE;
+	}
+	snd_hw_init(m + t, n - t);
+	log_printf("snd: %d voices @ %d Hz, %d loops, %d waves; tables %lu B of %lu B\n",
+		SND_VOICES, SND_HZ, SND_LOOPS, SND_WAVES, (unsigned long)t, (unsigned long)n);
+}
+
+void snd_frame(const float listener[3], const float right[3], double dt)
+{
+	uint64_t t0;
+	uint32_t us;
+	int i;
+
+	if (!S)
+		return;
+	t0 = sys_time_us();
+	memcpy(S->lis, listener, sizeof(S->lis));
+	memcpy(S->right, right, sizeof(S->right));
+	for (i = 0; i < SND_VOICES; i++)
+	{
+		voice_t *p = &S->v[i];
+
+		if (!p->busy || p->loop >= 0)
+			continue;
+		if (p->ent == SND_SELF)
+			memcpy(p->org, S->lis, sizeof(p->org));
+		else if (p->follow && !ent_pos(p->ent, p->org))
+			p->follow = 0;
+		if (p->sent != SENT_NONE)
+		{
+			if (!snd_hw_playing(i) || (p->end_pos && snd_hw_pos(i) >= p->end_pos))
+			{
+				double off = snd_hw_end_offset(i);
+				double gap = off >= 0.0 ? S->last_dt - off : S->last_dt;
+
+				/* word over: the next starts this frame (<= one frame) */
+				snd_hw_stop(i);
+				p->wave = -1;
+				sentence_next(i, gap);
+				if (!p->busy)
+					continue;
+			}
+		}
+		else if (!snd_hw_playing(i))
+		{
+			voice_free(i, "end");
+			continue;
+		}
+		voice_apply(i);
+	}
+	for (i = 0; i < SND_LOOPS; i++)
+		if (S->l[i].used)
+		{
+			int had = S->l[i].voice >= 0;
+
+			loop_update(i, 0);
+			if (had && S->l[i].voice < 0)
+				snd_logf("snd %lu virtual L%d\n", (unsigned long)S->frame, i);
+		}
+	snd_hw_pump(dt);
+	S->last_dt = dt;
+	S->frame++;
+	S->st.voices = voices_busy();
+	S->st.loops = loops_used();
+	S->st.waves_open = (uint32_t)snd_waves_open();
+	us = (uint32_t)(sys_time_us() - t0);
+	S->us_sum += us;
+	S->frames++;
+	if (us > S->st.us_max)
+		S->st.us_max = us;
+}
+
+void snd_stats(snd_stats_t *s, int reset)
+{
+	uint32_t now, peak;
+
+	if (!S)
+	{
+		memset(s, 0, sizeof(*s));
+		return;
+	}
+	*s = S->st;
+	s->voices = voices_busy();
+	s->loops = loops_used();
+	s->waves_open = (uint32_t)snd_waves_open();
+	s->frames = S->frames;
+	s->us = S->frames ? (uint32_t)(S->us_sum / S->frames) : 0;
+	snd_hw_mem(&now, &peak);
+	s->mem = S->tables + now;
+	s->mem_peak = S->tables + peak;
+	s->mem_region = mem_region_bytes(MEM_SOUND);
+	if (reset)
+	{
+		S->st.emits = S->st.started = S->st.stolen = S->st.dropped = 0;
+		S->st.voices_peak = s->voices;
+		S->st.loops_peak = s->loops;
+		S->st.waves_peak = s->waves_open;
+		S->st.us_max = 0;
+		S->us_sum = 0;
+		S->frames = 0;
+	}
+}
