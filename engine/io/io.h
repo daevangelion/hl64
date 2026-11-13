@@ -61,6 +61,9 @@ typedef struct
 	uint64_t	load_us;
 	uint32_t	hist[6];		/* frames by async bytes: 0, <=8K, <=16K, <=32K, <=64K, more */
 	uint32_t	kb_hist[IO_KB_BINS];	/* frames by async KB (rounded up), last bin = more */
+	uint32_t	audio_calls;		/* AUDIO class reads (mixer wave data) */
+	uint64_t	audio_bytes;
+	uint64_t	audio_us;		/* their PI time (host: modelled) */
 } io_stats_t;
 
 void	io_init(void);
@@ -75,6 +78,14 @@ void	io_finish(io_req_t *r);
 void	io_pump(void);
 /* Blocking read outside the queue (waits for the piece in flight first). */
 void	io_read_sync(void *dst, uint32_t rom, uint32_t len);
+/*
+ * AUDIO class (architecture 5.2: AUDIO > OPEN > SEAM > PREFETCH): the
+ * mixer's wave reads, synchronous and ahead of every queued request (they
+ * wait only for the piece in flight). Counted apart from blocked I/O and
+ * the async budget (snd's own CPU time includes them). dst 16-aligned,
+ * rom and len even.
+ */
+void	io_read_audio(void *dst, uint32_t rom, uint32_t len);
 int	io_busy(void);
 /* A piece is still in flight (a finished one is retired first): a sync read
  * now would wait for it. */

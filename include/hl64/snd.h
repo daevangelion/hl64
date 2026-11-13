@@ -47,10 +47,16 @@ void	snd_init(void);
 void	snd_frame(const float listener[3], const float right[3], double dt);
 void	snd_entity_freed(int e);
 
+/* The window runs from the last reset: emits..dropped and the peaks count
+ * in it, us = mean snd_frame CPU (backend pump included) over its frames,
+ * us_max the worst frame. mem = SOUND region bytes in use (tables + the
+ * backend's voice buffers and open waves), mem_peak its high-water mark
+ * since boot, mem_region the region's size (HL64_SOUND_KB). */
 typedef struct {
 	uint32_t	emits, started, stolen, dropped;	/* in the window */
 	uint32_t	voices, voices_peak, loops, loops_peak, waves_open, waves_peak;
-	uint32_t	us, us_max;
+	uint32_t	us, us_max, frames;
+	uint32_t	mem, mem_peak, mem_region;
 } snd_stats_t;
 void	snd_stats(snd_stats_t *s, int reset);
 
