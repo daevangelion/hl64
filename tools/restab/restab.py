@@ -392,7 +392,9 @@ class Content:
 
 
 def _norm(name: str) -> str:
-    return name.strip().replace("\\", "/").lower()
+    """lower case, "/" separators, no leading "/" (map keys write
+    "/models/mbarrel.mdl" for models/mbarrel.mdl)"""
+    return name.strip().replace("\\", "/").lstrip("/").lower()
 
 
 def res_kind_of_value(value: str) -> Optional[Tuple[int, str]]:
@@ -585,17 +587,41 @@ def cook(content_dir: str, defs_dir: str, map_names: Optional[List[str]] = None)
         if any(group_name(s.name).upper() == name for s in all_sent):
             group_refs.setdefault(name, "studio event")
     keep: List[Sentence] = []
+    dropped_sentences: Set[str] = set()
     for s in all_sent:
         if s.name.upper() in sentence_refs or group_name(s.name).upper() in group_refs:
             if by_name[s.name.upper()] is s:
-                keep.append(s)
+                # GoldSrc skips a word whose sample is missing: drop it, and
+                # the sentence when no word remains (its group skips it)
+                words = []
+                for word, mods in s.words:
+                    if content.find(cart_file_of(rtb.KIND_SOUND, _norm(word) + ".wav")):
+                        words.append((word, mods))
+                    else:
+                        print(f"restab: warning: sentences.txt:{s.line} {s.name}: word {word} "
+                              f"has no sound/{_norm(word)}.wav64: dropped", file=sys.stderr)
+                if not words:
+                    print(f"restab: warning: sentences.txt:{s.line} {s.name}: no word left: "
+                          f"sentence dropped", file=sys.stderr)
+                    dropped_sentences.add(s.name.upper())
+                    continue
+                keep.append(Sentence(s.name, s.line, words))
     for name, where in sorted(sentence_refs.items()):
         if name not in by_name:
             raise CookError(f"{where}: sentence {name} not in sound/sentences.txt")
     groups_present = {group_name(s.name).upper() for s in keep}
+    groups_listed = {group_name(s.name).upper() for s in all_sent}
     for name, where in sorted(group_refs.items()):
-        if name not in groups_present:
+        if name not in groups_listed:
             raise CookError(f"{where}: sentence group {name} not in sound/sentences.txt")
+        if name not in groups_present:
+            print(f"restab: warning: {where}: sentence group {name}: no sentence left "
+                  f"(missing sounds): no id", file=sys.stderr)
+    for kind, name in def_keys:
+        if (kind == rtb.KIND_SENTENCE and name in dropped_sentences) or \
+                (kind == rtb.KIND_GROUP and name not in groups_present):
+            raise CookError(f"res.def: {rtb.KIND_NAMES[kind]} {name}: none of its words has a "
+                            f"staged sound")
     for s in keep:
         for word, _ in s.words:
             refs.setdefault((rtb.KIND_SOUND, _norm(word) + ".wav"),
