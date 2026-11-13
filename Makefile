@@ -61,7 +61,7 @@ GAME_SRC_MON := game/hl/monsters.c game/hl/schedule.c game/hl/defaultai.c game/h
 	game/hl/aisound.c game/hl/nodes.c game/hl/scripted.c game/hl/sentences.c \
 	game/hl/talkmonster.c game/hl/scientist.c game/hl/monstermaker.c \
 	game/hl/barney.c game/hl/generic.c game/hl/headcrab.c \
-	game/hl/aisquad.c
+	game/hl/aisquad.c game/hl/houndeye.c
 GAME_SRC_ITEMS :=
 GAME_SRC_STUDIO :=
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \

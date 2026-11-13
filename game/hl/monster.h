@@ -37,6 +37,7 @@
 #include <stdint.h>
 
 #include "game/hl/cbase.h"
+#include "game/hl/gib.h"
 #include "game/hl/util.h"
 #include "game/studio/anim.h"
 #include "hl64/studio.h"
@@ -932,21 +933,6 @@ void	Mon_CallGibMonster(int e);
 int	Mon_GetSmallFlinchActivity(int e);
 void	Mon_MakeDamageBloodDecal(int e, int cCount, float flNoise, const col_trace_t *tr,
 		const float dir[3]);
-/* CGib (monsters.h): class "gib", a CBaseEntity with these members */
-typedef struct {
-	CBASEENTITY_FIELDS
-	int		m_bloodColor;
-	int		m_cBloodDecals;
-	int		m_material;	/* -1 = matNone */
-	float		m_lifeTime;
-} CGib;
-#define GIB(e)	((CGib *)ent_priv(e))
-/* GetClassPtr((CGib *)NULL): a fresh gib entity (-1 none); then CGib_Spawn */
-int	CGib_Create(void);
-void	CGib_Spawn(int e, res_t model);	/* CGib::Spawn(szGibModel) */
-void	CGib_SpawnHeadGib(int victim);
-void	CGib_SpawnRandomGibs(int victim, int cGibs, int human);
-void	CGib_SpawnStickyGibs(int victim, const float org[3], int cGibs);
 
 /* CBaseEntity::FireBullets (monsters; weapons.h constants) */
 enum { BULLET_NONE = 0, BULLET_PLAYER_9MM, BULLET_PLAYER_MP5, BULLET_PLAYER_357,
