@@ -5,7 +5,8 @@
 # prints the carve table and exits 0; with --ares the HL64_TEST ROM does
 # the same in the patched ares and exits 0 through the test harness, and
 # its carve table must equal the host's line for line. Also reports drift
-# between the cart's measured heap and HL64_HOST_HEAP_KB.
+# between the cart's heap after the carve and the host's (derived from the
+# cart ELF, include/hl64/limits.h HL64_CART_*).
 #
 # Usage: test/run/m0.sh [--ares]
 # Env:   BUILD_DIR (default build; put scratch on /scratch),
@@ -70,8 +71,8 @@ grep '^carve:' "$OUT/ares-clean.log" >"$OUT/ares-carve.txt"
 diff -u "$OUT/host-carve.txt" "$OUT/ares-carve.txt" || fail "carve tables differ"
 echo "ares: boot ok, carve table identical to host, exit 0"
 
-cart_heap="$(sed -n 's/^mem: heap free \([0-9]*\) KB.*/\1/p' "$OUT/ares-clean.log")"
-host_heap="$(sed -n 's/^mem: heap free \([0-9]*\) KB.*/\1/p' "$OUT/host.log")"
-echo "heap after carve: cart ${cart_heap} KB, host ${host_heap} KB"
-[[ "$cart_heap" == "$host_heap" ]] || echo "note: set HL64_HOST_HEAP_KB in include/hl64/limits.h so the host heap matches the cart (drift $((host_heap - cart_heap)) KB)"
+cart_heap="$(sed -n 's/^mem: heap free .* free \([0-9]*\) B$/\1/p' "$OUT/ares-clean.log")"
+host_heap="$(sed -n 's/^mem: heap free .* free \([0-9]*\) B$/\1/p' "$OUT/host.log")"
+echo "heap after carve: cart ${cart_heap} B, host ${host_heap} B"
+[[ "$cart_heap" == "$host_heap" ]] || echo "note: host heap differs from the cart's (drift $((host_heap - cart_heap)) B): recalibrate HL64_CART_BOOT_BYTES in include/hl64/limits.h"
 echo "M0 PASS (host + ares)"

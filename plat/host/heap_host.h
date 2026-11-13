@@ -2,7 +2,8 @@
 /*
  * heap_host.h -- the host build's malloc (heap_host.c, imported from the
  * old tree's n64/port/host/q64_heap_host.h, audit entry CLEAN): the
- * cart's newlib dlmalloc on a static arena of HL64_HOST_HEAP_KB, so the
+ * cart's newlib dlmalloc on a static arena the size of the cart's heap
+ * after the boot carve (heap_host.c ARENA_BYTES), so the
  * engine's malloc / calloc / realloc / free (engine/mem/heap.c --wrap)
  * split, coalesce and fragment as on the cart.
  */

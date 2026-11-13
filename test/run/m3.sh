@@ -183,13 +183,20 @@ grep -q '^changelevel: hldemo2 ' "$OUT/ares-a.log" || fail "m3-a (ares): no 'cha
 diff <(records "$OUT/host-a.log") <(records "$OUT/ares-a.log") >"$OUT/k10.diff" \
 	|| { head -20 "$OUT/k10.diff" >&2; fail "K10: the cart's route ops / stats records differ from the host's"; }
 say "m3-a: route PASS (ares), route ops and player / entity records identical to the host (K10)"
-# the host arena is the cart's heap after the carve (limits.h HL64_HOST_HEAP_KB)
-heapfree() { sed -n 's/^mem: heap free \([0-9]*\) KB.*/\1/p' "$1" | head -1; }
-HH="$(heapfree "$OUT/host-a.log")"
+# The host heap is the cart's heap after the carve, derived from the
+# HL64_TEST cart ELF (Makefile cart_image.h, limits.h HL64_CART_*): a
+# PROFILE host mirrors this PROFILE ROM; boot it on the ROM's content
+# (route.rbc in it; its commands are the ROM's dbg.cmd) and compare.
+make -C "$ROOT" --no-print-directory BUILD_DIR="$ROMDIR" PROFILE=1 host >"$OUT/host-profile-build.log" 2>&1 \
+	|| { tail -30 "$OUT/host-profile-build.log" >&2; fail "PROFILE host build"; }
+"$ROMDIR/host/hl64-host" --root "$BC" "${CMDS[@]}" --frames 1 >"$OUT/host-profile-boot.log" 2>&1 \
+	|| { tail -20 "$OUT/host-profile-boot.log" >&2; fail "PROFILE host boot"; }
+heapfree() { sed -n 's/^mem: heap free .* free \([0-9]*\) B$/\1/p' "$1" | head -1; }
+HH="$(heapfree "$OUT/host-profile-boot.log")"
 CH="$(heapfree "$OUT/ares-a.log")"
 [[ -n "$HH" && "$HH" == "$CH" ]] \
-	|| fail "heap after carve: host ${HH:-?} KB, cart ${CH:-?} KB (set HL64_HOST_HEAP_KB to the cart's)"
-say "heap after carve: host $HH KB = cart $CH KB"
+	|| fail "heap after carve: host ${HH:-?} B, cart ${CH:-?} B (recalibrate limits.h HL64_CART_BOOT_BYTES)"
+say "heap after carve: host $HH B = cart $CH B"
 
 if [[ -e "$ROOT/test/m3/snd_ares.sh" ]]; then
 	BUILD_DIR="$BUILD_DIR" HL64_CONTENT="$CONTENT" ARES_BIN="$ARES_BIN" "$ROOT/test/m3/snd_ares.sh" \
