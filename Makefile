@@ -57,7 +57,10 @@ ENGINE_SRC_SND := engine/snd/snd.c
 ENGINE_SRC_FX := engine/render/fx.c engine/render/tent.c engine/render/part.c \
 	engine/render/beam.c engine/render/decal.c engine/render/sprite.c engine/render/trans.c
 ENGINE_SRC_D2 :=
-GAME_SRC_CORE :=
+GAME_SRC_CORE := game/hl/util.c game/hl/dispatch.c game/hl/world.c game/hl/triggers.c game/hl/logic.c \
+	game/hl/doors.c game/hl/buttons.c game/hl/lights.c game/hl/ambient.c \
+	game/hl/material.c game/hl/env.c game/hl/bmodels.c game/hl/plats.c \
+	game/hl/breakable.c
 GAME_SRC_MON :=
 GAME_SRC_ITEMS :=
 GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
@@ -161,6 +164,9 @@ ROM_OBJS := $(addprefix $(BUILD_DIR)/,$(ENGINE_SRC:.c=.o) $(N64_SRC:.c=.o))
 $(foreach d,$(NOFASTMATH_DIRS),$(eval $(BUILD_DIR)/$(d)/%.o: CFLAGS += -fno-fast-math))
 $(BUILD_DIR)/engine/%.o: CFLAGS += -std=c99
 $(addprefix $(BUILD_DIR)/,game/pm/pm_shared.o game/pm/pm_math.o): CFLAGS += $(HLSDK_CFLAGS)
+# game/hl private blocks are HLSDK class chains as flat C structs used
+# through base-class pointers (game/hl/cbase.h)
+$(BUILD_DIR)/game/hl/%.o: CFLAGS += -fno-strict-aliasing
 
 # n64.mk sets the toolchain for %.z64 targets (and so for everything $(ROM)
 # depends on); `make elf` gets the same so it alone is a compile/link check.
@@ -219,6 +225,7 @@ $(BUILD_DIR)/host/%.o: %.c
 	$(HOST_CC) -c $(HOST_CFLAGS) -o $@ $<
 
 $(addprefix $(BUILD_DIR)/host/,game/pm/pm_shared.o game/pm/pm_math.o): HOST_CFLAGS += $(HLSDK_CFLAGS)
+$(BUILD_DIR)/host/game/hl/%.o: HOST_CFLAGS += -fno-strict-aliasing
 
 $(HOST_BIN): $(HOST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
