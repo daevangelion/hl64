@@ -50,6 +50,8 @@
 #define DL_PAIRS	512		/* dlit scratch per frame (vertex pairs) */
 #define FP_PAIRS	192		/* flashlight pool vertex pairs per frame */
 #define FP_IDX		512		/* flashlight pool strip indices per frame */
+#define FP_IDX_ALIGN	4		/* indices per 8 bytes: each batch's strip start (fp_flush) */
+_Static_assert(FP_IDX % FP_IDX_ALIGN == 0, "padded batch starts stay inside the pool");
 
 typedef struct {
 	const w64_meshlet_t	*m;
@@ -633,7 +635,13 @@ static void fp_cross(const float a[3], const float b[3], float o[3])
 	o[2] = a[0] * b[1] - a[1] * b[0];
 }
 
-/* Submit the batch [*v0, fp_used) pairs / [*i0, fp_iused) indices. */
+/* Submit the batch [*v0, fp_used) pairs / [*i0, fp_iused) indices. The
+ * next batch's indices start on the next 8-byte boundary (gpu.h
+ * gpu_draw): the RSP DMA drops an index pointer's low 3 bits, and a
+ * shifted strip both draws wrong triangles and, when the last index it
+ * sees opens a strip, steps past the strip's end and runs on through DMEM
+ * (ares: RSP CRASH in rspq_next_buffer, RDP busy, a frame after the
+ * flashlight came on). Vertex pairs are 32 bytes: always aligned. */
 static void fp_flush(int *v0, int *i0)
 {
 	int nv = (fp_used - *v0) * 2, ni = fp_iused - *i0;
@@ -644,6 +652,7 @@ static void fp_flush(int *v0, int *i0)
 		gpu_writeback(&fp_i[fp_cur][*i0], (uint32_t)ni * sizeof(int16_t));
 		gpu_draw(&fp_v[fp_cur][*v0], nv, &fp_i[fp_cur][*i0], ni);
 	}
+	fp_iused = (fp_iused + FP_IDX_ALIGN - 1) & ~(FP_IDX_ALIGN - 1);
 	*v0 = fp_used;
 	*i0 = fp_iused;
 }

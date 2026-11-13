@@ -10,6 +10,7 @@
  */
 #include <string.h>
 
+#include "engine/core/sys.h"
 #include "engine/render/gpu.h"
 
 static gpu_stats_t	cur, done;
@@ -80,6 +81,10 @@ void gpu_draw(const w64_vert_t *v, int nv, const int16_t *idx, int ni)
 {
 	int k, faces = 0;
 
+	/* the cart's RSP DMA alignment (gpu.h) */
+	if (((uintptr_t)v | (uintptr_t)idx) & 7)
+		sys_error("gpu: draw with vertices %p / strip %p not 8-byte aligned",
+			(const void *)v, (const void *)idx);
 	for (k = 0; k < ni; k++)
 		faces += (idx[k] & W64_IDX_RESTART) != 0;
 	mix(v->posA, sizeof(v->posA));

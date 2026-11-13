@@ -49,7 +49,10 @@ void	gpu_state_lost(void);
 /* Decal depth for the following draws (on: Z test against the coplanar
  * base, no Z write; off: the world's opaque state). */
 void	gpu_decal_depth(int on);
-/* One meshlet: vertex pairs (nv vertices) and its encoded strip. */
+/* One meshlet: vertex pairs (nv vertices) and its encoded strip. v and idx
+ * are 8-byte aligned: the cart's RSP DMAs both and drops the address's
+ * low 3 bits (a shifted strip draws wrong triangles and can run past its
+ * end: an RSP hang). The host build fails on a misaligned call. */
 void	gpu_draw(const w64_vert_t *v, int nv, const int16_t *idx, int ni);
 /* Vertex bytes the CPU rewrote (recolour, dlight scratch). */
 void	gpu_writeback(const void *p, uint32_t n);
