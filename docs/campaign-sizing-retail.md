@@ -381,7 +381,116 @@ Every boundary's back changelevel into the previous chapter is a live touch trig
 
 The largest render overruns are big open spaces (Surface Tension, Xen, the tram ride in Black Mesa Inbound). In `c2a5`'s worst leaf, 244 of 411 KiB are light probes. `c4a3`'s worst leaf (1066 KiB) is the Nihilanth arena.
 
-## 8. Reproduce
+## 8. Open cook failures (hl64 `make cook`, all 125 retail maps)
+
+**Status:** measured on 2026-11-13 by the Snd agent with the hl64 cook on
+m3-snd `14e79e7` (`make cook HL64_DATA=/scratch/hl1/valve` without
+`MAPS=`, i.e. every `maps/*.bsp`: campaign, Hazard Course, Uplink and
+deathmatch maps). Campaign-phase work (after M5): none of these is fixed.
+Pools (`include/hl64/limits.h`): render 245,760 B (`HL64_POOL_RENDER_KB`
+240), texture 131,072 B (128), collision 212,992 B (208).
+
+Evidence (scratch, not committed) in `/scratch/hl64/tmp/Snd/`:
+`cook-full.log` (125 maps), `w64c-failures.txt` (per-map errors),
+`missing-assets-125.txt`, `cook-85.log` (the 83-map run),
+`seam-errors-83.txt`, `restab-83.log`, `campaign-83.rtb`.
+
+### 8.1 Missing assets: warned, not failures
+
+The sound step names 24 assets the retail data lacks, one warning each with
+its first referrer, and continues. A map key naming a missing sound gets no
+id (HLE1 0xFFFF, `RES_NONE` at run time); a missing sentence word is
+dropped; a missing sentence gets no id (rtb-format.md "Inputs").
+
+| asset | referenced by |
+|---|---|
+| `sound/ambience/explode.wav` | c2a5e entity 467 (ambient_generic `brad_break_shake`) `message` |
+| `sound/ambience/mechwine.wav` | doublecross entity 214 (ambient_generic) `message` |
+| `sound/barney/stop3.wav` | sentences.txt BA_STOP2 (sentence dropped: no word left) |
+| `sound/debris/beamstart13.wav` | c4a1c entity 229 (ambient_generic `push_1`) `message` |
+| `sound/headcrab/hc_run2.wav` | c1a1f entity 12 (ambient_generic `crab_scream`) `message` |
+| `sound/holo/holointro.wav`, `holostn1`–`holostn16.wav`, `holostn10a.wav` (18) | `models/holo.mdl` studio events |
+| sentence `SC_CONSOLE5` | c1a0c entity 265 (scripted_sentence `retinal_goodluck`) `sentence` |
+
+Against §7.2's list, `vox/units.wav` and the `ambience/).wav` artefact are
+gone (hl64's `hl_sound_refs` resolves them), and `ambience/mechwine.wav`
+(a deathmatch map) and `SC_CONSOLE5` are new.
+
+### 8.2 `w64c` map packages: 40 maps fail
+
+Pool overruns, 20 maps (worst open set, B; **bold** = over the pool):
+
+| map | open set | pool | | map | open set | pool |
+|---|---:|---|---|---|---:|---|
+| c0a0 | **326,704** | render | | c2a5e | **381,216** | render |
+| c0a0b | **339,024** | render | | c2a5w | **368,448** | render |
+| c0a0d | **263,920** | render | | c2a5x | **360,768** | render |
+| c1a0c | **143,568** | texture | | c4a1 | **290,880** | render |
+| c1a1f | **256,512** / **154,912** | render / texture | | c4a1b | **301,792** | render |
+| c1a2 | **296,048** | render | | c4a1e | **339,920** | render |
+| c1a4b | **338,944** | render | | c4a2 | **258,240** | render |
+| c1a4i | **296,064** | render | | c5a1 | **213,088** | collision |
+| c1a4k | **279,808** | render | | crossfire (DM) | **314,128** | render |
+| c2a1a | **247,536** | render | | xen_dm (DM) | **326,736** | render |
+
+(A map listed below for a clipnode error reports no pool figure here and
+may also overrun a pool [INFERENCE]: §7.3 has the old tree's figures, e.g.
+c4a3 render 1066 KiB, c2a5 411 KiB.)
+
+Shared clipnode subtrees, 16 maps: `hull node clipnode N shared by model M
+hull 1, 2, 3 and model M hull 1, 2, 3` (the §7.1 item 1 DAG, now inside one
+model's three hulls): boot_camp (clipnode 18654, model 6), bounce (6869,
+15), c1a4d (10474, 5), c1a4f (7966, 24), c1a4g (16218, 83), c2a1b (5084,
+26), c2a2b1 (14282, 109), c2a2b2 (8921, 39), c2a4 (11268, 2), c2a4a (16334,
+107), c2a4b (10031, 1), c2a5 (13565, 31), c3a2b (5102, 1), c3a2f (3861,
+27), c4a3 (6568, 1), rapidcore (7367, 77).
+
+Deathmatch maps, 4: a clipnode child that precedes its parent
+(`clipnode N: child M not in N+1..count`): contamination (248 → 245),
+disposal (36 → 21), pool_party (32 → 28), rocket_frenzy (46 → 24).
+
+### 8.3 `w64seam`: 2 maps, 10 seams
+
+`model N hull 1 head out of range` (§7.1 item 2, now in w64seam's BSP
+check): c2a2a (model 52), c3a2c (model 160).
+
+With the 42 maps above left out (`MAPS=` the other 83), w64seam rejects 10
+seams (open set [render, texture, collision] in B where a pool is the cause):
+
+| seam (from → to via landmark, trigger lump) | cause |
+|---|---|
+| c1a0 → c0a0e via c0a0toc1a0, 67 | texture 140,240 > 131,072; last open set [188,608, 142,896, 71,952] |
+| c1a0 → c1a0d via c1a0toc1a0d, 123 | texture 192,240; [139,952, 192,240, 80,576] |
+| c1a0d → c1a0 via c1a0toc1a0d, 157 | texture 169,728; [154,016, 169,728, 87,568] |
+| c1a3a → c1a3d via lm_c1a3_da, 268 | texture 131,440; [155,360, 131,440, 75,808] |
+| c2a2c → c2a2d via c2a2cc2a2d, 106 | texture 139,616; [192,672, 139,616, 121,696] |
+| c2a3d → c2a3c via c2a3cd, 353 | render 322,624 > 245,760; [322,624, 76,752, 135,600] |
+| c2a4f → c2a4e via lm4, 18 | texture 136,848 |
+| c3a1 → c3a1b via a1a1b, 98 | missing info_landmark `a1a1b` |
+| lambda_bunker → c3a1b via a1a1b, 42 | missing info_landmark `a1a1b` |
+| c4a1a → c4a2b via c4a1a, 126 | open seam: no eye is empty in both maps |
+
+The first six pool causes say "no approach expansion both contains the
+firing region and fits pools".
+
+### 8.4 Resource table and scratch, 83 maps
+
+With the unproved 83-map graph copied into the content directory, restab
+and `hleids --check` were run by hand:
+
+- `campaign.rtb` 318,928 B: 83 maps, 1,586 files, 100 models, 54 sprites,
+  1,249 sounds, 712 sentences, 259 groups, 6,610 targets, 116 classes.
+- Engine tables 55,752 B against `HL64_RESTAB_KB` 56 (57,344 B): fits, with
+  1,592 B left.
+- Cart part 106,192 B **exceeds `HL64_SCRATCH_KB` 96 (98,304 B)**: restab
+  fails. The measurement used a scratch `limits.h` copy with 128 KB; the
+  committed limit is unchanged.
+- `hleids: HLE region need 185,184 B of HL64_HLE_BLOBS_KB 192 (196,608 B)`;
+  `hleids: check …: ok`.
+- Cooked content 100,505,352 B (1,893 files): maps 71,405,889, sound
+  23,094,865, models 4,203,504, sprites 1,243,864, gfx 196,160, gsfx 30,624.
+
+## 9. Reproduce
 
 Scratch scripts are in `/scratch/hl64/tmp/CampaignSize/work/` (not committed). Run with `PYTHONPATH=~/src/ports/quakegeneric/tools:~/src/ports/quakegeneric/tools/w64c`.
 
