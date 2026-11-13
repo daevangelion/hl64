@@ -1193,3 +1193,8 @@ void col_stats(col_stats_t *s)
 	*s = st;
 	memset(&st, 0, sizeof(st));
 }
+
+void col_counts(col_stats_t *s)
+{
+	*s = st;
+}

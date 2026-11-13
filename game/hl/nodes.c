@@ -208,6 +208,7 @@ int Graph_FindNearestNode(int e, const float org[3], int afNodeTypes)
 	}
 	if (g->cache[hsh].valid && VecEq(g->cache[hsh].v, org))
 		return g->cache[hsh].n;
+	mon_aiw.nn++;
 	memset(tried, 0, (size_t)g->n);
 	best = NO_NODE;
 	lastd = -1;
@@ -231,6 +232,7 @@ int Graph_FindNearestNode(int e, const float org[3], int afNodeTypes)
 			break;
 		tried[i] = 1;
 		lastd = bestd;
+		mon_aiw.nnt++;
 		UTIL_TraceLine(org, g->nodes[i].origin, ignore_monsters, -1, &tr);
 		if (tr.frac == 1.0f)
 		{
@@ -302,6 +304,7 @@ static void dijkstra(int slot, graph_t *g, int start, int dest, int iHull, int a
 	dist[start] = 0;
 	prev[start] = (int16_t)start;
 	hn = 0;
+	mon_aiw.dj++;
 	heap_push(start, 0);
 	while (hn > 0)
 	{
@@ -310,6 +313,7 @@ static void dijkstra(int slot, graph_t *g, int start, int dest, int iHull, int a
 			break;
 		if (cd > dist[cur] + 0.001f && dist[cur] >= 0)
 			continue;
+		mon_aiw.djpop++;
 		n = &g->nodes[cur];
 		for (i = 0; i < n->num_links; i++)
 		{
@@ -422,6 +426,7 @@ int Graph_FindCover(int e, const float threat[3], const float viewofs[3], float 
 		if (d >= mn && d < mx)
 		{
 			VecAdd(g->nodes[node].origin, viewofs, a);
+			mon_aiw.cover++;
 			UTIL_TraceLineGlass(a, look, ignore_monsters, ignore_glass, e, &tr);
 			if (tr.frac != 1.0f)
 			{
@@ -471,6 +476,7 @@ int Graph_BuildNearestRoute(int e, const float threat[3], const float viewofs[3]
 		if (d > mn && d < mx)
 		{
 			VecAdd(g->nodes[node].origin, m->view_ofs, a);
+			mon_aiw.cover++;
 			UTIL_TraceLine(a, look, ignore_monsters, e, &tr);
 			if (tr.frac == 1.0f && Mon_BuildRoute(e, g->nodes[node].origin, bits_MF_TO_LOCATION, -1))
 			{

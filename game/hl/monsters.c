@@ -26,9 +26,11 @@
 #include <math.h>
 #include <string.h>
 
+#include "engine/core/dbg.h"
 #include "engine/core/sys.h"
 #include "engine/phys/player.h"
 #include "game/hl/monster.h"
+#include "game/hl/player.h"
 
 #define MONSTER_CUT_CORNER_DIST	8
 #define LOCAL_STEP_SIZE		16
@@ -220,6 +222,64 @@ float Mon_ChangeYaw(int e, int s) { DISPATCH(ChangeYaw, CBaseMonster_ChangeYaw, 
 
 static mon_stats_t	mstat;
 static uint32_t		mstat_frame_us;
+mon_ai_work_t		mon_aiw;
+
+#define AIW_N	((int)(sizeof(mon_ai_work_t) / sizeof(uint32_t)))
+
+/* AI work per window / frame / think (`prof ai` line): the window's sum,
+ * the current frame's sum, the window's worst frame (monster think us)
+ * and its worst think with what it ran. */
+static struct {
+	mon_ai_work_t	win, frame, wf, wt;
+	uint32_t	frame_thinks, wf_us, wf_thinks, wt_us;
+	int		wt_e;
+	cls_t		wt_cls;
+	const char	*wt_s0, *wt_s1;	/* schedule at the think's start / end */
+	int		wt_t0, wt_t1;	/* task at the think's start / end */
+} aip;
+
+static void aiw_now(mon_ai_work_t *w)
+{
+	col_stats_t c;
+
+	col_counts(&c);
+	mon_aiw.traces = c.traces;
+	mon_aiw.bsp = c.nodes;
+	*w = mon_aiw;
+}
+
+/* d = b - a; s += d */
+static void aiw_delta(const mon_ai_work_t *a, const mon_ai_work_t *b, mon_ai_work_t *d)
+{
+	const uint32_t *pa = (const uint32_t *)a, *pb = (const uint32_t *)b;
+	uint32_t *pd = (uint32_t *)d;
+	int i;
+
+	for (i = 0; i < AIW_N; i++)
+		pd[i] = pb[i] - pa[i];
+}
+
+static void aiw_add(mon_ai_work_t *s, const mon_ai_work_t *d)
+{
+	const uint32_t *pd = (const uint32_t *)d;
+	uint32_t *ps = (uint32_t *)s;
+	int i;
+
+	for (i = 0; i < AIW_N; i++)
+		ps[i] += pd[i];
+}
+
+static const char *sched_name(const CBaseMonster *m)
+{
+	return m->m_pSchedule && m->m_pSchedule->pName ? m->m_pSchedule->pName : "-";
+}
+
+static int sched_task(const CBaseMonster *m)
+{
+	if (!m->m_pSchedule || m->m_iScheduleIndex < 0 || m->m_iScheduleIndex >= m->m_pSchedule->cTasks)
+		return -1;
+	return m->m_pSchedule->pTasklist[m->m_iScheduleIndex].iTask;
+}
 
 void mon_stats(mon_stats_t *s, int reset)
 {
@@ -240,10 +300,58 @@ void mon_stats_frame(void)
 	mstat.us += mstat_frame_us;
 	if (mstat_frame_us > mstat.us_max)
 		mstat.us_max = mstat_frame_us;
+	if (mstat_frame_us > aip.wf_us)
+	{
+		aip.wf_us = mstat_frame_us;
+		aip.wf_thinks = aip.frame_thinks;
+		aip.wf = aip.frame;
+	}
+	aiw_add(&aip.win, &aip.frame);
+	memset(&aip.frame, 0, sizeof(aip.frame));
+	aip.frame_thinks = 0;
 	mstat_frame_us = 0;
 }
 
 void mon_stats_route(void) { mstat.routes++; }
+
+static void aiw_print(const char *tag, const mon_ai_work_t *w)
+{
+	log_printf(" %s=lm:%lu,steps:%lu,traces:%lu,bsp:%lu,routes:%lu,tri:%lu,cover:%lu,nn:%lu,"
+		"nnt:%lu,dj:%lu,djpop:%lu", tag, (unsigned long)w->lm, (unsigned long)w->steps,
+		(unsigned long)w->traces, (unsigned long)w->bsp, (unsigned long)w->routes,
+		(unsigned long)w->tri, (unsigned long)w->cover, (unsigned long)w->nn,
+		(unsigned long)w->nnt, (unsigned long)w->dj, (unsigned long)w->djpop);
+}
+
+/* `prof ai` (after `prof mon_us`): the window's AI work per frame (avg),
+ * its worst frame (monster think us, thinks, work) and worst think
+ * (us, entity, class, schedule / task at its start -> end, work). */
+static void ai_prof_line(uint32_t frames)
+{
+	const mon_ai_work_t *w = &aip.win;
+	uint32_t n = frames ? frames : 1;
+
+	log_printf("prof ai lm=%lu steps=%lu traces=%lu bsp=%lu routes=%lu tri=%lu cover=%lu nn=%lu "
+		"nnt=%lu dj=%lu djpop=%lu worst_frame_us=%lu worst_frame_thinks=%lu worst_think_us=%lu "
+		"worst_think=%d:%s:%s/%d->%s/%d", (unsigned long)(w->lm / n),
+		(unsigned long)(w->steps / n), (unsigned long)(w->traces / n),
+		(unsigned long)(w->bsp / n), (unsigned long)(w->routes / n), (unsigned long)(w->tri / n),
+		(unsigned long)(w->cover / n), (unsigned long)(w->nn / n), (unsigned long)(w->nnt / n),
+		(unsigned long)(w->dj / n), (unsigned long)(w->djpop / n), (unsigned long)aip.wf_us,
+		(unsigned long)aip.wf_thinks, (unsigned long)aip.wt_us, aip.wt_e,
+		aip.wt_us ? game_class_name(aip.wt_cls) : "-", aip.wt_s0 ? aip.wt_s0 : "-",
+		aip.wt_t0, aip.wt_s1 ? aip.wt_s1 : "-", aip.wt_t1);
+	aiw_print("wf", &aip.wf);
+	aiw_print("wt", &aip.wt);
+	log_printf("\n");
+	/* the window's sums and worsts restart; the open frame's sums stay */
+	memset(&aip.win, 0, sizeof(aip.win));
+	memset(&aip.wf, 0, sizeof(aip.wf));
+	memset(&aip.wt, 0, sizeof(aip.wt));
+	aip.wf_us = aip.wf_thinks = aip.wt_us = 0;
+	aip.wt_e = -1;
+	aip.wt_s0 = aip.wt_s1 = 0;
+}
 
 /* `prof mon_us` roll-up line (engine/core/eng.c, once a second): CPU of
  * the monster thinks per frame, thinks / routes per frame, live monsters
@@ -271,6 +379,7 @@ void game_mon_prof(void)
 		(unsigned long)s.us_max, (unsigned long)(s.thinks / n), (unsigned long)s.routes,
 		(unsigned long)s.local_moves, (unsigned long)live, (unsigned long)s.scripts,
 		(unsigned long)mem, (unsigned long)mon_mem_peak);
+	ai_prof_line(s.frames);
 }
 
 /* ---- animation helpers (CBaseAnimating, animating.cpp) -------------------- */
@@ -602,14 +711,51 @@ static void mon_want_attacks(int e)
 	gs_want_activities(ent_rnd(e)->model, acts, (int)(sizeof(acts) / sizeof(acts[0])));
 }
 
+/* PROFILE builds log a think whose AI work passes these (work units: the
+ * same thinks on host and cart; the us beside them is the machine's). */
+#define AI_LOG_STEPS	256
+#define AI_LOG_TRACES	2048
+
+/* The decision trace (`trace F ai`, the `trace` command's window): after
+ * each think the monster's schedule, task, states, conditions, memory,
+ * movement goal and route, origin and yaws, exact (%.9g). Two runs whose
+ * AI decides the same print the same lines (GruntAI's cost work keeps
+ * them identical). */
+static void ai_trace_line(int e, const CBaseMonster *m)
+{
+	const float	*o = ent_cv(e)->origin;
+	int		i;
+
+	log_printf("trace %lu ai e=%d %s s=%s/%d t=%d st=%d ist=%d act=%d cond=%x mem=%x mg=%d "
+		"ma=%d en=%d org=%.9g,%.9g,%.9g yaw=%.9g iy=%.9g mw=%.9g goal=%.9g,%.9g,%.9g ri=%d",
+		(unsigned long)dbg_trace_frame(), e, game_class_name(ent_idc(e)->cls),
+		sched_name(m), m->m_iScheduleIndex, sched_task(m), m->m_MonsterState,
+		m->m_IdealMonsterState, m->m_Activity, (unsigned)m->m_afConditions,
+		(unsigned)m->m_afMemory, m->m_movementGoal, m->m_movementActivity,
+		EHGet(m->m_hEnemy), (double)o[0], (double)o[1], (double)o[2],
+		(double)ent_cv(e)->angles[1], (double)ent_phys(e)->ideal_yaw,
+		(double)m->m_flMoveWaitFinished, (double)m->m_vecMoveGoal[0],
+		(double)m->m_vecMoveGoal[1], (double)m->m_vecMoveGoal[2], m->m_iRouteIndex);
+	for (i = 0; i < ROUTE_SIZE && m->m_Route[i].iType; i++)
+		log_printf(" %x:%.9g,%.9g,%.9g", (unsigned)m->m_Route[i].iType,
+			(double)m->m_Route[i].vecLocation[0], (double)m->m_Route[i].vecLocation[1],
+			(double)m->m_Route[i].vecLocation[2]);
+	log_printf("\n");
+}
+
 void CBaseMonster_MonsterThink(int e)
 {
 	CBaseMonster	*m = MON(e);
 	uint64_t	t0 = sys_time_us();
 	float		flInterval;
-	int		seq;
+	int		seq, t_start = sched_task(m);
 	uint32_t	us;
+	mon_ai_work_t	w0, w1, d;
+	cls_t		cls = ent_idc(e)->cls;
+	const char	*s_start = sched_name(m), *s_end = "-";
+	int		t_end = -1;
 
+	aiw_now(&w0);
 	ThinkIn(e, 0.1f);
 	if (m->m_MonsterState != MONSTERSTATE_DEAD)
 		mon_want_attacks(e);
@@ -640,6 +786,37 @@ out:
 	mstat.thinks++;
 	mstat_frame_us += us;
 	game_mon_us_sum += us;
+	aiw_now(&w1);
+	aiw_delta(&w0, &w1, &d);
+	aiw_add(&aip.frame, &d);
+	aip.frame_thinks++;
+	if (ent_is_live(e) && MON(e) == m)
+	{
+		s_end = sched_name(m);
+		t_end = sched_task(m);
+	}
+	if (us > aip.wt_us)
+	{
+		aip.wt_us = us;
+		aip.wt_e = e;
+		aip.wt_cls = cls;
+		aip.wt_s0 = s_start;
+		aip.wt_t0 = t_start;
+		aip.wt_s1 = s_end;
+		aip.wt_t1 = t_end;
+		aip.wt = d;
+	}
+#ifdef HL64_PROFILE
+	if (d.steps >= AI_LOG_STEPS || d.traces >= AI_LOG_TRACES)
+	{
+		log_printf("ai: think t=%.3f e=%d %s %s/%d->%s/%d us=%lu", (double)gtime(), e,
+			game_class_name(cls), s_start, t_start, s_end, t_end, (unsigned long)us);
+		aiw_print("w", &d);
+		log_printf("\n");
+	}
+#endif
+	if (dbg_trace() && ent_is_live(e) && MON(e) == m)
+		ai_trace_line(e, m);
 }
 
 void CBaseMonster_CallMonsterThink(int e) { CBaseMonster_MonsterThink(e); }
@@ -1106,6 +1283,7 @@ int CBaseMonster_CheckLocalMove(int e, const float start[3], const float end[3],
 	int		ret = LOCALMOVE_VALID;
 
 	mstat.local_moves++;
+	mon_aiw.lm++;
 	VecCopy(cv->origin, startPos);
 	VecSub(end, start, dir);
 	yaw = UTIL_VecToYaw(dir);
@@ -1118,6 +1296,7 @@ int CBaseMonster_CheckLocalMove(int e, const float start[3], const float end[3],
 		stepSize = LOCAL_STEP_SIZE;
 		if (step + LOCAL_STEP_SIZE >= dist - 1)
 			stepSize = (dist - step) - 1;
+		mon_aiw.steps++;
 		if (!phy_walk_move(e, yaw, stepSize, WALKMOVE_CHECKONLY))
 		{
 			if (pflDist)
@@ -1218,6 +1397,7 @@ int Mon_BuildRoute(int e, const float goal[3], int flag, int target)
 
 	VecCopy(goal, g);	/* goal may point into m_Route / a component */
 	mstat.routes++;
+	mon_aiw.routes++;
 	Mon_RouteNew(e);
 	m->m_movementGoal = Mon_RouteClassify(e, flag);
 	VecCopy(g, m->m_Route[0].vecLocation);
@@ -1265,6 +1445,7 @@ int CBaseMonster_FTriangulate(int e, const float start[3], const float end[3], f
 	float		far[3], d[3], sizeX, sizeZ;
 	int		i, fly = cv->movetype == MOVETYPE_FLY;
 
+	mon_aiw.tri++;
 	sizeX = cv->maxs[0] - cv->mins[0];
 	if (sizeX < 24.0f)
 		sizeX = 24.0f;
