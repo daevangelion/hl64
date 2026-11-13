@@ -96,6 +96,8 @@ suite studio_test.py studiotest python3 test/m3/studio_test.py --bin "$B/hl64-st
 	--content "$CONTENT"
 suite snd.sh - test/m3/snd.sh all
 suite fx.py fxtest python3 test/m3/fx.py "$BUILD_DIR" "$CONTENT"
+suite items.py itemstest python3 test/m3/items.py --bin "$B/hl64-items" --content "$CONTENT" \
+	--data "$DATA" --build-dir "$BUILD_DIR" --scratch "$OUT/items"
 suite mon.sh - test/m3/mon.sh
 if [[ -e "$ROOT/test/m3/mon.sh" ]]; then
 	# the monster sweep covers the 10 Uplink + Hazard maps (mon_sweep.py MAPS)
