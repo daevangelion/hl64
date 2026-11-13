@@ -3,8 +3,9 @@
  * rec_test.c -- host driver for the record module and the resource table
  * (engine/ent/rec.c, engine/res): the real engine (carve, io, world
  * layers, components, think heap) on cooked content, with a test game
- * (the game_* exports below; game/hl is left out of this binary) that
- * records what the engine asks of it. Run by test/m3/rec.py.
+ * (the record dispatch rec.c calls, taken over with ld --wrap: the
+ * __wrap_game_* below; the rest of game/ links as usual) that records
+ * what the engine asks of it. Run by test/m3/rec.py.
  *
  *   hl64-rec --root CONTENT selftest
  *       hldemo1 records, typed keys, names, fires and deferred uses,
@@ -42,6 +43,15 @@
 #include "engine/world/wld.h"
 #include "plat/host/host.h"
 
+/* ld --wrap=game_* (Makefile REC_WRAP): rec.c's calls land here */
+int	__wrap_game_spawn_record(gid_t16 gid, int e);
+void	__wrap_game_spawn_logic(gid_t16 gid);
+void	__wrap_game_map_opened(int slot);
+void	__wrap_game_map_closing(int slot);
+void	__wrap_game_use(int e, int activator, int caller, int use_type, float value);
+void	__wrap_game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float value);
+void	__wrap_game_logic_timer(gid_t16 gid, uint16_t arg, int activator);
+
 static int fails;
 
 #define CHECK(cond, ...) do { if (!(cond)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); \
@@ -65,21 +75,7 @@ static struct {
 	int		index;
 } G;
 
-/* the rest of the game exports the linked engine names (game/hl is not
- * linked into this driver) */
-void game_init(void)
-{
-}
-
-void game_new_campaign(void)
-{
-}
-
-void game_start_frame(void)
-{
-}
-
-int game_spawn_record(gid_t16 gid, int e)
+int __wrap_game_spawn_record(gid_t16 gid, int e)
 {
 	if (rec_class(gid) == G.refuse_cls)
 		return -1;
@@ -89,25 +85,25 @@ int game_spawn_record(gid_t16 gid, int e)
 	return 0;
 }
 
-void game_spawn_logic(gid_t16 gid)
+void __wrap_game_spawn_logic(gid_t16 gid)
 {
 	(void)gid;
 	G.logic++;
 }
 
-void game_map_opened(int slot)
+void __wrap_game_map_opened(int slot)
 {
 	(void)slot;
 	G.opened++;
 }
 
-void game_map_closing(int slot)
+void __wrap_game_map_closing(int slot)
 {
 	(void)slot;
 	G.closing++;
 }
 
-void game_use(int e, int activator, int caller, int use_type, float value)
+void __wrap_game_use(int e, int activator, int caller, int use_type, float value)
 {
 	(void)activator; (void)caller; (void)use_type; (void)value;
 	G.uses++;
@@ -129,7 +125,7 @@ static float now_f(void)
 	return (float)eng_time();
 }
 
-void game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float value)
+void __wrap_game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float value)
 {
 	(void)caller; (void)value;
 	G.logic_uses++;
@@ -151,7 +147,7 @@ void game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float 
 		printf("use hl64_t5 %.9g\n", (double)now_f());
 }
 
-void game_logic_timer(gid_t16 gid, uint16_t arg, int activator)
+void __wrap_game_logic_timer(gid_t16 gid, uint16_t arg, int activator)
 {
 	G.timers++;
 	if (G.ntl < 64)
@@ -168,7 +164,7 @@ void game_logic_timer(gid_t16 gid, uint16_t arg, int activator)
 		while (G.index < K5_N && t >= k5_targets[G.index].delay)
 		{
 			if (!strcmp(k5_targets[G.index].name, "hl64_relay"))
-				game_logic_use(G.relay, activator, -1, USE_TOGGLE, 0);
+				__wrap_game_logic_use(G.relay, activator, -1, USE_TOGGLE, 0);
 			else
 				printf("use %s %.9g\n", k5_targets[G.index].name, (double)now_f());
 			G.index++;
@@ -676,7 +672,7 @@ int main(int argc, char **argv)
 		{
 			eng_set_clock(t, dt);
 			if (f == 0)
-				game_logic_use(G.mm, -1, -1, USE_TOGGLE, 0);
+				__wrap_game_logic_use(G.mm, -1, -1, USE_TOGGLE, 0);
 			rec_run_timers(t, dt);
 			t += dt;
 		}
