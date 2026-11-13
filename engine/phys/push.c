@@ -72,6 +72,33 @@ static int inside(int e, int c)
 	return tr.startsolid;
 }
 
+/* c's linked box overlaps the pusher's, faces in contact excluded
+ * [probe:measured P-push down_onto_crate] (frame = c's layer). */
+static int overlaps(int e, int c)
+{
+	const col_ent_t *p = &ent_c.cv[e], *v = &ent_c.cv[c];
+	float d[3];
+	int k;
+
+	ent_layer_delta(ent_c.id[e].layer, ent_c.id[c].layer, d);
+	for (k = 0; k < 3; k++)
+		if (v->absmin[k] >= p->absmax[k] + d[k] || v->absmax[k] <= p->absmin[k] + d[k])
+			return 0;
+	return 1;
+}
+
+/* c's box at its origin is in something solid (the position test,
+ * trace-and-hulls.md 4.6): blocked after its push [probe:measured P-push,
+ * K-pusher]. */
+static int stuck(int c)
+{
+	const col_ent_t *v = &ent_c.cv[c];
+	col_trace_t tr;
+
+	phy_trace(v->origin, v->mins, v->maxs, v->origin, phy_move_type(v), v, &tr);
+	return tr.startsolid;
+}
+
 static void sync_player(int c)
 {
 	if (c == ENT_PLAYER && phy_player_active())
@@ -148,7 +175,7 @@ static int carry(int e, int n, const float move[3], const turn_t *rot)
 		cv = &ent_c.cv[c];
 		serial = ent_c.id[c].serial;
 		eng_set_frame_layer(ent_c.id[c].layer);
-		if (!rides(c, e) && !inside(e, c))
+		if (!rides(c, e) && (!overlaps(e, c) || !inside(e, c)))
 		{
 			eng_set_frame_layer(frame);
 			continue;
@@ -189,7 +216,7 @@ static int carry(int e, int n, const float move[3], const turn_t *rot)
 		}
 		sync_player(c);
 		ent_motion_changed(c);
-		blocked = (cv->mins[0] != cv->maxs[0] || cv->mins[1] != cv->maxs[1]) && inside(e, c);
+		blocked = (cv->mins[0] != cv->maxs[0] || cv->mins[1] != cv->maxs[1]) && stuck(c);
 		if (blocked && (cv->solid == COL_SOLID_NOT || cv->solid == COL_SOLID_TRIGGER))
 		{
 			/* corpses and gibs collapse instead of blocking

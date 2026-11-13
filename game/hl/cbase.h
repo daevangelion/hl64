@@ -317,7 +317,8 @@ typedef struct game_class {
 	uint16_t	flags;		/* GC_* */
 	/* Entity spawn (KeyValue + Spawn + Precache): gid = the record (keys
 	 * via rec_key_*), GID_NONE for runtime creation. 0, or -1 when the
-	 * class refuses (logged with the reason; the engine frees e). */
+	 * class refuses: `return SpawnRefuse("reason")` (dispatch logs it;
+	 * the engine frees e). */
 	int	(*Spawn)(int e, gid_t16 gid);
 	const game_vt_t	*vt;
 	/* Logic records (HLE_CF_LOGIC classes). */
@@ -343,6 +344,15 @@ enum {
 #define CLASS(id, name)	extern const game_class_t gc_##id __attribute__((weak));
 #include "game/defs/classes.def"
 #undef CLASS
+
+/* A spawn refusal: Spawn returns SpawnRefuse(why) (-1), HLSDK's own reason
+ * where its Spawn removes the entity (missing target / model / key, ...;
+ * why: a static string). Dispatch logs every refusal, entity and logic, as
+ * `spawn: CLASS map S lump L refused: WHY` (record gid) or
+ * `spawn: CLASS (runtime entity E) refused: WHY` (gid GID_NONE): logic
+ * classes removing their record at spawn call game_refuse_log. */
+int			SpawnRefuse(const char *why);
+void			game_refuse_log(cls_t cls, gid_t16 gid, int e, const char *why);
 
 /* The class of entity e and its entry (NULL when unregistered). */
 const game_class_t	*game_class(cls_t cls);

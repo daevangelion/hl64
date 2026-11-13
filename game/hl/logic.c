@@ -365,7 +365,9 @@ static void CEnvGlobal_LogicSpawn(gid_t16 gid)
 	l->a16 = (uint16_t)(int)KeyF(gid, K_TRIGGERMODE, 0);
 	if (l->a < 0)
 	{
-		rec_kill(gid);		/* REMOVE_ENTITY */
+		game_refuse_log(rec_class(gid), gid, -1,
+			"CEnvGlobal::Spawn: no globalstate (REMOVE_ENTITY)");
+		rec_kill(gid);
 		return;
 	}
 	if (((uint32_t)KeyF(gid, K_SPAWNFLAGS, 0) & SF_GLOBAL_SET) && !GlobalInTable(l->a))
