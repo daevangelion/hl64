@@ -784,6 +784,18 @@ void phy_player_frame(const in_cmd_t *cmd, double time)
 	}
 	/* HLSDK PlayerPostThink: weapons, use, impulses, fall damage */
 	game_player_postthink(pl);
+	if (dbg_trace())
+	{
+		int st = test_pos(pl->origin, pl->usehull, NULL);
+
+		log_printf("trace %lu player org=%.9g,%.9g,%.9g vel=%.9g,%.9g,%.9g flags=%x hull=%d "
+			"ground=%d duck=%d btn=%x stuck=%d\n", (unsigned long)dbg_trace_frame(),
+			(double)pl->origin[0], (double)pl->origin[1], (double)pl->origin[2],
+			(double)pl->velocity[0], (double)pl->velocity[1], (double)pl->velocity[2],
+			(unsigned)pl->flags, (int)pl->usehull, (int)pl->groundentity,
+			(int)pl->in_duck, (unsigned)cmd->buttons,
+			st < 0 ? -1 : (int)phy_pm.pe[st].index);
+	}
 	eng_set_frame_layer(layer);
 
 	us = (uint32_t)(sys_time_us() - t0);
