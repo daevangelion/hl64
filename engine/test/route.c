@@ -766,6 +766,13 @@ static void lookahead_pin(void)
 	}
 }
 
+void rt_new_game(double old_time, double time)
+{
+	/* the current op keeps the game time it has waited so far */
+	if (rt.started)
+		rt.t0 = time - (old_time - rt.t0);
+}
+
 void rt_frame(double time)
 {
 	while (rt_active())

@@ -40,6 +40,9 @@ void	snd_sentence(int e, int chan, uint16_t sentence, float vol, float attn, int
 		int pitch);
 /* Stop (e, chan) (sound.md 1 STOP); chan -1: every channel of e. */
 void	snd_stop(int e, int chan);
+/* Every voice and loop stops (New Game after an end section; GoldSrc
+ * stops all sounds at disconnect). */
+void	snd_stop_all(void);
 
 /* Engine: boot, step 10 (listener = view origin + right vector, global),
  * free entity e's voices' positions when it is freed. */

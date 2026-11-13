@@ -73,6 +73,7 @@ static struct {
 	uint8_t		rollup;		/* 1 s roll-up line (DBG_PROF) */
 	uint8_t		world;		/* player content present */
 	uint8_t		ents_dump;	/* DBG_ENTS_DUMP: per-entity stats lines */
+	uint32_t	restart_frame;	/* end section: New Game at this frame (0 none) */
 	uint32_t	rollup_frames;
 	uint64_t	rollup_t0;
 	uint64_t	rollup_world_us;	/* world draw CPU in the roll-up window */
@@ -559,6 +560,48 @@ static void eng_new_game(int map)
 	studio_preload();
 }
 
+/* The end of a section (trigger_endsection, HLSDK pfnEndSection: the
+ * engine disconnects and the demo ends): the game starts over with New
+ * Game on the campaign's start map, as at boot. The disconnect drops
+ * everything of the session: sounds, effects, lights, entities and the
+ * player, every HLE slot and open layer, the stream's pins and teleport
+ * window. New Game follows once the closed layers' fenced pool frees have
+ * retired (RESTART_FRAMES world frames, no world drawn meanwhile): the
+ * clock restarts at 1.0 with its settle frames, the random stream at its
+ * boot seed, rec_new_campaign drops the frozen maps. */
+#define RESTART_FRAMES	3
+
+static void eng_disconnect(void)
+{
+	int m;
+
+	log_printf("eng: end of section: disconnect, New Game on %s\n",
+		wld_map_name(wld_start_map()));
+	snd_stop_all();
+	fx_init();
+	ren_dlight_reset();
+	ent_reset();
+	phy_player_reset();
+	studio_new_game();
+	rec_reset();
+	for (m = 0; m < wld_map_count(); m++)
+		wld_close(wld_layer_of_map(m));
+	wld_stream_new_game();
+	ren_cam.map = -1;
+	eng.restart_frame = eng.frame + RESTART_FRAMES;
+}
+
+static void eng_restart(void)
+{
+	double old = eng.time;
+
+	eng.restart_frame = 0;
+	hl64_rand_seed(0);
+	eng_new_game(wld_start_map());
+	eng.time = eng_clock_time();
+	rt_new_game(old, eng.time);
+}
+
 void eng_boot(const char *platform)
 {
 #ifdef HL64_TEST
@@ -835,6 +878,12 @@ void eng_frame(void)
 		dt = eng.fixed_dt_us;
 	if (eng.timescale != 1.0f)
 		dt = (uint32_t)(dt * eng.timescale + 0.5f);
+	/* the end section fired last frame (the route VM saw it at step 13):
+	 * disconnect; New Game RESTART_FRAMES frames later */
+	if (eng.restart_frame && eng.frame >= eng.restart_frame)
+		eng_restart();
+	else if (!eng.restart_frame && eng.world && game_end_section() > 0)
+		eng_disconnect();
 
 	/* 2 in: pad -> usercmd once the player exists; before: the free camera */
 	if (phy_player_active())
