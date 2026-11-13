@@ -1,0 +1,33 @@
+# HL sound encoding classes: tools/cook/hl_sound_classes.py picks one per
+# WAV for audioconv64. Imported from the quakegeneric tree
+# (tools/hl_sound_classes.txt, provenance-audit.md entry CLEAN). Measured
+# basis: the old tree's campaign sizing (cart CPU per voice, bytes, quality).
+#
+#   class <name> <audioconv64 --wav-compress spec> <max rate Hz> [exact]
+#       Encoding of a class. Samples above <max rate> are resampled down
+#       to it; lower-rate samples stay at their source rate (the mixer
+#       resamples at play time). "exact" resamples every sample to the rate.
+#   match <class> <glob>...
+#       Sample paths (relative to sound/, fnmatch) in that class. Rules
+#       are tried in file order; the first match wins.
+#   loop <class>
+#       Class of a WAV that loops (GoldSrc "cue " chunk) and matched no rule.
+#   default <class>
+#       Everything else.
+#
+# VADPCM Huffman (huffman=true) is ~11 % smaller but its bit decode runs on
+# the CPU: 0.38 vs 0.22 ms per voice per 1/30 s at 11025 Hz. It pays only
+# where few voices play at once (speech); one-shots that stack (gunfire,
+# impacts) and loops that hold a voice for minutes take the cheap decode.
+# Opus (spec 3) is not used: 6.5 ms per voice per frame on the cart.
+
+class voice    vadpcm,huffman=true   22050
+class fx       vadpcm,huffman=false  22050
+class ambience vadpcm,huffman=false  22050
+
+# grunt weapon fire / reloads live in the speech directory
+match fx       hgrunt/gr_mgun* hgrunt/gr_reload* hgrunt/gr_die* hgrunt/gr_pain*
+match voice    scientist/* barney/* hgrunt/* holo/* fvox/* vox/* gman/* nihilanth/* hl/*
+match ambience ambience/* fans/* plats/* doors/*
+loop    ambience
+default fx
