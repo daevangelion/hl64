@@ -41,7 +41,7 @@
 #include "hl64/settings.h"
 #include "hl64/studio.h"
 #include "hl64/studio_fmt.h"
-#include "engine/core/eng.h"
+#include "engine/core/dbg.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/io/io.h"
@@ -1254,9 +1254,9 @@ int ent_illum(int e)
 		g[k] = cv->origin[k] + L->gofs[k];
 	v = ren_model_light(e, g, (float)base, -1, 0);
 	illum[e] = (uint8_t)(base > 0 ? base : 1);
-	if (eng_trace())
+	if (dbg_trace())
 		log_printf("trace %lu illum e=%d probe=%d base=%d v=%d\n",
-			(unsigned long)eng_frame_count(), e, probe, base, v);
+			(unsigned long)dbg_trace_frame(), e, probe, base, v);
 	return v;
 }
 

@@ -5,7 +5,7 @@
  * engine random draw (HLSDK RandomLong / RandomFloat ranges).
  */
 #include "engine/core/rng.h"
-#include "engine/core/eng.h"
+#include "engine/core/dbg.h"
 #include "engine/core/log.h"
 #include "hl64/pmove.h"
 
@@ -42,8 +42,8 @@ static uint32_t next(void)
 #ifdef HL64_TEST
 /* `trace` window: each draw with its caller's address (addr2line on the
  * build's ELF names the call site) */
-#define TRACE_DRAW()	do { if (eng_trace()) log_printf("trace %lu rand %lu at %lx\n", \
-	(unsigned long)eng_frame_count(), (unsigned long)rng_draws, \
+#define TRACE_DRAW()	do { if (dbg_trace()) log_printf("trace %lu rand %lu at %lx\n", \
+	(unsigned long)dbg_trace_frame(), (unsigned long)rng_draws, \
 	(unsigned long)(uintptr_t)__builtin_return_address(0)); } while (0)
 #else
 #define TRACE_DRAW()	((void)0)

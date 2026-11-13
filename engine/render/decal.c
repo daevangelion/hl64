@@ -36,7 +36,7 @@
 #include "hl64/ent.h"
 #include "hl64/grid.h"
 #include "hl64/limits.h"
-#include "engine/core/eng.h"
+#include "engine/core/dbg.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/io/io.h"
@@ -964,9 +964,9 @@ int fx_decal_static(int e, const float org[3], int decal)
 
 	if (t == -2 || work >= BUDGET_WORK)
 	{
-		if (eng_trace())
+		if (dbg_trace())
 			log_printf("trace %lu decal static e=%d not now: %s\n",
-				(unsigned long)eng_frame_count(), e, t == -2 ? "sheet" : "budget");
+				(unsigned long)dbg_trace_frame(), e, t == -2 ? "sheet" : "budget");
 		return -1;
 	}
 	if (t < 0)
@@ -1009,9 +1009,9 @@ void decal_frame(void)
 		}
 		if (work >= BUDGET_WORK)
 		{
-			if (eng_trace())
+			if (dbg_trace())
 				log_printf("trace %lu decal budget: queue cut\n",
-					(unsigned long)eng_frame_count());
+					(unsigned long)dbg_trace_frame());
 			break;		/* excess placements wait */
 		}
 		if (q->tries && retries >= RETRIES)
@@ -1031,8 +1031,8 @@ void decal_frame(void)
 	}
 	st.pending = (uint16_t)n;
 	t0 = sys_time_us() - t0 + spent_us;
-	if (eng_trace() && work)
-		log_printf("trace %lu decal work=%lu us=%lu\n", (unsigned long)eng_frame_count(),
+	if (dbg_trace() && work)
+		log_printf("trace %lu decal work=%lu us=%lu\n", (unsigned long)dbg_trace_frame(),
 			(unsigned long)work, (unsigned long)t0);
 	st.place_us += (uint32_t)t0;
 	spent_us = work = 0;

@@ -42,7 +42,7 @@
 	X(ENTS_DUMP, "entsdump", "u", 1)	/* K10 triage: stats records also log one hash line per live entity */ \
 	X(SOUND, "sound", "uuu", 1)		/* res_t (SOUND / SENTENCE), entity (0 = the listener), pitch (0 = 100) */ \
 	X(SEAMPROF_MARK, "seamprof_mark", "", 1)	/* open a seam-window profile at this frame (engine/test/seamprof, PROFILE) */ \
-	X(TRACE, "trace", "uu", 1)		/* K10 triage: frames FIRST..LAST log `trace F` decision lines (eng_trace) */
+	X(TRACE, "trace", "uu", 1)		/* K10 triage: frames FIRST..LAST log `trace F` decision lines (dbg_trace) */
 
 enum {
 #define DBG_ENUM(id, name, args, test) DBG_##id,
@@ -82,6 +82,11 @@ void	dbg_handler_set(int op, dbg_handler_t fn);
 int	dbg_push(const dbg_cmd_t *c);
 /* Frame boundary: run every due command. Returns failures so far. */
 uint32_t dbg_run(uint32_t frame);
+/* K10 triage (`trace FIRST LAST`, test builds): 1 while the frame the last
+ * dbg_run opened is inside the window; modules then log `trace F <what>`
+ * lines of their decisions (F = dbg_trace_frame()). */
+int	dbg_trace(void);
+uint32_t dbg_trace_frame(void);
 
 /*
  * Command file (test builds): the host CLI's parsed commands for a cart

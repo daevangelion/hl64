@@ -23,7 +23,7 @@
 #include "hl64/coll.h"
 #include "hl64/ent.h"
 #include "hl64/limits.h"
-#include "engine/core/eng.h"
+#include "engine/core/dbg.h"
 #include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
@@ -1104,7 +1104,7 @@ int col_material(uint16_t model, const float origin[3], const float angles[3],
 		return 0;
 	plane_get(s.hit_cp, s.hit_li, n, &d);
 	code = mat_code(s.L, s.hit_ci, s.hit_li, n, s.hit_p);
-	if (eng_trace())
+	if (dbg_trace())
 	{
 		const wld_layer_t *L = s.L;
 		uint32_t h = 2166136261u, i, st0 = 0, st1 = 0;
@@ -1123,7 +1123,7 @@ int col_material(uint16_t model, const float origin[3], const float angles[3],
 			st1 = L->mat_start[s.hit_ci + 1];
 		}
 		log_printf("trace %lu material model=%u ci=%lu li=%lu p=%.9g,%.9g,%.9g n=%.9g,%.9g,%.9g "
-			"mat=%d code=%d st=%lu..%lu ent0=%u hash=%08lx\n", (unsigned long)eng_frame_count(),
+			"mat=%d code=%d st=%lu..%lu ent0=%u hash=%08lx\n", (unsigned long)dbg_trace_frame(),
 			(unsigned)model, (unsigned long)s.hit_ci, (unsigned long)s.hit_li,
 			(double)s.hit_p[0], (double)s.hit_p[1], (double)s.hit_p[2], (double)n[0],
 			(double)n[1], (double)n[2], L->mat ? 1 : 0, code, (unsigned long)st0,

@@ -36,7 +36,7 @@
 #include "hl64/ent.h"
 #include "hl64/game.h"
 #include "hl64/limits.h"
-#include "engine/core/eng.h"
+#include "engine/core/dbg.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/io/io.h"
@@ -1204,10 +1204,10 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 		memcpy(S.vleaf, vl, (size_t)nv * sizeof(vl[0]));
 		S.nvleaf = nv;
 		S.cell = cell;
-		if (eng_trace())
+		if (dbg_trace())
 			log_printf("trace %lu stream ch=%d hs=%d leaf=%ld cell=%ld nv=%d vl=%ld,%ld,%ld "
 				"vb=%ld,%ld,%ld pin=%lu/%lu lgen=%lu/%lu cgen=%lu/%lu voff=%.9g,%.9g,%.9g "
-				"eye=%.9g,%.9g,%.9g retry=%d\n", (unsigned long)eng_frame_count(), changed,
+				"eye=%.9g,%.9g,%.9g retry=%d\n", (unsigned long)dbg_trace_frame(), changed,
 				hs, (long)leaf, (long)cell, nv, (long)(nv > 0 ? vl[0] : 0),
 				(long)(nv > 1 ? vl[1] : 0), (long)(nv > 2 ? vl[2] : 0), (long)vb[0],
 				(long)vb[1], (long)vb[2], (unsigned long)S.pin_gen,

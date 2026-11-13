@@ -73,8 +73,6 @@ static struct {
 	uint8_t		rollup;		/* 1 s roll-up line (DBG_PROF) */
 	uint8_t		world;		/* player content present */
 	uint8_t		ents_dump;	/* DBG_ENTS_DUMP: per-entity stats lines */
-	uint32_t	trace_first;	/* DBG_TRACE window (frames, inclusive) */
-	uint32_t	trace_last;
 	uint32_t	rollup_frames;
 	uint64_t	rollup_t0;
 	uint64_t	rollup_world_us;	/* world draw CPU in the roll-up window */
@@ -507,18 +505,6 @@ static int cmd_ents_dump(const dbg_cmd_t *c)
 }
 
 #ifdef HL64_TEST
-static int cmd_trace(const dbg_cmd_t *c)
-{
-	eng.trace_first = c->arg[0].u;
-	eng.trace_last = c->arg[1].u;
-	return 0;
-}
-
-int eng_trace(void)
-{
-	return eng.trace_last && eng.frame >= eng.trace_first && eng.frame <= eng.trace_last;
-}
-
 /* The frame's simulated state: the random stream, the entities (with
  * `entsdump 1` also one line per live entity, labelled by the frame) and
  * the player. */
@@ -605,9 +591,6 @@ void eng_boot(const char *platform)
 	dbg_handler_set(DBG_QUIT, cmd_quit);
 	dbg_handler_set(DBG_STEP_ALL, cmd_step_all);
 	dbg_handler_set(DBG_ENTS_DUMP, cmd_ents_dump);
-#ifdef HL64_TEST
-	dbg_handler_set(DBG_TRACE, cmd_trace);
-#endif
 	SEAMPROF_INIT();
 	ent_init();
 	eng.world = (uint8_t)wld_init();
@@ -978,7 +961,7 @@ void eng_frame(void)
 
 	/* 13 test: debug commands at the frame boundary, route VM, roll-up, log */
 #ifdef HL64_TEST
-	if (eng_trace())
+	if (dbg_trace())
 		trace_frame();
 #endif
 	eng.frame++;
