@@ -96,8 +96,8 @@ Captures owed before the milestone that needs them:
 |---|---|---|
 | T-points, T-segments, T-entities, T-rotated, T-hitbox, T-allsolid | probe | trace-and-hulls.md (M2) |
 | A-touch, A-shape, A-order (taken: creation order of runtime triggers; map-trigger pairs feed the `touchrank` cook step) | probe | area-links-and-touch.md (M2) |
-| P-toss, P-bounce, P-step, P-push, P-rotate, P-pushable, P-walkmove | probe | physics-movetypes.md (M3) |
-| K-think, K-pusher, K-alloc, K-settle | probe | think-and-time.md (M3) |
+| P-toss, P-bounce, P-step, P-push, P-rotate, P-pushable, P-walkmove (taken) | probe | physics-movetypes.md (M3) |
+| K-think, K-pusher, K-alloc, K-settle (taken); W-water: `func_water` contents (taken); L-illum (taken: no server-side light observable, below) | probe | think-and-time.md, trace-and-hulls.md, lightstyles.md (M3) |
 | PM-bot runs (walk, run, jump, duck, ladder, water, stairs) | probe | pmove-host.md (M2) |
 | X-fx, X-glow, S-mix, L-anim, D-flash, W-texanim | retail client | render-fx, sound, lightstyles, dlights, world-surfaces (M3) |
 | old cook outputs, M1 poses, route logs and PROFILE logs | old tree | world-surfaces W1, M1, M4–M6 baselines |
@@ -127,3 +127,13 @@ on line 2). Inputs come from a generator seeded by (map, capture).
 | A-touch | linked boxes read back per solid type, bit 256 (Quake's FL_ITEM; HLSDK has none), yaw, rotated SOLID_BSP / SOLID_TRIGGER brushes; box trigger vs. FLY / bit-256 / SOLID_NOT / SOLID_TRIGGER / MOVETYPE_NONE / TOSS movers and the fake client at real-box gaps −8…3 u per axis, touches tagged set_origin / physics / pmove; three overlapping triggers; seven impact scenarios |
 | A-shape | the map brush model that least fills its bounds (an angled `trigger_once` in hldemo1–3; none in the Hazard Course) as a probe trigger, unrotated and at yaw 30; 320 sample origins, each probed by the fake client's 1 ms zero move and by a physics mover |
 | PM-bot | fake client via `pfnRunPlayerMove`, 300 frames per run: stand, walk, run, strafe, jump, standjump, duck, duckjump on level floor (msec 10; run/jump/duck/duckjump at 33; run/jump at 50), 18 u and 19 u step brushes, stairs, ladder (pitch −45 and 0), water, slope; per frame the command and the player state after the move, plus hull, physents and touches from `playermove_t` |
+| A-order | a server of its own with map triggers left linked as the map left them (a `DispatchTouch` hook logs and swallows map touches): every pair of SOLID_TRIGGER entities whose linked boxes are within 64 u, per mover hull 0/1/3/2 up to two origins where a mover touches both; a FLY mover set there and the touches of its next physics link in order, plus the fake client's 1 ms move; then runtime probe triggers, start-off `trigger_hurt` / `trigger_push` turned on as `ToggleUse` does, and every pair re-measured after its first-touched trigger was toggled off and on; placements wait until `force_retouch` is 0 |
+| K-think, K-pusher | probe entities thinking at frame times 0.01, 1/30 and 0.1 s (`host_framerate`), thinks set by other entities, the `nextthink` boundary, `multi_manager` / `trigger_relay` delays; probe pushers (copies of map brush models) moving with `nextthink` on `ltime`, blocked, sub-frame, idle |
+| K-alloc, K-settle | raw edict allocation and reuse read from the edict array; map-load time and the first 40 StartFrames with every item's state |
+| P-toss … P-walkmove | scenarios on a level world floor spot: drops, an arc, landing on a monster, a conveyor, base velocity; BOUNCE at friction 0 / 0.55 / 0.8 / 1, a grenade, BOUNCEMISSILE; STEP falls, slides, ledges, water; a lift, doors, blocked doors with riders, a corpse, a monster; a rotating pusher with riders and the fake client; PUSHSTEP boxes and the maps' `func_pushable`s; `pfnWalkMove` (flat, probe steps, ledges, world stairs, fly, swim), `pfnDropToFloor`, `pfnMoveToOrigin` |
+| W-water | a `func_water` spawned by the game DLL (none in these maps): `pfnPointContents` and pmove contents on a lattice, toss / step / fake client inside it, contents after it moved; probe brush entities with each contents skin and solid type |
+| L-illum | `pfnGetEntityIllum` at 48 floor points every frame, with light style 0 changed and next to an EF_BRIGHTLIGHT entity: 128 everywhere (the client 0), so light styles, dlights, sound and render fx have no server-side observable on HLDS and stay with the retail client oracle |
+
+M2 and M3 captures run with map triggers disabled in servers of their
+own (`run.sh all`: m2, m3, live), so one group's time, entity slots and
+engine random stream do not depend on the other.
