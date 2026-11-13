@@ -101,14 +101,17 @@ typedef struct {
 
 typedef struct {
 	float		gravity;	/* scale, 0 = 1 */
-	float		friction;	/* 0 = 1 (HLSDK pev->friction default 1) */
+	/* literal (0 is no friction; HLSDK entvars start at 0): BOUNCE
+	 * overbounce 2 - friction; STEP / PUSHSTEP ground friction scales by
+	 * it once and then sets it to 1 (physics-movetypes.md 3) */
+	float		friction;
 	float		ideal_yaw;	/* walk_move / move_to_origin / change_yaw */
 	float		yaw_speed;
 	uint16_t	groundentity;	/* slot, ENT_NONE */
 	uint16_t	aiment;		/* MOVETYPE_FOLLOW target, ENT_NONE */
 	int8_t		waterlevel;	/* 0..3 */
 	int8_t		watertype;	/* COL_* contents */
-	uint8_t		pad[2];
+	int16_t		view_ofs_z;	/* HLSDK pev->view_ofs.z: eyes for waterlevel 3 */
 } ent_phys_t;			/* 24 */
 
 typedef struct {
@@ -278,6 +281,13 @@ int		phy_move_to_origin(int e, const float goal[3], float dist, int mode);
 int		phy_drop_to_floor(int e);
 void		phy_change_yaw(int e);	/* toward phys.ideal_yaw by yaw_speed */
 int		phy_check_bottom(int e);
+/* FL_CONVEYOR pushers: the base velocity (HLSDK speed * movedir) the
+ * engine gives entities resting on e; the game calls it where HLSDK sets
+ * a conveyor's speed or movedir (zero clears). At most 16 conveyors. */
+void		phy_set_conveyor(int e, const float vel[3]);
+/* Game side (weak; none = no enemy): the enemy whose height an FL_FLY /
+ * FL_SWIM walk_move steers toward (HLSDK pev->enemy), -1 none. */
+int		game_walk_enemy(int e);
 
 /* ---- searches (7.1) -------------------------------------------------------- */
 
