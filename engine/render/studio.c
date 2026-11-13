@@ -48,6 +48,7 @@
 #include "engine/mem/pool.h"
 #include "engine/render/gpu_studio.h"
 #include "engine/render/ren.h"
+#include "engine/render/trans.h"
 #include "engine/world/wld.h"
 
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -945,32 +946,43 @@ static int probe_at(wld_layer_t *L, const uint16_t *list, int cnt, const float p
 	return -1;
 }
 
-static int light_at(wld_layer_t *L, const uint16_t *list, int cnt, const float local[3],
+/* Model light (lightstyles.md 4, dlights.md 4): the probe under the point
+ * (128 when its REND chunk is not resident), the style term (none until
+ * probe v3) and the live lights, by the renderer's ren_model_light. */
+static int light_at(int e, wld_layer_t *L, const uint16_t *list, int cnt, const float local[3],
 	const float global[3])
 {
-	int base = probe_at(L, list, cnt, local), i;
-	float v = base < 0 ? 128.0f : (float)base;
+	int base = probe_at(L, list, cnt, local);
 
-	for (i = 0; i < HL64_DLIGHTS; i++)
-	{
-		const ren_dlight_t *d;
-		float dx, dy, dz, a;
+	return ren_model_light(e, global, base < 0 ? 128.0f : (float)base, -1, 0);
+}
 
-		if (!ren_dlight_live(i))
-			continue;
-		d = ren_dlight(i);
-		dx = global[0] - d->origin[0];
-		dy = global[1] - d->origin[1];
-		dz = global[2] - d->origin[2];
-		a = d->radius - sqrtf(dx * dx + dy * dy + dz * dz);
-		if (a > 0)
-			v += a;
-	}
-	if (v < 32)
-		v = 32;
-	if (v > 255)
-		v = 255;
-	return (int)v;
+/* pfnGetEntityIllum (ent.h): the light a studio entity is drawn with, or
+ * the model light at a non-studio entity's origin, from the sectors its
+ * leaf sees; an entity whose probe chunk is not resident keeps its last
+ * value (128 before the first). */
+static uint8_t	illum[HL64_MAX_ENTITIES];
+
+int ent_illum(int e)
+{
+	const col_ent_t *cv;
+	wld_layer_t *L;
+	const uint16_t *list;
+	float g[3];
+	int cnt, base, k, v;
+
+	if (!ent_is_live(e) || !(L = wld_layer(ent_idc(e)->layer)))
+		return 0;
+	cv = ent_cv(e);
+	list = wld_leaf_sectors(L, wld_point_leaf(L, cv->origin), &cnt);
+	base = probe_at(L, list, cnt, cv->origin);
+	if (base < 0)
+		base = illum[e] ? illum[e] : 128;
+	for (k = 0; k < 3; k++)
+		g[k] = cv->origin[k] + L->gofs[k];
+	v = ren_model_light(e, g, (float)base, -1, 0);
+	illum[e] = (uint8_t)(base > 0 ? base : 1);
+	return v;
 }
 
 /* ---- draw ------------------------------------------------------------------------------------ */
@@ -1108,7 +1120,7 @@ static void draw_entity(int e, double time, wld_layer_t *L, const uint16_t *list
 	ge.nruns = pick_runs(m, r->body, ent_cv(e)->skin);
 	ge.runs = runs_buf;
 	ge.tex = tex_buf;
-	lv = light_at(L, list, cnt, org, org_g);
+	lv = light_at(e, L, list, cnt, org, org_g);
 	ge.rgba[0] = ge.rgba[1] = ge.rgba[2] = (uint8_t)lv;
 	if (mode < 0)
 		ge.mode = (uint8_t)blend_mode(e, &ge.rgba[3]);
@@ -1236,22 +1248,13 @@ void studio_draw(double time)
 			cand[i].trans = (uint16_t)(blend_mode(e, &a) != GPU_STUDIO_OPAQUE);
 			cand[i].dist = d;
 		}
-		/* opaque first, then translucent back to front */
+		/* opaque here; translucent ones join the renderer's back-to-front
+		 * pass (engine/render/trans.c calls studio_draw_trans) */
 		for (i = 0; i < n; i++)
 			if (!cand[i].trans)
 				draw_entity(cand[i].e, time, L, list, cnt, eye, -1, 0);
-		for (;;)
-		{
-			int best = -1;
-
-			for (i = 0; i < n; i++)
-				if (cand[i].trans == 1 && (best < 0 || cand[i].dist > cand[best].dist))
-					best = i;
-			if (best < 0)
-				break;
-			cand[best].trans = 2;
-			draw_entity(cand[best].e, time, L, list, cnt, eye, -1, 0);
-		}
+			else
+				ren_trans_studio(cand[i].e, cand[i].dist);
 	}
 	gpu_studio_end();
 	timed(t0);
@@ -1308,7 +1311,7 @@ void studio_draw_temp(res_t model, int body, int skin, const float org_g[3], con
 			continue;
 		for (k = 0; k < 3; k++)
 			local[k] = org_g[k] - L->gofs[k];
-		lv = light_at(L, lay_list[li], lay_cnt[li], local, org_g);
+		lv = light_at(-1, L, lay_list[li], lay_cnt[li], local, org_g);
 		break;
 	}
 	ge.rgba[0] = ge.rgba[1] = ge.rgba[2] = (uint8_t)lv;
@@ -1495,7 +1498,7 @@ static void draw_view(const float eye[3])
 			list = wld_leaf_sectors(L, wld_point_leaf(L, org), &cnt);
 			for (k = 0; k < 3; k++)
 				g[k] = org[k] + L->gofs[k];
-			lv = light_at(L, list, cnt, org, g);
+			lv = light_at(1, L, list, cnt, org, g);
 			ge.rgba[0] = ge.rgba[1] = ge.rgba[2] = (uint8_t)lv;
 		}
 	}
