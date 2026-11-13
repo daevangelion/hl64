@@ -77,8 +77,14 @@ typedef struct {
 /* Effects pass bracket (after the studio entities, before the view model). */
 void	gpu_fx_begin(void);
 void	gpu_fx_end(void);
-/* Mode for the following draws; prim colour for the PRIM combiners. */
+/* Mode for the following draws; prim colour for the PRIM combiners. The
+ * cart applies a mode's state only when the mode changes. */
 void	gpu_fx_mode(int mode, const uint8_t prim[4]);
+/* Another renderer drew inside the effects pass (studio entities and
+ * temp models through gpu_studio) and left its own RDP / tiny3d state:
+ * the next gpu_fx_mode applies its whole state, whatever the previous
+ * mode was. */
+void	gpu_fx_state_lost(void);
 /* Texture for the following draws: CI4 w x h with its 16-entry RGBA5551
  * TLUT (sprites), or I4 w x h (decals); sides are powers of two <= 64.
  * The bytes stay valid until the GPU has read them (two frames). */

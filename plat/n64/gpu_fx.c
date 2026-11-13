@@ -126,6 +126,11 @@ void gpu_fx_mode(int m, const uint8_t prim[4])
 	t3d_state_set_drawflags(flags);
 }
 
+void gpu_fx_state_lost(void)
+{
+	mode = -1;
+}
+
 void gpu_fx_tex_ci4(const uint16_t *tlut, const uint8_t *ci4, int w, int h)
 {
 	surface_t s;
