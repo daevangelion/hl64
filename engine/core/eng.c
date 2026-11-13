@@ -37,6 +37,8 @@
 #include "engine/mem/carve.h"
 #include "engine/mem/heap.h"
 #include "engine/render/gpu.h"
+#include "engine/render/gpu_2d.h"
+#include "hl64/draw2d.h"
 #include "engine/render/gpu_studio.h"
 #include "hl64/studio.h"
 #include "hl64/fx.h"
@@ -197,6 +199,14 @@ static int cmd_shot(const dbg_cmd_t *c)
 	log_printf("shot %lu frame=%lu\n", (unsigned long)c->arg[0].u,
 		(unsigned long)eng.frame);
 	log_draw("shot", c->arg[0].u);
+	{
+		gpu_2d_stats_t h;
+
+		gpu_2d_stats(&h);
+		log_printf("shot %lu hud: pics=%lu fills=%lu texels=%lu hash=%08lx\n",
+			(unsigned long)c->arg[0].u, (unsigned long)h.pics, (unsigned long)h.fills,
+			(unsigned long)h.texels, (unsigned long)h.hash);
+	}
 	return 0;
 }
 
@@ -407,6 +417,7 @@ void eng_boot(const char *platform)
 		ren_init();
 		studio_init();
 		ren_cam_init();
+		d2_init();
 	}
 	fx_init();
 	in_init();
@@ -547,6 +558,14 @@ static void rollup(void)
 	}
 	rec_prof_line();
 	game_mon_prof();
+	if (eng.world)
+	{
+		uint32_t avg, max, draws, bytes;
+
+		d2_rollup(&avg, &max, &draws, &bytes);
+		log_printf("prof hud_us avg=%lu max=%lu draws=%lu hud_bytes=%lu\n", (unsigned long)avg,
+			(unsigned long)max, (unsigned long)draws, (unsigned long)bytes);
+	}
 	{
 		fx_stats_t f;
 		unsigned long n;
@@ -666,6 +685,11 @@ void eng_frame(void)
 
 		ren_view_frame(eng.time, (double)dt * 1e-6);
 		ren_frame(eng.time);
+		/* the HUD after the 3D frame (architecture.md 9.8) */
+		game_hud_frame(eng.time, (double)dt * 1e-6);
+		d2_begin();
+		game_hud_draw();
+		d2_end();
 		ren_stats(&r);
 		eng.rollup_world_us += r.world_us;
 		if (r.world_us > eng.rollup_world_max)
