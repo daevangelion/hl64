@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Stream host test (test/m4/stream.sh): the OPEN seam t0a0c -> t0a0d
+# (a1a2, cwg flags 8, the elevator). New Game on t0a0c; the player walks
+# into the seam's approach box (t0a0d opens, its draw set lands), then
+# stands in the elevator (the carry box) facing its back wall, where
+# t0a0d's own elevator surfaces draw across layers (ren: oseam=). The
+# shots `open-seam` and `open-seam-2` bracket a `set r_openseam` change
+# the caller may make between them (stream.sh: none; the ares evidence
+# run: 0 at frame 140, an A/B pair of the same pose).
+# Syntax and semantics: docs/formats/route-bytecode.md.
+startmap t0a0c
+setpos -1100 -1508 40 0 0
+wait 3
+setpos -749 -1508 40 0 180
+wait 1
+shot open-seam
+stats open-seam
+wait 1
+shot open-seam-2
+pass

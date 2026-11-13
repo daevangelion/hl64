@@ -59,7 +59,7 @@ map (the VM adds the map's CWG placement `g_M`; architecture.md 5.4).
 | 0x08 | `WAIT_END` | 0 | 0 | `timeout` | the campaign's end section has fired (`trigger_endsection` / end of demo) |
 | 0x09 | `LOOK` | 0 | 0 | pitch *f*, yaw *f* | set the view angles (roll 0) |
 | 0x0A | `LOOK_AT` | 0 name, 1 class | name or class id | map | aim the view at the centre of the nearest live entity of the name / class in `map`; fails if there is none |
-| 0x0B | `SETPOS` | 1 = angles given | map | x, y, z, pitch, yaw *f* | move the player there with zero velocity (and set the view angles when `a` = 1); fails unless the home map is `map` |
+| 0x0B | `SETPOS` | 1 = angles given | map | x, y, z, pitch, yaw *f* | test builds only (a debug teleport; a build without `HL64_TEST` rejects the route): move the player there with zero velocity (and set the view angles when `a` = 1); fails unless the home map is `map` |
 | 0x0C | `BUTTONS` | 0 | down mask | up mask | held route buttons = (held \| down) & ~up; masks are HLSDK `IN_*` bits, disjoint, bit 6 unused |
 | 0x0D | `IMPULSE` | impulse | 0 | — | the next usercmd carries the impulse |
 | 0x0E | `DROP` | 0 | map | class id, x, y, z *f* | the game creates a runtime entity of the class there (HLSDK `CBaseEntity::Create` path) |
@@ -95,7 +95,10 @@ satisfied when more than `timeout` µs have passed since it started;
   `route FAIL <op#> <source>:<line> <mnemonic> <reason>` (line from the
   debug table) and ends the run with a non-zero harness exit.
 - Residency: the VM pins the destinations of the next `SETPOS` ops as
-  route look-ahead pins (architecture.md 5.3).
+  route look-ahead pins (architecture.md 5.3). A `SETPOS` opens a
+  30-frame teleport window (engine/io `io_tele_window`): its frames'
+  synchronous reads stay blocked frame time; a frame > 1 ms in it counts
+  as `blk1ms_tele=` on the `stats N stream:` line instead of `blk1ms=`.
 - Load: the reader rules below; `rtb_id` must equal the loaded table's
   `build_id`.
 

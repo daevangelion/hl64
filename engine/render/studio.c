@@ -64,6 +64,12 @@
 #define MESH_GRACE	3		/* frames a mesh stays after its last draw (GPU) */
 #define STEP_SNAP	64.0f		/* physics-movetypes.md 7 */
 #define STEP_MAX	0.2
+/* Models whose animations total at most this many bytes (view / world
+ * weapon models, gibs, items) have every sequence prefetched once their
+ * info lands, so the render paths that pose them (view model, temp
+ * entities) never read an animation synchronously. */
+#define SMALL_ANIMS	(32 * 1024)
+#define PF_FREE_REQS	8	/* the prefetch leaves this many read slots free */
 
 enum { U_ABSENT, U_LOADING, U_LANDED, U_RESIDENT, U_BAD };
 
@@ -72,6 +78,7 @@ typedef struct {
 	uint8_t		files;		/* rom / arom resolved */
 	uint8_t		info_st, mesh_st;
 	uint8_t		info_try;	/* an async info prefetch was started (once) */
+	uint8_t		anim_pf;	/* every sequence of a small model requested */
 	uint16_t	numseq, ntex;
 	sfmt_info_t	*info;
 	mem_blk_t	*info_blk;
@@ -103,7 +110,7 @@ typedef struct {
 /* Async info loads (studio_frame's prefetch of interest models): the
  * 64-byte header, then the info block, at SEAM priority (D3(b): an info
  * must be resident before its record hydrates). */
-#define ILOADS		4
+#define ILOADS		8
 typedef struct {
 	io_req_t	r;
 	sfmt_file_t	hdr __attribute__((aligned(16)));
@@ -409,6 +416,19 @@ static int model_files(int i)
 	return m->rom && m->arom ? 0 : -1;
 }
 
+/* A synchronous read of model i's info or animation: sync_loads; outside
+ * load I/O (boot / New Game / setpos map loads) also sync_play, which
+ * blocks a playing frame, logged by model. */
+static void sync_read(int i, const char *what)
+{
+	st.sync_loads++;
+	if (io_loading())
+		return;
+	st.sync_play++;
+	log_printf("studio: sync %s read in play: model %d %s\n", what, i,
+		res_name(RES_MAKE(RES_K_MODEL, i)));
+}
+
 #ifdef HL64_HOST
 void studio_test_bind(int idx, const char *s64, const char *a64)
 {
@@ -482,6 +502,7 @@ static int evict_one(void)
 		mem_pool_free(&pool, m->info_blk, 0);
 		m->info = NULL;
 		m->info_st = U_ABSENT;
+		m->info_try = 0;	/* an interest model's info is prefetched again */
 	}
 	return 1;
 }
@@ -599,7 +620,7 @@ static smodel_t *info_of(res_t r)
 				/* needed before its prefetch landed: finish it now
 				 * (blocked I/O, counted) */
 				iload_step(&iloads[k], 1);
-				st.sync_loads++;
+				sync_read(i, "info (queued)");
 			}
 	if (m->info_st == U_RESIDENT)
 	{
@@ -617,7 +638,7 @@ static smodel_t *info_of(res_t r)
 	io_read_sync(m->info, m->rom + m->info_ofs, m->info_size);
 	if (info_landed(m, i))
 		return NULL;
-	st.sync_loads++;
+	sync_read(i, "info");
 	return m;
 }
 
@@ -676,6 +697,23 @@ void studio_preload(void)
 	for (e = 1; e < HL64_MAX_ENTITIES; e++)
 		if (ent_is_live(e) && RES_KIND(ent_rnd(e)->model) == RES_K_MODEL)
 			info_of(ent_rnd(e)->model);
+}
+
+int studio_infos_pending(void)
+{
+	int n = res_count(RES_K_MODEL), i, p = 0;
+
+	if (n > HL64_STUDIO_MODELS)
+		n = HL64_STUDIO_MODELS;
+	for (i = 0; i < n; i++)
+	{
+		const smodel_t *m = &models[i];
+
+		if (m->info_st == U_LOADING || (m->info_st == U_ABSENT && !m->info_try
+			&& res_interest(RES_MAKE(RES_K_MODEL, i))))
+			p++;
+	}
+	return p;
 }
 
 const void *studio_info(res_t model, uint32_t *size)
@@ -794,7 +832,10 @@ static const void *anim_get(res_t model, int seq, uint32_t *size, int want_only,
 
 		for (k = 0; k < REQS; k++)
 			if (reqs[k].kind == 2 && reqs[k].idx == a - anims)
+			{
 				io_finish(&reqs[k].r);
+				sync_read(mi, "anim (queued)");
+			}
 		io_pump();
 	}
 	if (sync && a->st == U_ABSENT)
@@ -802,7 +843,7 @@ static const void *anim_get(res_t model, int seq, uint32_t *size, int want_only,
 		if (!(a->blk = alloc(s->anim_size, (void **)&a->data)))
 			return NULL;
 		io_read_sync(a->data, m->arom + s->anim_ofs, s->anim_size);
-		st.sync_loads++;
+		sync_read(mi, "anim");
 		a->st = U_LANDED;
 	}
 	if (a->st == U_LANDED)
@@ -838,6 +879,82 @@ const void *studio_anim_now(res_t model, int sequence, uint32_t *size)
 void studio_want(res_t model, int sequence)
 {
 	anim_get(model, sequence, NULL, 1, 0);
+}
+
+static int reqs_free(void)
+{
+	int i, n = 0;
+
+	for (i = 0; i < REQS; i++)
+		n += !reqs[i].kind;
+	return n;
+}
+
+/* Request every sequence of small model i (info resident) while more than
+ * PF_FREE_REQS read slots are free (the visible entities' reads keep
+ * theirs); 1 when every sequence was asked for. */
+static int want_all(int i)
+{
+	const smodel_t *m = &models[i];
+	int s;
+
+	if (m->info_st != U_RESIDENT || m->asize > SMALL_ANIMS)
+		return 1;
+	for (s = 0; s < m->numseq; s++)
+	{
+		if (reqs_free() <= PF_FREE_REQS)
+			return 0;
+		anim_get(RES_MAKE(RES_K_MODEL, i), s, NULL, 1, 0);
+	}
+	return 1;
+}
+
+/* studio_frame: the small models with residency interest get every
+ * sequence requested once their info is resident. */
+static void anim_prefetch(void)
+{
+	int n = res_count(RES_K_MODEL), i;
+
+	if (n > HL64_STUDIO_MODELS)
+		n = HL64_STUDIO_MODELS;
+	for (i = 0; i < n; i++)
+	{
+		smodel_t *m = &models[i];
+
+		if (m->anim_pf || m->info_st != U_RESIDENT || !res_interest(RES_MAKE(RES_K_MODEL, i)))
+			continue;
+		if (!want_all(i))
+			return;
+		m->anim_pf = 1;
+	}
+}
+
+/* 1 when sequence seq of model (as game_studio_pose picks it: 0 when out
+ * of range) can be posed without a read: info and animation resident, or
+ * a sequence without animation data. Otherwise what is missing is
+ * requested (an info through residency interest, studio_frame's async
+ * prefetch): the render paths skip the draw instead of reading it now. */
+static int anim_ready(res_t model, int seq)
+{
+	int i = model_index(model);
+	const smodel_t *m;
+	const sanim_t *a;
+
+	if (i < 0)
+		return 0;
+	m = &models[i];
+	if (m->info_st != U_RESIDENT)
+	{
+		res_precache(model);
+		return 0;
+	}
+	if (seq < 0 || seq >= m->numseq)
+		seq = 0;
+	if (!m->numseq || !SFMT_SEQS(m->info)[seq].anim_size)
+		return 1;
+	anim_get(model, seq, NULL, 1, 0);
+	a = anim_slot(i, seq, 0);
+	return a && a->st == U_RESIDENT;
 }
 
 /* ---- mesh -------------------------------------------------------------------------------- */
@@ -934,6 +1051,7 @@ void studio_frame(void)
 	frame++;
 	mem_pool_retire(&pool, frame);
 	info_prefetch(0);
+	anim_prefetch();
 	for (e = 1; e < HL64_MAX_ENTITIES; e++)
 	{
 		const ent_rnd_t *r;
@@ -1321,6 +1439,49 @@ static void timed(uint64_t t0)
 		st.us_max = (uint32_t)(t1 - t0);
 }
 
+/* A non-home layer's studio entities: none draws (counted, ren
+ * other_ents), except, through an OPEN seam whose B layer this is
+ * (ren_open_layer), the opaque ones whose origin is in the carry box,
+ * drawn at B's origin - T: what the eye sees of B through the seam. */
+static void draw_other_layer(wld_layer_t *L, double time, const float eye[3])
+{
+	static wld_layer_t bt;		/* L with its content's draw origin */
+	float off[3] = { 0, 0, 0 }, lo[3] = { 0, 0, 0 }, hi[3] = { 0, 0, 0 }, eye_l[3];
+	const uint16_t *list = NULL;
+	int e, k, cnt = 0, open = ren_open_layer(L->slot, off, lo, hi);
+
+	if (open)
+	{
+		bt = *L;
+		for (k = 0; k < 3; k++)
+		{
+			bt.gofs[k] = L->gofs[k] + off[k];
+			eye_l[k] = eye[k] - bt.gofs[k];
+		}
+		list = wld_leaf_sectors(L, wld_point_leaf(L, eye_l), &cnt);
+	}
+	for (e = 2; e < HL64_MAX_ENTITIES; e++)
+	{
+		const col_ent_t *cv;
+		uint8_t a;
+
+		if (!is_studio(e) || ent_idc(e)->layer != L->slot || (ent_rnd(e)->effects & EF_NODRAW))
+			continue;
+		cv = ent_cv(e);
+		for (k = 0; open && k < 3; k++)
+			if (cv->origin[k] < lo[k] || cv->origin[k] > hi[k])
+				break;
+		if (!open || k < 3 || blend_mode(e, &a) != GPU_STUDIO_OPAQUE
+			|| !visible(&bt, list, cnt, cv, eye))
+		{
+			ren_other_layer_ent(0);
+			continue;
+		}
+		draw_entity(e, time, &bt, list, cnt, eye, -1, 0);
+		ren_other_layer_ent(1);
+	}
+}
+
 void studio_draw(double time)
 {
 	static cand_t cand[HL64_STUDIO_DRAWN];
@@ -1340,6 +1501,9 @@ void studio_draw(double time)
 
 		lay_list[li] = NULL;
 		lay_cnt[li] = 0;
+		/* a non-home layer draws nothing, unless through an OPEN seam */
+		if (L && L->map != ren_cam.map)
+			draw_other_layer(L, time, eye);
 		if (!L || L->map != ren_cam.map)
 			continue;
 		for (k = 0; k < 3; k++)
@@ -1417,12 +1581,14 @@ void studio_draw_temp(res_t model, int body, int skin, const float org_g[3], con
 	int gpu_mode, uint8_t alpha)
 {
 	uint64_t t0 = sys_time_us();
-	smodel_t *m = mesh_of(model);
+	smodel_t *m;
 	gpu_studio_ent_t ge;
 	game_pose_t p;
 	int li, lv = 128;
 
-	if (!m)
+	/* never a synchronous read on a draw: a temp model whose info or
+	 * sequence 0 is not resident yet is requested and skipped */
+	if (!anim_ready(model, 0) || !(m = mesh_of(model)))
 		return;
 	memset(&p, 0, sizeof(p));
 	p.model = model;
@@ -1477,9 +1643,16 @@ void studio_draw_view(void)
 
 void studio_view_model(const studio_view_t *v)
 {
+	int i;
+
 	view_set = v && v->model != RES_NONE;
-	if (view_set)
-		view = *v;
+	if (!view_set)
+		return;
+	view = *v;
+	/* the view model's sequences stay resident while it is held (a new
+	 * weapon animation never reads synchronously) */
+	if ((i = model_index(v->model)) >= 0)
+		want_all(i);
 }
 
 static float	chrome_up[MAXBONES][3], chrome_right[MAXBONES][3];
@@ -1544,7 +1717,7 @@ static void draw_view(const float eye[3])
 	if (!view_set)
 		return;
 	view_set = 0;
-	if (!(m = mesh_of(view.model)))
+	if (!anim_ready(view.model, view.sequence) || !(m = mesh_of(view.model)))
 		return;
 	ms = m->mesh;
 	if (ms->nslots > view_slots)
@@ -1659,7 +1832,12 @@ int studio_hitboxes(const col_ent_t *e, const col_hitbox_t **out)
 	if (!ent_is_live(e->index))
 		return 0;
 	r = ent_rnd(e->index);
-	if (!(m = info_of(r->model)) || !m->info->numhitboxes)
+	/* never a synchronous read in a playing frame's trace: while the
+	 * current sequence's animation (or the info) is still landing (a
+	 * sequence change a frame or two ago; requested here), the box stands
+	 * for the hitboxes; load I/O (boot, tools, map loads) reads it */
+	if ((!anim_ready(r->model, r->sequence) && !io_loading()) || !(m = info_of(r->model))
+		|| !m->info->numhitboxes)
 		return 0;
 	memset(&p, 0, sizeof(p));
 	p.model = r->model;
@@ -1706,10 +1884,12 @@ void studio_stats(studio_stats_t *s, int reset)
 	if (reset)
 	{
 		uint32_t models_n = st.models, peak = st.pool_peak, anims_n = st.anims;
+		uint32_t play = st.sync_play;
 
 		memset(&st, 0, sizeof(st));
 		st.models = models_n;
 		st.pool_peak = peak;
 		st.anims = anims_n;
+		st.sync_play = play;
 	}
 }

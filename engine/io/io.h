@@ -14,7 +14,8 @@
  * of a trace) bypass the budget and are counted as blocked I/O, except
  * during boot (until the first io_frame_begin) and inside io_set_load
  * (boot / New Game / setpos map loads), which count as load I/O. A frame
- * blocked more than 1 ms logs `io: frame N blocked U us: ...`.
+ * blocked more than 1 ms logs `io: frame N blocked U us: ...`; inside a
+ * test teleport window (io_tele_window) it counts as blk1ms_tele.
  *
  * Shared by the cart and the host build: the backend (sys.h sys_pi_*) is
  * a PI DMA (cart) or a pread with a modelled PI cost per KB (host), so
@@ -75,6 +76,9 @@ typedef struct
 	uint32_t	life_blocked_max_us;
 	uint32_t	life_frames_blocked_1ms;
 	uint32_t	life_frames_budget_over;
+	/* frames > 1 ms blocked inside io_tele_window (blk1ms_tele): not in
+	 * life_frames_blocked_1ms / life_blocked_max_us, counted apart */
+	uint32_t	life_frames_blocked_1ms_tele;
 } io_stats_t;
 
 void	io_init(void);
@@ -108,9 +112,14 @@ int	io_in_flight(void);
 /* Map load (boot / New Game / setpos): sync reads count as load I/O, not
  * as blocked frame time. Nests: io_set_load(1) ... io_set_load(0). */
 void	io_set_load(int on);
-/* A test teleport (route SETPOS) is a map load: sync reads of this frame
- * and the next `frames` (the destination's hydration) count as load I/O. */
-void	io_load_window(uint32_t frames);
+/* A test-only teleport (route SETPOS, HL64_TEST): this frame and the next
+ * `frames` - 1 (the destination hydrates) are a teleport window. Their sync
+ * reads are still blocked frame time; a frame > 1 ms in the window counts
+ * as life_frames_blocked_1ms_tele (stats `blk1ms_tele=`) instead of
+ * blk1ms / blkmax, and its `io: frame` line says "(teleport window)". */
+void	io_tele_window(uint32_t frames);
+/* 1 inside io_set_load / boot (sync reads are load I/O). */
+int	io_loading(void);
 /* Bytes queued or in flight. */
 uint32_t io_queued(void);
 /* Bytes still allowed this frame; the frame's whole budget. */

@@ -170,6 +170,8 @@ void	game_mon_start_frame(void) __attribute__((weak));
 void	game_items_start_frame(void) __attribute__((weak));
 
 void	world_lightstyles(void);
+/* precache.c: residency interest for the map's records' models (level load) */
+void	game_precache_map(int slot);
 
 /* ---- lifetime ------------------------------------------------------------------ */
 
@@ -250,6 +252,7 @@ void game_new_campaign(void)
 
 void game_map_opened(int slot)
 {
+	game_precache_map(slot);
 	if (game_mon_map_opened)
 		game_mon_map_opened(slot);
 }

@@ -27,9 +27,10 @@ static uint32_t		fr_pi_us;	/* modelled PI busy time this frame (host) */
 static uint32_t		fr_sync_calls, fr_sync_bytes, fr_sync_max, fr_sync_max_rom;
 /* since boot, never reset by io_stats */
 static uint32_t		life_frames, life_blocked_max, life_blocked_1ms, life_budget_over;
-static uint32_t		load_until;	/* io_load_window: load I/O before this frame */
+static uint32_t		life_blocked_1ms_tele;	/* > 1 ms frames inside io_tele_window */
+static uint32_t		tele_until;	/* io_tele_window: teleport frames before this one */
 
-#define LOADING()	(loading > 0 || booting || life_frames < load_until)
+#define LOADING()	(loading > 0 || booting)
 
 /* ---- backend (sys_pi_*) ------------------------------------------------ */
 
@@ -132,7 +133,8 @@ void io_init(void)
 	fr_async = fr_blocked_us = fr_pi_us = 0;
 	fr_sync_calls = fr_sync_bytes = fr_sync_max = fr_sync_max_rom = 0;
 	life_frames = life_blocked_max = life_blocked_1ms = life_budget_over = 0;
-	load_until = 0;
+	life_blocked_1ms_tele = 0;
+	tele_until = 0;
 	memset(&st, 0, sizeof(st));
 }
 
@@ -158,17 +160,25 @@ void io_frame_begin(uint32_t frame_us)
 		}
 		if (fr_blocked_us > st.frame_blocked_max_us)
 			st.frame_blocked_max_us = fr_blocked_us;
-		if (fr_blocked_us > life_blocked_max)
-			life_blocked_max = fr_blocked_us;
 		if (fr_blocked_us > 1000)
 		{
+			/* a test teleport's frames (route SETPOS: the destination
+			 * hydrates) are counted apart, never dropped */
+			int tele = life_frames < tele_until;
+
 			st.frames_blocked_1ms++;
-			life_blocked_1ms++;
+			if (tele)
+				life_blocked_1ms_tele++;
+			else
+				life_blocked_1ms++;
 			log_printf("io: frame %lu blocked %lu us: %lu sync reads %lu B, largest %lu B "
-				"at 0x%08lx\n", (unsigned long)life_frames, (unsigned long)fr_blocked_us,
+				"at 0x%08lx%s\n", (unsigned long)life_frames, (unsigned long)fr_blocked_us,
 				(unsigned long)fr_sync_calls, (unsigned long)fr_sync_bytes,
-				(unsigned long)fr_sync_max, (unsigned long)fr_sync_max_rom);
+				(unsigned long)fr_sync_max, (unsigned long)fr_sync_max_rom,
+				tele ? " (teleport window)" : "");
 		}
+		if (fr_blocked_us > life_blocked_max && life_frames >= tele_until)
+			life_blocked_max = fr_blocked_us;
 		st.blocked_us += fr_blocked_us;
 		if (fr_us && fr_pi_us > fr_us)
 			st.frames_pi_over++;
@@ -290,9 +300,14 @@ void io_set_load(int on)
 		sys_error("io: io_set_load(0) without io_set_load(1)");
 }
 
-void io_load_window(uint32_t frames)
+void io_tele_window(uint32_t frames)
 {
-	load_until = life_frames + frames;
+	tele_until = life_frames + frames;
+}
+
+int io_loading(void)
+{
+	return LOADING();
 }
 
 uint32_t io_queued(void)
@@ -367,6 +382,7 @@ void io_stats(io_stats_t *out, int reset)
 	out->life_blocked_max_us = life_blocked_max;
 	out->life_frames_blocked_1ms = life_blocked_1ms;
 	out->life_frames_budget_over = life_budget_over;
+	out->life_frames_blocked_1ms_tele = life_blocked_1ms_tele;
 	if (reset)
 		memset(&st, 0, sizeof(st));
 }

@@ -56,8 +56,11 @@ typedef struct {
 
 enum { WLD_CH_ABSENT, WLD_CH_LOADING, WLD_CH_RESIDENT, WLD_CH_PINNED };
 /* Residency classes, weakest first (architecture.md 5.3): a request
- * evicts only chunks of weaker classes (unwanted = NONE). */
-enum { WLD_CLS_NONE, WLD_CLS_PREFETCH, WLD_CLS_PIN, WLD_CLS_OPEN };
+ * evicts only chunks of weaker classes (unwanted = NONE). LOAD: a layer
+ * open's own reads (pinned hull 0, the ENTS scan), which may evict open
+ * chunks not drawn this frame or the last: a fragmented pool must not
+ * stall an open whose sum fits. */
+enum { WLD_CLS_NONE, WLD_CLS_PREFETCH, WLD_CLS_PIN, WLD_CLS_OPEN, WLD_CLS_LOAD };
 
 #define WLD_PATTERN_MAX	64
 
@@ -96,6 +99,10 @@ typedef struct {
 	uint8_t			*page_state;	/* per TEXP page: WLD_PAGE_STATE bytes (gpu) */
 	wld_mover_t		*movers;
 	uint16_t		nmovers;
+	/* translucent ENTS placements (drawn by the translucent pass, not as
+	 * M1 movers): movers[nsub - ntrans_movers .. nsub), for the stream's
+	 * residency of the MOVR chunks a brush entity will draw */
+	uint16_t		ntrans_movers;
 	uint8_t			has_start;
 	uint8_t			reencode;	/* running tiny3d encodes strips differently */
 	uint8_t			high;		/* layer-region blocks at the high end */
@@ -215,6 +222,10 @@ void		wld_stream_missing(uint32_t n);
 typedef struct {
 	uint32_t	loads, evictions, nofit, queued;
 	uint32_t	pool_used[3], pool_peak[3];	/* render, texture, collision */
+	/* the most bytes the open + pin classes of one target generation
+	 * wanted (prefetch excluded): the pools' need; pool_peak is the
+	 * LRU cache's high water */
+	uint32_t	want_peak[3];
 	uint32_t	dirs_used, dirs_peak, dirs_size;	/* layer region */
 } wld_stats_t;
 void		wld_stats(wld_stats_t *s);

@@ -1,11 +1,15 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * stream.c -- residency classes and the change-driven target set
- * (docs/architecture.md 5.2-5.4): open (the eye leaf's visible set, the
- * collision window and the brush models in it), pin (a seam's B set and
- * window, point pins of teleport / route destinations), prefetch (eye-leaf
- * sets at eye + v * {0.25, 0.5, 1} s, the collision window + v * 0.5 s);
- * teleport windows and pop-in accounting; the async layer opens' stepping.
+ * (docs/architecture.md 5.2-5.4): open (the eye leaf's visible set and
+ * the drawn eye's neighbouring leaves -- bob, punch, shake -- each with
+ * the MOVR models the renderer can draw there: ENTS placements and live
+ * brush entities, swept ahead; the collision window and the brush models
+ * in it), pin (a seam's B set, window and arrival-eye set, point pins of
+ * teleport / route destinations), prefetch (eye-leaf sets at eye + v *
+ * {0.25, 0.5, 1} s, v the faster of the velocity and the observed motion,
+ * the collision window + v * 0.5 s); teleport windows and pop-in
+ * accounting; the want peak per pool; the async layer opens' stepping.
  *
  * The behaviour follows the old tree's n64/port/w64_stream.c as an oracle
  * (audit entry n64/port/w64_stream.c: CLEAN + QUAKE-INTERFACE): want
@@ -32,6 +36,7 @@
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/io/io.h"
+#include "engine/render/ren.h"
 #include "engine/world/wld_int.h"
 
 #define PREF_COLL_S	0.5f		/* collision window + v * 0.5 s */
@@ -39,12 +44,17 @@
 #define PIN_ARRIVE	64.0f		/* ... or when the player arrives */
 #define TELE_WINDOW_S	1.0		/* pop-in allowed for 1 s after a teleport */
 #define TELE_SLACK	32.0f		/* u a frame's move may exceed v * dt by */
+#define RIDE_SLACK	32.0f		/* u/s observed motion must exceed the velocity by */
+#define VIEW_PTS	7		/* the drawn eye: last offset, +-VIEW_SLACK per axis */
+#define VIEW_SLACK	24.0f		/* view bob / punch / shake reach (u) */
 #define TELE_DT		0.1f		/* longest frame (HL64_DT_MAX_US) */
 #define VEL_BUCKET	64.0f		/* u/s per velocity bucket step */
 #define COL_WIN		128.0f		/* collision window margin (engine/coll COL_WINDOW) */
 #define POINT_PINS	4
 #define COLL_MODELS	64
 #define EYE_Z		28.0f		/* view offset of a point pin's eye */
+#define MOVER_LEAD_S	0.5f		/* a moving brush entity's box swept this far ahead */
+#define MOVER_MARGIN	128.0f		/* ... and grown this much (a door about to move) */
 #define POPIN_LOGS	16		/* `stream: popin` lines logged at most */
 
 typedef struct {
@@ -65,6 +75,9 @@ static struct {
 	/* inputs of the standing target set */
 	int		home_slot;
 	int32_t		leaf, cell;
+	int32_t		vleaf[VIEW_PTS];	/* the drawn eye's other leaves */
+	int		nvleaf;
+	float		voff[3];	/* drawn eye - player eye (last frame) */
 	int32_t		vb[3];
 	uint32_t	pin_gen_seen, layer_gen_seen, coll_gen_seen;
 	uint8_t		valid, pending;
@@ -84,6 +97,7 @@ static struct {
 	/* teleports */
 	uint8_t		have_prev;
 	float		prev[3], prev_speed, rebase[3];
+	double		prev_t;
 	double		tele_until;
 	uint32_t	popin_logs;
 	wld_stream_stats_t st;
@@ -97,7 +111,86 @@ static void name(wld_layer_t *L, int c, int cls)
 		S.pending = 1;
 }
 
-/* REND + TEXP pages of the sectors leaf sees. */
+/* A map-local box meets a sector of list (the renderer's mover / entity
+ * sector test, without the frustum). */
+static int box_seen(const wld_layer_t *L, const float lo[3], const float hi[3],
+	const uint16_t *list, int cnt)
+{
+	int i, k;
+
+	for (i = 0; i < cnt; i++)
+	{
+		const int16_t *sb = L->sects[list[i]].bbox;
+
+		for (k = 0; k < 3; k++)
+			if (lo[k] > sb[k + 3] || hi[k] < sb[k])
+				break;
+		if (k == 3)
+			return 1;
+	}
+	return 0;
+}
+
+/* The MOVR models the renderer can draw in the sectors of list: the ENTS
+ * placements (rest positions, opaque and translucent; a record not yet
+ * hydrated, or woken and drawn in the same frame, is drawn there) and the
+ * live brush entities of L (where they are now: doors, trains, the
+ * elevator). fn(L, sub, cls) per model; 0 when fn returned 0 for any. */
+static int each_mover(wld_layer_t *L, const uint16_t *list, int cnt, int cls,
+	int (*fn)(wld_layer_t *L, int sub, int cls))
+{
+	int i, k, e, ok = 1;
+
+	for (i = 0; i < L->nmovers + L->ntrans_movers; i++)
+	{
+		const wld_mover_t *mv = &L->movers[i < L->nmovers ? i
+			: L->dir->nsub - 1 - (i - L->nmovers)];
+		const int16_t *mb = L->subs[mv->sub].bbox;
+		float lo[3], hi[3];
+
+		for (k = 0; k < 3; k++)
+		{
+			lo[k] = mb[k] + mv->origin[k] - MOVER_MARGIN;
+			hi[k] = mb[k + 3] + mv->origin[k] + MOVER_MARGIN;
+		}
+		if (box_seen(L, lo, hi, list, cnt) && !fn(L, mv->sub, cls))
+			ok = 0;
+	}
+	for (e = 1; e < HL64_MAX_ENTITIES; e++)
+	{
+		res_t m;
+		const col_ent_t *cv;
+		const float *v;
+		float lo[3], hi[3];
+		int k;
+
+		if (!ent_is_live(e) || ent_idc(e)->layer != L->slot)
+			continue;
+		m = ent_rnd(e)->model;
+		if (RES_KIND(m) != RES_K_SUBMODEL || RES_SUB_SLOT(m) != L->slot)
+			continue;
+		/* swept over its next MOVER_LEAD_S of travel and grown by
+		 * MOVER_MARGIN: a door starting to open into the view is
+		 * resident when it gets there */
+		cv = ent_cv(e);
+		v = ent_mot(e)->velocity;
+		for (k = 0; k < 3; k++)
+		{
+			float d = v[k] * MOVER_LEAD_S;
+
+			lo[k] = cv->absmin[k] + (d < 0 ? d : 0) - MOVER_MARGIN;
+			hi[k] = cv->absmax[k] + (d > 0 ? d : 0) + MOVER_MARGIN;
+		}
+		if (box_seen(L, lo, hi, list, cnt) && !fn(L, (int)RES_SUB_NUM(m), cls))
+			ok = 0;
+	}
+	return ok;
+}
+
+static int name_movr(wld_layer_t *L, int n, int cls);
+
+/* REND + TEXP pages of the sectors leaf sees, and the MOVR chunks (with
+ * their pages once landed) of the movers in them. */
 static void name_leaf(wld_layer_t *L, int leaf, int cls)
 {
 	const uint16_t *list;
@@ -112,10 +205,14 @@ static void name_leaf(wld_layer_t *L, int leaf, int cls)
 		for (k = 0; k < s->page_count; k++)
 			name(L, L->dir->texp_first + L->pagepool[s->page_first + k], cls);
 	}
+	if (!each_mover(L, list, cnt, cls, name_movr))
+		S.pending = 1;	/* a MOVR's pages follow when it lands */
 }
 
-/* A texture's page and every page of its animation / alternate sequences. */
-static void name_tex(wld_layer_t *L, int t, int cls)
+/* A texture's page and every page of its animation / alternate
+ * sequences: name them at cls (check 0), or 1 when all are resident
+ * (check 1). */
+static int tex_pages(wld_layer_t *L, int t, int cls, int check)
 {
 	int pass, steps, u;
 
@@ -129,12 +226,25 @@ static void name_tex(wld_layer_t *L, int t, int cls)
 			const w64_tex_t *x = &L->texs[u];
 
 			if (x->page != W64_NONE)
-				name(L, L->dir->texp_first + x->page, cls);
+			{
+				int c = L->dir->texp_first + x->page;
+
+				if (!check)
+					name(L, c, cls);
+				else if (L->ch[c].state < WLD_CH_RESIDENT)
+					return 0;
+			}
 			if (!(x->flags & W64_TEXF_ANIM) || x->anim_next == (pass ? L->texs[t].alternate : t))
 				break;
 			u = x->anim_next;
 		}
 	}
+	return 1;
+}
+
+static void name_tex(wld_layer_t *L, int t, int cls)
+{
+	tex_pages(L, t, cls, 0);
 }
 
 /* BSP model n's MOVR chunk, and its pages once it is resident; 0 while it
@@ -238,10 +348,40 @@ static void name_point(wld_layer_t *L, const float org[3], int cls)
 	name_box(L, lo, hi, cls);
 }
 
+/* The leaves the arrival eye can be in: the seam window's player box
+ * (B-local) sampled at its centre and its inset corners, at eye height;
+ * distinct leaves > 0 into out, their count. */
+#define ARRIVAL_PTS	5
+static int arrival_leaves(const wld_layer_t *L, const seam_pin_t *p, int out[ARRIVAL_PTS])
+{
+	static const float sx[ARRIVAL_PTS] = { 0, -1, 1, -1, 1 }, sy[ARRIVAL_PTS] = { 0, -1, -1, 1, 1 };
+	int i, j, n = 0;
+
+	for (i = 0; i < ARRIVAL_PTS; i++)
+	{
+		float e[3];
+		int leaf, k;
+
+		for (k = 0; k < 2; k++)
+		{
+			float c = 0.5f * (p->box[k] + p->box[k + 3]), h = 0.5f * (p->box[k + 3] - p->box[k]) - 16;
+
+			e[k] = c + (h > 0 ? h : 0) * (k ? sy[i] : sx[i]);
+		}
+		e[2] = 0.5f * (p->box[2] + p->box[5]) + EYE_Z;
+		leaf = wld_point_leaf(L, e);
+		for (j = 0; j < n && out[j] != leaf; j++)
+			;
+		if (leaf > 0 && j == n)
+			out[n++] = leaf;
+	}
+	return n;
+}
+
 static void name_seam(wld_layer_t *L, seam_pin_t *p)
 {
 	float lo[3], hi[3];
-	int i, k;
+	int i, k, leaves[ARRIVAL_PTS], nl;
 
 	p->movr_wait = 0;
 	for (i = 0; i < p->n; i++)
@@ -270,13 +410,21 @@ static void name_seam(wld_layer_t *L, seam_pin_t *p)
 			hi[k] = p->box[k + 3] + COL_WIN;
 		}
 		name_box(L, lo, hi, WLD_CLS_PIN);
+		/* the arrival eye's own draw set (the cooked slice is the set
+		 * seen through the seam, not what the eye sees after the switch:
+		 * B's movers there were missing for 22 frames) */
+		nl = arrival_leaves(L, p, leaves);
+		for (i = 0; i < nl; i++)
+			name_leaf(L, leaves[i], WLD_CLS_PIN);
 	}
 }
 
 /* ---- the target set ------------------------------------------------------------ */
 
 /* Name the whole set, strongest class first (a stronger request may take
- * a weaker queued read's slot, never the reverse). */
+ * a weaker queued read's slot, never the reverse). The want peak is
+ * measured after the open set and the seam pins: the test route's point
+ * pins (look-ahead SETPOS) are not a play need. */
 static void name_all(void)
 {
 	static const float none[3] = { 0, 0, 0 }, ts[3] = { 0.25f, 0.5f, 1.0f };
@@ -285,6 +433,15 @@ static void name_all(void)
 
 	S.pending = 0;
 	for (cls = WLD_CLS_OPEN; cls >= WLD_CLS_PREFETCH; cls--)
+	{
+		if (cls == WLD_CLS_PREFETCH)
+		{
+			wld_want_measure();
+			for (s = 0; s < HL64_WORLD_LAYERS; s++)
+				for (i = 0; wld_layer(s) && i < POINT_PINS; i++)
+					if (S.point[i].live && S.point[i].map == wld_layer(s)->map)
+						name_point(wld_layer(s), S.point[i].org, WLD_CLS_PIN);
+		}
 		for (s = 0; s < HL64_WORLD_LAYERS; s++)
 		{
 			wld_layer_t *L = wld_layer(s);
@@ -298,6 +455,8 @@ static void name_all(void)
 				{
 					L->want_leaf = S.leaf;
 					name_leaf(L, S.leaf, cls);
+					for (i = 0; i < S.nvleaf; i++)
+						name_leaf(L, S.vleaf[i], cls);
 				}
 				if (S.have_coll)
 					name_window(L, none, cls);
@@ -309,9 +468,6 @@ static void name_all(void)
 			{
 				if (S.seam[s].on)
 					name_seam(L, &S.seam[s]);
-				for (i = 0; i < POINT_PINS; i++)
-					if (S.point[i].live && S.point[i].map == L->map)
-						name_point(L, S.point[i].org, cls);
 			}
 			else if (s == S.home_slot)
 			{
@@ -334,6 +490,7 @@ static void name_all(void)
 				}
 			}
 		}
+	}
 }
 
 /* A pinned MOVR landed since the set was named: its pages join. */
@@ -390,7 +547,10 @@ static float len3(const float v[3])
 }
 
 /* A player global jump not explained by its velocity nor by a seam
- * re-base opens the teleport window (the first frame too: New Game). */
+ * re-base opens the teleport window (the first frame too: New Game).
+ * Otherwise a frame's motion clearly faster than the velocity (riding a
+ * train / lift / pushed: the push moves the origin, not the velocity) is
+ * the prefetch velocity. */
 static void teleport_check(int home_map, double now)
 {
 	const float *gm = wld_map_origin(home_map);
@@ -409,7 +569,11 @@ static void teleport_check(int home_map, double now)
 		S.tele_until = now + TELE_WINDOW_S;
 		S.st.teleports++;
 	}
+	else if (now > S.prev_t && len3(d) > (speed + RIDE_SLACK) * (float)(now - S.prev_t))
+		for (k = 0; k < 3; k++)
+			S.vel[k] = d[k] / (float)(now - S.prev_t);
 	memcpy(S.prev, g, sizeof(g));
+	S.prev_t = now;
 	S.prev_speed = speed;
 	memset(S.rebase, 0, sizeof(S.rebase));
 	S.have_prev = 1;
@@ -432,6 +596,17 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 		if (L->open && !L->ready)
 			wld_open_step(L, 16 * 1024);
 	}
+	/* the drawn eye's offset from the player's eye (bob, punch, landing
+	 * offset): last frame's view minus last frame's eye */
+	if (home_map >= 0 && ren_cam.map == home_map && S.have_prev)
+	{
+		const float *gm = wld_map_origin(home_map);
+
+		for (k = 0; k < 3; k++)
+			S.voff[k] = ren_cam.org[k] - gm[k] - S.eye[k];
+	}
+	else
+		memset(S.voff, 0, sizeof(S.voff));
 	memcpy(S.eye, eye, sizeof(S.eye));
 	memcpy(S.vel, vel, sizeof(S.vel));
 	/* point pins lapse after 3 s or on arrival */
@@ -454,18 +629,39 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 	if (H && H->ready != 1)
 		H = NULL;
 	for (k = 0; k < 3; k++)
-		vb[k] = vbucket(vel[k]);
+		vb[k] = vbucket(S.vel[k]);
 	if (S.pending == 0 && movr_landed())
 		S.pin_gen++;
 	{
 		int hs = H ? H->slot : -1;
 		int32_t leaf = H ? wld_point_leaf(H, eye) : -1, cell = H ? eye_cell(H, eye) : -1;
+		int32_t vl[VIEW_PTS];
+		int nv = 0, i, j;
 
+		/* the drawn eye (bob, punch, shake: last frame's offset, and
+		 * VIEW_SLACK around the eye) can sit in a neighbouring leaf */
+		for (i = 0; H && i < VIEW_PTS; i++)
+		{
+			float v[3];
+			int32_t l;
+
+			for (k = 0; k < 3; k++)
+				v[k] = eye[k] + (i == 0 ? (len3(S.voff) < TELE_SLACK ? S.voff[k] : 0)
+					: (i - 1) / 2 == k ? ((i & 1) ? VIEW_SLACK : -VIEW_SLACK) : 0);
+			l = wld_point_leaf(H, v);
+			for (j = 0; j < nv && vl[j] != l; j++)
+				;
+			if (l > 0 && l != leaf && j == nv)
+				vl[nv++] = l;
+		}
 		changed = !S.valid || hs != S.home_slot || leaf != S.leaf || cell != S.cell
+			|| nv != S.nvleaf || memcmp(vl, S.vleaf, (size_t)nv * sizeof(vl[0]))
 			|| memcmp(vb, S.vb, sizeof(vb)) || S.pin_gen != S.pin_gen_seen
 			|| wld_layer_gen != S.layer_gen_seen || S.coll_gen != S.coll_gen_seen;
 		S.home_slot = hs;
 		S.leaf = leaf;
+		memcpy(S.vleaf, vl, (size_t)nv * sizeof(vl[0]));
+		S.nvleaf = nv;
 		S.cell = cell;
 	}
 	if (changed)
@@ -487,6 +683,17 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 		if (S.pending)
 			name_all();
 		S.st.reassert++;
+	}
+	/* brush entities move without changing an input (doors, trains, the
+	 * elevator): the ones now in the eye's sectors join the standing set */
+	if (H && S.leaf > 0)
+	{
+		const uint16_t *list;
+		int cnt;
+
+		list = wld_leaf_sectors(H, S.leaf, &cnt);
+		if (!each_mover(H, list, cnt, WLD_CLS_OPEN, name_movr))
+			S.pending = 1;
 	}
 	/* the 128 KB seam budget while a seam pin is still missing chunks */
 	for (s = 0; s < HL64_WORLD_LAYERS; s++)
@@ -625,10 +832,65 @@ static int resident(const wld_layer_t *L, int c)
 	return L->ch[c].state >= WLD_CH_RESIDENT;
 }
 
+/* BSP model n's MOVR and every page its meshlets can show (animation /
+ * alternate frames) resident (not a MOVR: 1). */
+static int movr_resident(const wld_layer_t *L, unsigned n)
+{
+	const w64_sub_t *sb;
+	const w64_meshlet_t *m;
+	int k, nm;
+
+	if (n >= L->dir->nsub || L->subs[n].kind != W64_SUB_MOVR)
+		return 1;
+	sb = &L->subs[n];
+	if (!resident(L, sb->chunk))
+		return 0;
+	m = (const w64_meshlet_t *)((const uint8_t *)L->ch[sb->chunk].data + 24);
+	nm = ((const w64_rend_t *)L->ch[sb->chunk].data)->nmeshlets;
+	/* tex_pages only reads L when checking */
+	for (k = 0; k < nm; k++)
+		if (!tex_pages((wld_layer_t *)(uintptr_t)L, m[k].tex, 0, 1))
+			return 0;
+	return 1;
+}
+
+static int sector_resident(const wld_layer_t *L, int e)
+{
+	const w64_sector_t *s = &L->sects[e];
+	int k;
+
+	if (!resident(L, s->rend_chunk))
+		return 0;
+	for (k = 0; k < s->page_count; k++)
+		if (!resident(L, L->dir->texp_first + L->pagepool[s->page_first + k]))
+			return 0;
+	return 1;
+}
+
+/* name_leaf's MOVR models resident (each_mover's fn). */
+static int movr_ok(wld_layer_t *L, int sub, int cls)
+{
+	(void)cls;
+	return movr_resident(L, (unsigned)sub);
+}
+
+static int leaf_resident(const wld_layer_t *L, int leaf)
+{
+	const uint16_t *list;
+	int i, cnt;
+
+	list = wld_leaf_sectors(L, leaf, &cnt);
+	for (i = 0; i < cnt; i++)
+		if (!sector_resident(L, list[i]))
+			return 0;
+	/* each_mover only reads L here (movr_ok) */
+	return each_mover((wld_layer_t *)(uintptr_t)L, list, cnt, 0, movr_ok);
+}
+
 int wld_pin_resident(const wld_layer_t *B)
 {
 	const seam_pin_t *p = &S.seam[B->slot];
-	int i, k;
+	int i, k, leaves[ARRIVAL_PTS], nl;
 
 	if (!p->on)
 		return 1;
@@ -640,32 +902,11 @@ int wld_pin_resident(const wld_layer_t *B)
 
 		if (e & 0x8000)
 		{
-			const w64_sub_t *sb;
-			const w64_meshlet_t *m;
-			int nm;
-
-			if ((e & 0x7FFF) >= B->dir->nsub || B->subs[e & 0x7FFF].kind != W64_SUB_MOVR)
-				continue;
-			sb = &B->subs[e & 0x7FFF];
-			if (!resident(B, sb->chunk))
+			if (!movr_resident(B, e & 0x7FFF))
 				return 0;
-			m = (const w64_meshlet_t *)((const uint8_t *)B->ch[sb->chunk].data + 24);
-			nm = ((const w64_rend_t *)B->ch[sb->chunk].data)->nmeshlets;
-			for (k = 0; k < nm; k++)
-				if (B->texs[m[k].tex].page != W64_NONE
-					&& !resident(B, B->dir->texp_first + B->texs[m[k].tex].page))
-					return 0;
 		}
-		else if (e < B->dir->nsect)
-		{
-			const w64_sector_t *s = &B->sects[e];
-
-			if (!resident(B, s->rend_chunk))
-				return 0;
-			for (k = 0; k < s->page_count; k++)
-				if (!resident(B, B->dir->texp_first + B->pagepool[s->page_first + k]))
-					return 0;
-		}
+		else if (e < B->dir->nsect && !sector_resident(B, e))
+			return 0;
 	}
 	if (p->win)
 	{
@@ -691,6 +932,10 @@ int wld_pin_resident(const wld_layer_t *B)
 						if (!resident(B, B->dir->coll_first + v[i]))
 							return 0;
 				}
+		nl = arrival_leaves(B, p, leaves);
+		for (i = 0; i < nl; i++)
+			if (!leaf_resident(B, leaves[i]))
+				return 0;
 	}
 	return 1;
 }

@@ -93,7 +93,9 @@ static struct {
 	int		map;			/* layer map the slot follows; -1 none */
 	uint32_t	due;			/* frame its sheet may be read */
 	uint8_t		loaded, n;
+	uint8_t		reading;		/* req queued (an async read, SEAM class) */
 	uint32_t	peak;			/* largest sheet read into it, bytes */
+	io_req_t	req;
 } slots[HL64_WORLD_LAYERS];
 static uint8_t		*slot_base;		/* region + align16(global sheet) */
 static uint32_t		slot_bytes, frames, spent_us;
@@ -159,6 +161,9 @@ void decal_init(void)
 	region_bytes = cap;
 	for (s = 0; s < HL64_WORLD_LAYERS; s++)
 	{
+		if (slots[s].reading)
+			io_cancel(&slots[s].req);
+		slots[s].reading = 0;
 		slots[s].map = -1;
 		slots[s].loaded = slots[s].n = 0;
 		slots[s].peak = 0;
@@ -202,8 +207,9 @@ void decal_mem_line(void)
 
 /* Slot s follows layer s: a new map drops the decals and placements that
  * use the slot's textures, then (SLOT_DELAY frames later) reads the map's
- * DECL sheet; a sheet that breaks the rules or the slot leaves the map
- * without its placed decals (logged). */
+ * DECL sheet asynchronously (a layer opens during play: a seam's B); a
+ * sheet that breaks the rules or the slot leaves the map without its
+ * placed decals (logged). */
 static void slot_sync(int s)
 {
 	wld_layer_t *L = wld_layer(s);
@@ -219,25 +225,47 @@ static void slot_sync(int s)
 			if (queue[i].live && queue[i].decal >= lo && queue[i].decal < lo + SHEET_MAX)
 				queue[i].live = 0;
 		memset(&tex[lo], 0, SHEET_MAX * sizeof(tex[0]));
+		if (slots[s].reading)
+			io_cancel(&slots[s].req);
+		slots[s].reading = 0;
 		slots[s].map = map;
 		slots[s].loaded = slots[s].n = 0;
 		slots[s].due = frames + SLOT_DELAY;
 	}
 	if (slots[s].loaded || !L || (int32_t)(frames - slots[s].due) < 0)
 		return;
-	slots[s].loaded = 1;
 	for (c = 0; c < L->dir->nchunks; c++)
 		if (L->chunks[c].fourcc == DECL_FOURCC)
 			break;
 	if (c == L->dir->nchunks)
+	{
+		slots[s].loaded = 1;
 		return;
+	}
 	if (L->chunks[c].size > slot_bytes)
 	{
+		slots[s].loaded = 1;
 		log_printf("fx: %s: DECL %lu B > decal slot %lu B\n", wld_map_name(map),
 			(unsigned long)L->chunks[c].size, (unsigned long)slot_bytes);
 		return;
 	}
-	io_read_sync(slot_base + (uint32_t)s * slot_bytes, L->rom + L->chunks[c].ofs, L->chunks[c].size);
+	if (!slots[s].reading)
+	{
+		io_req_t *q = &slots[s].req;
+
+		memset(q, 0, sizeof(*q));
+		q->rom = L->rom + L->chunks[c].ofs;
+		q->dst = slot_base + (uint32_t)s * slot_bytes;
+		q->len = (L->chunks[c].size + 1) & ~1u;
+		q->prio = IO_PRIO_SEAM;
+		q->user = -1;
+		io_submit(q);
+		slots[s].reading = 1;
+	}
+	if (slots[s].req.state != IO_DONE)
+		return;
+	slots[s].reading = 0;
+	slots[s].loaded = 1;
 	if (L->chunks[c].size > slots[s].peak)
 		slots[s].peak = L->chunks[c].size;
 	if ((r = load_sheet(slot_base + (uint32_t)s * slot_bytes, L->chunks[c].size, &tex[lo])) < 0)

@@ -18,8 +18,9 @@
  * specs: texture animation (431-453) from world-surfaces.md 4, the
  * dynamic-light falloff (634-649) from dlights.md 3. tiny3d / rdpq calls
  * live behind gpu.h. The flashlight is the pool pass over the drawn
- * list (dlights.md 3; world list only, movers not covered yet). Not
- * carried: OPEN-seam cross-layer draw (M4).
+ * list (dlights.md 3; world list only, movers not covered yet). OPEN
+ * seams (cwg-format.md): while the player is in an OPEN seam's approach
+ * box, B's draw set is drawn across layers (draw_open_seam).
  *
  * Movers at rest at the map origin are world-space geometry: they join
  * the world list (one page sort, per-meshlet cull, no matrix). Movers
@@ -34,7 +35,10 @@
 #include "hl64/limits.h"
 #include "hl64/settings.h"
 #include "hl64/studio.h"
+#include "hl64/seam.h"
+#include "engine/core/log.h"
 #include "engine/core/sys.h"
+#include "engine/phys/player.h"
 #include "engine/mem/carve.h"
 #include "engine/render/gpu_fx.h"
 #include "engine/render/ren.h"
@@ -63,6 +67,12 @@ static float		fr_n[4][3];	/* inward frustum plane normals (n . p >= n . eye) */
 static float		eye_g[3];	/* eye, global */
 static uint32_t		r10;		/* floor(game time x 10) */
 static ren_stats_t	st, last;
+/* this frame's OPEN-seam B layer (ren_open_layer): slot, -T, carry box
+ * in B's frame; slot -1 none */
+static struct {
+	int		slot;
+	float		off[3], lo[3], hi[3];
+} oseam = { -1, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } };
 
 static w64_vert_t	*dl_buf[2];
 static w64_vert_t	*fp_v[2];	/* flashlight pool, double-buffered */
@@ -1006,6 +1016,179 @@ static void draw_layer(wld_layer_t *L)
 	}
 }
 
+/* ---- OPEN seams (cwg-format.md "OPEN seams") ------------------------------------- */
+
+#define OSEAM_SCALE	(1.0f + 1.0f / 256.0f)	/* about the eye: A's copy wins the depth test */
+
+/* Meshlet box (B-local) meets the carry box (B-local). */
+static int touches(const int16_t *bb, const float lo[3], const float hi[3])
+{
+	int k;
+
+	for (k = 0; k < 3; k++)
+		if (bb[k] > hi[k] || bb[k + 3] < lo[k])
+			return 0;
+	return 1;
+}
+
+/* B's OPEN draw set (the leading ndraw sector-pool entries: B sectors,
+ * 0x8000 | n B MOVR models), its meshlets touching the carry box, drawn
+ * at B's origin - T and scaled about the eye by OSEAM_SCALE. */
+static void draw_open_seam(wld_layer_t *B, const seam_info_t *s)
+{
+	float org[3], d[4];
+	ren_mat_t mt;
+	int i, j, k, n = 0, wait = 0;
+	uint32_t before;
+
+	for (k = 0; k < 3; k++)
+		org[k] = B->gofs[k] + oseam.off[k];
+	plane_d(org, d);
+	for (i = 0; i < B->dir->ntex; i++)
+		tex_page0[i] = B->texs[ren_tex_anim(B->texs, B->dir->ntex, i, 0, r10)].page;
+	for (j = 0; j < s->ndraw && j < s->npool; j++)
+	{
+		uint16_t e = s->pool[j];
+		const w64_rend_t *r;
+		const w64_meshlet_t *m;
+		uint8_t *ch;
+		int c, page;
+
+		if (e & 0x8000)
+		{
+			if ((e & 0x7FFF) >= B->dir->nsub || B->subs[e & 0x7FFF].kind != W64_SUB_MOVR)
+				continue;
+			c = B->subs[e & 0x7FFF].chunk;
+		}
+		else if (e < B->dir->nsect)
+			c = B->sects[e].rend_chunk;
+		else
+			continue;
+		if (!(ch = wld_chunk_use(B, c)))
+		{
+			wait = 1;
+			continue;
+		}
+		r = (const w64_rend_t *)ch;
+		m = (const w64_meshlet_t *)(ch + 24);
+		for (k = 0; k < r->nmeshlets; k++, m++)
+		{
+			if (!touches(m->bbox, oseam.lo, oseam.hi))
+				continue;
+			page = tex_page0[m->tex];
+			if (page == W64_NONE)
+				continue;
+			/* every page of the set, in view or not (turning must not
+			 * hide B again) */
+			if (!wld_chunk_use(B, B->dir->texp_first + page))
+			{
+				wait = 1;
+				continue;
+			}
+			if (box_culled(m->bbox, d))
+				continue;
+			if (n >= HL64_REN_VIS_MAX)
+			{
+				st.dropped++;
+				continue;
+			}
+			vis[n].m = m;
+			vis[n].chunk = ch;
+			vis[n].chunk_idx = (uint16_t)c;
+			vis[n].page = (uint16_t)page;
+			n++;
+		}
+	}
+	/* B shows through whole: until every chunk of the draw set landed
+	 * (requested above) nothing of it draws, so nothing pops in */
+	if (wait)
+		return;
+	if (!n)
+		return;
+	/* camera-relative: scaling about the eye scales the whole matrix */
+	memset(&mt, 0, sizeof(mt));
+	for (k = 0; k < 3; k++)
+	{
+		mt.m[k][k] = OSEAM_SCALE;
+		mt.m[3][k] = (org[k] - eye_g[k]) * OSEAM_SCALE;
+	}
+	mt.m[3][3] = 1.0f;
+	gpu_matrix_push(&mt);
+	before = st.meshlets;
+	draw_list(B, n, org, 1);
+	gpu_matrix_pop();
+	st.oseam_meshlets += st.meshlets - before;
+	st.meshlets = before;
+	if (settings.r_openseam == 2)
+		log_printf("ren: open seam %s->%s meshlets=%d\n", wld_map_name(s->from),
+			wld_map_name(s->to), n);
+}
+
+/* The OPEN seams of home layer A whose approach box holds the player:
+ * their B layer (ready) draws its draw set. */
+static void open_seams(const wld_layer_t *A)
+{
+	seam_graph_t g;
+	seam_info_t s;
+	const float *po;
+	int i, k;
+
+	oseam.slot = -1;
+	if (!settings.r_openseam || seam_graph(&g) || !phy_player_active()
+		|| phy_player_map() != A->map)
+		return;
+	po = phy_player()->origin;
+	for (i = 0; i < g.nseams; i++)
+	{
+		wld_layer_t *B;
+
+		if (seam_info(i, &s) || s.from != A->map || !(s.flags & SEAM_F_OPEN) || !s.ndraw)
+			continue;
+		for (k = 0; k < 3; k++)
+			if (po[k] < s.ap_mins[k] || po[k] > s.ap_maxs[k])
+				break;
+		if (k < 3)
+			continue;
+		B = wld_layer_of_map(s.to);
+		/* B shows through once its seam set is resident (nothing of it
+		 * pops in through the seam) */
+		if (!B || B->ready != 1 || !wld_layer(B->slot) || !wld_pin_resident(B))
+			continue;
+		/* B content at g_B - T: B's landmark on A's; the carry box
+		 * (A-local) in B's frame is + delta */
+		oseam.slot = B->slot;
+		for (k = 0; k < 3; k++)
+		{
+			oseam.off[k] = -s.T[k];
+			oseam.lo[k] = s.carry_mins[k] + s.delta[k];
+			oseam.hi[k] = s.carry_maxs[k] + s.delta[k];
+		}
+		draw_open_seam(B, &s);
+		/* A's translucent movers (trans pass) use A's pages again */
+		for (k = 0; k < A->dir->ntex; k++)
+			tex_page0[k] = A->texs[ren_tex_anim(A->texs, A->dir->ntex, k, 0, r10)].page;
+		return;		/* one approached seam at a time */
+	}
+}
+
+int ren_open_layer(int slot, float off[3], float lo[3], float hi[3])
+{
+	if (slot < 0 || slot != oseam.slot)
+		return 0;
+	memcpy(off, oseam.off, sizeof(oseam.off));
+	memcpy(lo, oseam.lo, sizeof(oseam.lo));
+	memcpy(hi, oseam.hi, sizeof(oseam.hi));
+	return 1;
+}
+
+void ren_other_layer_ent(int drawn)
+{
+	if (drawn)
+		st.oseam_ents++;
+	else
+		st.other_ents++;
+}
+
 void ren_frame(double time)
 {
 	uint64_t t0 = sys_time_us();
@@ -1054,9 +1237,13 @@ void ren_frame(double time)
 
 	gpu_begin(&v);
 	fx_draw_begin();
+	oseam.slot = -1;
 	for (i = 0; i < HL64_WORLD_LAYERS; i++)
 		if ((L = wld_layer(i)) && L->map == ren_cam.map)
+		{
 			draw_layer(L);
+			open_seams(L);
+		}
 	st.world_us = (uint32_t)(sys_time_us() - t0);
 	/* frame step 11 (architecture.md 3.2): studio, particles,
 	 * translucent, decals, view model; the HUD follows */

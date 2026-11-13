@@ -45,6 +45,7 @@ void settings_reset(void)
 	settings.vol_master = 100;
 	settings.vol_sfx = 100;
 	settings.stick_deadzone = 8;
+	settings.r_openseam = 1;
 }
 
 int settings_set(int id, float v)

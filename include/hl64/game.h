@@ -22,9 +22,14 @@ void	game_init(void);
 void	game_prof_line(void);
 /* New Game: global state, skill, the player's inventory reset. */
 void	game_new_campaign(void);
-/* An HLE slot opened / is closing (its records' game state). */
+/* An HLE slot opened / is closing (its records' game state). The open
+ * declares residency interest for every model the map's records will
+ * need (game/hl/precache.c, GoldSrc's level-load precache). */
 void	game_map_opened(int slot);
 void	game_map_closing(int slot);
+/* Residency interest for class cls's precache list (a runtime spawn the
+ * map's records do not name: the test route's DROP). */
+void	game_precache_class(cls_t cls);
 
 /* Spawn a physical record into entity e (allocated by the engine, layer
  * and gid set, origin / angles from the record): read its keys, run the

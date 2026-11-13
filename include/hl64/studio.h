@@ -47,6 +47,10 @@ void		studio_frame(void);
  * models' infos asynchronously (no mid-game synchronous info read once
  * the interest precedes the use). */
 void		studio_preload(void);
+/* Models with residency interest whose info is still on its way (the
+ * async prefetch has it queued or not yet started); rec holds a newly
+ * opened map's hydration until 0 (level-load precache before spawns). */
+int		studio_infos_pending(void);
 void		studio_draw(double time);
 /* The renderer's translucent pass (engine/render/trans.c, back to front):
  * entity e, already found visible by studio_draw, in gpu_mode
@@ -83,8 +87,10 @@ typedef struct {
 	uint32_t	models, pool_used, pool_peak, anims, sync_loads;
 	uint32_t	drawn, bones_us, draw_us, us_max;
 	uint32_t	frames, us_sum, culled, pending, nofit, dropped;
+	uint32_t	sync_play;	/* since boot: sync reads outside load I/O */
 } studio_stats_t;
-/* Counters since the last reset (pool fields: now / peak). */
+/* Counters since the last reset (pool fields: now / peak; sync_play is
+ * never reset). */
 void		studio_stats(studio_stats_t *s, int reset);
 
 #ifdef HL64_HOST

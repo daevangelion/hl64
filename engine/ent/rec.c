@@ -45,6 +45,7 @@
 #include "hl64/game.h"
 #include "hl64/limits.h"
 #include "hl64/rec.h"
+#include "hl64/studio.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/ent/rec_int.h"
@@ -88,7 +89,7 @@ typedef struct {
 	uint8_t			phase;		/* PH_* */
 	uint8_t			idle;
 	uint8_t			logic_pending;
-	uint8_t			pad;
+	uint8_t			pre_wait;	/* precache_held: frames held + 1, 0 not held */
 	uint32_t		ndecals;	/* rec_limits_t.ndecals of the layer */
 	uint32_t		block, block_len;	/* in the HLE region */
 	uint8_t			*b;		/* the chunk */
@@ -1811,6 +1812,7 @@ static void chunk_done(rmap_t *m, const wld_layer_t *L)
 	eng_set_frame_layer(m->slot);
 	game_map_opened(m->slot);
 	eng_set_frame_layer(prev);
+	m->pre_wait = 1;	/* its precache lands before its records hydrate */
 	thaw(m);
 	log_printf("rec: %s open in slot %d: %u records (%u logic, %u pending), chunk %lu B, "
 		"block %lu B\n", file, m->slot, m->h->numrecs, m->nlogic, m->npend,
@@ -1880,7 +1882,7 @@ int rec_map_ready(int slot)
 	if (slot < 0 || slot >= REC_SLOTS || !R.map)
 		return 0;
 	advance(&R.map[slot]);
-	return R.map[slot].open;
+	return R.map[slot].open && !R.map[slot].pre_wait;
 }
 
 void rec_map_finish(int slot)
@@ -1902,6 +1904,12 @@ void rec_map_finish(int slot)
 		advance(m);
 		if (m->phase == ph)
 			sys_error("rec: %s: HLE open waits for its layer", wld_map_name(m->map));
+	}
+	/* a map load: its precache's infos are read now too (load I/O) */
+	if (m->pre_wait)
+	{
+		studio_preload();
+		m->pre_wait = 0;
 	}
 	io_set_load(0);
 }
@@ -2796,6 +2804,29 @@ static int home_slot(const float g[3])
 	return -1;
 }
 
+/* A newly opened map's records wait for its level-load precache (the
+ * interest game_map_opened declared; studio infos land asynchronously),
+ * as GoldSrc precaches before the first spawn: a Spawn would otherwise
+ * read its model's info synchronously. Bounded, logged. */
+#define REC_PRECACHE_FRAMES	60
+static int precache_held(rmap_t *m)
+{
+	int n;
+
+	if (!m->pre_wait)
+		return 0;
+	n = studio_infos_pending();
+	if (n && m->pre_wait < REC_PRECACHE_FRAMES)
+	{
+		m->pre_wait++;
+		return 1;
+	}
+	log_printf("rec: %s precache %s after %u frames (%d infos pending)\n",
+		wld_map_name(m->map), n ? "timed out" : "landed", (unsigned)(m->pre_wait - 1), n);
+	m->pre_wait = 0;
+	return 0;
+}
+
 void rec_frame(const float (*anchors)[3], int nanchors)
 {
 	uint64_t t0 = sys_time_us();
@@ -2816,7 +2847,7 @@ void rec_frame(const float (*anchors)[3], int nanchors)
 		int i;
 
 		advance(m);
-		if (!m->open || !(L = wld_layer(s)))
+		if (!m->open || !(L = wld_layer(s)) || precache_held(m))
 			continue;
 		/* a newly opened map's logic records: all at once (no entities) */
 		if (m->logic_pending)
@@ -2897,7 +2928,7 @@ int rec_wake_box(const float gmins[3], const float gmaxs[3])
 		uint16_t hit[64];
 		int nh = 0;
 
-		if (!m->open || !m->npend || !wld_layer(s))
+		if (!m->open || m->pre_wait || !m->npend || !wld_layer(s))
 			continue;
 		g = wld_layer(s)->gofs;
 		for (k = 0; k < 3; k++)

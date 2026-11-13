@@ -18,8 +18,8 @@
  *   T5 teleport windows: pop-in inside a window is popin_tele, outside
  *      popin; a seam re-base is not a teleport.
  *   T6 blocked-I/O positive control: a deliberate 64 KB synchronous read
- *      counts as a frame > 1 ms; load I/O (io_set_load, io_load_window)
- *      does not.
+ *      counts as a frame > 1 ms; load I/O (io_set_load) does not; inside
+ *      a test teleport window (io_tele_window) it counts as blk1ms_tele.
  *
  * Usage: hl64-stream CONTENT_DIR. Output: `stream: T<n> <what>: PASS|FAIL
  * ...` lines, then `stream: N failed`; exit 0 when none failed.
@@ -509,7 +509,9 @@ static void t4_evict(void)
 	int m, q, p, k, best = -1, rounds;
 	uint32_t most = 0, ev, eq, pr;
 
-	/* the map whose TEXP pages overflow the texture pool the most */
+	/* the map with the most TEXP pages; the texture pool is squeezed to
+	 * three quarters of them (the pool is sized for seam windows, wider
+	 * than any one map) */
 	for (m = 0; m < wld_map_count(); m++)
 	{
 		uint32_t sum = 0;
@@ -525,18 +527,17 @@ static void t4_evict(void)
 		wld_close(L);
 		frames(3);
 	}
-	if (most <= HL64_POOL_TEXTURE_KB * 1024u)
-	{
-		check("T4 evict", 0, "no map's pages overflow the texture pool (largest %lu B)",
-			(unsigned long)most);
-		return;
-	}
+	if (most * 3 / 4 < HL64_POOL_TEXTURE_KB * 1024u)
+		wld_test_squeeze((HL64_POOL_TEXTURE_KB * 1024u - most * 3 / 4) & ~15u);
 	L = wld_open(best);
 	q = fill_textures(L, WLD_CLS_PREFETCH);
-	check("T4 evict", q >= 0, "%s: %lu B of pages, pool full at page %d", wld_map_name(best),
-		(unsigned long)most, q);
+	check("T4 evict", q >= 0, "%s: %lu B of pages, pool (squeezed to %lu B) full at page %d",
+		wld_map_name(best), (unsigned long)most, (unsigned long)(most * 3 / 4), q);
 	if (q < 0)
+	{
+		wld_test_squeeze(0);
 		return;
+	}
 
 	/* E1: a weaker class never evicts a stronger one */
 	rename_resident(L, WLD_CLS_OPEN);
@@ -590,7 +591,7 @@ static void t4_evict(void)
 	fill_textures(L, WLD_CLS_PIN);
 	frames(40);
 	{
-		int queued[16], nq = 0, open_q = -1, spare = 16, full = 0;
+		int queued[16], nq = 0, open_q = -1, spare = 4, full = 0;
 
 		if (!++wld_tgen)
 			wld_tgen = 1;
@@ -642,6 +643,7 @@ static void t4_evict(void)
 	}
 	land_all();
 	wld_close(L);
+	wld_test_squeeze(0);
 	frames(3);
 }
 
@@ -725,14 +727,27 @@ static void t6_blocked(void)
 	io_read_sync(big, rom, sizeof(big));
 	io_set_load(0);
 	frames(1);
-	io_load_window(1);
-	io_read_sync(big, rom, sizeof(big));
-	frames(2);
 	io_read_sync(big, rom, 512);
 	frames(1);
 	io_stats(&b, 0);
-	check("T6 blocked", b.life_frames_blocked_1ms == a.life_frames_blocked_1ms,
-		"the same read as load I/O (io_set_load, io_load_window), a 512 B read: not counted");
+	check("T6 blocked", b.life_frames_blocked_1ms == a.life_frames_blocked_1ms
+		&& b.life_frames_blocked_1ms_tele == a.life_frames_blocked_1ms_tele,
+		"the same read as load I/O (io_set_load), a 512 B read: not counted");
+	a = b;
+	io_tele_window(2);
+	io_read_sync(big, rom, sizeof(big));
+	frames(1);
+	io_read_sync(big, rom, sizeof(big));
+	frames(1);
+	io_read_sync(big, rom, sizeof(big));
+	frames(1);
+	io_stats(&b, 0);
+	check("T6 blocked", b.life_frames_blocked_1ms_tele == a.life_frames_blocked_1ms_tele + 2
+		&& b.life_frames_blocked_1ms == a.life_frames_blocked_1ms + 1,
+		"the read in a 2-frame teleport window: 2 frames blk1ms_tele (%lu), the frame "
+		"after it blk1ms (%lu)",
+		(unsigned long)(b.life_frames_blocked_1ms_tele - a.life_frames_blocked_1ms_tele),
+		(unsigned long)(b.life_frames_blocked_1ms - a.life_frames_blocked_1ms));
 }
 
 int main(int argc, char **argv)

@@ -155,14 +155,18 @@ static void log_draw(const char *what, uint32_t label)
 	gpu_stats(&g);
 	log_printf("%s %lu ren: map=%s eye=%.9g,%.9g,%.9g ang=%.9g,%.9g,%.9g leaf=%lu r10=%lu "
 		"sectors=%lu movers=%lu meshlets=%lu verts=%lu tris=%lu binds=%lu relit=%lu "
-		"dlit=%lu missing=%lu dropped=%lu world_us=%lu\n", what, (unsigned long)label,
+		"dlit=%lu missing=%lu dropped=%lu world_us=%lu oseam=%lu oseam_ents=%lu "
+		"other_ents=%lu\n", what,
+		(unsigned long)label,
 		wld_map_name(ren_cam.map), (double)ren_cam.org[0], (double)ren_cam.org[1],
 		(double)ren_cam.org[2], (double)ren_cam.ang[0], (double)ren_cam.ang[1],
 		(double)ren_cam.ang[2], (unsigned long)r.leaf, (unsigned long)r.r10,
 		(unsigned long)r.sectors, (unsigned long)r.movers, (unsigned long)r.meshlets,
 		(unsigned long)r.verts, (unsigned long)r.tris, (unsigned long)r.binds,
 		(unsigned long)r.relit, (unsigned long)r.dlit, (unsigned long)r.missing,
-		(unsigned long)r.dropped, (unsigned long)r.world_us);
+		(unsigned long)r.dropped, (unsigned long)r.world_us,
+		(unsigned long)r.oseam_meshlets, (unsigned long)r.oseam_ents,
+		(unsigned long)r.other_ents);
 	log_printf("%s %lu gpu: binds=%lu meshlets=%lu verts=%lu tris=%lu hash=%08lx\n", what,
 		(unsigned long)label, (unsigned long)g.binds, (unsigned long)g.meshlets,
 		(unsigned long)g.verts, (unsigned long)g.tris, (unsigned long)g.hash);
@@ -331,17 +335,22 @@ static int cmd_stats(const dbg_cmd_t *c)
 		{
 			wld_stream_stats_t ss;
 			io_stats_t io;
+			studio_stats_t sd;
 
 			wld_stream_stats(&ss, 0);
 			io_stats(&io, 0);
-			log_printf("stats %lu stream: popin=%lu popin_tele=%lu blk1ms=%lu pins=%lu "
-				"prefetch=%lu recompute=%lu reassert=%lu over=%lu tele=%lu open_async=%lu "
-				"open_fail=%lu\n", (unsigned long)c->arg[0].u, (unsigned long)ss.popin,
+			studio_stats(&sd, 0);
+			log_printf("stats %lu stream: popin=%lu popin_tele=%lu blk1ms=%lu "
+				"blk1ms_tele=%lu studio_sync=%lu pins=%lu prefetch=%lu recompute=%lu "
+				"reassert=%lu over=%lu tele=%lu open_async=%lu open_fail=%lu\n",
+				(unsigned long)c->arg[0].u, (unsigned long)ss.popin,
 				(unsigned long)ss.popin_tele, (unsigned long)io.life_frames_blocked_1ms,
-				(unsigned long)ss.pins, (unsigned long)ss.prefetch,
-				(unsigned long)ss.recompute, (unsigned long)ss.reassert,
-				(unsigned long)io.life_frames_budget_over, (unsigned long)ss.teleports,
-				(unsigned long)ss.open_async, (unsigned long)ss.open_fail);
+				(unsigned long)io.life_frames_blocked_1ms_tele,
+				(unsigned long)sd.sync_play, (unsigned long)ss.pins,
+				(unsigned long)ss.prefetch, (unsigned long)ss.recompute,
+				(unsigned long)ss.reassert, (unsigned long)io.life_frames_budget_over,
+				(unsigned long)ss.teleports, (unsigned long)ss.open_async,
+				(unsigned long)ss.open_fail);
 		}
 	}
 	if (phy_player_active())
@@ -392,10 +401,12 @@ static int cmd_mem(const dbg_cmd_t *c)
 
 		wld_stats(&w);
 		log_printf("mem world: layerdirs=%lu peak=%lu size=%lu render_peak=%lu "
-			"texture_peak=%lu collision_peak=%lu\n", (unsigned long)w.dirs_used,
+			"texture_peak=%lu collision_peak=%lu render_want_peak=%lu "
+			"texture_want_peak=%lu collision_want_peak=%lu\n", (unsigned long)w.dirs_used,
 			(unsigned long)w.dirs_peak, (unsigned long)w.dirs_size,
 			(unsigned long)w.pool_peak[0], (unsigned long)w.pool_peak[1],
-			(unsigned long)w.pool_peak[2]);
+			(unsigned long)w.pool_peak[2], (unsigned long)w.want_peak[0],
+			(unsigned long)w.want_peak[1], (unsigned long)w.want_peak[2]);
 	}
 	mem_heap_lifetime(&total_mal, &total_fr, &fails, &live_n, &live_kb, &peak_kb);
 	log_printf("mem: allocs %u frees %u fails %u live %u (%u KB) peak %u KB stack %d\n",
@@ -588,9 +599,11 @@ static void rollup(void)
 		wld_stream_stats(&ss, 1);
 		n = ss.frames ? ss.frames : 1;
 		log_printf("prof stream_us avg=%lu max=%lu frames=%lu recompute=%lu reassert=%lu "
-			"blk1ms=%lu blkmax=%lu promoted=%lu\n", (unsigned long)ss.us_sum / n,
-			(unsigned long)ss.us_max, (unsigned long)ss.frames, (unsigned long)ss.recompute,
-			(unsigned long)ss.reassert, (unsigned long)io.life_frames_blocked_1ms,
+			"blk1ms=%lu blk1ms_tele=%lu blkmax=%lu promoted=%lu\n",
+			(unsigned long)ss.us_sum / n, (unsigned long)ss.us_max, (unsigned long)ss.frames,
+			(unsigned long)ss.recompute, (unsigned long)ss.reassert,
+			(unsigned long)io.life_frames_blocked_1ms,
+			(unsigned long)io.life_frames_blocked_1ms_tele,
 			(unsigned long)io.life_blocked_max_us, (unsigned long)ss.promoted);
 	}
 	if (eng.world)
