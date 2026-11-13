@@ -10,11 +10,11 @@
  * pmove touch list. The services pm_shared calls back into (contents,
  * player traces, position tests) live here over engine/coll.
  *
- * The move runs in the home layer's frame (pmove-host.md 2.1): the player
- * block's origin is map-local, the physents are copies translated by the
- * home g_M, and only the entity layer and engine/coll queries that need
- * global positions (grid query, linking, residency, true contents outside
- * the home world) translate back.
+ * The move runs in the home layer's frame (pmove-host.md 2.1;
+ * eng_frame_layer() = the home layer during the move and its touches):
+ * the player block's origin and the player's collision view are
+ * map-local, the physents are copies translated into the home frame, and
+ * only the grid query and residency translate to global positions.
  *
  * Not before M3: conveyor ground entities (their speed / movedir belong
  * to the M3 components), the game's player prethink / think / postthink
@@ -23,12 +23,14 @@
 #include <math.h>
 #include <string.h>
 
+#include "hl64/ent.h"
 #include "hl64/game.h"
 #include "hl64/grid.h"
 #include "engine/core/dbg.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/in/in.h"
+#include "engine/phys/phys.h"
 #include "engine/phys/player.h"
 #include "engine/world/wld.h"
 
@@ -100,12 +102,11 @@ static void prof_add(uint64_t t0, uint32_t *us, uint32_t *calls)
 }
 
 /* World contents: the home layer's leaf in its own frame; where that is
- * SOLID (or outside it) the other open layers, globally (col_true_contents
- * order). */
+ * SOLID (or outside it) the other open layers (col_true_contents order,
+ * in the home frame). */
 static int true_contents(const float p[3])
 {
 	const wld_layer_t *H = P.home;
-	float g[3];
 	int k;
 
 	if (H)
@@ -121,8 +122,7 @@ static int true_contents(const float p[3])
 				return c;
 		}
 	}
-	to_global(g, p);
-	return col_true_contents(g);
+	return col_true_contents(p);
 }
 
 int phy_pm_true_contents(const float p[3])
@@ -327,14 +327,17 @@ static void world_physent(col_ent_t *o, const wld_layer_t *L)
 /* An entity's collision view as a home-frame physent. */
 static void local_physent(col_ent_t *o, const col_ent_t *e)
 {
+	float d[3];
 	int k;
 
 	*o = *e;
+	if (!ent_frame_delta(e->index, d))
+		return;
 	for (k = 0; k < 3; k++)
 	{
-		o->origin[k] = e->origin[k] - P.hofs[k];
-		o->absmin[k] = e->absmin[k] - P.hofs[k];
-		o->absmax[k] = e->absmax[k] - P.hofs[k];
+		o->origin[k] = e->origin[k] + d[k];
+		o->absmin[k] = e->absmin[k] + d[k];
+		o->absmax[k] = e->absmax[k] + d[k];
 	}
 }
 
@@ -349,16 +352,18 @@ static int boxes_meet(const float amin[3], const float amax[3], const float bmin
 	return 1;
 }
 
-/* squared distance from p to an entity's linked box */
+/* squared distance from global p to an entity's linked box */
 static float box_dist2(const col_ent_t *e, const float p[3])
 {
+	const float *gm = eng_layer_origin(ent_idc(e->index)->layer);
 	float d2 = 0;
 	int k;
 
 	for (k = 0; k < 3; k++)
 	{
-		float d = p[k] < e->absmin[k] ? e->absmin[k] - p[k]
-			: p[k] > e->absmax[k] ? p[k] - e->absmax[k] : 0;
+		float lo = e->absmin[k] + gm[k], hi = e->absmax[k] + gm[k];
+		float d = p[k] < lo ? lo - p[k] : p[k] > hi ? p[k] - hi : 0;
+
 		d2 += d * d;
 	}
 	return d2;
@@ -483,10 +488,15 @@ static void build_physents(uint32_t dt_us)
 
 /* ---- the player entity ----------------------------------------------------- */
 
-/* the player's entity (global) from the player block (home-local) */
+/* the player's entity from the player block: map-local to the home layer
+ * (its layer), global while the home layer is not open */
 static void sync_view(void)
 {
-	to_global(P.e->origin, P.pl.origin);
+	ent_idc(P.e->index)->layer = (int8_t)(P.home ? P.home->slot : -1);
+	if (P.home)
+		memcpy(P.e->origin, P.pl.origin, sizeof(P.e->origin));
+	else
+		to_global(P.e->origin, P.pl.origin);
 	memcpy(P.e->mins, P.pl.mins, sizeof(P.e->mins));
 	memcpy(P.e->maxs, P.pl.maxs, sizeof(P.e->maxs));
 	P.e->angles[0] = 0;
@@ -588,7 +598,7 @@ void phy_player_frame(const in_cmd_t *cmd, double time)
 	ent_player_t *pl = &P.pl;
 	uint64_t t0;
 	uint32_t us;
-	int i, k;
+	int i, k, layer;
 	uint16_t done[HL64_PM_TOUCH];
 	int ndone = 0;
 
@@ -596,6 +606,10 @@ void phy_player_frame(const in_cmd_t *cmd, double time)
 		return;
 	t0 = sys_time_us();
 	P.printed = 0;
+	/* the move, its services and its touches run in the home frame */
+	P.home = find_home();
+	layer = eng_frame_layer();
+	eng_set_frame_layer(P.home ? P.home->slot : -1);
 
 	/* collision residency around the player (architecture.md 5.3) */
 	{
@@ -609,8 +623,10 @@ void phy_player_frame(const in_cmd_t *cmd, double time)
 		col_want(mins, maxs);
 	}
 
-	/* step 2: the player's think before the move (game) */
+	/* step 2: the player's think before the move (game), then its think
+	 * if due (think-and-time.md 2) */
 	game_player_prethink(pl);
+	phy_run_think(ENT_PLAYER, time, eng_frametime());
 
 	/* steps 4-5: physents and the move */
 	phy_pm.pl = pl;
@@ -647,6 +663,7 @@ void phy_player_frame(const in_cmd_t *cmd, double time)
 		if (other && ent_get(ENT_PLAYER) == P.e)
 			phy_impact(P.e, other);
 	}
+	eng_set_frame_layer(layer);
 
 	us = (uint32_t)(sys_time_us() - t0);
 	P.prof.frames++;

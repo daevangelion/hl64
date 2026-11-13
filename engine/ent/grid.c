@@ -60,9 +60,7 @@ static struct {
 
 void ent_grid_init(void)
 {
-	if (mem_region_bytes(MEM_THINK_GRID) < 2u * (GRID_BUCKETS + 1))
-		sys_error("grid: think/grid region too small");
-	g.head = mem_region(MEM_THINK_GRID);
+	g.head = ent_think_take(2u * (GRID_BUCKETS + 1));
 }
 
 void ent_grid_clear(void)
@@ -211,6 +209,7 @@ void ent_unlink(col_ent_t *e)
 	int i = e->index;
 
 	grid_remove(i);
+	ent_sets_set_linked(i, 0);
 	if (ent_s.contents[i])
 	{
 		col_contents_remove(e);
@@ -228,9 +227,11 @@ void ent_link(col_ent_t *e)
 	int i = e->index, k, a, level;
 	int32_t lo[3], hi[3];
 	ent_node_t *n = &ent_s.node[i];
+	const float *gm = eng_layer_origin(ent_c.id[i].layer);
 
 	grid_remove(i);
 	linked_box(e);
+	ent_sets_set_linked(i, ent_is_live(i));
 	k = kind_of(e);
 	if (k == ENT_Q_CONTENTS && !ent_s.contents[i])
 	{
@@ -245,10 +246,11 @@ void ent_link(col_ent_t *e)
 	if (!k)
 		return;
 	g.st.links++;
+	/* cells and the rounded box are global: + g_M of the layer */
 	for (a = 0; a < 3; a++)
 	{
-		lo[a] = coord(e->absmin[a]);
-		hi[a] = coord(e->absmax[a]);
+		lo[a] = coord(e->absmin[a] + gm[a]);
+		hi[a] = coord(e->absmax[a] + gm[a]);
 		n->lo[a] = s16_clamp(lo[a] - 1);
 		n->hi[a] = s16_clamp(hi[a] + 1);
 		lo[a] += GRID_BIAS;
@@ -309,9 +311,12 @@ dry:
 /* ---- queries ---------------------------------------------------------------- */
 
 typedef struct {
-	const float	*mins, *maxs;
-	int16_t		lo[3], hi[3];	/* the query box rounded outwards */
+	const float	*mins, *maxs;	/* frame-local */
+	int16_t		lo[3], hi[3];	/* the global query box rounded outwards */
 	int		mask, max, n;
+	int		frame;
+	uint8_t		have[HL64_WORLD_LAYERS + 1];
+	float		d[HL64_WORLD_LAYERS + 1][3];	/* layer -1.. : g_M(layer) - g_M(frame) */
 	uint16_t	*out;
 } query_t;
 
@@ -319,6 +324,7 @@ static void visit(query_t *q, int i)
 {
 	ent_node_t *n = &ent_s.node[i];
 	const col_ent_t *e;
+	int layer;
 
 	if (n->stamp == g.qstamp)
 		return;
@@ -329,12 +335,32 @@ static void visit(query_t *q, int i)
 		|| n->lo[1] > q->hi[1] || n->hi[1] < q->lo[1]
 		|| n->lo[2] > q->hi[2] || n->hi[2] < q->lo[2])
 		return;
-	/* exact; positive form: a NaN box meets nothing */
-	e = &ent_s.v[i];
-	if (!(e->absmin[0] <= q->maxs[0] && e->absmax[0] >= q->mins[0]
-		&& e->absmin[1] <= q->maxs[1] && e->absmax[1] >= q->mins[1]
-		&& e->absmin[2] <= q->maxs[2] && e->absmax[2] >= q->mins[2]))
-		return;
+	/* exact, in the query's frame; positive form: a NaN box meets nothing */
+	e = &ent_c.cv[i];
+	layer = ent_c.id[i].layer;
+	if (layer < -1 || layer >= HL64_WORLD_LAYERS)
+		layer = -1;	/* no open layer: the global frame (eng_layer_origin) */
+	if (layer == q->frame)
+	{
+		if (!(e->absmin[0] <= q->maxs[0] && e->absmax[0] >= q->mins[0]
+			&& e->absmin[1] <= q->maxs[1] && e->absmax[1] >= q->mins[1]
+			&& e->absmin[2] <= q->maxs[2] && e->absmax[2] >= q->mins[2]))
+			return;
+	}
+	else
+	{
+		const float *d = q->d[layer + 1];
+
+		if (!q->have[layer + 1])
+		{
+			ent_layer_delta(layer, q->frame, q->d[layer + 1]);
+			q->have[layer + 1] = 1;
+		}
+		if (!(e->absmin[0] + d[0] <= q->maxs[0] && e->absmax[0] + d[0] >= q->mins[0]
+			&& e->absmin[1] + d[1] <= q->maxs[1] && e->absmax[1] + d[1] >= q->mins[1]
+			&& e->absmin[2] + d[2] <= q->maxs[2] && e->absmax[2] + d[2] >= q->mins[2]))
+			return;
+	}
 	if (q->n < q->max)
 		q->out[q->n++] = (uint16_t)i;
 	else
@@ -357,9 +383,16 @@ static uint32_t sort_key(int i, int by_rank)
 
 int ent_query(const float mins[3], const float maxs[3], int mask, uint16_t *out, int max)
 {
+	return ent_query_in(-1, mins, maxs, mask, out, max);
+}
+
+int ent_query_in(int frame, const float mins[3], const float maxs[3], int mask, uint16_t *out,
+	int max)
+{
 	query_t q;
 	int32_t lo[3], hi[3];
 	int level, a, i, j, by_rank = mask == ENT_Q_TRIGGER;
+	const float *gm = eng_layer_origin(frame);
 
 	g.st.queries++;
 	for (a = 0; a < 3; a++)
@@ -367,14 +400,19 @@ int ent_query(const float mins[3], const float maxs[3], int mask, uint16_t *out,
 			return 0;
 	q.mins = mins;
 	q.maxs = maxs;
+	q.frame = frame;
+	memset(q.have, 0, sizeof(q.have));
+	/* cells and the rounded box from the global box; the cell range is
+	 * one unit wider, so a face contact that rounds differently in the
+	 * global frame still shares a cell */
 	for (a = 0; a < 3; a++)
 	{
-		lo[a] = coord(mins[a]);
-		hi[a] = coord(maxs[a]);
+		lo[a] = coord(mins[a] + gm[a]);
+		hi[a] = coord(maxs[a] + gm[a]);
 		q.lo[a] = s16_clamp(lo[a] - 1);
 		q.hi[a] = s16_clamp(hi[a] + 1);
-		lo[a] += GRID_BIAS;
-		hi[a] += GRID_BIAS;
+		lo[a] += GRID_BIAS - 1;
+		hi[a] += GRID_BIAS + 1;
 	}
 	q.mask = mask;
 	q.max = max;
@@ -442,9 +480,9 @@ int col_ents_box(const float mins[3], const float maxs[3], const col_ent_t **out
 
 	if (max > HL64_MAX_ENTITIES)
 		max = HL64_MAX_ENTITIES;
-	n = ent_query(mins, maxs, ENT_Q_SOLID | ENT_Q_TRIGGER, idx, max);
+	n = ent_query_in(eng_frame_layer(), mins, maxs, ENT_Q_SOLID | ENT_Q_TRIGGER, idx, max);
 	for (i = 0; i < n; i++)
-		out[i] = &ent_s.v[idx[i]];
+		out[i] = &ent_c.cv[idx[i]];
 	return n;
 }
 
