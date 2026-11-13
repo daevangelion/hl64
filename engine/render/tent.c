@@ -268,6 +268,7 @@ void tent_draw(int i, uint8_t blend, int mode)
 	if (RES_KIND(t->model) == RES_K_MODEL)
 	{
 		studio_draw_temp(t->model, t->body, 0, t->org, t->ang, mode, blend);
+		gpu_fx_state_lost();
 		return;
 	}
 	{
