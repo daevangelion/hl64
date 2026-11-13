@@ -116,8 +116,8 @@ waitnear -240 384 178 14 10
 wait 0.5
 # HEV flashlight (impulse 100), looking down the dark duct north to its
 # floor: HLSDK player.cpp drains 1 unit per FLASH_DRAIN_TIME 1.2 s while
-# on; the log's flashlight lines and the stats lines' battery field carry
-# the numbers
+# on; the log's `flashlight: on|off|charged, battery N, t=T` lines carry
+# the numbers (game/hl/player.c)
 look 20 90
 wait 0.3
 shot duct-dark
