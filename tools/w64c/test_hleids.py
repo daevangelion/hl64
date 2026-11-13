@@ -150,9 +150,7 @@ class HleIds(unittest.TestCase):
     def test_unknown_names_stop(self) -> None:
         for strip, what in ((lambda t: t.res_names.__setitem__(0, "models/x.mdl"), "MODEL"),
                             (lambda t: t.global_names.clear(), "global state"),
-                            (lambda t: t.patterns.pop(), "pattern"),
-                            (lambda t: t.group_names.__setitem__(0, "X"), "group"),
-                            (lambda t: t.sentence_names.__setitem__(2, "X"), "sentence")):
+                            (lambda t: t.patterns.pop(), "pattern")):
             t = table()
             strip(t)
             with self.assertRaises(hleids.IdError) as cm:
@@ -163,13 +161,19 @@ class HleIds(unittest.TestCase):
         with self.assertRaises(hleids.IdError):
             hleids.apply(self.blob, ids, "m")
 
-    def test_missing_title_and_class_are_none(self) -> None:
+    def test_missing_title_class_sentence_are_none(self) -> None:
+        """titles.txt lacks it / the game lacks the class / restab dropped
+        a sentence or group whose sounds are all missing: no id"""
         t = table()
+        t.group_names[0] = "X"
+        t.sentence_names[2] = "X"
         t.titles, t.title_names = [], []
         t.class_names = t.class_names[:-1]
         keys, cls, _kn, _f = self.parse(hleids.apply(self.blob, hleids.Ids.from_table(t, keys_def()), "m"))
         self.assertEqual(keys[(9, "message")], hleids.NONE)
         self.assertEqual(keys[(10, "monstertype")], hleids.NONE)
+        self.assertEqual(keys[(5, "message")], hleids.NONE)
+        self.assertEqual(keys[(6, "sentence")], hleids.NONE)
 
     def test_malformed_chunks(self) -> None:
         for bad in (b"", self.blob[:50], b"HLX1" + self.blob[4:],
