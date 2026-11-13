@@ -844,9 +844,11 @@ static int request(wld_layer_t *L, int c, int cls)
 			continue;
 		}
 		/* evicted REND / TEXP bytes free behind their fence: once the
-		 * fenced bytes cover the request, wait for them (two frames)
-		 * instead of evicting the rest of the pool */
-		if ((pl->fenced && pl->size - pl->used + pl->fenced >= size) || !evict_one(p, cls))
+		 * fenced bytes could make the hole (the largest free block plus
+		 * every fenced byte covers the request), wait for them (two
+		 * frames) instead of evicting the rest of the pool; a pool whose
+		 * free bytes are fragmented evicts on until they could */
+		if ((pl->fenced && mem_pool_largest(pl) + pl->fenced >= size) || !evict_one(p, cls))
 		{
 			st.nofit++;
 			return 0;
@@ -966,6 +968,40 @@ void wld_frame(uint32_t frame)
 		mem_pool_retire(&pools[p], wld_frame_no);
 	mem_pool_retire(&layer_pool, wld_frame_no);
 }
+
+void wld_want_measure(void)
+{
+	uint32_t b[NPOOLS] = { 0 };
+	int s, c, p;
+
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+	{
+		const wld_layer_t *L = &layers[s];
+
+		if (!L->open || L->ready != 1)
+			continue;
+		for (c = 0; c < L->dir->nchunks; c++)
+			if (L->ch[c].want == wld_tgen && L->ch[c].cls >= WLD_CLS_PIN)
+				b[chunk_pool(L->chunks[c].fourcc)] += (L->chunks[c].size + 15) & ~15u;
+	}
+	for (p = 0; p < NPOOLS; p++)
+		if (b[p] > st.want_peak[p])
+			st.want_peak[p] = b[p];
+}
+
+#ifdef HL64_HOST
+void wld_test_squeeze(uint32_t bytes)
+{
+	static mem_blk_t *blk;
+	static void *owner;
+
+	if (blk)
+		mem_pool_free(&pools[POOL_TEXTURE], blk, 0);
+	blk = bytes ? mem_pool_alloc_high(&pools[POOL_TEXTURE], bytes, &owner) : NULL;
+	if (blk)
+		blk->locked = 1;
+}
+#endif
 
 void wld_stats(wld_stats_t *s)
 {
@@ -1144,10 +1180,11 @@ static void scan_ents(wld_layer_t *L, const uint8_t *b)
 		 * entities spawn unrotated except rotating doors / func_rotating,
 		 * whose closed pose is their model); translucent render modes
 		 * are the translucent pass's (M3) */
-		if (sub > 0 && sub < L->dir->nsub && L->subs[sub].kind == W64_SUB_MOVR && !rmode
-			&& L->nmovers < L->dir->nsub)
+		if (sub > 0 && sub < L->dir->nsub && L->subs[sub].kind == W64_SUB_MOVR
+			&& L->nmovers + L->ntrans_movers < L->dir->nsub)
 		{
-			wld_mover_t *mv = &L->movers[L->nmovers++];
+			wld_mover_t *mv = !rmode ? &L->movers[L->nmovers++]
+				: &L->movers[L->dir->nsub - 1 - L->ntrans_movers++];
 
 			memcpy(mv->origin, org, sizeof(org));
 			mv->sub = (uint16_t)sub;

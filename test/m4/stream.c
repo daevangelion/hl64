@@ -509,7 +509,9 @@ static void t4_evict(void)
 	int m, q, p, k, best = -1, rounds;
 	uint32_t most = 0, ev, eq, pr;
 
-	/* the map whose TEXP pages overflow the texture pool the most */
+	/* the map with the most TEXP pages; the texture pool is squeezed to
+	 * three quarters of them (the pool is sized for seam windows, wider
+	 * than any one map) */
 	for (m = 0; m < wld_map_count(); m++)
 	{
 		uint32_t sum = 0;
@@ -525,18 +527,17 @@ static void t4_evict(void)
 		wld_close(L);
 		frames(3);
 	}
-	if (most <= HL64_POOL_TEXTURE_KB * 1024u)
-	{
-		check("T4 evict", 0, "no map's pages overflow the texture pool (largest %lu B)",
-			(unsigned long)most);
-		return;
-	}
+	if (most * 3 / 4 < HL64_POOL_TEXTURE_KB * 1024u)
+		wld_test_squeeze((HL64_POOL_TEXTURE_KB * 1024u - most * 3 / 4) & ~15u);
 	L = wld_open(best);
 	q = fill_textures(L, WLD_CLS_PREFETCH);
-	check("T4 evict", q >= 0, "%s: %lu B of pages, pool full at page %d", wld_map_name(best),
-		(unsigned long)most, q);
+	check("T4 evict", q >= 0, "%s: %lu B of pages, pool (squeezed to %lu B) full at page %d",
+		wld_map_name(best), (unsigned long)most, (unsigned long)(most * 3 / 4), q);
 	if (q < 0)
+	{
+		wld_test_squeeze(0);
 		return;
+	}
 
 	/* E1: a weaker class never evicts a stronger one */
 	rename_resident(L, WLD_CLS_OPEN);
@@ -590,7 +591,7 @@ static void t4_evict(void)
 	fill_textures(L, WLD_CLS_PIN);
 	frames(40);
 	{
-		int queued[16], nq = 0, open_q = -1, spare = 16, full = 0;
+		int queued[16], nq = 0, open_q = -1, spare = 4, full = 0;
 
 		if (!++wld_tgen)
 			wld_tgen = 1;
@@ -642,6 +643,7 @@ static void t4_evict(void)
 	}
 	land_all();
 	wld_close(L);
+	wld_test_squeeze(0);
 	frames(3);
 }
 

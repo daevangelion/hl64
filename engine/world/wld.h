@@ -99,6 +99,10 @@ typedef struct {
 	uint8_t			*page_state;	/* per TEXP page: WLD_PAGE_STATE bytes (gpu) */
 	wld_mover_t		*movers;
 	uint16_t		nmovers;
+	/* translucent ENTS placements (drawn by the translucent pass, not as
+	 * M1 movers): movers[nsub - ntrans_movers .. nsub), for the stream's
+	 * residency of the MOVR chunks a brush entity will draw */
+	uint16_t		ntrans_movers;
 	uint8_t			has_start;
 	uint8_t			reencode;	/* running tiny3d encodes strips differently */
 	uint8_t			high;		/* layer-region blocks at the high end */
@@ -218,6 +222,10 @@ void		wld_stream_missing(uint32_t n);
 typedef struct {
 	uint32_t	loads, evictions, nofit, queued;
 	uint32_t	pool_used[3], pool_peak[3];	/* render, texture, collision */
+	/* the most bytes the open + pin classes of one target generation
+	 * wanted (prefetch excluded): the pools' need; pool_peak is the
+	 * LRU cache's high water */
+	uint32_t	want_peak[3];
 	uint32_t	dirs_used, dirs_peak, dirs_size;	/* layer region */
 } wld_stats_t;
 void		wld_stats(wld_stats_t *s);

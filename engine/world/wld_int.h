@@ -32,5 +32,13 @@ extern uint32_t		wld_n_promoted, wld_n_evict_queued, wld_n_prefetch_req;
 extern uint32_t		wld_n_open_async, wld_n_open_fail;
 /* wld_close: the slot's seam pin goes. */
 void		wld_stream_closed(int slot);
+/* After the stream named a generation: the bytes its open + pin classes
+ * want per pool, into wld_stats_t.want_peak. */
+void		wld_want_measure(void);
+#ifdef HL64_HOST
+/* Host tests: hold `bytes` of the texture pool (a locked block at its
+ * high end; 0 gives it back), so an eviction test fills it with one map. */
+void		wld_test_squeeze(uint32_t bytes);
+#endif
 
 #endif
