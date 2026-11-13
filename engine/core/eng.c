@@ -25,6 +25,7 @@
 #include "hl64/game.h"
 #include "hl64/limits.h"
 #include "hl64/rec.h"
+#include "hl64/seam.h"
 #include "hl64/settings.h"
 #include "hl64/snd.h"
 #include "engine/core/dbg.h"
@@ -684,17 +685,14 @@ void eng_frame(void)
 	if (eng.world)
 	{
 		wld_frame(eng.frame);
-		/* 8 hydration pump around the player (global position) */
-		if (phy_player_active())
+		/* 8 hydration pump and release batches around the anchors (the
+		 * player, and the player mapped through an approached seam) */
 		{
-			const float *gm = wld_map_origin(phy_player_map());
-			const float *o = phy_player()->origin;
-			float anchor[1][3] = { { o[0] + gm[0], o[1] + gm[1], o[2] + gm[2] } };
+			float anchor[8][3];
+			int n = phy_player_active() ? seam_anchors(anchor, 8) : 0;
 
-			rec_frame((const float (*)[3])anchor, 1);
+			rec_frame((const float (*)[3])anchor, n);
 		}
-		else
-			rec_frame(NULL, 0);
 		wld_style_tick(eng.time);
 		ren_dlight_frame(eng.time, (double)dt * 1e-6);
 		ren_dlight_sources(eng.time);
