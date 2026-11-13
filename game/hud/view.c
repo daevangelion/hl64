@@ -24,6 +24,7 @@
  * and the client-side event punch join with M3 effects.
  */
 #include <math.h>
+#include <stddef.h>
 
 #include "hl64/game.h"
 #include "hl64/settings.h"
@@ -143,7 +144,7 @@ void game_calc_view(const ent_player_t *pl, float time, float frametime, game_vi
 			point[2] -= CL_WATERDIST;
 			for (i = 0; i < CL_WATERDIST; i++)
 			{
-				contents = col_contents(point);
+				contents = phy_pm_contents(point, NULL);
 				if (contents > COL_WATER)
 					break;
 				point[2] += 1;
@@ -156,7 +157,7 @@ void game_calc_view(const ent_player_t *pl, float time, float frametime, game_vi
 			point[2] += CL_WATERDIST;
 			for (i = 0; i < CL_WATERDIST; i++)
 			{
-				contents = col_contents(point);
+				contents = phy_pm_contents(point, NULL);
 				if (contents <= COL_WATER)
 					break;
 				point[2] -= 1;

@@ -335,10 +335,11 @@ static int wait_until(int ok, uint32_t timeout, uint64_t now_us)
 	return 0;
 }
 
-static int near(int map, const float *w, int inside_map)
+/* inside_map: the player's home map is `map`, so his origin is map-local
+ * like the route's point */
+static int near(const float *w, int inside_map)
 {
 	const ent_player_t *pl = phy_player();
-	const float *g = wld_map_origin(map);
 	float d2 = 0;
 	int k;
 
@@ -346,7 +347,7 @@ static int near(int map, const float *w, int inside_map)
 		return 0;
 	for (k = 0; k < 3; k++)
 	{
-		float d = pl->origin[k] - (w[k] + g[k]);
+		float d = pl->origin[k] - w[k];
 
 		d2 += d * d;
 	}
@@ -384,7 +385,7 @@ void rt_frame(uint64_t now_us)
 				return;
 			break;
 		case OP_WAIT_NEAR:
-			if (!wait_until(near((int)b, w, home), rd32(p + 20), now_us))
+			if (!wait_until(near(w, home), rd32(p + 20), now_us))
 				return;
 			break;
 		case OP_LOOK:

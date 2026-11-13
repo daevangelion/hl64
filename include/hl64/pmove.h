@@ -12,9 +12,14 @@
  * playermove_t, runs PM_Move and writes the player block and the touch
  * list back. Layout and names here are hl64's own.
  *
- * Coordinates are global (map-local + the layer's g_M). Physent 0 is the
- * world as the home layer's world model placed at its g_M; other open
- * layers follow as world physents (index 0) with their own g_M.
+ * Coordinates are home-layer local (the player's home map's own frame;
+ * global = local + the home layer's g_M): pm_shared's float arithmetic
+ * then sees GoldSrc's numbers, not numbers several thousand units off
+ * (pmove-host.md 2.1). The player block's origin, the physent copies
+ * (origin, absmin, absmax), the services' points and the touch list are
+ * in that frame; the entity layer and engine/coll stay global. Physent 0
+ * is the home layer's world model at the origin; other open layers follow
+ * as world physents (index 0) at their g_M minus the home g_M.
  */
 #ifndef HL64_PMOVE_H
 #define HL64_PMOVE_H
@@ -69,7 +74,7 @@ typedef struct {
 #define PL_MOVE_NOCLIP		8
 
 typedef struct {
-	float		origin[3];
+	float		origin[3];	/* home-layer local (map-local) */
 	float		velocity[3];
 	float		basevelocity[3];
 	float		movedir[3];	/* water-jump push */
@@ -112,8 +117,9 @@ typedef struct {
 	in_cmd_t	cmd;
 	float		time_ms;	/* game clock, milliseconds */
 	int		npe, nme, ntouch;
-	/* physents: copies of the entities' collision views; physent 0 and
-	 * the other layers' world models carry index 0 (the world) */
+	/* physents: copies of the entities' collision views translated into
+	 * the home frame; physent 0 and the other layers' world models carry
+	 * index 0 (the world) */
 	col_ent_t	pe[HL64_PM_PHYSENTS];
 	col_ent_t	me[HL64_PM_MOVEENTS];	/* ladders */
 	/* pmove touch list, in order: tr.ent = physent index */
@@ -145,11 +151,12 @@ void		phy_pm_trace(const float start[3], const float end[3], int flags, int useh
 /* PM_TestPlayerPosition: physent index of the first solid the box of
  * usehull at pos is inside, -1 if free; tr (may be NULL) gets that trace. */
 int		phy_pm_test(const float pos[3], int usehull, col_trace_t *tr);
-/* PM_TraceModel: the box of usehull against one physent only. */
+/* One physent alone (PM_TraceModel passes usehull 2: the point). */
 void		phy_pm_trace_ent(const col_ent_t *pe, int usehull, const float start[3],
 			const float end[3], col_trace_t *tr);
-/* PM_GetModelBounds: a brush model's bounds in map coordinates of its
- * layer, placed globally (+ g_M); 0 for a bad model. */
+/* PM_GetModelBounds: a brush model's bounds in the home frame (its
+ * layer's map coordinates + that layer's g_M - the home g_M); 0 for a bad
+ * model. */
 int		phy_pm_model_bounds(uint16_t model, float mins[3], float maxs[3]);
 /* PM_PlaySound: the player's footstep / ladder / wade / jump-land sounds
  * (literal HLSDK sample names). */

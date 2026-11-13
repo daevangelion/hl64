@@ -189,6 +189,9 @@ static void *svc_hull_for_bsp(physent_t *pe, float *offset)
 	return &hull_handle[i];
 }
 
+/* GoldSrc's PM_TraceModel traces the point (hull 0) whatever usehull is:
+ * PM_LadderMove's trace from inside the ladder's player hull toward its
+ * centre then crosses the brush face [probe:measured PM-bot ladder runs] */
 static float svc_trace_model(physent_t *pEnt, float *start, float *end, trace_t *trace)
 {
 	const col_ent_t *e = pe_src(pEnt);
@@ -201,7 +204,7 @@ static float svc_trace_model(physent_t *pEnt, float *start, float *end, trace_t 
 		VectorCopy(end, trace->endpos);
 		return 1;
 	}
-	phy_pm_trace_ent(e, pm.usehull, start, end, &t);
+	phy_pm_trace_ent(e, 2, start, end, &t);
 	trace->allsolid = t.allsolid ? true : false;
 	trace->startsolid = t.startsolid ? true : false;
 	trace->inopen = t.inopen ? true : false;

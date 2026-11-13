@@ -10,6 +10,12 @@
  * pmove touch list. The services pm_shared calls back into (contents,
  * player traces, position tests) live here over engine/coll.
  *
+ * The move runs in the home layer's frame (pmove-host.md 2.1): the player
+ * block's origin is map-local, the physents are copies translated by the
+ * home g_M, and only the entity layer and engine/coll queries that need
+ * global positions (grid query, linking, residency, true contents outside
+ * the home world) translate back.
+ *
  * Not before M3: conveyor ground entities (their speed / movedir belong
  * to the M3 components), the game's player prethink / think / postthink
  * around the move, and audio for pm_shared's footstep sounds (counted).
@@ -35,13 +41,23 @@ const float phy_pm_maxs[4][3] = {
 
 #define VIEW_HEIGHT	28.0f	/* HLSDK VEC_VIEW */
 static struct {
-	ent_player_t		pl;
-	col_ent_t		*e;		/* entity slot 1 */
+	ent_player_t		pl;		/* origin home-local */
+	col_ent_t		*e;		/* entity slot 1 (global) */
 	int			map;		/* home map, WLD_NO_MAP */
+	const float		*hofs;		/* the home map's g_M */
+	const wld_layer_t	*home;		/* its layer this move, NULL closed */
 	uint8_t			active;
 	uint8_t			printed;	/* a pm_shared message this frame */
 	phy_player_prof_t	prof;
 } P = { .map = WLD_NO_MAP };
+
+static void to_global(float g[3], const float p[3])
+{
+	int k;
+
+	for (k = 0; k < 3; k++)
+		g[k] = p[k] + P.hofs[k];
+}
 
 /* ---- services (pmove-host.md 3) ------------------------------------------ */
 
@@ -75,14 +91,35 @@ static int box_has(const col_ent_t *e, const float p[3])
 	return 1;
 }
 
+/* World contents: the home layer's leaf in its own frame; where that is
+ * SOLID (or outside it) the other open layers, globally (col_true_contents
+ * order). */
 int phy_pm_true_contents(const float p[3])
 {
-	return col_true_contents(p);
+	const wld_layer_t *H = P.home;
+	float g[3];
+	int k;
+
+	if (H)
+	{
+		for (k = 0; k < 3; k++)
+			if (!(p[k] >= H->models[0].mins[k] && p[k] <= H->models[0].maxs[k]))
+				break;
+		if (k == 3)
+		{
+			int c = H->leafc[wld_point_leaf(H, p)];
+
+			if (c != COL_SOLID)
+				return c;
+		}
+	}
+	to_global(g, p);
+	return col_true_contents(g);
 }
 
 int phy_pm_contents(const float p[3], int *truecont)
 {
-	int w = col_true_contents(p), i;
+	int w = phy_pm_true_contents(p), i;
 
 	if (truecont)
 		*truecont = w;
@@ -107,11 +144,12 @@ int phy_pm_model_bounds(uint16_t model, float mins[3], float maxs[3])
 
 	if (!L || !col_model_bounds(model, mins, maxs))
 		return 0;
-	for (k = 0; k < 3; k++)
-	{
-		mins[k] += L->gofs[k];
-		maxs[k] += L->gofs[k];
-	}
+	if (L != P.home)
+		for (k = 0; k < 3; k++)
+		{
+			mins[k] += L->gofs[k] - P.hofs[k];
+			maxs[k] += L->gofs[k] - P.hofs[k];
+		}
 	return 1;
 }
 
@@ -211,16 +249,17 @@ int phy_pm_test(const float pos[3], int usehull, col_trace_t *tr)
 
 /* ---- physents (pmove-host.md 2) ------------------------------------------- */
 
+/* An open layer's world model as a physent at its g_M - the home g_M. */
 static void world_physent(col_ent_t *o, const wld_layer_t *L)
 {
 	memset(o, 0, sizeof(*o));
-	memcpy(o->origin, L->gofs, sizeof(o->origin));
 	memcpy(o->mins, L->models[0].mins, sizeof(o->mins));
 	memcpy(o->maxs, L->models[0].maxs, sizeof(o->maxs));
 	for (int k = 0; k < 3; k++)
 	{
-		o->absmin[k] = L->gofs[k] + o->mins[k];
-		o->absmax[k] = L->gofs[k] + o->maxs[k];
+		o->origin[k] = L == P.home ? 0 : L->gofs[k] - P.hofs[k];
+		o->absmin[k] = o->origin[k] + o->mins[k];
+		o->absmax[k] = o->origin[k] + o->maxs[k];
 	}
 	o->index = 0;
 	o->owner = COL_NONE;
@@ -229,6 +268,20 @@ static void world_physent(col_ent_t *o, const wld_layer_t *L)
 	o->skin = 0;
 	o->solid = COL_SOLID_BSP;
 	o->rendermode = COL_RENDER_NORMAL;
+}
+
+/* An entity's collision view as a home-frame physent. */
+static void local_physent(col_ent_t *o, const col_ent_t *e)
+{
+	int k;
+
+	*o = *e;
+	for (k = 0; k < 3; k++)
+	{
+		o->origin[k] = e->origin[k] - P.hofs[k];
+		o->absmin[k] = e->absmin[k] - P.hofs[k];
+		o->absmax[k] = e->absmax[k] - P.hofs[k];
+	}
 }
 
 static int boxes_meet(const float amin[3], const float amax[3], const float bmin[3],
@@ -279,13 +332,26 @@ static int keep_nearest(uint16_t *idx, int n, int room, const float p[3])
 	return kept;
 }
 
+static const wld_layer_t *find_home(void)
+{
+	int i;
+
+	for (i = 0; i < HL64_WORLD_LAYERS; i++)
+	{
+		const wld_layer_t *L = wld_layer(i);
+
+		if (L && L->map == P.map)
+			return L;
+	}
+	return NULL;
+}
+
 static void build_physents(uint32_t dt_us)
 {
 	ent_player_t *pl = &P.pl;
-	float mins[3], maxs[3], dt = (float)dt_us * 1e-6f;
+	float mins[3], maxs[3], gmins[3], gmaxs[3], gorg[3], dt = (float)dt_us * 1e-6f;
 	uint16_t idx[2 * HL64_PM_PHYSENTS], lad[2 * HL64_PM_MOVEENTS];
 	int n, nl = 0, i, k, over = 0;
-	const wld_layer_t *home = NULL;
 
 	for (k = 0; k < 3; k++)
 	{
@@ -294,24 +360,21 @@ static void build_physents(uint32_t dt_us)
 		mins[k] = pl->origin[k] + pl->mins[k] - r;
 		maxs[k] = pl->origin[k] + pl->maxs[k] + r;
 	}
+	to_global(gmins, mins);
+	to_global(gmaxs, maxs);
+	to_global(gorg, pl->origin);
 	phy_pm.npe = 0;
 	phy_pm.nme = 0;
 	/* physent 0: the home layer; then the other open layers it meets */
-	for (i = 0; i < HL64_WORLD_LAYERS; i++)
-	{
-		const wld_layer_t *L = wld_layer(i);
-
-		if (L && L->map == P.map)
-			home = L;
-	}
-	if (home)
-		world_physent(&phy_pm.pe[phy_pm.npe++], home);
+	P.home = find_home();
+	if (P.home)
+		world_physent(&phy_pm.pe[phy_pm.npe++], P.home);
 	for (i = 0; i < HL64_WORLD_LAYERS; i++)
 	{
 		const wld_layer_t *L = wld_layer(i);
 		col_ent_t w;
 
-		if (!L || L == home)
+		if (!L || L == P.home)
 			continue;
 		world_physent(&w, L);
 		if (boxes_meet(w.absmin, w.absmax, mins, maxs))
@@ -319,7 +382,7 @@ static void build_physents(uint32_t dt_us)
 	}
 
 	/* entities: solids and contents brushes, ascending index */
-	n = ent_query(mins, maxs, ENT_Q_SOLID | ENT_Q_CONTENTS, idx, 2 * HL64_PM_PHYSENTS);
+	n = ent_query(gmins, gmaxs, ENT_Q_SOLID | ENT_Q_CONTENTS, idx, 2 * HL64_PM_PHYSENTS);
 	for (i = k = 0; i < n; i++)
 	{
 		const col_ent_t *e = ent_get(idx[i]);
@@ -340,18 +403,18 @@ static void build_physents(uint32_t dt_us)
 	n = k;
 	if (n > HL64_PM_PHYSENTS - phy_pm.npe)
 	{
-		n = keep_nearest(idx, n, HL64_PM_PHYSENTS - phy_pm.npe, pl->origin);
+		n = keep_nearest(idx, n, HL64_PM_PHYSENTS - phy_pm.npe, gorg);
 		over = 1;
 	}
 	for (i = 0; i < n; i++)
-		phy_pm.pe[phy_pm.npe++] = *ent_get(idx[i]);
+		local_physent(&phy_pm.pe[phy_pm.npe++], ent_get(idx[i]));
 	if (nl > HL64_PM_MOVEENTS)
 	{
-		nl = keep_nearest(lad, nl, HL64_PM_MOVEENTS, pl->origin);
+		nl = keep_nearest(lad, nl, HL64_PM_MOVEENTS, gorg);
 		over = 1;
 	}
 	for (i = 0; i < nl; i++)
-		phy_pm.me[phy_pm.nme++] = *ent_get(lad[i]);
+		local_physent(&phy_pm.me[phy_pm.nme++], ent_get(lad[i]));
 	if (over)
 	{
 		if (!P.printed)
@@ -366,9 +429,10 @@ static void build_physents(uint32_t dt_us)
 
 /* ---- the player entity ----------------------------------------------------- */
 
+/* the player's entity (global) from the player block (home-local) */
 static void sync_view(void)
 {
-	memcpy(P.e->origin, P.pl.origin, sizeof(P.e->origin));
+	to_global(P.e->origin, P.pl.origin);
 	memcpy(P.e->mins, P.pl.mins, sizeof(P.e->mins));
 	memcpy(P.e->maxs, P.pl.maxs, sizeof(P.e->maxs));
 	P.e->angles[0] = 0;
@@ -425,9 +489,11 @@ int phy_player_spawn(int map, const float org[3], const float ang[3])
 		dbg_handler_set(DBG_LOOK, cmd_look);
 	}
 	P.map = map;
+	P.hofs = wld_map_origin(map);
+	P.home = L;
 	for (k = 0; k < 3; k++)
 	{
-		P.pl.origin[k] = org[k] + L->gofs[k];
+		P.pl.origin[k] = org[k];
 		P.pl.velocity[k] = 0;
 		P.pl.basevelocity[k] = 0;
 		P.pl.view_angles[k] = ang[k];
@@ -483,8 +549,8 @@ void phy_player_frame(const in_cmd_t *cmd, uint64_t now_us)
 
 		for (k = 0; k < 3; k++)
 		{
-			mins[k] = pl->origin[k] + pl->mins[k];
-			maxs[k] = pl->origin[k] + pl->maxs[k];
+			mins[k] = pl->origin[k] + pl->mins[k] + P.hofs[k];
+			maxs[k] = pl->origin[k] + pl->maxs[k] + P.hofs[k];
 		}
 		col_want(mins, maxs);
 	}

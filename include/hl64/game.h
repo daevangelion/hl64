@@ -22,9 +22,10 @@ void	game_pm_move(phy_pm_t *pm);
 void	game_player_prethink(ent_player_t *pl);
 
 /* The view (HLSDK client V_CalcRefdef for a first-person player): eye
- * origin = origin + view_ofs + bob, stair-step smoothing, water offset;
- * angles = command angles + punch + movement roll. time and frametime in
- * seconds of game clock. */
+ * origin = origin + view_ofs + bob, stair-step smoothing, water offset
+ * (PM_PointContents), in the player's home-local frame; angles = command
+ * angles + punch + movement roll. time and frametime in seconds of game
+ * clock. */
 typedef struct {
 	float	org[3];
 	float	ang[3];		/* pitch (down +), yaw, roll; degrees */
