@@ -150,7 +150,11 @@
  * + 10 open wav64 (state, codebook); x 1.25 = 97680 B. */
 #define HL64_SOUND_KB			96
 #define HL64_SPRITE_CACHE_KB		64
-#define HL64_DECAL_TEXELS_KB		68	/* measured (ares, m3-a): 51.7 KB peak (sheet + 96 x 24 piece vertices) x 1.25 = 64.6 KB */
+/* Decal region: HLSDK sheet (29856 B) + 96 x 24 piece vertices (23040 B)
+ * + 2 per-map placed-decal (infodecal) sheet slots of the largest map's
+ * size; cook-proved (hleids --check). Retail need 86528 B (largest map
+ * c2a1 16816 B) x 1.25 = 108160 B; Uplink need 76672 B. */
+#define HL64_DECAL_TEXELS_KB		106
 #define HL64_PARTICLES_KB		12
 #define HL64_DLIGHT_KB			48	/* dlight scratch + flashlight pool */
 #define HL64_HUD_KB			128	/* [EST] HUD sheets + font */
