@@ -52,7 +52,7 @@ map (the VM adds the map's CWG placement `g_M`; architecture.md 5.4).
 | 0x01 | `WAIT` | 0 | 0 | `us` | done when `us` of game time have passed since the op started |
 | 0x02 | `WAIT_MAP` | 0 | map | `timeout` | the player's home map is `map` |
 | 0x03 | `WAIT_NEAR` | 0 | map | x, y, z *f*, r *f* (≥ 0), `timeout` | home map is `map` and the player origin is within `r` (3D distance) of the point |
-| 0x04 | `WAIT_MOVED` | 0 | name id | `timeout` | an entity with the name (`TARG`) is moving (velocity or avelocity non-zero) or its origin / angles differ from its record's spawn values |
+| 0x04 | `WAIT_MOVED` | 0 | name id | `timeout` | an entity with the name (`TARG`) is moving (velocity or avelocity non-zero) or its origin / angles differ from its record's spawn values; zero angles never count (HLSDK `SetMovedir` zeroes a linear mover's angles at spawn: a closed `func_door` with `angle 90` rests at 0 0 0) |
 | 0x05 | `WAIT_GONE` | 0 | name id | `timeout` | every record carrying the name is killed or removed, and for a spawned name every spawner has spawned and none of its children with the name is alive |
 | 0x06 | `WAIT_CLASS` | 0 | map | class id, x, y, z *f*, r *f*, `timeout` | a live, solid entity of the class lies within `r` of the point in `map` |
 | 0x07 | `WAIT_GLOBAL` | state (0 off, 1 on, 2 dead) | global id | `timeout` | the global state (HLSDK `GLOBALESTATE`) has that value |
@@ -66,7 +66,7 @@ map (the VM adds the map's CWG placement `g_M`; architecture.md 5.4).
 | 0x0F | `GOD` | 0 / 1 | 0 | — | debug invulnerability off / on (test builds) |
 | 0x10 | `SHOT` | 0 | label | — | request a screenshot tagged with the label (ares harness dump / host recorder) |
 | 0x11 | `STATS` | 0 | label | — | print one stats record line tagged with the label |
-| 0x12 | `PASS` | 0 | 0 | — | the route passed: log `route PASS`, harness exit 0 |
+| 0x12 | `PASS` | 0 | 0 | — | the route passed: log `route PASS`, harness exit 0; runs in the frame after it is reached, so the `STATS` / `SHOT` commands queued just before it still run |
 
 Ids: map = CWG map index, name id = `TARG` index (its map is the
 entity's map), class id = `classes.def` line, global id = `GLOB` index.
@@ -79,9 +79,17 @@ satisfied when more than `timeout` µs have passed since it started;
 
 - Runs once per frame after the frame's simulation and drawing (frame loop
   step 13). It executes ops in order until a wait op is not yet satisfied;
-  every other op completes in the frame it is reached. `BUTTONS`, `LOOK`,
-  `SETPOS` and `IMPULSE` take effect in the next frame's usercmd / player
-  state.
+  every other op except `PASS` completes in the frame it is reached.
+  `BUTTONS`, `LOOK`, `SETPOS` and `IMPULSE` take effect in the next
+  frame's usercmd / player state; `STATS` and `SHOT` run at the next
+  frame boundary.
+- Entity and record ops never hydrate a pending record: a name's entities
+  are its records' live entities (and, for a spawned name, the runtime
+  holders once no record of the name is pending). A monstermaker "has
+  spawned" (`WAIT_GONE`) when its record is killed or its entity has
+  neither think nor use left (HLSDK `CMonsterMaker::MakeMonster` clears
+  both when its count runs out). `WAIT_CLASS` and `LOOK_AT` measure from
+  the entity's origin / box centre; `DROP` spawns at angles 0.
 - Logs `route: <op#> <mnemonic> [label]` per op; a failure logs
   `route FAIL <op#> <source>:<line> <mnemonic> <reason>` (line from the
   debug table) and ends the run with a non-zero harness exit.
