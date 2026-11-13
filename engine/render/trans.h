@@ -35,6 +35,7 @@ void	fx_draw_decals(void);
 typedef struct {
 	uint32_t	items, cutouts, dropped, sprites, studio, brushes, temps, beams;
 	uint32_t	glow_occluded, invisible, us;
+	uint32_t	decals, decal_verts;	/* decals submitted, their vertices */
 } fx_draw_stats_t;
 /* Last drawn frame. */
 void	fx_draw_stats(fx_draw_stats_t *s);

@@ -517,7 +517,7 @@ void fx_draw_decals(void)
 {
 	uint64_t t0 = sys_time_us();
 
-	decal_draw();
+	decal_draw(&ds.decals, &ds.decal_verts);
 	gpu_fx_end();
 	fx_add_us((uint32_t)(sys_time_us() - t0));
 	last = ds;

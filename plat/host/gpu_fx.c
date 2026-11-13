@@ -13,6 +13,8 @@ static gpu_fx_stats_t	cur, done;
 static int		mode = -1;
 static gpu_fx_vert_t	last_v[64];
 static int		last_n, last_mode = -1;
+static ren_mat_t	frame, last_frame;
+static int		framed, last_framed;
 
 static void mix(const void *p, uint32_t n)
 {
@@ -27,6 +29,7 @@ void gpu_fx_begin(void)
 	memset(&cur, 0, sizeof(cur));
 	cur.hash = 2166136261u;
 	mode = -1;
+	framed = 0;
 }
 
 void gpu_fx_end(void)
@@ -70,6 +73,16 @@ void gpu_fx_tex_i4(const uint8_t *i4, int w, int h)
 	cur.texloads++;
 }
 
+void gpu_fx_frame(const ren_mat_t *m)
+{
+	static const ren_mat_t cam;	/* NULL: camera-relative, hashed as zeros */
+
+	mix(m ? m : &cam, sizeof(cam));
+	framed = m != NULL;
+	if (m)
+		frame = *m;
+}
+
 void gpu_fx_tris(const gpu_fx_vert_t *v, int nv, const uint8_t *idx, int ntri)
 {
 	if (mode < 0 || nv <= 0 || ntri <= 0)
@@ -82,6 +95,8 @@ void gpu_fx_tris(const gpu_fx_vert_t *v, int nv, const uint8_t *idx, int ntri)
 	last_n = nv > 64 ? 64 : nv;
 	memcpy(last_v, v, sizeof(*v) * (size_t)last_n);
 	last_mode = mode;
+	last_frame = frame;
+	last_framed = framed;
 }
 
 int gpu_fx_host_last(gpu_fx_vert_t *out, int max, int *m)
@@ -91,6 +106,12 @@ int gpu_fx_host_last(gpu_fx_vert_t *out, int max, int *m)
 	memcpy(out, last_v, sizeof(*out) * (size_t)n);
 	*m = last_mode;
 	return n;
+}
+
+int gpu_fx_host_last_frame(ren_mat_t *m)
+{
+	*m = last_frame;
+	return last_framed;
 }
 
 void gpu_fx_points(const gpu_fx_point_t *p, int n)

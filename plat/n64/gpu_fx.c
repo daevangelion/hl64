@@ -13,7 +13,8 @@
  * Vertices go to a two-frame uncached ring (the RSP reads a frame's
  * vertices while the CPU fills the next); positions are camera-relative
  * quarter units under one scale matrix per batch (pushed and popped around
- * each batch, so the world's mover matrices are untouched).
+ * each batch, so the world's mover matrices are untouched), or model-frame
+ * units under a gpu_fx_frame matrix kept in the same ring.
  */
 #include <string.h>
 
@@ -27,11 +28,15 @@
 #include "engine/render/gpu_fx.h"
 
 #define RING_PAIRS	1024		/* vertex pairs per frame */
+#define MAT_PAIRS	(int)(sizeof(T3DMat4FP) / sizeof(T3DVertPacked))
 #define POINTS_MAX	HL64_FX_PARTICLES
+
+_Static_assert(sizeof(T3DMat4FP) % sizeof(T3DVertPacked) == 0, "frame matrix in ring pairs");
 
 static T3DVertPacked	*ring;		/* 2 x RING_PAIRS, uncached */
 static TPXParticleS16	*pts;		/* 2 x POINTS_MAX / 2, uncached */
 static T3DMat4FP	*mat;		/* the quarter-unit scale */
+static T3DMat4FP	*frame;		/* batch matrix: mat or a ring entry; NULL = ring full */
 static int		ready, half, used, mode = -1;
 static gpu_fx_stats_t	cur, done;
 
@@ -59,6 +64,7 @@ void gpu_fx_begin(void)
 	half ^= 1;
 	used = 0;
 	mode = -1;
+	frame = mat;
 	memset(&cur, 0, sizeof(cur));
 }
 
@@ -180,6 +186,20 @@ static void put(T3DVertPacked *p, int b, const gpu_fx_vert_t *v)
 	}
 }
 
+void gpu_fx_frame(const ren_mat_t *m)
+{
+	if (!m)
+		frame = mat;
+	else if (used + MAT_PAIRS > RING_PAIRS)
+		frame = NULL;	/* the following batches are counted, not drawn */
+	else
+	{
+		frame = (T3DMat4FP *)&ring[half * RING_PAIRS + used];
+		used += MAT_PAIRS;
+		t3d_mat4_to_fixed_3x4(frame, (const T3DMat4 *)m);
+	}
+}
+
 void gpu_fx_tris(const gpu_fx_vert_t *v, int nv, const uint8_t *idx, int ntri)
 {
 	T3DVertPacked *p;
@@ -187,7 +207,7 @@ void gpu_fx_tris(const gpu_fx_vert_t *v, int nv, const uint8_t *idx, int ntri)
 
 	if (mode < 0 || nv <= 0 || ntri <= 0 || nv > 64)
 		return;
-	if (used + pairs > RING_PAIRS)
+	if (!frame || used + pairs > RING_PAIRS)
 	{
 		cur.calls[mode]++;	/* counted, not drawn: the frame's ring is full */
 		return;
@@ -196,7 +216,7 @@ void gpu_fx_tris(const gpu_fx_vert_t *v, int nv, const uint8_t *idx, int ntri)
 	used += pairs;
 	for (i = 0; i < nv; i++)
 		put(&p[i >> 1], i & 1, &v[i]);
-	t3d_matrix_push(mat);
+	t3d_matrix_push(frame);
 	t3d_vert_load(p, 0, (uint32_t)nv);
 	for (i = 0; i < ntri; i++)
 		t3d_tri_draw(idx[3 * i], idx[3 * i + 1], idx[3 * i + 2]);

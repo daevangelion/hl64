@@ -165,7 +165,7 @@ void		fx_add_us(uint32_t us);
 
 void		decal_init(void);
 void		decal_frame(void);		/* placement queue, 3 ms cap */
-void		decal_draw(void);
+void		decal_draw(uint32_t *ndecals, uint32_t *nverts);	/* counts what it submits */
 int		decal_count(void);
 /* Queue a placement: point (global), hit normal, world (-1) or the brush
  * entity e, HLSDK decal index. */
