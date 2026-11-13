@@ -168,13 +168,16 @@ void		decal_frame(void);		/* placement queue, 3 ms cap */
 void		decal_draw(uint32_t *ndecals, uint32_t *nverts);	/* counts what it submits */
 int		decal_count(void);
 /* Queue a placement: point (global), hit normal, world (-1) or the brush
- * entity e, HLSDK decal index. */
+ * entity e, a sheet texture (the fx_decal_* calls resolve decal ids). */
 void		decal_queue(const float p_g[3], const float n[3], int e, int decal);
-/* Test builds: place now (no queue, no cap); returns the pieces placed. */
+/* Test builds: place now (no queue, no cap): decal id as fx_decal_static
+ * (map-local ids in eng_frame_layer's map); returns the pieces placed,
+ * -1 not now. */
 int		decal_place_now(const float p_g[3], const float n[3], int e, int decal);
 
 typedef struct {
 	uint16_t	live, placed, pending, dropped, replaced, pieces, verts_max, nosheet;
+	uint16_t	statics;	/* fx_decal_static placements */
 	uint32_t	place_us;
 } decal_stats_t;
 void		decal_stats(decal_stats_t *s, int reset);

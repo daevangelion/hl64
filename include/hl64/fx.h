@@ -61,9 +61,16 @@ void	fx_implosion(const float org[3], int radius, int count, int life);
 
 /* decal = HLSDK decals.h index (dlls/world.cpp gDecals order); the
  * effects map it by name onto the cooked decal sheet (gsfx/decals.i4);
- * decals the sheet lacks are not placed. */
+ * decals the sheet lacks are not placed. 42 + i: entry i of the caller's
+ * map's placed-decal sheet (rec_key_decal; w64-format.md "DECL"). */
 void	fx_decal_trace(const col_trace_t *tr, int decal);
 void	fx_decal_at(int e, const float org[3], int decal);
+/* HLSDK pfnStaticDecal / TE_BSPDECAL (infodecal): placed now on model e
+ * (0 = the world) at org. > 0 placed, 0 nothing takes it (or no such
+ * decal), < 0 not now (a sector around org is not resident yet, the map's
+ * sheet is not read yet, or the frame's 3 ms placement budget is spent):
+ * call again later. */
+int	fx_decal_static(int e, const float org[3], int decal);
 
 /* ---- screen (HLSDK UTIL_ScreenShake / ScreenFade / HudMessage) ---------- */
 

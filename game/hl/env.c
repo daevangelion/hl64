@@ -16,8 +16,8 @@
  * hl64 game/, Half Life 1 SDK licence (game/LICENSE-HLSDK).
  *
  * env.c -- HLSDK dlls/effects.cpp and explode.cpp effect entities on the
- * effects API (include/hl64/fx.h): env_sprite (CSprite), env_explosion
- * (CEnvExplosion, also created at run time by ExplosionCreate),
+ * effects API (include/hl64/fx.h): env_sprite (CSprite), env_glow (CGlow),
+ * env_explosion (CEnvExplosion, also created at run time by ExplosionCreate),
  * spark_shower (CShower), env_shake, env_fade, env_message, env_render
  * (triggers.cpp CRenderFxManager), env_spark (buttons.cpp CEnvSpark),
  * env_beverage, item_sodacan, gibshooter (CGibShooter) and env_shooter
@@ -181,6 +181,61 @@ static const game_vt_t CSprite_vt = {
 
 const game_class_t gc_ENV_SPRITE = {
 	.size = sizeof(CSprite), .Spawn = CSprite_Spawn, .vt = &CSprite_vt,
+};
+
+/* ---- env_glow (CGlow) ------------------------------------------------------ */
+
+typedef struct {
+	CBASEENTITY_FIELDS
+	float		m_lastTime;
+	float		m_maxFrame;
+} CGlow;
+
+static void CGlow_Animate(int e, float frames)
+{
+	CGlow *p = PRIV(CGlow, e);
+
+	if (p->m_maxFrame > 0)
+		ent_rnd(e)->frame = (float)fmod(ent_rnd(e)->frame + frames, p->m_maxFrame);
+}
+
+void CGlow_Think(int e)
+{
+	CGlow *p = PRIV(CGlow, e);
+
+	CGlow_Animate(e, ent_rnd(e)->framerate * (gtime() - p->m_lastTime));
+	ThinkIn(e, 0.1f);
+	p->m_lastTime = gtime();
+}
+
+static int CGlow_Spawn(int e, gid_t16 gid)
+{
+	CGlow *p = PRIV(CGlow, e);
+
+	(void)gid;
+	ent_set_solid(e, SOLID_NOT);
+	ent_set_movetype(e, MOVETYPE_NONE);
+	ent_rnd(e)->effects = 0;
+	ent_rnd(e)->frame = 0;
+	PRECACHE(p->model);
+	ent_set_model(e, p->model);
+	p->m_maxFrame = (float)res_model_frames(p->model) - 1;
+	if (p->m_maxFrame > 1.0f && ent_rnd(e)->framerate != 0)
+	{
+		SetThink(e, FN_CGlow_Think);
+		ThinkIn(e, 0.1f);
+	}
+	p->m_lastTime = gtime();
+	return 0;
+}
+
+/* CPointEntity: no level transitions */
+static const game_vt_t CGlow_vt = {
+	.ObjectCaps = NoTransition_ObjectCaps,
+};
+
+const game_class_t gc_ENV_GLOW = {
+	.size = sizeof(CGlow), .Spawn = CGlow_Spawn, .vt = &CGlow_vt,
 };
 
 /* ---- spark_shower (CShower) --------------------------------------------- */

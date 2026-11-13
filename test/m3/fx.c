@@ -20,12 +20,15 @@
 #include "hl64/coll.h"
 #include "hl64/ent.h"
 #include "hl64/fx.h"
+#include "hl64/game.h"
 #include "hl64/grid.h"
 #include "hl64/limits.h"
 #include "hl64/rec.h"
 #include "hl64/settings.h"
 #include "hl64/studio.h"
+#include "engine/core/eng.h"
 #include "engine/core/sys.h"
+#include "engine/ent/rec_int.h"
 #include "engine/io/io.h"
 #include "engine/mem/carve.h"
 #include "engine/render/fx_int.h"
@@ -1387,13 +1390,132 @@ static void test_styles(void)
 		"(lightstyles.md 4)");
 }
 
+/* ---- PLACED: infodecal and env_glow of one map (w64-format.md "DECL") ---- */
+
+/* A New Game on map (logic records and those near the start spawn as in a
+ * route), every other infodecal / env_glow record woken, the engine run:
+ * each targetless infodecal sprays its decal (map-sheet ids from the
+ * map's DECL slot) and is removed, each env_glow lives. */
+static int test_placed(const char *name)
+{
+	int map = wld_map_find(name), slot, lump, f;
+	int decals = 0, statics = 0, local = 0, triggered = 0, glows = 0, live = 0, left = 0;
+	decal_stats_t ds;
+	char note[200];
+
+	begin();
+	if (map < 0)
+	{
+		printf("PLACED FAIL %s: no such map\n", name);
+		return 1;
+	}
+	if (map != wld_start_map())
+		wld_close(wld_open(wld_start_map()));
+	game_new_campaign();
+	rec_new_campaign(map);
+	slot = wld_open(map)->slot;
+	for (lump = 0; lump < 1024; lump++)
+	{
+		gid_t16 gid = GID_MAKE(slot, lump);
+		cls_t c;
+
+		if (rec_kind(gid) < 0)
+			continue;
+		c = rec_class(gid);
+		if (c != RC_INFODECAL && c != RC_ENV_GLOW)
+			continue;
+		if (c == RC_INFODECAL)
+		{
+			int d = rec_key_decal(gid, RK_TEXTURE);
+
+			decals++;
+			if (d < 0)
+				continue;	/* not in decals.wad: refused */
+			local += d >= 42;
+			if (rec_targetname(gid) == NAME_NONE)
+				statics++;
+			else
+				triggered++;
+		}
+		else
+			glows++;
+		if (rec_entity(gid) < 0 && (rec_state(gid) == REC_PENDING || rec_state(gid) == REC_DRY))
+			rec_wake(gid);
+	}
+	decal_stats(&ds, 1);
+	for (f = 0; f < 900; f++)
+	{
+		eng_frame();
+		decal_stats(&ds, 0);
+		if (ds.statics >= statics)
+			break;
+	}
+	for (lump = 0; lump < 1024; lump++)
+	{
+		gid_t16 gid = GID_MAKE(slot, lump);
+		int e;
+
+		if (rec_kind(gid) < 0)
+			continue;
+		e = rec_entity(gid);
+		if (rec_class(gid) == RC_ENV_GLOW)
+			live += e >= 0 && RES_KIND(ent_rnd(e)->model) == RES_K_SPRITE;
+		else if (rec_class(gid) == RC_INFODECAL && rec_targetname(gid) == NAME_NONE && e >= 0)
+			left++;
+	}
+	decal_stats(&ds, 0);
+	CHECK(ds.statics == statics, "%s: %d of %d targetless infodecals placed (%d frames, nosheet %d)",
+		name, ds.statics, statics, f, ds.nosheet);
+	CHECK(!left, "%s: %d infodecals not removed after spraying", name, left);
+	CHECK(live == glows, "%s: %d of %d env_glow live with a sprite", name, live, glows);
+	CHECK(decal_count() >= statics, "%s: %d decals live", name, decal_count());
+	/* the targeted ones spray when used (TriggerDecal), gone 0.1 s on */
+	for (lump = 0; lump < 1024; lump++)
+	{
+		gid_t16 gid = GID_MAKE(slot, lump);
+		int e;
+
+		if (rec_kind(gid) < 0 || rec_class(gid) != RC_INFODECAL || rec_targetname(gid) == NAME_NONE
+			|| (e = rec_entity(gid)) < 0)
+			continue;
+		eng_set_frame_layer(slot);
+		game_use(e, e, e, 3 /* USE_TOGGLE */, 0);
+		eng_set_frame_layer(-1);
+	}
+	for (lump = 0; lump < 60; lump++)	/* 2 s */
+		eng_frame();
+	left = 0;
+	for (lump = 0; lump < 1024; lump++)
+	{
+		gid_t16 gid = GID_MAKE(slot, lump);
+
+		if (rec_kind(gid) >= 0 && rec_class(gid) == RC_INFODECAL && rec_entity(gid) >= 0)
+			left++;
+	}
+	decal_stats(&ds, 0);
+	CHECK(ds.statics == statics + triggered, "%s: %d of %d triggered infodecals placed", name,
+		ds.statics - statics, triggered);
+	CHECK(!left, "%s: %d infodecals left after use", name, left);
+	snprintf(note, sizeof(note), "%s: infodecal %d (%d targetless placed in %d frames, %d map-sheet, "
+		"%d of %d triggered placed on use), env_glow %d/%d live, decals live %d", name, decals,
+		statics, f, local, ds.statics - statics, triggered, live, glows, decal_count());
+	finish("PLACED", note);
+	return fails != 0;
+}
+
 int main(int argc, char **argv)
 {
 	int map;
 
+	if (argc == 5 && !strcmp(argv[1], "--root") && !strcmp(argv[3], "--placed"))
+	{
+		host_io_init(argv[2]);
+		eng_boot("host");
+		return test_placed(argv[4]);
+	}
 	if (argc != 3 || strcmp(argv[1], "--root"))
 	{
-		fprintf(stderr, "usage: hl64-fx --root CONTENT\n");
+		fprintf(stderr, "usage: hl64-fx --root CONTENT [--placed MAP]\n");
 		return 2;
 	}
 	host_io_init(argv[2]);

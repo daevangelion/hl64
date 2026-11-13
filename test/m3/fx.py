@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """fx.py -- run the effects host tests (test/m3/fx.c: render-fx.md X1-X6,
-dlights.md D1/D2/D4 + model term, lightstyles.md L1/L2 + model term) and
-check that every test reported PASS.
+dlights.md D1/D2/D4 + model term, lightstyles.md L1/L2 + model term, and
+PLACED: the infodecal / env_glow records of hldemo1 and hldemo2 placed
+from their DECL sheets) and check that every test reported PASS.
 
   python3 test/m3/fx.py BUILD_DIR CONTENT
 
@@ -13,6 +14,23 @@ import subprocess
 import sys
 
 TESTS = ("X1", "X2", "X3", "X4", "X5", "X6", "SCREEN", "DLIGHT", "LSTYLE")
+PLACED_MAPS = ("hldemo1", "hldemo2")
+
+
+def run(cmd):
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    return r
+
+
+def verdicts(out, names):
+    seen = {}
+    for line in out.splitlines():
+        w = line.split()
+        if len(w) >= 2 and w[0] in names and w[1] in ("PASS", "FAIL"):
+            seen[w[0]] = w[1]
+    return seen
 
 
 def main(argv):
@@ -20,18 +38,21 @@ def main(argv):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     exe = argv[1].rstrip("/") + "/host/hl64-fx"
-    r = subprocess.run([exe, "--root", argv[2]], capture_output=True, text=True)
-    sys.stdout.write(r.stdout)
-    sys.stderr.write(r.stderr)
-    seen = {}
-    for line in r.stdout.splitlines():
-        w = line.split()
-        if len(w) >= 2 and w[0] in TESTS and w[1] in ("PASS", "FAIL"):
-            seen[w[0]] = w[1]
+    r = run([exe, "--root", argv[2]])
+    seen = verdicts(r.stdout, TESTS)
     missing = [t for t in TESTS if t not in seen]
     failed = [t for t in TESTS if seen.get(t) == "FAIL"]
-    ok = r.returncode == 0 and not missing and not failed
-    print("fx.py: %s (%d tests%s%s)" % ("PASS" if ok else "FAIL", len(TESTS),
+    ok = r.returncode == 0
+    for m in PLACED_MAPS:
+        r = run([exe, "--root", argv[2], "--placed", m])
+        v = verdicts(r.stdout, ("PLACED",)).get("PLACED")
+        if v is None:
+            missing.append("PLACED:" + m)
+        elif v == "FAIL" or r.returncode != 0:
+            failed.append("PLACED:" + m)
+    ok = ok and not missing and not failed
+    n = len(TESTS) + len(PLACED_MAPS)
+    print("fx.py: %s (%d tests%s%s)" % ("PASS" if ok else "FAIL", n,
           ", missing " + " ".join(missing) if missing else "",
           ", failed " + " ".join(failed) if failed else ""))
     return 0 if ok else 1
