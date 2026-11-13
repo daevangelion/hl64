@@ -194,8 +194,11 @@ typedef struct {
 typedef struct {
 	const uint8_t	*base;		/* resident .sc4 bytes, NULL */
 	const uint16_t	*tlut;
-	const fx_sprframe_t *frames;
-	int		nframes;
+	const fx_sprframe_t *frames;	/* images (singles and group members) */
+	const uint16_t	*groups;	/* per entity frame: first image, image count */
+	const uint16_t	*ends;		/* per image: cumulative group interval end, ms */
+	int		nframes;	/* entity frames (a group counts once) */
+	int		nimages;
 	uint8_t		type;		/* FX_SPR_* */
 	uint8_t		texformat;
 	uint8_t		tint[3];
@@ -210,6 +213,9 @@ const fx_sprite_t *sprite_get(res_t r);
  * blend mode decided by the caller. */
 void		sprite_draw(const fx_sprite_t *s, int f, const float org[3], const float ang[3],
 			float scale, int gpu_mode, const uint8_t rgba[4]);
+/* Image of entity frame f at effects time t (render-fx.md 3: a group
+ * frame picks its member by time within the group's intervals). */
+int		sprite_image(const fx_sprite_t *s, int f, double t);
 
 typedef struct {
 	uint32_t	resident, bytes, peak, loads, evicted, skipped;
@@ -228,5 +234,19 @@ int		trans_blend_amt(int rendermode, int renderfx, int amt, int e, float dist);
 /* GPU mode for (render mode, model kind) and the capped blend (X1). */
 int		trans_gpu_mode(int rendermode, int kind, uint8_t *blend);
 void		trans_frame(double dt);		/* persistent fades (5-8) */
+/* Translucent pass callback of the temp entities (tent.c). */
+void		tent_draw(int i, uint8_t blend, int mode);
+
+/* Pool drops since the last reset (counted by each pool). */
+uint32_t	tent_dropped(int reset);
+uint32_t	part_dropped(int reset);
+uint32_t	beam_dropped(int reset);
+
+#ifdef HL64_HOST
+/* Tests: a cooked .sc4 image (big-endian, caller-owned) as resident sprite r. */
+int		sprite_test_inject(res_t r, uint8_t *bytes, uint32_t size);
+/* X2: the last translucent pass's items, back to front. */
+int		trans_last_order(uint8_t *kind, uint16_t *id, uint8_t *blend, int max);
+#endif
 
 #endif

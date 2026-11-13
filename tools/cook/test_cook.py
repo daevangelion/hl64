@@ -189,8 +189,27 @@ class TestWorldTex(unittest.TestCase):
 class TestSprite(unittest.TestCase):
     def test_cook(self):
         out = hl_sprite_cook.cook(spr([(8, 8, bytes(range(64)))]))
-        self.assertEqual(struct.unpack_from(">IHH", out, 0), (hl_sprite_cook.MAGIC, 1, 1))
+        self.assertEqual(struct.unpack_from(">IHH", out, 0), (hl_sprite_cook.MAGIC, 2, 1))
+        self.assertEqual(struct.unpack_from(">H", out, 14)[0], 1)
         self.assertEqual(len(out) % 8, 0)
+
+    def test_group(self):
+        # frame 0 single, frame 1 a group of 3 with cumulative intervals
+        head = b"IDSP" + struct.pack("<iiifiiiii", 2, 0, 0, 1.0, 8, 8, 2, 0, 0)
+        blob = head + struct.pack("<h", 256) + bytes(768)
+        blob += struct.pack("<i4i", 0, 0, 0, 8, 8) + bytes(64)
+        blob += struct.pack("<ii3f", 1, 3, 0.1, 0.3, 0.6)
+        for k in range(3):
+            blob += struct.pack("<4i", 0, 0, 8, 8) + bytes([k]) * 64
+        out = hl_sprite_cook.cook(blob)
+        nframes, nimages = struct.unpack_from(">H", out, 6)[0], struct.unpack_from(">H", out, 14)[0]
+        self.assertEqual((nframes, nimages), (2, 4))
+        fo = 80 + 16 * nimages
+        self.assertEqual(struct.unpack_from(">4H", out, fo), (0, 1, 1, 3))
+        self.assertEqual(struct.unpack_from(">4H", out, fo + 8), (0, 100, 300, 600))
+        bad = blob.replace(struct.pack("<3f", 0.1, 0.3, 0.6), struct.pack("<3f", 0.3, 0.1, 0.6))
+        with self.assertRaises(ValueError):
+            hl_sprite_cook.cook(bad)
 
     def test_hostile(self):
         good = spr([(8, 8, bytes(64))])

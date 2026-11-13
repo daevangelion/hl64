@@ -97,4 +97,9 @@ typedef struct {
 /* Last completed frame. */
 void	gpu_fx_stats(gpu_fx_stats_t *s);
 
+#ifdef HL64_HOST
+/* Recorder: the vertices of the last gpu_fx_tris call and its mode (tests). */
+int	gpu_fx_host_last(gpu_fx_vert_t *out, int max, int *mode);
+#endif
+
 #endif

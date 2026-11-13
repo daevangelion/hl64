@@ -16,6 +16,10 @@
 
 /* Boot, once: the game's tables (dispatch, class table, precache lists). */
 void	game_init(void);
+/* PROFILE roll-up line `prof game_us avg= max= thinks= uses= fires=`
+ * (the game's dispatch time per frame over the window; window totals),
+ * then resets the window. */
+void	game_prof_line(void);
 /* New Game: global state, skill, the player's inventory reset. */
 void	game_new_campaign(void);
 /* An HLE slot opened / is closing (its records' game state). */
@@ -83,6 +87,10 @@ int	game_studio_setup_bones(int e, float (*out)[3][4], int max);
 /* Client-side animation event of e (HLSDK cl_dll StudioEvent: muzzle
  * flashes, client sounds), called by the engine's studio draw. */
 void	game_studio_event(int e, int event, const char *options);
+/* pfnGetAttachment for the engine's effects (muzzle flashes): attachment
+ * i of entity e at its current pose into out (e's map-local frame);
+ * returns 0 (out = e's origin) when e has no such attachment. */
+int	game_attachment(int e, int i, float out[3]);
 /* Server-side studio pose (GoldSrc's server bone setup: pev->frame as is,
  * no client interpolation, no sequence blend-in): bone-to-world 3x4
  * matrices of the pose *p describes into out (<= max); returns the bone

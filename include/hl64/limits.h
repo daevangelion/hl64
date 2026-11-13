@@ -106,7 +106,7 @@
 /* ---- boot carve regions, KB (4.1) ------------------------------------ */
 
 #define HL64_SCRATCH_KB			96	/* per-frame scratch arena; boot: the campaign.rtb cart part (67632 B measured, Uplink + Hazard with the full game res.def) */
-#define HL64_RESTAB_KB			40	/* resource table: 29228 B measured with the game's res.def (Uplink + Hazard cook, GameMon2) x 1.25, rounded up */
+#define HL64_RESTAB_KB			56	/* resource table: 44528 B measured (full res.def, Uplink + Hazard cook of main 1a9e4e8: 1192 files, 1015 sounds) x 1.25 */
 #define HL64_SENTENCES_KB		24	/* [EST] word ids, no strings */
 #define HL64_LIGHTSTYLE_KB		4	/* patterns + state */
 #define HL64_LAYER_DIRS_KB		168	/* 2 open .w64 directories, measured */
@@ -129,7 +129,7 @@
  * + 10 open wav64 (state, codebook); x 1.25 = 97680 B. */
 #define HL64_SOUND_KB			96
 #define HL64_SPRITE_CACHE_KB		64
-#define HL64_DECAL_TEXELS_KB		48
+#define HL64_DECAL_TEXELS_KB		56	/* decal sheet (43 HLSDK decals, 31 KB) + 96 x 24 piece vertices (22.5 KB) */
 #define HL64_PARTICLES_KB		12
 #define HL64_DLIGHT_KB			48	/* dlight scratch + flashlight pool */
 #define HL64_HUD_KB			128	/* [EST] HUD sheets + font */

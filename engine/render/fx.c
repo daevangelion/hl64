@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "hl64/ent.h"
+#include "hl64/game.h"
 #include "hl64/limits.h"
 #include "hl64/rec.h"
 #include "hl64/settings.h"
@@ -25,11 +26,6 @@
 #include "engine/render/fx_int.h"
 #include "engine/render/ren.h"
 #include "engine/world/wld.h"
-
-/* Slices linked later (sound, the game's studio maths) are optional. */
-#pragma weak snd_ambient
-void	gs_attachment(int e, int i, float out[3]);
-#pragma weak gs_attachment
 
 #define NO_TITLE	0xFFFF
 
@@ -143,7 +139,7 @@ void fx_play(int set, const float org_g[3], float vol, float attn)
 	res_t s = asset(set, -1);
 	int frame;
 
-	if (!s || !snd_ambient)
+	if (!s)
 		return;
 	frame = eng_frame_layer();
 	eng_set_frame_layer(-1);
@@ -606,9 +602,7 @@ void fx_muzzle_flash(int e, int attachment, int type)
 		return;
 	/* the attachment (game/studio) in e's frame, else origin + 18 forward
 	 * at eye height (dlights.md 1 EF_MUZZLEFLASH placement) */
-	if (gs_attachment)
-		gs_attachment(e, attachment, p);
-	else
+	if (!game_attachment(e, attachment, p))
 	{
 		ren_angle_axes(ent_cv(e)->angles, f, r, u);
 		for (k = 0; k < 3; k++)

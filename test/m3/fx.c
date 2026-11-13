@@ -1,0 +1,1157 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * fx.c -- host harness for docs/specs/render-fx.md (X1, X2, X3 exact-rate
+ * part, X4 synthetic part, X5, X6), dlights.md (D1, D2, D4 and the model
+ * term of 4) and lightstyles.md (L1, L2, the model term of 4) on the real
+ * engine/render effects modules, the draw-list recorder and a cooked map
+ * (the player start of the campaign's start map); test/m3/fx.py runs it.
+ *
+ *   hl64-fx --root CONTENT        prints "<test> PASS|FAIL ..." lines
+ *
+ * Every test is self-contained or synthetic (entities, sprites and decals
+ * made here); the retail-capture properties (X3 shapes, X4 screenshots,
+ * X7, D5-D7, L5-L7) are not run.
+ */
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "hl64/coll.h"
+#include "hl64/ent.h"
+#include "hl64/fx.h"
+#include "hl64/grid.h"
+#include "hl64/limits.h"
+#include "hl64/rec.h"
+#include "hl64/settings.h"
+#include "hl64/studio.h"
+#include "engine/core/sys.h"
+#include "engine/io/io.h"
+#include "engine/mem/carve.h"
+#include "engine/render/fx_int.h"
+#include "engine/render/gpu_fx.h"
+#include "engine/render/ren.h"
+#include "engine/render/trans.h"
+#include "engine/world/wld.h"
+#include "plat/host/host.h"
+
+static int fails, tfails;
+static double now = 1.0;
+static wld_layer_t *L;
+
+#define CHECK(cond, ...) do { if (!(cond)) { tfails++; printf("  fail %s:%d: ", __FILE__, \
+	__LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
+
+static void begin(void)
+{
+	tfails = 0;
+}
+
+static void finish(const char *name, const char *note)
+{
+	printf("%s %s%s%s\n", name, tfails ? "FAIL" : "PASS", note ? " " : "", note ? note : "");
+	fails += tfails != 0;
+}
+
+static void step(double dt)
+{
+	now += dt;
+	fx_frame(now, dt);
+}
+
+static void draw(void)
+{
+	fx_draw_begin();
+	fx_draw_particles();
+	fx_draw_trans();
+	fx_draw_decals();
+}
+
+static void eye(const float g[3], float pitch, float yaw)
+{
+	memcpy(ren_cam.org, g, sizeof(ren_cam.org));
+	ren_cam.ang[0] = pitch;
+	ren_cam.ang[1] = yaw;
+	ren_cam.ang[2] = 0;
+	ren_cam.map = L->map;
+}
+
+/* An entity of the start layer at global g. */
+static int make_ent(const float g[3])
+{
+	float o[3];
+	int e = ent_create(ENT_ALLOC_GAME), k;
+
+	ent_idc(e)->layer = (int8_t)L->slot;
+	for (k = 0; k < 3; k++)
+		o[k] = g[k] - L->gofs[k];
+	eng_set_frame_layer(L->slot);
+	ent_set_origin(e, o);
+	eng_set_frame_layer(-1);
+	return e;
+}
+
+static void kill_all(void)
+{
+	int e;
+
+	for (e = 2; e < HL64_MAX_ENTITIES; e++)
+		if (ent_is_live(e))
+			ent_destroy(e);
+}
+
+/* ---- a cooked sprite (.sc4, tools/cook/hl_sprite_cook.py layout) ---------- */
+
+static uint8_t sc4[1024] __attribute__((aligned(16)));
+static res_t test_spr;
+
+static void be16(uint8_t *p, unsigned v)
+{
+	p[0] = (uint8_t)(v >> 8);
+	p[1] = (uint8_t)v;
+}
+
+static void be32(uint8_t *p, uint32_t v)
+{
+	be16(p, v >> 16);
+	be16(p + 2, v & 0xFFFF);
+}
+
+/* v2: entity frame 0 = image 0; frame 1 = a group of images 1-3 with
+ * cumulative interval ends 100, 300, 600 ms; 16 x 16 units each */
+static void make_sprite(int type)
+{
+	static const uint16_t ends[4] = { 0, 100, 300, 600 };
+	int i;
+
+	memset(sc4, 0, sizeof(sc4));
+	be32(sc4, 0x53433431u);
+	be16(sc4 + 4, 2);
+	be16(sc4 + 6, 2);
+	sc4[8] = (uint8_t)type;
+	be16(sc4 + 14, 4);
+	for (i = 0; i < 16; i++)
+		be16(sc4 + 16 + 2 * i, 0xFFFF);
+	for (i = 0; i < 4; i++)
+	{
+		uint8_t *f = sc4 + 80 + 16 * i;
+
+		be16(f, (unsigned)(uint16_t)-8);
+		be16(f + 2, 8);
+		be16(f + 4, 16);
+		be16(f + 6, 16);
+		f[8] = 16;
+		f[9] = 16;
+		be32(f + 12, 160 + 128 * (uint32_t)i);
+		be16(sc4 + 152 + 2 * i, ends[i]);
+	}
+	be16(sc4 + 144, 0);
+	be16(sc4 + 146, 1);
+	be16(sc4 + 148, 1);
+	be16(sc4 + 150, 3);
+	/* a sprite id no cooked file uses: past the table's sprites */
+	test_spr = RES_MAKE(RES_K_SPRITE, 8000);
+	if (sprite_test_inject(test_spr, sc4, 160 + 4 * 128))
+	{
+		printf("setup FAIL sprite inject\n");
+		exit(1);
+	}
+}
+
+static int sprite_ent(const float g[3], int rm, int amt)
+{
+	int e = make_ent(g);
+
+	ent_rnd(e)->model = test_spr;
+	ent_cv(e)->rendermode = (uint8_t)rm;
+	ent_rnd(e)->renderamt = (uint8_t)amt;
+	return e;
+}
+
+/* ---- X1 render-mode table ---------------------------------------------------- */
+
+static void test_x1(void)
+{
+	static const char *kinds[3] = { "sprite", "studio", "brush" };
+	/* expected (render-fx.md 2): blender (0 none, 1 alpha, 2 add, -1 opaque
+	 * pass), Z test, Z write, alpha compare, flat colour */
+	static const int want[3][6][5] = {
+		{ { 1, 1, 1, 1, 0 }, { 1, 1, 0, 0, 0 }, { 1, 1, 0, 0, 0 }, { 2, 0, 0, 0, 0 },
+		  { 1, 1, 1, 1, 0 }, { 2, 1, 0, 0, 0 } },
+		{ { -1 }, { 1 }, { 1 }, { 2 }, { -1 }, { 2 } },
+		{ { -1 }, { 1, 1, 0, 0, 1 }, { 1, 1, 0, 0, 0 }, { 2, 1, 0, 0, 0 }, { -1 },
+		  { 2, 1, 0, 0, 0 } },
+	};
+	float g[3];
+	gpu_fx_stats_t gs;
+	int k, rm, e[6], i;
+
+	begin();
+	for (k = 0; k < 3; k++)
+		for (rm = 0; rm < 6; rm++)
+		{
+			uint8_t b = 255;
+			int m = trans_gpu_mode(rm, k, &b);
+
+			if (k == 1)
+			{
+				printf("x1 %s rm=%d studio_mode=%d blend=%d\n", kinds[k], rm, m, b);
+				CHECK(want[k][rm][0] == -1 ? m < 0 : m == want[k][rm][0], "studio rm %d", rm);
+			}
+			else if (m < 0)
+			{
+				printf("x1 %s rm=%d opaque-pass\n", kinds[k], rm);
+				CHECK(want[k][rm][0] == -1, "%s rm %d not opaque", kinds[k], rm);
+			}
+			else
+			{
+				const gpu_fx_rdp_t *r = &gpu_fx_rdp[m];
+
+				printf("x1 %s rm=%d mode=%s blend=%d blender=%d ztest=%d zwrite=%d acmp=%d "
+					"cc=%d tex=%d\n", kinds[k], rm, gpu_fx_mode_name[m], b, r->blender,
+					r->ztest, r->zwrite, r->acompare, r->combiner, r->textured);
+				CHECK(r->blender == want[k][rm][0] && r->ztest == want[k][rm][1]
+					&& r->zwrite == want[k][rm][2] && r->acompare == want[k][rm][3]
+					&& (r->combiner == GPU_FX_CC_PRIM_A) == want[k][rm][4],
+					"%s rm %d state", kinds[k], rm);
+			}
+			if (rm == 3 || rm == 5)
+				CHECK(b == HL64_FX_ADD_CAP, "%s rm %d additive cap %d", kinds[k], rm, b);
+		}
+	/* recorder: one sprite per render mode, drawn in the pass */
+	make_sprite(FX_SPR_PARALLEL);
+	eye(L->start_org, 0, 0);
+	for (rm = 0; rm < 6; rm++)
+	{
+		g[0] = L->start_org[0] + L->gofs[0] + 40 + 4 * rm;
+		g[1] = L->start_org[1] + L->gofs[1] + 4 * rm - 12;
+		g[2] = L->start_org[2] + L->gofs[2];
+		e[rm] = sprite_ent(g, rm, 200);
+	}
+	{
+		float eg[3];
+
+		for (i = 0; i < 3; i++)
+			eg[i] = L->start_org[i] + L->gofs[i];
+		eye(eg, 0, 0);
+	}
+	draw();
+	gpu_fx_stats(&gs);
+	for (i = 0; i < GPU_FX_MODES; i++)
+		if (gs.calls[i])
+			printf("x1 recorder mode=%s calls=%lu\n", gpu_fx_mode_name[i],
+				(unsigned long)gs.calls[i]);
+	CHECK(gs.calls[GPU_FX_CUTOUT] == 2 && gs.calls[GPU_FX_BLEND] == 2 && gs.calls[GPU_FX_GLOW] == 1
+		&& gs.calls[GPU_FX_ADD] == 1, "recorder calls cut %lu blend %lu glow %lu add %lu",
+		(unsigned long)gs.calls[GPU_FX_CUTOUT], (unsigned long)gs.calls[GPU_FX_BLEND],
+		(unsigned long)gs.calls[GPU_FX_GLOW], (unsigned long)gs.calls[GPU_FX_ADD]);
+	(void)e;
+	kill_all();
+	finish("X1", "render mode table + recorder");
+}
+
+/* ---- X2 ordering, cap, blend 0 ------------------------------------------------- */
+
+static void test_x2(void)
+{
+	uint8_t kind[HL64_FX_TRANS_MAX], bl[HL64_FX_TRANS_MAX];
+	uint16_t id[HL64_FX_TRANS_MAX];
+	float eg[3], dist[HL64_MAX_ENTITIES];
+	fx_draw_stats_t ds;
+	int i, n, e, k, maxkept = 0;
+	unsigned seed = 7;
+
+	begin();
+	for (k = 0; k < 3; k++)
+		eg[k] = L->start_org[k] + L->gofs[k];
+	eye(eg, 0, 0);
+	for (i = 0; i < 80; i++)
+	{
+		float g[3];
+
+		seed = seed * 1103515245u + 12345u;
+		g[0] = eg[0] + 50 + (float)(seed >> 8 & 1023);
+		g[1] = eg[1] + (float)((seed >> 20) & 63) - 32;
+		g[2] = eg[2];
+		e = sprite_ent(g, FX_RM_TRANSADD, 255);
+		dist[e] = g[0] - eg[0];
+	}
+	draw();
+	n = trans_last_order(kind, id, bl, HL64_FX_TRANS_MAX);
+	fx_draw_stats(&ds);
+	CHECK(n == HL64_FX_TRANS_MAX, "kept %d", n);
+	CHECK(ds.dropped == 16, "dropped %lu", (unsigned long)ds.dropped);
+	for (i = 1; i < n; i++)
+		CHECK(dist[id[i - 1]] >= dist[id[i]], "order at %d: %g < %g", i,
+			(double)dist[id[i - 1]], (double)dist[id[i]]);
+	/* the nearest are kept: every dropped one is farther than every kept */
+	for (i = 0; i < n; i++)
+		if (dist[id[i]] > dist[id[maxkept]])
+			maxkept = i;
+	for (e = 2; e < HL64_MAX_ENTITIES; e++)
+		if (ent_is_live(e))
+		{
+			int kept = 0;
+
+			for (i = 0; i < n; i++)
+				kept |= id[i] == e;
+			if (!kept)
+				CHECK(dist[e] >= dist[id[maxkept]], "dropped %d nearer than kept", e);
+		}
+	for (i = 0; i < n; i++)
+		CHECK(kind[i] == TK_SPRITE_ENT && bl[i] == HL64_FX_ADD_CAP, "item %d", i);
+	kill_all();
+
+	/* blend 0: not drawn, still solid */
+	{
+		float g[3] = { eg[0] + 64, eg[1], eg[2] }, a[3], b[3];
+		float mn[3] = { -16, -16, -16 }, mx[3] = { 16, 16, 16 };
+		col_trace_t tr;
+
+		e = sprite_ent(g, FX_RM_TRANSTEXTURE, 0);
+		eng_set_frame_layer(L->slot);
+		ent_set_size(e, mn, mx);
+		ent_set_solid(e, COL_SOLID_BBOX);
+		draw();
+		fx_draw_stats(&ds);
+		CHECK(ds.items == 0 && ds.invisible == 1, "items %lu invisible %lu",
+			(unsigned long)ds.items, (unsigned long)ds.invisible);
+		for (k = 0; k < 3; k++)
+		{
+			a[k] = L->start_org[k];
+			b[k] = g[k] - L->gofs[k] + (k == 0 ? 64 : 0);
+		}
+		col_trace_line(a, b, COL_MOVE_NORMAL, NULL, &tr);
+		CHECK(tr.ent == e && tr.frac < 1, "trace hit ent %d frac %g", tr.ent, (double)tr.frac);
+		eng_set_frame_layer(-1);
+		kill_all();
+	}
+	finish("X2", "back to front, nearest 64 kept, blend 0 invisible and solid");
+}
+
+/* ---- X3 exact rates (fx 0, 5-8, 14-16) and the shaped fx' figures ----------- */
+
+static int amt_after(int fx, int amt0, double secs, double dt)
+{
+	float g[3] = { 0, 0, 0 };
+	int e = make_ent(g), a;
+	long t, n = lround(secs / dt);
+
+	ent_rnd(e)->renderfx = (uint8_t)fx;
+	ent_rnd(e)->renderamt = (uint8_t)amt0;
+	for (t = 0; t < n; t++)
+		trans_frame(dt);
+	a = ent_rnd(e)->renderamt;
+	ent_destroy(e);
+	return a;
+}
+
+static void test_x3(void)
+{
+	static const double dts[3] = { 1.0 / 30, 1.0 / 60, 1.0 / 20 };
+	int i, k;
+	char note[160];
+
+	begin();
+	for (i = 0; i < 3; i++)
+	{
+		CHECK(amt_after(FX_RFX_FADE_SLOW, 255, 1, dts[i]) == 225, "fade slow dt %g", dts[i]);
+		CHECK(amt_after(FX_RFX_FADE_FAST, 255, 1, dts[i]) == 135, "fade fast dt %g", dts[i]);
+		CHECK(amt_after(FX_RFX_SOLID_SLOW, 0, 2, dts[i]) == 60, "solid slow dt %g", dts[i]);
+		CHECK(amt_after(FX_RFX_SOLID_FAST, 128, 1, dts[i]) == 248, "solid fast dt %g", dts[i]);
+		CHECK(amt_after(FX_RFX_FADE_FAST, 255, 5, dts[i]) == 0, "fade stays at 0");
+		CHECK(amt_after(FX_RFX_SOLID_FAST, 100, 5, dts[i]) == 255, "solid stays at 255");
+	}
+	for (k = 0; k < 2; k++)
+	{
+		int amt = k ? 128 : 255;
+
+		CHECK(trans_blend_amt(5, FX_RFX_NONE, amt, 3, 50) == amt, "fx 0");
+		CHECK(trans_blend_amt(5, FX_RFX_NO_DISSIPATION, amt, 3, 50) == amt, "fx 14");
+	}
+	/* pulse amplitude / period, strobe rate, distort / hologram means */
+	{
+		static const struct { int fx; float amp, hz; } pul[4] = {
+			{ FX_RFX_PULSE_SLOW, 16, 1 }, { FX_RFX_PULSE_FAST, 16, 4 },
+			{ FX_RFX_PULSE_SLOW_WIDE, 64, 1 }, { FX_RFX_PULSE_FAST_WIDE, 64, 4 } };
+		double save = fx_s.now;
+
+		for (i = 0; i < 4; i++)
+		{
+			int lo = 255, hi = 0, cross = 0, prev = 0, s;
+
+			for (s = 0; s < 5000; s++)
+			{
+				int b, up;
+
+				fx_s.now = 10.0 + s * 0.001;
+				b = trans_blend_amt(5, pul[i].fx, 128, 3, 50);
+				lo = b < lo ? b : lo;
+				hi = b > hi ? b : hi;
+				up = b >= 128;
+				if (s && up && !prev)
+					cross++;
+				prev = up;
+			}
+			CHECK(fabsf((float)(hi - lo) - 2 * pul[i].amp) <= 0.1f * 2 * pul[i].amp,
+				"pulse %d amplitude %d", pul[i].fx, hi - lo);
+			CHECK(fabsf((float)cross / 5.0f - pul[i].hz) <= 0.1f * pul[i].hz + 0.2f,
+				"pulse %d rate %g", pul[i].fx, cross / 5.0);
+		}
+		for (i = 0; i < 3; i++)
+		{
+			static const float rate[3] = { 4, 8, 16 };
+			int changes = 0, prev = -1, s;
+
+			for (s = 0; s < 5000; s++)
+			{
+				int b;
+
+				fx_s.now = 10.0 + s * 0.001;
+				b = trans_blend_amt(5, FX_RFX_STROBE_SLOW + i, 200, 3, 50);
+				if (prev >= 0 && b != prev)
+					changes++;
+				prev = b;
+			}
+			CHECK(fabsf(changes / 5.0f - rate[i]) <= 0.1f * rate[i], "strobe %d %g/s",
+				FX_RFX_STROBE_SLOW + i, changes / 5.0);
+		}
+		{
+			double sum[4] = { 0, 0, 0, 0 };
+			static const float d[4] = { 50, 200, 500, 50 };
+
+			for (i = 0; i < 4000; i++)
+			{
+				sum[0] += trans_blend_amt(5, FX_RFX_HOLOGRAM, 255, 3, d[0]);
+				sum[1] += trans_blend_amt(5, FX_RFX_HOLOGRAM, 255, 3, d[1]);
+				sum[2] += trans_blend_amt(5, FX_RFX_HOLOGRAM, 255, 3, d[2]);
+				sum[3] += trans_blend_amt(5, FX_RFX_DISTORT, 255, 3, d[3]);
+			}
+			for (i = 0; i < 4; i++)
+				sum[i] /= 4000;
+			snprintf(note, sizeof(note), "holo50=%.1f holo200=%.1f holo500=%.1f distort=%.1f",
+				sum[0], sum[1], sum[2], sum[3]);
+			CHECK(fabs(sum[0] - 223.5) < 5 && fabs(sum[1] - 223.5 * 2 / 3) < 5 && sum[2] == 0
+				&& fabs(sum[3] - 223.5) < 5, "%s", note);
+		}
+		fx_s.now = save;
+	}
+	finish("X3", "fade/solid exact 30/120 per s at 20-60 fps; fx 0/14 = renderamt; "
+		"pulse/strobe figures; distort/hologram means (shapes own, calibration pending)");
+}
+
+/* ---- X4 glow: occlusion, constant screen size ------------------------------------- */
+
+static float glow_size(float d)
+{
+	gpu_fx_vert_t v[64];
+	float far_g[3] = { 20000, 20000, 20000 }, g[3], w, z;
+	int e, n, m;
+
+	eye(far_g, 0, 0);
+	g[0] = far_g[0] + d;
+	g[1] = far_g[1];
+	g[2] = far_g[2];
+	e = sprite_ent(g, FX_RM_GLOW, 255);
+	draw();
+	n = gpu_fx_host_last(v, 64, &m);
+	ent_destroy(e);
+	if (n != 4 || m != GPU_FX_GLOW)
+		return -1;
+	/* view: x forward, -y right; width across / depth */
+	w = fabsf((float)(v[1].pos[1] - v[0].pos[1]));
+	z = (float)v[0].pos[0];
+	return w / z;
+}
+
+static void test_x4(void)
+{
+	float s0, s, eg[3], dir[3] = { 1, 0, 0 }, end[3];
+	float ds[5] = { 100, 300, 700, 1200, 2000 };
+	col_trace_t tr;
+	fx_draw_stats_t st;
+	char note[128];
+	int i, k, e;
+
+	begin();
+	make_sprite(FX_SPR_PARALLEL);
+	/* render-fx.md 3: group frames pick by time in the group's intervals */
+	{
+		const fx_sprite_t *sp = sprite_get(test_spr);
+		/* the cycle runs on the clock: 6.0 s = 10 cycles of 0.6 s */
+		static const double at[6] = { 6.05, 6.15, 6.35, 6.59, 6.61, 7.35 };
+		static const int want[6] = { 1, 2, 3, 3, 1, 2 };
+
+		CHECK(sp && sp->nframes == 2 && sprite_image(sp, 0, 10.2) == 0, "single frame");
+		for (i = 0; sp && i < 6; i++)
+			CHECK(sprite_image(sp, 1, at[i]) == want[i], "group at %g: %d", at[i],
+				sprite_image(sp, 1, at[i]));
+	}
+	s0 = glow_size(ds[0]);
+	CHECK(s0 > 0, "glow not drawn");
+	for (i = 1; i < 5; i++)
+	{
+		s = glow_size(ds[i]);
+		CHECK(fabsf(s - s0) <= 0.05f * s0, "size at %g: %g vs %g", (double)ds[i], (double)s,
+			(double)s0);
+	}
+	/* occluded: a sprite behind the first wall ahead of the start */
+	for (k = 0; k < 3; k++)
+	{
+		eg[k] = L->start_org[k] + L->gofs[k];
+		end[k] = eg[k] + 4096 * dir[k];
+	}
+	eye(eg, 0, 0);
+	fx_trace(eg, end, COL_MOVE_NOMONSTERS, &tr);
+	CHECK(tr.frac < 1, "no wall ahead");
+	for (k = 0; k < 3; k++)
+		end[k] = tr.end[k] + 32 * dir[k];
+	e = sprite_ent(end, FX_RM_GLOW, 255);
+	draw();
+	fx_draw_stats(&st);
+	CHECK(st.glow_occluded == 1 && st.sprites == 0, "occluded %lu drawn %lu",
+		(unsigned long)st.glow_occluded, (unsigned long)st.sprites);
+	ent_destroy(e);
+	snprintf(note, sizeof(note), "screen size %.4f constant 100-2000 u, occluded glow hidden",
+		(double)s0);
+	finish("X4", note);
+}
+
+/* ---- X5 decals ------------------------------------------------------------------- */
+
+static float dot3(const float a[3], const float b[3])
+{
+	return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+/* Trace from a (global) along dir up to len: hit point, normal; 0 = none. */
+static int ray(const float a[3], const float dir[3], float len, float hit[3], float n[3])
+{
+	float b[3];
+	col_trace_t tr;
+	int k;
+
+	for (k = 0; k < 3; k++)
+		b[k] = a[k] + dir[k] * len;
+	fx_trace(a, b, COL_MOVE_NOMONSTERS, &tr);
+	if (tr.frac >= 1 || tr.startsolid)
+		return 0;
+	memcpy(hit, tr.end, sizeof(tr.end));
+	memcpy(n, tr.normal, sizeof(tr.normal));
+	return 1;
+}
+
+static int corner_test(char *note, int len)
+{
+	float eg[3], pa[3], na[3], pb[3], nb[3], t[3], up[3] = { 0, 0, 1 }, s[3], p[3];
+	float v[HL64_FX_DECAL_VERTS][3];
+	int yaw, sgn, k, i, owner, nv, found = 0, onA, onB;
+
+	for (k = 0; k < 3; k++)
+		eg[k] = L->start_org[k] + L->gofs[k];
+	for (yaw = 0; yaw < 360 && !found; yaw += 15)
+	{
+		float d[3] = { cosf(yaw * 0.0174533f), sinf(yaw * 0.0174533f), 0 };
+
+		if (!ray(eg, d, 2048, pa, na) || fabsf(na[2]) > 0.1f)
+			continue;
+		t[0] = na[1] * up[2] - na[2] * up[1];
+		t[1] = na[2] * up[0] - na[0] * up[2];
+		t[2] = na[0] * up[1] - na[1] * up[0];
+		for (sgn = -1; sgn <= 1 && !found; sgn += 2)
+		{
+			float dir[3] = { t[0] * sgn, t[1] * sgn, t[2] * sgn };
+
+			for (k = 0; k < 3; k++)
+				s[k] = pa[k] + na[k] * 8;
+			if (!ray(s, dir, 512, pb, nb) || dot3(nb, na) > 0.2f || fabsf(nb[2]) > 0.1f)
+				continue;
+			/* 2 u from wall B, on wall A: both planes within 4 u */
+			for (k = 0; k < 3; k++)
+				p[k] = pb[k] - na[k] * 8 - dir[k] * 2;
+			found = 1;
+		}
+	}
+	if (!found)
+	{
+		snprintf(note, (size_t)len, "no inside corner found");
+		return -1;
+	}
+	{
+		int before = decal_count(), placed = decal_place_now(p, na, -1, 11 /* {scorch1 */);
+
+		CHECK(placed >= 1, "corner decal placed %d", placed);
+		CHECK(decal_count() > before, "count");
+	}
+	onA = onB = 0;
+	for (i = 0; i < HL64_FX_DECALS; i++)
+	{
+		int np = decal_info(i, &owner, &nv, v, HL64_FX_DECAL_VERTS);
+
+		if (np <= 0)
+			continue;
+		for (k = 0; k < nv; k++)
+		{
+			float da[3], db[3], r;
+			int j;
+
+			for (j = 0; j < 3; j++)
+			{
+				da[j] = v[k][j] - pa[j];
+				db[j] = v[k][j] - pb[j];
+			}
+			if (fabsf(dot3(da, na)) < 0.6f)
+				onA++;
+			else if (fabsf(dot3(db, nb)) < 0.6f)
+				onB++;
+			/* clipped: never behind the other wall, inside the rectangle */
+			CHECK(dot3(db, nb) > -0.6f && dot3(da, na) > -0.6f, "vertex %d behind a wall", k);
+			for (j = 0; j < 3; j++)
+				da[j] = v[k][j] - p[j];
+			r = sqrtf(dot3(da, da));
+			CHECK(r <= 48 * 1.4143f + 8.5f, "vertex %d %g u from the centre", k, (double)r);
+		}
+	}
+	/* vertices on the corner line count for A; B must hold its own */
+	CHECK(onA >= 3 && onB >= 1, "split across both faces: %d on A, %d on B", onA, onB);
+	snprintf(note, (size_t)len, "corner split A=%d B=%d verts", onA, onB);
+	return 0;
+}
+
+static int door_test(void)
+{
+	int i, k, e = -1, owner, nv, np;
+	float v0[HL64_FX_DECAL_VERTS][3], v1[HL64_FX_DECAL_VERTS][3];
+
+	for (i = 0; i < L->nmovers && e < 0; i++)
+	{
+		const wld_mover_t *mv = &L->movers[i];
+		const w64_sub_t *sb = &L->subs[mv->sub];
+		static const float dirs[6][3] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 },
+			{ 0, 0, 1 }, { 0, 0, -1 } };
+		float c[3], hx[3];
+		int d;
+
+		if (sb->kind != W64_SUB_MOVR)
+			continue;
+		e = ent_create(ENT_ALLOC_GAME);
+		ent_idc(e)->layer = (int8_t)L->slot;
+		eng_set_frame_layer(L->slot);
+		ent_set_model(e, RES_SUBMODEL(L->slot, mv->sub));
+		ent_set_movetype(e, MOVETYPE_PUSH);
+		ent_set_solid(e, COL_SOLID_BSP);
+		ent_set_origin(e, mv->origin);
+		for (k = 0; k < 3; k++)
+		{
+			c[k] = 0.5f * (sb->bbox[k] + sb->bbox[k + 3]) + mv->origin[k];
+			hx[k] = 0.5f * (sb->bbox[k + 3] - sb->bbox[k]) + 16;
+		}
+		for (d = 0; d < 6; d++)
+		{
+			float a[3], b[3], z[3] = { 0, 0, 0 }, g[3];
+			col_trace_t tr;
+
+			for (k = 0; k < 3; k++)
+			{
+				a[k] = c[k] + dirs[d][k] * hx[k];
+				b[k] = c[k];
+			}
+			col_clip(ent_cv(e), a, z, z, b, &tr);
+			if (tr.frac >= 1 || tr.startsolid)
+				continue;
+			for (k = 0; k < 3; k++)
+				g[k] = tr.end[k] + L->gofs[k];
+			eng_set_frame_layer(-1);
+			if (decal_place_now(g, tr.normal, e, 0) > 0)
+				goto placed;
+			eng_set_frame_layer(L->slot);
+		}
+		eng_set_frame_layer(-1);
+		ent_destroy(e);
+		e = -1;
+	}
+	CHECK(e > 0, "no mover face took a decal");
+	return -1;
+placed:
+	np = -1;
+	for (i = 0; i < HL64_FX_DECALS; i++)
+		if (decal_info(i, &owner, &nv, v0, HL64_FX_DECAL_VERTS) > 0 && owner == e)
+		{
+			float o[3];
+
+			memcpy(o, ent_cv(e)->origin, sizeof(o));
+			o[2] += 32;
+			eng_set_frame_layer(L->slot);
+			ent_set_origin(e, o);
+			eng_set_frame_layer(-1);
+			np = decal_info(i, &owner, &nv, v1, HL64_FX_DECAL_VERTS);
+			for (k = 0; k < nv; k++)
+				CHECK(fabsf(v1[k][2] - v0[k][2] - 32) < 0.01f && fabsf(v1[k][0] - v0[k][0]) < 0.01f,
+					"door decal vertex %d did not follow", k);
+			break;
+		}
+	CHECK(np > 0, "door decal not found");
+	ent_destroy(e);
+	/* the mover is gone: its decal goes on the next draw */
+	draw();
+	for (i = 0; i < HL64_FX_DECALS; i++)
+		if (decal_info(i, &owner, &nv, v0, 1) > 0)
+			CHECK(owner != e, "decal of a freed mover drawn");
+	return 0;
+}
+
+static void test_x5(void)
+{
+	char note[160] = "";
+	decal_stats_t ds;
+	float eg[3], d[3] = { 1, 0, 0 }, p[3], n[3];
+	int i, k;
+
+	begin();
+	fx_init();
+	corner_test(note, sizeof(note));
+	door_test();
+	/* pool: 100 placements on one wall keep 96, oldest replaced */
+	for (k = 0; k < 3; k++)
+		eg[k] = L->start_org[k] + L->gofs[k];
+	CHECK(ray(eg, d, 4096, p, n), "no wall ahead");
+	decal_stats(&ds, 1);
+	for (i = 0; i < 100; i++)
+	{
+		float q[3] = { p[0], p[1], p[2] + (float)(i % 5) - 2 };
+
+		decal_place_now(q, n, -1, i % 5);
+	}
+	decal_stats(&ds, 0);
+	CHECK(decal_count() == HL64_FX_DECALS, "pool %d", decal_count());
+	CHECK(ds.replaced >= 4, "replaced %d", ds.replaced);
+	/* the queue: 3 ms cap and 16 pending, drops counted */
+	fx_init();
+	for (i = 0; i < 40; i++)
+	{
+		col_trace_t tr;
+
+		memset(&tr, 0, sizeof(tr));
+		tr.frac = 0.5f;
+		for (k = 0; k < 3; k++)
+		{
+			tr.end[k] = p[k] - L->gofs[k];
+			tr.normal[k] = n[k];
+		}
+		eng_set_frame_layer(L->slot);
+		fx_decal_trace(&tr, 0);
+		eng_set_frame_layer(-1);
+	}
+	decal_stats(&ds, 0);
+	CHECK(ds.dropped == 40 - HL64_FX_DECAL_QUEUE, "queue drops %d", ds.dropped);
+	for (i = 0; i < 60; i++)
+	{
+		step(1.0 / 30);
+		decal_stats(&ds, 0);
+		if (!ds.pending && decal_count() >= HL64_FX_DECAL_QUEUE)
+			break;
+	}
+	CHECK(decal_count() >= HL64_FX_DECAL_QUEUE && ds.pending == 0, "queued placed %d pending %d",
+		decal_count(), ds.pending);
+	draw();
+	{
+		gpu_fx_stats_t gs;
+
+		gpu_fx_stats(&gs);
+		CHECK(gs.calls[GPU_FX_DECAL] >= 1, "decals drawn %lu", (unsigned long)gs.calls[GPU_FX_DECAL]);
+	}
+	finish("X5", note);
+}
+
+/* ---- X6 effect catalogue under bursts --------------------------------------------- */
+
+static res_t find_res(int kind, const char *name)
+{
+	int i, n = res_count(kind);
+
+	for (i = 0; i < n; i++)
+		if (!strcmp(res_name(RES_MAKE(kind, i)), name))
+			return RES_MAKE(kind, i);
+	return RES_NONE;
+}
+
+static void test_x6(void)
+{
+	res_t spr = find_res(RES_K_SPRITE, "sprites/zerogxplode.spr");
+	res_t gib = find_res(RES_K_MODEL, "models/hgibs.mdl");
+	float o[3], d[3] = { 0, 0, 1 }, sz[3] = { 64, 64, 64 }, v[3] = { 0, 0, 100 }, b[3];
+	int i, k, beams = 0, id;
+	char note[200];
+	uint32_t td, pd, bd;
+
+	begin();
+	fx_init();
+	for (k = 0; k < 3; k++)
+	{
+		o[k] = L->start_org[k];
+		b[k] = o[k] + (k == 0 ? 200 : 0);
+	}
+	eng_set_frame_layer(L->slot);
+	for (i = 0; i < 60; i++)
+	{
+		fx_sparks(o);
+		fx_ricochet(o, 1);
+		fx_gunshot(o);
+		fx_explosion(o, spr, 20, 15, 0);
+		fx_smoke(o, spr, 20, 12);
+		fx_tracer(o, b);
+		fx_sprite(o, spr, 10, 200);
+		fx_glow_sprite(o, spr, 10, 10, 200);
+		fx_blood_sprite(o, spr, spr, 247, 10);
+		fx_blood_stream(o, d, 247, 200);
+		fx_break_model(o, sz, v, 100, gib, 0, 25, 0x08);
+		fx_temp_model(o, v, 90, gib, 1, 25);
+		fx_dlight(o, 20, 255, 255, 255, 5, 10);
+		fx_elight(1, o, 100, 255, 255, 255, 5, 100);
+		fx_particles(o, d, 247, 20);
+		fx_implosion(o, 100, 20, 5);
+		fx_beam_cylinder(o, 200, spr, 5, 16, 0, 255, 255, 255, 200);
+		id = fx_beam(-1, o, -1, b, spr, 20, 10, 255, 255, 255, 200, 10, 0);
+		beams += id >= 0;
+		fx_shake(o, 4, 2, 1, 0);
+		fx_fade(0, 0, 0, 255, 1, 1, 1);
+		fx_text(0);
+		fx_lightstyle(2, 0);
+		CHECK(tent_live() <= HL64_FX_TEMPS && part_live() <= HL64_FX_PARTICLES
+			&& beam_live() <= HL64_FX_BEAMS, "caps exceeded");
+	}
+	eng_set_frame_layer(-1);
+	td = tent_dropped(0);
+	pd = part_dropped(0);
+	bd = beam_dropped(0);
+	CHECK(tent_live() == HL64_FX_TEMPS && part_live() == HL64_FX_PARTICLES
+		&& beam_live() == HL64_FX_BEAMS, "pools full: temps %d parts %d beams %d", tent_live(),
+		part_live(), beam_live());
+	CHECK(td > 0 && pd > 0 && bd > 0, "drops counted %lu %lu %lu", (unsigned long)td,
+		(unsigned long)pd, (unsigned long)bd);
+	/* drawing a full scene does not crash; then everything with a life ends */
+	{
+		float eg[3];
+
+		for (k = 0; k < 3; k++)
+			eg[k] = L->start_org[k] + L->gofs[k] - 100;
+		eye(eg, 0, 0);
+	}
+	draw();
+	for (i = 0; i < 30 * 10; i++)
+	{
+		step(1.0 / 30);
+		if (i % 10 == 0)
+			draw();
+	}
+	/* infinite-life beams stay until killed */
+	CHECK(tent_live() == 0 && part_live() == 0, "after 10 s: temps %d parts %d", tent_live(),
+		part_live());
+	for (i = 0; i < HL64_FX_BEAMS; i++)
+		fx_beam_kill(i);
+	CHECK(beam_live() == 0, "beams after kill %d", beam_live());
+	snprintf(note, sizeof(note), "60x burst of every effect: drops temps=%lu parts=%lu beams=%lu, "
+		"all freed after 10 s", (unsigned long)td, (unsigned long)pd, (unsigned long)bd);
+	finish("X6", note);
+}
+
+/* ---- screen state ---------------------------------------------------------------------- */
+
+static void test_screen(void)
+{
+	float org[3], ang[3], a;
+	uint8_t rgba[4];
+	int k;
+
+	begin();
+	fx_init();
+	step(0);		/* the effects clock on the test clock */
+	fx_fade(255, 0, 0, 200, 1.0f, 0.5f, 1 /* FFADE_OUT */);
+	step(0.5);
+	fx_view(org, ang, rgba);
+	CHECK(rgba[0] == 255 && abs(rgba[3] - 100) <= 1, "fade out half %d", rgba[3]);
+	step(0.75);
+	fx_view(org, ang, rgba);
+	CHECK(rgba[3] == 200, "fade hold %d", rgba[3]);
+	step(1.0);
+	fx_view(org, ang, rgba);
+	CHECK(rgba[3] == 0, "fade over %d", rgba[3]);
+	fx_fade(0, 0, 0, 255, 1.0f, 0, 0 /* FFADE_IN */);
+	step(0.25);
+	fx_view(org, ang, rgba);
+	CHECK(abs(rgba[3] - 191) <= 2, "fade in quarter %d", rgba[3]);
+	/* shake: the player on the ground, inside the radius */
+	if (ent_is_live(1))
+	{
+		ent_cv(1)->flags |= FL_ONGROUND;
+		eng_set_frame_layer(ent_idc(1)->layer);
+		memcpy(org, ent_cv(1)->origin, sizeof(org));
+		fx_shake(org, 8, 10, 2, 100);
+		eng_set_frame_layer(-1);
+		step(0.1);
+		fx_view(org, ang, rgba);
+		a = 0;
+		for (k = 0; k < 3; k++)
+			a += fabsf(org[k]);
+		CHECK(a > 0, "no shake offset");
+		step(2.0);
+		fx_view(org, ang, rgba);
+		CHECK(org[0] == 0 && org[1] == 0 && org[2] == 0, "shake did not end");
+	}
+	fx_text(0);
+	step(0.01);
+	CHECK(fx_text_current(&a) == 0 && a >= 0, "title 0 showing");
+	step(60);
+	CHECK(fx_text_current(&a) == 0xFFFF, "title over");
+	finish("SCREEN", ent_is_live(1) ? "fade in/out/hold, shake inside radius and decay, title timing"
+		: "fade in/out/hold, title timing (shake needs the player: not run)");
+}
+
+/* ---- dlights (D1, D2, D4, model term) -------------------------------------------------- */
+
+static int live_count(void)
+{
+	int i, n = 0;
+
+	for (i = 0; i < HL64_DLIGHTS; i++)
+		n += ren_dlight_live(i);
+	return n;
+}
+
+static void test_dlights(void)
+{
+	ren_dlight_t *a, *b, *c;
+	double t = 100.0;
+	int i;
+	float bright, end[3], eg[3], ang[3] = { 0, 0, 0 };
+
+	begin();
+	/* D1: key reuse, oldest-dead reuse, decay to death, one-frame lights */
+	for (i = 0; i < HL64_DLIGHTS; i++)
+		ren_dlight_alloc(0, t)->die = t - 1;
+	ren_dlight_frame(t, 0.0);
+	CHECK(live_count() == 0, "dead lights cleared %d", live_count());
+	a = ren_dlight_alloc(7, t);
+	a->die = t + 5;
+	a->radius = 100;
+	b = ren_dlight_alloc(7, t);
+	CHECK(a == b, "key reuse");
+	a->die = t + 5;		/* the reuse cleared it */
+	a->radius = 100;
+	c = ren_dlight_alloc(0, t);
+	CHECK(c != a, "a free light, not the keyed one");
+	c->die = t + 5;
+	c->radius = 50;
+	c->decay = 100;
+	ren_dlight_frame(t + 0.25, 0.25);
+	CHECK(fabsf(c->radius - 25) < 1e-3f && live_count() == 2, "decay %g", (double)c->radius);
+	ren_dlight_frame(t + 0.5, 0.25);
+	CHECK(live_count() == 1, "decayed to 0 dies (%d live)", live_count());
+	c = ren_dlight_alloc(0, t + 0.5);
+	c->die = t + 0.5;	/* one frame */
+	c->radius = 80;
+	ren_dlight_frame(t + 0.5, 0.0);
+	CHECK(live_count() == 2, "one-frame light live this frame");
+	ren_dlight_frame(t + 0.6, 0.1);
+	CHECK(live_count() == 1, "one-frame light gone next frame");
+	/* oldest dead reused before light 0 when full */
+	for (i = 0; i < HL64_DLIGHTS; i++)
+	{
+		ren_dlight_t *l = ren_dlight_alloc(0, t + 0.6);
+
+		l->die = t + 10;
+		l->radius = 10;
+	}
+	ren_dlight(5)->die = t;
+	{
+		ren_dlight_t *x = ren_dlight_alloc(0, t + 1);
+
+		CHECK(x == ren_dlight(5), "first dead light reused");
+		x->die = t + 10;
+		CHECK(ren_dlight_alloc(0, t + 1) == ren_dlight(0), "full: light 0");
+	}
+	for (i = 0; i < HL64_DLIGHTS; i++)
+		ren_dlight(i)->die = 0;
+	ren_dlight_frame(t + 2, 0);
+	/* D2: falloff grid */
+	{
+		static const float ps[4] = { 0, 10, -30, 90 }, qs[4] = { 0, 20, 50, 200 };
+		int pi, qi;
+
+		for (pi = 0; pi < 4; pi++)
+			for (qi = 0; qi < 4; qi++)
+			{
+				float want = 100 - fabsf(ps[pi]) < 20 ? 0
+					: (100 - fabsf(ps[pi]) - qs[qi] > 0 ? 100 - fabsf(ps[pi]) - qs[qi] : 0);
+
+				CHECK(fabsf(ren_dlight_falloff(100, 20, ps[pi], qs[qi]) - want) < 1e-4f,
+					"falloff p %g q %g", (double)ps[pi], (double)qs[qi]);
+			}
+		CHECK(ren_dlight_falloff(100, 20, 85, 0) == 0, "minlight cutoff");
+	}
+	/* D4: brightness at 100 / 500 / 1000 / 2000 u, end point of the trace */
+	CHECK(ren_flashlight_bright(100) == 1 && ren_flashlight_bright(500) == 1, "near 1");
+	CHECK(fabsf(ren_flashlight_bright(1000) - 64.0f / 255) < 1e-6f, "1000 u %g",
+		(double)ren_flashlight_bright(1000));
+	CHECK(fabsf(ren_flashlight_bright(2000) - 16.0f / 255) < 1e-6f, "2000 u %g",
+		(double)ren_flashlight_bright(2000));
+	{
+		float far_g[3] = { 20000, 20000, 20000 };
+
+		ren_flashlight_place(far_g, ang, -1, end, &bright);
+		CHECK(fabsf(end[0] - 22000) < 0.1f && fabsf(bright - 16.0f / 255) < 1e-6f,
+			"open 2000 u end %g bright %g", (double)end[0], (double)bright);
+	}
+	for (i = 0; i < 3; i++)
+		eg[i] = L->start_org[i] + L->gofs[i];
+	{
+		float dir[3] = { 1, 0, 0 }, hit[3], n[3], d;
+
+		if (!ray(eg, dir, 2000, hit, n))
+			for (i = 0; i < 3; i++)
+				hit[i] = eg[i] + 2000 * dir[i];
+		ren_flashlight_place(eg, ang, -1, end, &bright);
+		d = hit[0] - eg[0];
+		CHECK(fabsf(end[0] - hit[0]) < 0.1f && fabsf(bright - ren_flashlight_bright(d)) < 1e-5f,
+			"wall end %g vs %g", (double)end[0], (double)hit[0]);
+	}
+	/* dlights.md 4: model term, elights on their own entity only */
+	{
+		float o[3] = { 0, 0, 0 };
+		ren_dlight_t *l = ren_dlight_alloc(0, t + 3);
+
+		l->die = t + 9;
+		l->radius = 100;
+		l->origin[0] = 60;
+		CHECK(ren_model_light(5, o, 50, -1, 0) == 90, "dlight term %d",
+			ren_model_light(5, o, 50, -1, 0));
+		l = ren_dlight_alloc(9, t + 3);
+		l->die = t + 9;
+		l->radius = 30;
+		l->world = 0;
+		l->entity = 9;
+		CHECK(ren_model_light(9, o, 50, -1, 0) == 120, "elight on its entity");
+		CHECK(ren_model_light(5, o, 50, -1, 0) == 90, "elight not on others");
+		CHECK(ren_model_light(5, o, 0, -1, 0) >= 32 && ren_model_light(5, o, 0, -1, 0) == 40,
+			"floor/sum %d", ren_model_light(5, o, 0, -1, 0));
+		CHECK(ren_model_light(5, o, 250, -1, 0) == 255, "clamp");
+		CHECK(ren_model_light(4, o, -200, -1, 0) == 32, "floor 32");
+		for (i = 0; i < HL64_DLIGHTS; i++)
+			ren_dlight(i)->die = 0;
+		ren_dlight_frame(t + 20, 0);
+	}
+	finish("DLIGHT", "D1 pool, D2 falloff grid + minlight, D4 brightness + trace end, model term "
+		"(dlights.md 4)");
+}
+
+/* ---- lightstyles (L1, L2, fx_lightstyle, model term) --------------------------------------- */
+
+static void test_styles(void)
+{
+	static uint8_t all[26], abc[3] = { 0, 1, 2 };
+	static const double ts[5] = { 1.0, 1.05, 1.15, 1.25, 1.35 };
+	static const int want[5] = { 1, 1, 2, 0, 1 };
+	const uint8_t *pat;
+	int i, len;
+	float o[3] = { 0, 0, 0 };
+
+	begin();
+	wld_style_reset();
+	CHECK(wld_style_value(3) == 256, "unset 256");
+	for (i = 0; i < 26; i++)
+	{
+		all[i] = (uint8_t)i;
+		wld_style_set(4, all + i, 1);
+		CHECK(wld_style_value(4) == i * 22, "letter %c = %d", 'a' + i, wld_style_value(4));
+	}
+	wld_style_set(4, NULL, 0);
+	CHECK(wld_style_value(4) == 256, "empty 256");
+	wld_style_set(5, abc, 3);
+	for (i = 0; i < 5; i++)
+	{
+		wld_style_tick(ts[i]);
+		CHECK(wld_style_value(5) == want[i] * 22, "abc at %g: %d", ts[i], wld_style_value(5));
+	}
+	/* pfnLightStyle path: cooked pattern ids */
+	wld_style_tick(2.0);
+	for (i = 0; i < res_patterns() && i < 14; i++)
+	{
+		pat = res_pattern((uint16_t)i, &len);
+		fx_lightstyle(6, (uint16_t)i);
+		CHECK(pat && len > 0 && wld_style_value(6) == pat[20 % len] * 22,
+			"pattern %d via fx_lightstyle", i);
+	}
+	/* lightstyles.md 4: base + amount x value / 264 */
+	wld_style_set(7, all + 12, 1);	/* m = 264 */
+	CHECK(ren_model_light(3, o, 40, 7, 100) == 140, "style term at m");
+	wld_style_set(7, all + 0, 1);	/* a = 0 */
+	CHECK(ren_model_light(3, o, 40, 7, 100) == 40, "style term off");
+	wld_style_reset();
+	finish("LSTYLE", "L1 letters + unset, L2 abc timing, fx_lightstyle -> pattern table, model term "
+		"(lightstyles.md 4)");
+}
+
+int main(int argc, char **argv)
+{
+	int map;
+
+	if (argc != 3 || strcmp(argv[1], "--root"))
+	{
+		fprintf(stderr, "usage: hl64-fx --root CONTENT\n");
+		return 2;
+	}
+	host_io_init(argv[2]);
+	mem_boot_carve();
+	settings_reset();
+	io_init();
+	ent_init();
+	if (!wld_init())
+	{
+		fprintf(stderr, "hl64-fx: no content in %s\n", argv[2]);
+		return 2;
+	}
+	res_init();
+	col_init();
+	ren_init();
+	studio_init();
+	fx_init();
+	map = wld_start_map();
+	L = wld_open(map);
+	eng_set_frame_layer(-1);
+	/* the sectors the start leaf sees and the movers resident (the decal
+	 * tests need their chunks): request, pump the reads */
+	{
+		const uint16_t *list;
+		int cnt, i, it, missing = 1;
+		uint32_t fr = 1;
+
+		wld_want_open(L, wld_point_leaf(L, L->start_org));
+		list = wld_leaf_sectors(L, wld_point_leaf(L, L->start_org), &cnt);
+		for (it = 0; it < 4000 && missing; it++)
+		{
+			missing = 0;
+			io_frame_begin(33333);
+			for (i = 0; i < cnt; i++)
+				missing |= !wld_chunk_use(L, L->sects[list[i]].rend_chunk);
+			for (i = 0; i < L->nmovers && i < 8; i++)
+				if (L->subs[L->movers[i].sub].kind == W64_SUB_MOVR)
+					missing |= !wld_chunk_use(L, L->subs[L->movers[i].sub].chunk);
+			io_pump();
+			wld_frame(fr++);
+		}
+		if (missing)
+			printf("setup: start sectors not resident after %d frames\n", it);
+	}
+	printf("fx tests on %s (layer %d)\n", wld_map_name(map), L->slot);
+	test_x1();
+	test_x2();
+	test_x3();
+	test_x4();
+	test_x5();
+	test_x6();
+	test_screen();
+	test_dlights();
+	test_styles();
+	printf(fails ? "fx FAIL (%d)\n" : "fx ok\n", fails);
+	return fails ? 1 : 0;
+}
