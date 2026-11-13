@@ -28,9 +28,10 @@ SPAWNING 1<<8; pitch NORM 100.
   stopped; otherwise it plays once. A one-shot that would start silent
   (2) is dropped.
 - Source position: the entity's origin, updated every frame while the
-  sound plays (moving monsters carry their voices) **[retail S-mix]**; the
-  listener's own sounds are not spatialised. `emit_ambient(point, …)` is
-  fixed.
+  sound plays (moving monsters carry their voices) **[retail S-mix]**;
+  brush entities (origin at the map origin: doors, buttons, trains) sound
+  from the centre of their box; the listener's own sounds are not
+  spatialised. `emit_ambient(point, …)` is fixed.
 - Playback rate = sample rate × pitch / 100, capped at 130 % of 22050 Hz
   (mechanism limit: voice buffers sized for the cap).
 

@@ -72,6 +72,34 @@ static uint32_t track_miss_free;	/* free of unknown ptr (no size) */
 static uint32_t track_miss_full;	/* insert failed (table full) */
 
 static int reenter;
+static mem_heap_redirect_t *redir;
+
+void mem_heap_redirect(mem_heap_redirect_t *r)
+{
+	redir = r;
+}
+
+static void *redir_alloc(size_t align, size_t size)
+{
+	return redir->alloc(align, size);
+}
+
+/* realloc of an owned block, or of NULL while the redirect is active */
+static void *redir_realloc(void *ptr, size_t size)
+{
+	void *p = size ? redir->alloc(16, size) : NULL;
+	size_t old;
+
+	if (ptr && p)
+	{
+		old = redir->size(ptr);
+		memcpy(p, ptr, old < size ? old : size);
+	}
+	if (ptr && (p || !size))
+		redir->release(ptr);
+	return p;
+}
+
 
 static unsigned
 hash_ptr(void *p)
@@ -175,6 +203,8 @@ __wrap_malloc(size_t size)
 {
 	void *p;
 
+	if (redir && redir->active)
+		return redir_alloc(16, size);
 	if (reenter)
 		return __real_malloc(size);
 	reenter = 1;
@@ -189,6 +219,11 @@ __wrap_malloc(size_t size)
 void
 __wrap_free(void *ptr)
 {
+	if (ptr && redir && redir->owns(ptr))
+	{
+		redir->release(ptr);
+		return;
+	}
 	if (reenter)
 	{
 		__real_free(ptr);
@@ -211,6 +246,13 @@ __wrap_calloc(size_t nmemb, size_t size)
 	void *p;
 	size_t bytes;
 
+	if (redir && redir->active)
+	{
+		p = redir_alloc(16, nmemb * size);
+		if (p)
+			memset(p, 0, nmemb * size);
+		return p;
+	}
 	if (reenter)
 		return __real_calloc(nmemb, size);
 	reenter = 1;
@@ -230,6 +272,8 @@ __wrap_realloc(void *ptr, size_t size)
 	void *p;
 	uint32_t old_sz = 0;
 
+	if (redir && (ptr ? redir->owns(ptr) : redir->active))
+		return redir_realloc(ptr, size);
 	if (reenter)
 		return __real_realloc(ptr, size);
 	reenter = 1;
@@ -290,6 +334,8 @@ __wrap_memalign(size_t align, size_t size)
 {
 	void *p;
 
+	if (redir && redir->active)
+		return redir_alloc(align, size);
 	if (reenter)
 		return __real_memalign(align, size);
 	reenter = 1;
