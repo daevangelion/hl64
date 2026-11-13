@@ -5,8 +5,9 @@ Imported from the quakegeneric tree (tools/hl_sprite_cook.py,
 provenance-audit.md entry CLEAN). The renderer draws sprites from this file
 with one PI DMA into one heap block and no conversion on the cart:
 
-  * frames (a group's first member) resampled nearest to power-of-two
-    sides <= 64 (TMEM wrapping), 4-bit indices packed high nibble first;
+  * every image (single frames and every member of a frame group, with the
+    group's intervals) resampled nearest to power-of-two sides <= 64 (TMEM
+    wrapping), 4-bit indices packed high nibble first;
   * one 16-colour TLUT (RGBA5551) per sprite, picked from the palette-index
     usage summed over every frame at full size (the most used colour, then
     the most used of each of 15 luminance bands, then popularity); every
@@ -17,13 +18,18 @@ with one PI DMA into one heap block and no conversion on the cart:
     brightness-weighted mean colour, for the screen-blended additive / glow /
     index-alpha draws.
 
-Layout (big-endian; offsets absolute, 8-aligned data):
-  0  u32 magic 'SC41'   4 u16 version   6 u16 nframes
-  8  u8 type  9 u8 texformat  10 u8 tint[3]  13 u8 pad[3]
+Layout v2 (big-endian; offsets absolute, 8-aligned data):
+  0  u32 magic 'SC41'   4 u16 version (2)   6 u16 nframes (entity frames: a
+     group counts once, GoldSrc ModelFrames)
+  8  u8 type  9 u8 texformat  10 u8 tint[3]  13 u8 pad  14 u16 nimages
   16 u16 tlut[16]   48 u16 tlut_ia[16]
-  80 frames[nframes] (16 bytes): s16 left, s16 up, u16 src w, u16 src h,
+  80 images[nimages] (16 bytes): s16 left, s16 up, u16 src w, u16 src h,
      u8 w, u8 h (CI4 sides), u16 pad, u32 ci4 offset
-  CI4 payloads (w * h / 2 bytes each)
+  then frames[nframes] (4 bytes): u16 first image, u16 images (1, or the
+     group's member count)
+  then ends[nimages] (u16): a group member's cumulative interval end in ms
+     (the SPR group's interval table; 0 for single frames)
+  CI4 payloads (w * h / 2 bytes each), 8-aligned
 File size is a multiple of 8. Malformed sprites raise ValueError.
 
   python3 -m tools.cook.hl_sprite_cook <in.spr> <out.sc4>
@@ -36,7 +42,7 @@ from pathlib import Path
 from typing import List
 
 MAGIC = 0x53433431  # 'SC41'
-VERSION = 1
+VERSION = 2
 HEADER = 80
 FRAME = 16
 EDGE = 64
@@ -73,25 +79,38 @@ def _parse(spr: bytes):
         raise ValueError("truncated palette")
     pal = list(spr[o:o + palcount * 3]) + [0] * (768 - palcount * 3)
     o += palcount * 3
-    frames = []
+    # images: (left, up, w, h, px, end_ms); groups: (first image, count)
+    images, groups = [], []
     for _ in range(nframes):
         ftype = struct.unpack_from("<i", spr, o)[0]
         o += 4
-        count = 1
+        count, ends = 1, [0]
         if ftype != 0:
             count = struct.unpack_from("<i", spr, o)[0]
             if count < 1 or count > 1024:
                 raise ValueError(f"bad frame group size {count}")
-            o += 4 + 4 * count
+            o += 4
+            # SPR group intervals: cumulative end times (s), increasing
+            iv = struct.unpack_from(f"<{count}f", spr, o)
+            o += 4 * count
+            ends, prev = [], 0
+            for t in iv:
+                ms = int(round(t * 1000))
+                if not (ms > prev and ms <= 65535):
+                    raise ValueError(f"bad group interval {t}")
+                ends.append(ms)
+                prev = ms
+        groups.append((len(images), count))
         for k in range(count):
             left, up, w, h = struct.unpack_from("<4i", spr, o)
             o += 16
             if w < 1 or h < 1 or w > 1024 or h > 1024 or o + w * h > len(spr):
                 raise ValueError("truncated frame")
-            if k == 0:
-                frames.append((left, up, w, h, spr[o:o + w * h]))
+            images.append((left, up, w, h, spr[o:o + w * h], ends[k]))
             o += w * h
-    return typ, texformat, pal, frames
+    if len(images) > 4096:
+        raise ValueError(f"{len(images)} images")
+    return typ, texformat, pal, images, groups
 
 
 def _pick16(usage: List[int], pal: List[int]) -> List[int]:
@@ -125,9 +144,9 @@ def _pick16(usage: List[int], pal: List[int]) -> List[int]:
 
 
 def cook(spr: bytes) -> bytes:
-    typ, texformat, pal, frames = _frames(spr)
+    typ, texformat, pal, frames, groups = _frames(spr)
     usage = [0] * 256
-    for _l, _u, _w, _h, px in frames:
+    for _l, _u, _w, _h, px, _e in frames:
         for p in px:
             usage[p] += 1
     alpha = texformat == SPR_ALPHTEST and usage[255] > 0
@@ -166,9 +185,9 @@ def cook(spr: bytes) -> bytes:
     tint = [s[i] * 255 // m if m > 0 else 255 for i in range(3)]
 
     table, blobs = [], []
-    ofs = HEADER + FRAME * len(frames)
+    ofs = HEADER + FRAME * len(frames) + 4 * len(groups) + 2 * len(frames)
     ofs = (ofs + 7) & ~7
-    for left, up, w, h, px in frames:
+    for left, up, w, h, px, _e in frames:
         pw, ph = _pow2_floor(min(w, EDGE)), _pow2_floor(min(h, EDGE))
         if pw < 2:
             raise ValueError(f"frame {w}x{h}: under 2 texels wide")
@@ -182,11 +201,13 @@ def cook(spr: bytes) -> bytes:
         blob = data.ljust((len(data) + 7) & ~7, b"\0")
         blobs.append(blob)
         ofs += len(blob)
-    head = struct.pack(">IHHBB3B3x", MAGIC, VERSION, len(frames), typ & 255,
-                       texformat & 255, *tint)
+    head = struct.pack(">IHHBB3BxH", MAGIC, VERSION, len(groups), typ & 255,
+                       texformat & 255, *tint, len(frames))
     head += struct.pack(">16H", *tlut) + struct.pack(">16H", *ia)
     assert len(head) == HEADER
     out = head + b"".join(table)
+    out += b"".join(struct.pack(">HH", first, n) for first, n in groups)
+    out += b"".join(struct.pack(">H", f[5]) for f in frames)
     out = out.ljust((len(out) + 7) & ~7, b"\0") + b"".join(blobs)
     return out
 

@@ -442,7 +442,7 @@ void FireTargets(name_t target, int activator, int caller, int use_type, float v
 {
 	if (target == NAME_NONE)
 		return;
-	rec_fire(target, activator, caller, GID_NONE, use_type, value);
+	GameFire(target, activator, caller, GID_NONE, use_type, value);
 }
 
 void CBaseEntity_SUB_UseTargets(int e, int activator, int use_type, float value)
@@ -498,7 +498,7 @@ void SUB_UseTargets(int e, int activator, int use_type, float value)
 	{
 		/* DelayedUse: owner = the activator only when it is the player;
 		 * DelayThink fires with value 0 */
-		rec_fire_at(gtime() + p->m_flDelay, p->target, p->m_iszKillTarget,
+		GameFireAt(gtime() + p->m_flDelay, p->target, p->m_iszKillTarget,
 			IsPlayer(activator) ? activator : -1, e, use_type, 0);
 		return;
 	}

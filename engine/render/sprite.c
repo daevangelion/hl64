@@ -75,20 +75,24 @@ static int pow2(unsigned v)
 	return v >= 2 && v <= 64 && !(v & (v - 1));
 }
 
-/* Validate the landed bytes (hostile input) and fill the frame table in
- * native order; the host swaps the TLUT once. 0 ok. */
+/* Validate the landed bytes (hostile input): images, entity frames (first
+ * image, count inside the images; groups' interval ends increasing), the
+ * host swaps the tables to native order once. 0 ok. */
 static int parse(sent_t *e)
 {
 	uint8_t *b = e->data;
-	uint32_t size = e->size, i;
-	int n;
+	uint32_t size = e->size, i, gofs, eofs;
+	int n, ni;
 
-	if (size < SC4_HEADER || be32(b) != SC4_MAGIC || be16(b + 4) != 1)
+	if (size < SC4_HEADER || be32(b) != SC4_MAGIC || be16(b + 4) != 2)
 		return -1;
 	n = be16(b + 6);
-	if (n < 1 || SC4_HEADER + (uint32_t)n * SC4_FRAME > size || b[8] > FX_SPR_PARALLEL_ORIENTED)
+	ni = be16(b + 14);
+	gofs = SC4_HEADER + (uint32_t)ni * SC4_FRAME;
+	eofs = gofs + 4u * (uint32_t)n;
+	if (n < 1 || ni < n || eofs + 2u * (uint32_t)ni > size || b[8] > FX_SPR_PARALLEL_ORIENTED)
 		return -2;
-	for (i = 0; i < (uint32_t)n; i++)
+	for (i = 0; i < (uint32_t)ni; i++)
 	{
 		const uint8_t *f = b + SC4_HEADER + SC4_FRAME * i;
 		uint32_t ofs = be32(f + 12);
@@ -96,6 +100,18 @@ static int parse(sent_t *e)
 		if (!pow2(f[8]) || !pow2(f[9]) || ofs & 7 || ofs > size
 			|| (uint32_t)f[8] * f[9] / 2 > size - ofs)
 			return -3;
+	}
+	for (i = 0; i < (uint32_t)n; i++)
+	{
+		uint32_t first = be16(b + gofs + 4 * i), cnt = be16(b + gofs + 4 * i + 2), k;
+
+		if (!cnt || first + cnt > (uint32_t)ni)
+			return -4;
+		for (k = 1; k < cnt && cnt > 1; k++)
+			if (be16(b + eofs + 2 * (first + k)) <= be16(b + eofs + 2 * (first + k - 1)))
+				return -5;
+		if (cnt > 1 && !be16(b + eofs + 2 * first))
+			return -5;
 	}
 #ifdef HL64_HOST
 	/* host: native order in place (the cart reads it big-endian as is) */
@@ -105,7 +121,7 @@ static int parse(sent_t *e)
 
 		memcpy(b + 16 + 2 * i, &v, 2);
 	}
-	for (i = 0; i < (uint32_t)n; i++)
+	for (i = 0; i < (uint32_t)ni; i++)
 	{
 		uint8_t *f = b + SC4_HEADER + SC4_FRAME * i;
 		fx_sprframe_t fr;
@@ -120,15 +136,44 @@ static int parse(sent_t *e)
 		fr.ci4 = be32(f + 12);
 		memcpy(f, &fr, sizeof(fr));
 	}
+	for (i = gofs; i < eofs + 2u * (uint32_t)ni; i += 2)
+	{
+		uint16_t v = be16(b + i);
+
+		memcpy(b + i, &v, 2);
+	}
 #endif
 	e->s.base = b;
 	e->s.tlut = (const uint16_t *)(b + 16);
 	e->s.frames = (const fx_sprframe_t *)(b + SC4_HEADER);
+	e->s.groups = (const uint16_t *)(b + gofs);
+	e->s.ends = (const uint16_t *)(b + eofs);
 	e->s.nframes = n;
+	e->s.nimages = ni;
 	e->s.type = b[8];
 	e->s.texformat = b[9];
 	memcpy(e->s.tint, b + 10, 3);
 	return 0;
+}
+
+int sprite_image(const fx_sprite_t *s, int f, double t)
+{
+	const uint16_t *g;
+	uint32_t total, ms;
+	int k;
+
+	if (f < 0)
+		f = 0;
+	g = s->groups + 2 * (f % s->nframes);
+	if (g[1] <= 1)
+		return g[0];
+	/* the member whose interval holds t within the group's cycle */
+	total = s->ends[g[0] + g[1] - 1];
+	ms = (uint32_t)fmod(t * 1000.0, (double)total);
+	for (k = 0; k < g[1] - 1; k++)
+		if (ms < s->ends[g[0] + k])
+			break;
+	return g[0] + k;
 }
 
 static void landed(io_req_t *r)
@@ -381,7 +426,7 @@ void sprite_draw(const fx_sprite_t *s, int f, const float org[3], const float an
 		return;
 	if (f < 0)
 		f = 0;
-	fr = &s->frames[f % s->nframes];
+	fr = &s->frames[sprite_image(s, f, fx_s.now)];
 	if (scale <= 0)
 		scale = 1;
 	axes(s->type, org, ang, r, u);

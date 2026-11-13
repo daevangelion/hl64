@@ -539,7 +539,7 @@ static void ChangeLevelNow(int e, int activator, const char *how)
 	/* CFireAndDie: changetarget after changedelay (always crosses; the
 	 * name is in the next map, so M4's seam delivers it there) */
 	if (p->m_changeTarget != NAME_NONE)
-		rec_fire_at(t + p->m_changeTargetDelay, p->m_changeTarget, NAME_NONE, -1, -1,
+		GameFireAt(t + p->m_changeTargetDelay, p->m_changeTarget, NAME_NONE, -1, -1,
 			USE_TOGGLE, 0);
 	else if (p->m_szChangeTarget[0])
 		log_printf("changelevel: changetarget %s (delay %g) is in %s: delivered by the "

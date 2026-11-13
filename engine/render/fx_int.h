@@ -194,8 +194,11 @@ typedef struct {
 typedef struct {
 	const uint8_t	*base;		/* resident .sc4 bytes, NULL */
 	const uint16_t	*tlut;
-	const fx_sprframe_t *frames;
-	int		nframes;
+	const fx_sprframe_t *frames;	/* images (singles and group members) */
+	const uint16_t	*groups;	/* per entity frame: first image, image count */
+	const uint16_t	*ends;		/* per image: cumulative group interval end, ms */
+	int		nframes;	/* entity frames (a group counts once) */
+	int		nimages;
 	uint8_t		type;		/* FX_SPR_* */
 	uint8_t		texformat;
 	uint8_t		tint[3];
@@ -210,6 +213,9 @@ const fx_sprite_t *sprite_get(res_t r);
  * blend mode decided by the caller. */
 void		sprite_draw(const fx_sprite_t *s, int f, const float org[3], const float ang[3],
 			float scale, int gpu_mode, const uint8_t rgba[4]);
+/* Image of entity frame f at effects time t (render-fx.md 3: a group
+ * frame picks its member by time within the group's intervals). */
+int		sprite_image(const fx_sprite_t *s, int f, double t);
 
 typedef struct {
 	uint32_t	resident, bytes, peak, loads, evicted, skipped;

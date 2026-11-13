@@ -27,7 +27,46 @@
  */
 #include <string.h>
 
+#include "engine/core/sys.h"
 #include "game/hl/util.h"
+
+/* ---- profile (prof game_us roll-up) ---------------------------------------- */
+
+/* Time inside the game's dispatch per frame (outermost calls only: a use
+ * fired from a think counts once; avg / max over the roll-up window's
+ * frames), and the window's totals of thinks, uses (entity + logic) and
+ * fires (rec_fire / rec_fire_at the game issues, game_fires). */
+static struct {
+	uint64_t	sum, max, frame, t0;
+	uint32_t	frames, thinks, uses;
+	int		depth;
+} gprof;
+uint32_t	game_fires;
+
+static void prof_enter(void)
+{
+	if (!gprof.depth++)
+		gprof.t0 = sys_time_us();
+}
+
+static void prof_leave(void)
+{
+	if (!--gprof.depth)
+		gprof.frame += sys_time_us() - gprof.t0;
+}
+
+void game_prof_line(void)
+{
+	unsigned long n = gprof.frames ? gprof.frames : 1;
+
+	log_printf("prof game_us avg=%lu max=%lu thinks=%lu uses=%lu fires=%lu\n",
+		(unsigned long)(gprof.sum / n), (unsigned long)gprof.max,
+		(unsigned long)gprof.thinks, (unsigned long)gprof.uses,
+		(unsigned long)game_fires);
+	gprof.sum = gprof.max = 0;
+	gprof.frames = gprof.thinks = gprof.uses = 0;
+	game_fires = 0;
+}
 
 /* ---- function table (funcs.def; fn_t = index + 1) ------------------------ */
 
@@ -136,9 +175,57 @@ void	world_lightstyles(void);
 
 static const phy_game_hooks_t game_hooks = { game_think, game_touch, game_blocked };
 
+/* The client effects' sounds and sprites (fx.h FX_A_* sets): ricochets
+ * weapons/ric1-5 (HLSDK world.cpp W_Precache), the func_break.cpp
+ * material debris sounds, and the shipped valve files named for the other
+ * roles (weapons/explode3-5, player/pl_shell1-3, weapons/sshell1-3,
+ * sprites/richo1.spr, sprites/muzzleflash1-3 for flash type % 10 0-2). */
+static void fx_asset_set(int set, const int *defs, int n)
+{
+	res_t ids[FX_ASSET_MAX];
+	int i;
+
+	for (i = 0; i < n; i++)
+		ids[i] = res_def(defs[i]);
+	fx_assets(set, ids, n);
+}
+
+static void game_fx_assets(void)
+{
+	static const int ric[] = { R_WEAPONS_RIC1, R_WEAPONS_RIC2, R_WEAPONS_RIC3,
+		R_WEAPONS_RIC4, R_WEAPONS_RIC5 };
+	static const int expl[] = { R_WEAPONS_EXPLODE3, R_WEAPONS_EXPLODE4, R_WEAPONS_EXPLODE5 };
+	static const int shell[] = { R_PLAYER_PL_SHELL1, R_PLAYER_PL_SHELL2, R_PLAYER_PL_SHELL3 };
+	static const int sshell[] = { R_WEAPONS_SSHELL1, R_WEAPONS_SSHELL2, R_WEAPONS_SSHELL3 };
+	static const int glass[] = { R_DEBRIS_GLASS1, R_DEBRIS_GLASS2, R_DEBRIS_GLASS3 };
+	static const int metal[] = { R_DEBRIS_METAL1, R_DEBRIS_METAL2, R_DEBRIS_METAL3 };
+	static const int flesh[] = { R_DEBRIS_FLESH1, R_DEBRIS_FLESH2, R_DEBRIS_FLESH3,
+		R_DEBRIS_FLESH5, R_DEBRIS_FLESH6, R_DEBRIS_FLESH7 };
+	static const int wood[] = { R_DEBRIS_WOOD1, R_DEBRIS_WOOD2, R_DEBRIS_WOOD3 };
+	static const int concrete[] = { R_DEBRIS_CONCRETE1, R_DEBRIS_CONCRETE2,
+		R_DEBRIS_CONCRETE3 };
+	static const int richo[] = { R_SPR_RICHO1 };
+	static const int muzzle[] = { R_SPR_MUZZLEFLASH1, R_SPR_MUZZLEFLASH2,
+		R_SPR_MUZZLEFLASH3 };
+#define SET(s, a)	fx_asset_set(s, a, (int)(sizeof(a) / sizeof(a[0])))
+	SET(FX_A_RICOCHET_SND, ric);
+	SET(FX_A_EXPLODE_SND, expl);
+	SET(FX_A_SHELL_SND, shell);
+	SET(FX_A_SHOTSHELL_SND, sshell);
+	SET(FX_A_GLASS_SND, glass);
+	SET(FX_A_METAL_SND, metal);
+	SET(FX_A_FLESH_SND, flesh);
+	SET(FX_A_WOOD_SND, wood);
+	SET(FX_A_CONCRETE_SND, concrete);
+	SET(FX_A_RICOCHET_SPR, richo);
+	SET(FX_A_MUZZLE_SPR, muzzle);
+#undef SET
+}
+
 void game_init(void)
 {
 	phy_set_game_hooks(&game_hooks);
+	game_fx_assets();
 	if (game_mon_init)
 		game_mon_init();
 	if (game_items_init)
@@ -175,10 +262,19 @@ void game_map_closing(int slot)
 
 void game_start_frame(void)
 {
+	/* the previous frame's dispatch time (its active set, touches, uses)
+	 * plus this frame's logic timers (step 4, before this call) */
+	gprof.sum += gprof.frame;
+	if (gprof.frame > gprof.max)
+		gprof.max = gprof.frame;
+	gprof.frame = 0;
+	gprof.frames++;
+	prof_enter();
 	if (game_mon_start_frame)
 		game_mon_start_frame();
 	if (game_items_start_frame)
 		game_items_start_frame();
+	prof_leave();
 }
 
 /* ---- spawn (DispatchSpawn) ----------------------------------------------------- */
@@ -260,12 +356,15 @@ void game_spawn_logic(gid_t16 gid)
 	cls_t cls = rec_class(gid);
 	const game_class_t *c = game_class(cls);
 
-	if (!c || !c->LogicSpawn)
+	/* a use-only logic class (env_shake / fade / render: HLSDK Spawn keeps
+	 * nothing the record does not) has no spawn step */
+	if (!c || (!c->LogicSpawn && !c->LogicUse))
 	{
 		refuse_log(cls, gid, "no logic class");
 		return;
 	}
-	c->LogicSpawn(gid);
+	if (c->LogicSpawn)
+		c->LogicSpawn(gid);
 }
 
 /* ---- dispatch ------------------------------------------------------------------- */
@@ -279,7 +378,12 @@ void game_think(int e)
 			game_class_name(ent_idc(e)->cls), e);
 	gf = func_of(ent_tm(e)->think, FK_THINK, e);
 	if (gf)
+	{
+		gprof.thinks++;
+		prof_enter();
 		gf->fn.think(e);
+		prof_leave();
+	}
 }
 
 void game_touch(int e, int other)
@@ -290,7 +394,11 @@ void game_touch(int e, int other)
 		return;
 	gf = func_of(ent_tm(e)->touch, FK_TOUCH, e);
 	if (gf)
+	{
+		prof_enter();
 		gf->fn.touch(e, other);
+		prof_leave();
+	}
 }
 
 void game_blocked(int e, int other)
@@ -298,7 +406,11 @@ void game_blocked(int e, int other)
 	const game_func_t *gf = func_of(ent_tm(e)->blocked, FK_BLOCKED, e);
 
 	if (gf)
+	{
+		prof_enter();
 		gf->fn.touch(e, other);
+		prof_leave();
+	}
 }
 
 void game_use(int e, int activator, int caller, int use_type, float value)
@@ -309,7 +421,12 @@ void game_use(int e, int activator, int caller, int use_type, float value)
 		return;
 	gf = func_of(ent_tm(e)->use, FK_USE, e);
 	if (gf)
+	{
+		gprof.uses++;
+		prof_enter();
 		gf->fn.use(e, activator, caller, use_type, value);
+		prof_leave();
+	}
 }
 
 void game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float value)
@@ -317,7 +434,12 @@ void game_logic_use(gid_t16 gid, int activator, int caller, int use_type, float 
 	const game_class_t *c = game_class(rec_class(gid));
 
 	if (c && c->LogicUse)
+	{
+		gprof.uses++;
+		prof_enter();
 		c->LogicUse(gid, activator, caller, use_type, value);
+		prof_leave();
+	}
 }
 
 void game_logic_timer(gid_t16 gid, uint16_t arg, int activator)
@@ -325,7 +447,12 @@ void game_logic_timer(gid_t16 gid, uint16_t arg, int activator)
 	const game_class_t *c = game_class(rec_class(gid));
 
 	if (c && c->LogicTimer)
+	{
+		gprof.thinks++;
+		prof_enter();
 		c->LogicTimer(gid, arg, activator);
+		prof_leave();
+	}
 }
 
 /* UTIL_IsMasterTriggered's lookup: the first record named master (a

@@ -36,14 +36,14 @@ static void LogicUseTargets(gid_t16 gid, name_t target, name_t kill, float delay
 		return;
 	if (delay != 0)
 	{
-		rec_fire_at(gtime() + delay, target, kill, IsPlayer(activator) ? activator : -1, -1,
+		GameFireAt(gtime() + delay, target, kill, IsPlayer(activator) ? activator : -1, -1,
 			use_type, 0);
 		return;
 	}
 	if (kill != NAME_NONE)
 		KillTargets(kill);
 	if (target != NAME_NONE)
-		rec_fire(target, activator, -1, gid, use_type, value);
+		GameFire(target, activator, -1, gid, use_type, value);
 }
 
 static name_t key_name(gid_t16 gid, int k)
@@ -183,7 +183,7 @@ static void ManagerThink(gid_t16 gid, int clone)
 			c->m_index = (uint16_t)index;
 		else
 			l->a16 = (uint16_t)index;
-		rec_fire(name, EHGet(act), -1, gid, USE_TOGGLE, 0);
+		GameFire(name, EHGet(act), -1, gid, USE_TOGGLE, 0);
 		if (rec_state(gid) == REC_KILLED)
 			return;
 	}
@@ -484,7 +484,7 @@ static void CMultiSource_LogicUse(gid_t16 gid, int activator, int caller, int us
 			(unsigned)GID_SLOT(gid), (unsigned)GID_LUMP(gid), total);
 		/* CBaseEntity::SUB_UseTargets(NULL, ...) */
 		if ((name_t)l->b != NAME_NONE)
-			rec_fire((name_t)l->b, -1, -1, gid, l->a16 ? USE_ON : USE_TOGGLE, 0);
+			GameFire((name_t)l->b, -1, -1, gid, l->a16 ? USE_ON : USE_TOGGLE, 0);
 	}
 }
 
