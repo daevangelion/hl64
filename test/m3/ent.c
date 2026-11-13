@@ -377,6 +377,22 @@ static void test_heap(void)
 		}
 		err = ent_sets_check();
 		CHECK(!err, "heap round %d: %s", round, err ? err : "");
+		/* ent_next_live walks exactly the live slots, ascending */
+		{
+			int want = -1, got;
+
+			for (got = ent_next_live(-1); ; got = ent_next_live(got))
+			{
+				for (want++; want < HL64_MAX_ENTITIES && !ent_is_live(want); want++)
+					;
+				if (want == HL64_MAX_ENTITIES)
+					want = -1;
+				CHECK(got == want, "heap round %d: ent_next_live %d, live scan %d",
+					round, got, want);
+				if (got < 0 || got != want)
+					break;
+			}
+		}
 		checks++;
 	}
 	printf("heap ok: %d operations checked, %d thinks\n", checks, thinks);

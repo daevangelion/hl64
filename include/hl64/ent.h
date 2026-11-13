@@ -302,6 +302,10 @@ int		ent_in_box(const float mins[3], const float maxs[3], uint32_t flagmask,
 			uint16_t *out, int max);
 /* Next live entity of class cls in HLE slot `slot` (-1: any) after `after`. */
 int		ent_next_class(int after, cls_t cls, int slot);
+/* Next live slot after `after` (-1 starts), ascending; -1 when none. Walks
+ * the live bitset: per-frame scans pay per live entity, not per slot (a
+ * slot's ent_id_t is its own cache line). */
+int		ent_next_live(int after);
 /* The player if its PVS leaf set holds e's origin (pfnFindClientInPVS),
  * else 0 (the world). */
 int		ent_client_in_pvs(int e);

@@ -473,13 +473,15 @@ static int mover_sub(const wld_layer_t *L, int e)
 	return sub;
 }
 
+/* Live slots only (the live bitset): a scan of every slot read one
+ * ent_id_t cache line per slot, ~280 us a frame on the cart. */
 static void collect_movers(const wld_layer_t *L)
 {
 	int e;
 
 	nmov = 0;
-	for (e = 1; e < HL64_MAX_ENTITIES; e++)
-		if (ent_is_live(e) && ent_idc(e)->layer == L->slot && mover_sub(L, e) >= 0)
+	for (e = ent_next_live(0); e >= 0; e = ent_next_live(e))
+		if (ent_idc(e)->layer == L->slot && mover_sub(L, e) >= 0)
 			mov_ent[nmov++] = (uint16_t)e;
 }
 
