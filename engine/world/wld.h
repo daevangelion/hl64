@@ -75,6 +75,16 @@ typedef struct {
 	const w64_grid_t	*grid;
 	const w64_gcell_t	*cells;
 	const int32_t		*starts;
+	/* collision (engine/coll) */
+	const int8_t		*leafc;		/* CONTENTS_* per BSP leaf [nleafs_all] */
+	const uint16_t		*glists;	/* grid list pool: count, coll index... */
+	const w64_mat_t		*mat;		/* surface materials, NULL none */
+	const uint16_t		*mat_start;	/* [ncoll + 1] */
+	const uint16_t		*mat_ent;
+	const w64_matmix_t	*mat_mix;
+	const w64_matface_t	*mat_face;
+	uint16_t		coll_gen;	/* COLL want generation (wld_want_coll) */
+	uint16_t		pad2;
 	wld_chunk_t		*ch;		/* per chunk */
 	uint32_t		*style_epoch;	/* per styled-meshlet slot: last colouring */
 	uint16_t		nstyle_slots, style_used;
@@ -121,6 +131,15 @@ uint8_t		*wld_chunk_use(wld_layer_t *L, int c);
  * want could not be queued); otherwise the previous wants stand by
  * generation, and the LRU never evicts a chunk of the current set. */
 void		wld_want_open(wld_layer_t *L, int leaf);
+/* COLL wants (engine/coll, the collision window): the caller bumps
+ * L->coll_gen (never 0) when its window changes and names each chunk;
+ * an absent chunk is queued at OPEN priority, and no chunk named by the
+ * current generation is evicted. */
+void		wld_want_coll(wld_layer_t *L, int c);
+/* Resident bytes of COLL chunk c, read synchronously when absent (a
+ * chunk missing mid-trace: blocked I/O, architecture.md 5.2); a queued
+ * read of it is finished first. */
+uint8_t		*wld_chunk_sync(wld_layer_t *L, int c);
 /* Frame boundary: retire the GPU fences two frames old. */
 void		wld_frame(uint32_t frame);
 

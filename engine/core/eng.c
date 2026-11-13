@@ -244,6 +244,7 @@ void eng_boot(const char *platform)
 	dbg_handler_set(DBG_QUIT, cmd_quit);
 	ent_init();
 	eng.world = (uint8_t)wld_init();
+	col_init();
 	if (eng.world)
 	{
 		ren_init();

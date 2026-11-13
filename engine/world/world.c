@@ -396,7 +396,7 @@ static void parse_dir(wld_layer_t *L, uint8_t *d, const char *file)
 		for (k = 1; k <= v[0]; k++)
 			NEED(v[k] < dir->nsect, dir->vispool_ofs + 2 * (L->leafvis[i] + k), "vis sector");
 	}
-	/* collision grid: cells and start table (lists are M2's) */
+	/* collision grid: cells, start table, list pool */
 	g = (w64_grid_t *)(d + dir->grid_ofs);
 #if WLD_SWAP
 	S16(g, 8);
@@ -416,6 +416,81 @@ static void parse_dir(wld_layer_t *L, uint8_t *d, const char *file)
 		NEED(L->cells[i].start < g->nstart, g->cells_ofs + 4 * i, "grid start");
 	NEED(L->models[0].visleafs >= 1 && L->models[0].visleafs + 1 == dir->nleaf,
 		dir->model_ofs + 52, "visleafs");
+	/* grid list pool: every cell's list (count, coll index...) */
+	end = 1;
+	for (i = 0; i < ncell; i++)
+	{
+		uint32_t o = L->cells[i].list;
+
+		NEED(TABLE(g->lists_ofs, (uint64_t)o + 1, 2), g->cells_ofs + 4 * i, "grid list");
+		NEED(TABLE(g->lists_ofs, (uint64_t)o + 1 + be16(d + g->lists_ofs + 2 * o), 2),
+			g->cells_ofs + 4 * i, "grid list");
+		if (o + 1 + be16(d + g->lists_ofs + 2 * o) > end)
+			end = o + 1 + be16(d + g->lists_ofs + 2 * o);
+	}
+	NEED(TABLE(g->lists_ofs, end, 2), dir->grid_ofs + 24, "grid list pool");
+#if WLD_SWAP
+	S16(d + g->lists_ofs, end);
+#endif
+	L->glists = (const uint16_t *)(d + g->lists_ofs);
+	for (i = 0; i < ncell; i++)
+	{
+		const uint16_t *v = L->glists + L->cells[i].list;
+		uint32_t k;
+
+		for (k = 1; k <= v[0]; k++)
+			NEED(v[k] < dir->ncoll, g->lists_ofs + 2 * (L->cells[i].list + k), "grid list coll");
+	}
+	/* leaf contents: CONTENTS_* (-1 .. -16) per BSP leaf */
+	NEED(dir->nleafs_all >= dir->nleaf && TABLE(dir->leafc_ofs, dir->nleafs_all, 1), 60,
+		"leaf contents");
+	L->leafc = (const int8_t *)(d + dir->leafc_ofs);
+	for (i = 0; i < dir->nleafs_all; i++)
+		NEED(L->leafc[i] <= -1 && L->leafc[i] >= -16, dir->leafc_ofs + i, "leaf contents value");
+	/* surface materials (optional) */
+	L->mat = NULL;
+	if (dir->mat_ofs)
+	{
+		w64_mat_t *m = (w64_mat_t *)(d + dir->mat_ofs);
+		const uint16_t *st;
+
+		NEED(TABLE(dir->mat_ofs, 1, sizeof(w64_mat_t)), 68, "material table");
+#if WLD_SWAP
+		S16(m, 4);
+		S32(&m->start_ofs, 4);
+#endif
+		NEED(TABLE(m->start_ofs, (uint32_t)dir->ncoll + 1, 2) && TABLE(m->ent_ofs, m->nent, 2)
+			&& TABLE(m->mix_ofs, m->nmix, 8) && TABLE(m->face_ofs, m->nface, 10),
+			dir->mat_ofs, "material tables");
+#if WLD_SWAP
+		S16(d + m->start_ofs, (uint32_t)dir->ncoll + 1);
+		S16(d + m->ent_ofs, m->nent);
+		for (i = 0; i < m->nmix; i++)
+		{
+			w64_matmix_t *x = (w64_matmix_t *)(d + m->mix_ofs) + i;
+
+			S32(&x->gid, 1);
+			S16(&x->first, 2);
+		}
+		S16(d + m->face_ofs, 5u * m->nface);
+#endif
+		st = (const uint16_t *)(d + m->start_ofs);
+		for (i = 0; i < dir->ncoll; i++)
+			NEED(st[i] <= st[i + 1] && st[i + 1] <= m->nent, m->start_ofs + 2 * i,
+				"material start");
+		for (i = 0; i < m->nmix; i++)
+		{
+			const w64_matmix_t *x = (const w64_matmix_t *)(d + m->mix_ofs) + i;
+
+			NEED((uint32_t)x->first + x->count <= m->nface && x->count, m->mix_ofs + 8 * i,
+				"material mix");
+		}
+		L->mat = m;
+		L->mat_start = st;
+		L->mat_ent = (const uint16_t *)(d + m->ent_ofs);
+		L->mat_mix = (const w64_matmix_t *)(d + m->mix_ofs);
+		L->mat_face = (const w64_matface_t *)(d + m->face_ofs);
+	}
 #undef TABLE
 #undef NEED
 }
@@ -592,7 +667,9 @@ static void req_done(io_req_t *r)
 }
 
 /* Evict the least recently used resident chunk of pool p not used this
- * frame or the last; freed behind a fence two frames ahead. */
+ * frame or the last; freed behind a fence two frames ahead (the GPU may
+ * still read REND / TEXP bytes); COLL bytes only the CPU reads, and no
+ * walk holds a chunk it did not use this frame, so they free at once. */
 static int evict_one(int p)
 {
 	wld_layer_t *bl = NULL;
@@ -609,7 +686,8 @@ static int evict_one(int p)
 			const wld_chunk_t *ch = &L->ch[c];
 
 			if (ch->state != WLD_CH_RESIDENT || ch->used + 1 >= frame_no
-				|| ch->want == L->want_gen || chunk_pool(L->chunks[c].fourcc) != p)
+				|| chunk_pool(L->chunks[c].fourcc) != p
+				|| ch->want == (p == POOL_COLL ? L->coll_gen : L->want_gen))
 				continue;
 			if (bc < 0 || ch->used < bl->ch[bc].used)
 			{
@@ -620,7 +698,7 @@ static int evict_one(int p)
 	}
 	if (bc < 0)
 		return 0;
-	mem_pool_free(&pools[p], bl->ch[bc].blk, frame_no + 2);
+	mem_pool_free(&pools[p], bl->ch[bc].blk, p == POOL_COLL ? 0 : frame_no + 2);
 	bl->ch[bc].blk = NULL;
 	bl->ch[bc].data = NULL;
 	bl->ch[bc].state = WLD_CH_ABSENT;
@@ -707,6 +785,41 @@ void wld_want_open(wld_layer_t *L, int leaf)
 			want(L, L->dir->texp_first + L->pagepool[s->page_first + k], &pending);
 	}
 	L->want_pending = (uint8_t)pending;
+}
+
+void wld_want_coll(wld_layer_t *L, int c)
+{
+	wld_chunk_t *ch = &L->ch[c];
+
+	ch->want = L->coll_gen;
+	if (ch->state == WLD_CH_ABSENT)
+		request(L, c);
+}
+
+uint8_t *wld_chunk_sync(wld_layer_t *L, int c)
+{
+	const w64_chunk_t *ck = &L->chunks[c];
+	wld_chunk_t *ch = &L->ch[c];
+	uint32_t size = (ck->size + 15) & ~15u;
+	int i;
+
+	if (ch->state == WLD_CH_LOADING)
+		for (i = 0; i < HL64_WORLD_REQS; i++)
+			if (reqs[i].user == ((int)L->slot << 16 | c))
+				io_finish(&reqs[i]);	/* req_done lands it */
+	if (ch->state == WLD_CH_ABSENT)
+	{
+		while (!(ch->blk = mem_pool_alloc(&pools[POOL_COLL], size, &ch->data)))
+			if (!evict_one(POOL_COLL))
+				sys_error("world: %s: COLL chunk %d does not fit the collision pool",
+					maps[L->map].name, c);
+		io_read_sync(ch->data, L->rom + ck->ofs, size);
+		ch->state = WLD_CH_RESIDENT;
+		st.loads++;
+		landed(L, c, ch->data);
+	}
+	ch->used = frame_no;
+	return ch->data;
 }
 
 void wld_frame(uint32_t frame)
@@ -936,6 +1049,7 @@ wld_layer_t *wld_open(int map)
 	memset(L, 0, sizeof(*L));
 	L->slot = (uint8_t)(L - layers);
 	L->want_leaf = -1;
+	L->coll_gen = 1;
 	L->map = (uint16_t)map;
 	memcpy(L->gofs, maps[map].gofs, sizeof(L->gofs));
 	snprintf(path, sizeof(path), "maps/%s.w64", maps[map].name);
