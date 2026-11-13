@@ -107,7 +107,11 @@ setpos -266 282 196 0 90
 waitnear -266 384 178 6 10
 -forward
 +moveright
-waitnear -240 384 178 6 10
+# widened: 6 -> 14: GoldSrc pm_shared PM_Friction scales the whole ground
+# velocity while PM_Accelerate adds the strafe, so the ducked crawl's 106.56 u/s
+# northward speed decays over ~0.5 s and carries the player ~20 u on into the
+# junction (y 394..401) as he strafes east: x -240 is crossed at y ~396
+waitnear -240 384 178 14 10
 -moveright
 wait 0.5
 # HEV flashlight (impulse 100), looking down the dark duct north to its
@@ -123,7 +127,10 @@ shot duct-flashlight
 stats flashlight-on
 look 0 90
 +forward
-waitnear -229 566 178 6 10
+# widened: 6 -> 8: the junction strafe above ends at x -235.9 (GoldSrc
+# PM_Friction stops the 106.56 u/s ducked strafe 7.5 u after -moveright), and
+# the straight crawl up the duct's north leg (x -240..-210) keeps that x
+waitnear -229 566 178 8 10
 -forward
 shot vent-flashlight
 +moveright
@@ -250,7 +257,11 @@ wait 1.5
 +forward
 wait 0.6
 -forward
-waitnear 2466 780 0 90 4
+# widened: 90 -> 120: GoldSrc runs at sv_maxspeed 320 (cl_forwardspeed 400
+# clamped, pm_shared PM_PlayerMove) and keeps that speed in the air (PM_AirMove):
+# the player clears the deck's east face (hull x 2464) and lands against the
+# yard's south wall at 2466 680 -60, 117 u from the old landing spot's centre
+waitnear 2466 780 0 120 4
 # MP5 + clip on the radio table under the trailer deck
 setpos 2246 716 -60 0 270
 wait 0.5
