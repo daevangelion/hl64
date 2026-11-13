@@ -206,12 +206,26 @@ static int any3(const float v[3])
 	return v[0] != 0 || v[1] != 0 || v[2] != 0;
 }
 
+/* A ground entity that keeps a resting entity busy: a conveyor sets its
+ * base velocity every frame, a box resting on a monster or a client lands
+ * again every frame [probe:measured P-toss], and a freed ground leaves it
+ * to fall (until its step clears groundentity). */
+static int busy_ground(int e)
+{
+	int g = ent_c.phys[e].groundentity;
+
+	if (g == ENT_NONE)
+		return 0;
+	return !ent_is_live(g) || (ent_c.cv[g].flags & (FL_CONVEYOR | FL_MONSTER | FL_CLIENT));
+}
+
 int ent_needs_step(int e)
 {
 	const col_ent_t *v = &ent_c.cv[e];
 	const ent_mot_t *m = &ent_c.mot[e];
 	int ground = (v->flags & FL_ONGROUND) != 0;
 	int moving = any3(m->velocity) || any3(m->avelocity);
+	int base = any3(m->basevelocity) || (v->flags & FL_BASEVELOCITY);
 
 	if (e == ENT_PLAYER)
 		return 0;
@@ -230,14 +244,26 @@ int ent_needs_step(int e)
 	case MOVETYPE_FLYMISSILE:
 	case MOVETYPE_BOUNCEMISSILE:
 	case MOVETYPE_PUSHSTEP:
-		/* at rest = on ground without velocity (physics-movetypes.md 3) */
-		return !ground || moving;
+		/* at rest = on ground without velocity (physics-movetypes.md 3),
+		 * no base velocity to fold, on a ground that stays still */
+		return !ground || moving || base || busy_ground(e);
 	case MOVETYPE_STEP:
-		return (!ground && !(v->flags & (FL_FLY | FL_SWIM))) || moving
-			|| any3(m->basevelocity) || (v->flags & FL_BASEVELOCITY);
+		return (!ground && !(v->flags & (FL_FLY | FL_SWIM))) || moving || base
+			|| busy_ground(e);
 	default:
 		return 0;
 	}
+}
+
+/* Entities resting on e (being freed) step once more: their ground is
+ * gone. */
+void ent_sets_ground_lost(int e)
+{
+	int i;
+
+	for (i = 0; i < ent_s.top; i++)
+		if (ent_c.phys[i].groundentity == e && ent_is_live(i) && i != e)
+			bit_put(H.movers, i, 1);
 }
 
 void ent_sets_update(int e)
@@ -357,8 +383,12 @@ const char *ent_sets_check(void)
 			return "heap membership";
 		if (want && H.key[H.pos[e]] != f32_bits(ent_c.tm[e].nextthink))
 			return "heap key";
-		if (bit_get(H.movers, e) != (live && ent_needs_step(e)))
+		/* an extra bit (ground lost) only costs one step; a missing one
+		 * skips motion */
+		if (live && ent_needs_step(e) && !bit_get(H.movers, e))
 			return "movers bit";
+		if (!live && bit_get(H.movers, e))
+			return "movers bit of a free slot";
 		if (bit_get(H.kill, e) != (live && (ent_c.cv[e].flags & FL_KILLME) != 0))
 			return "kill bit";
 		if (!live && (bit_get(H.due, e) || bit_get(H.linked, e)))

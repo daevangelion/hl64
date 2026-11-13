@@ -240,6 +240,7 @@ void ent_destroy(int e)
 		return;
 	ent_unlink(&ent_c.cv[e]);
 	ent_sets_remove(e);
+	ent_sets_ground_lost(e);
 	ent_priv_free(e);
 	ent_s.freetime[e] = (float)eng_clock_time();
 	ent_c.id[e].serial++;
