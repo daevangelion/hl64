@@ -153,10 +153,8 @@ def discover_maps(maps_dir: Path, only: Optional[Iterable[str]] = None) -> List[
 
 
 def spawnable_classes(entcook_h: Path = ENTCOOK_H) -> Set[str]:
-    """Lower-case classnames the game can spawn: what the entity cook keeps
-    (`hle_classes[]`, placed entities) plus the classes of CLASS_MODEL (the
-    game implements them; a monstermaker may create one that no map
-    places)."""
+    """Lower-case classnames of placed entities the game spawns: what the
+    entity cook keeps (`hle_classes[]`)."""
     text = Path(entcook_h).read_text("latin-1")
     start = text.find("hle_classes[]")
     end = text.find("{NULL", start)
@@ -165,7 +163,7 @@ def spawnable_classes(entcook_h: Path = ENTCOOK_H) -> Set[str]:
     out = {m.lower() for m in re.findall(r'\{"([A-Za-z0-9_]+)"\s*,', text[start:end])}
     if not out:
         raise ValueError(f"{entcook_h}: empty hle_classes[] table")
-    return out | {c.lower() for c in CLASS_MODEL}
+    return out
 
 
 def offcart_models(ents: List[Dict[str, str]]) -> Set[str]:
@@ -222,14 +220,17 @@ def map_models(ents: List[Dict[str, str]], spawnable: Set[str]) -> Dict[str, Set
     out: Dict[str, Set[str]] = {}
     for e in ents:
         cls = entity_classes(e)
-        classes.update(cls)
-        if cls[0] in MODEL_KEY_CLASSES and cls[0] in spawnable:
+        if cls[0] not in spawnable:
+            continue                   # the entity cook drops it
+        # a kept entity's named class (monstermaker monstertype, world_items
+        # type) is created by the game: it counts when the game implements it
+        classes.update([cls[0]] + [c for c in cls[1:] if c in spawnable or c in cm])
+        if cls[0] in MODEL_KEY_CLASSES:
             m = e.get("model", "").replace("\\", "/").lower()
             if m.startswith("models/") and m.endswith(".mdl"):
                 out.setdefault(m[len("models/"):-4], set()).add(cls[0])
-    # placed (and monstermaker) classes count when the game spawns them;
-    # what those spawn at run time (CLASS_SPAWNS) the game creates itself
-    for c in class_closure(c for c in classes if c in spawnable):
+    # what those classes spawn at run time (CLASS_SPAWNS) the game creates
+    for c in class_closure(classes):
         if c in cm:
             out.setdefault(cm[c], set()).add(c)
     for b in ALWAYS_MODELS:
