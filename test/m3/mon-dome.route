@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# GameMon host test: the hldemo1 dome scene (test/routes/m3-a.route
+# positions). start_script_trigger -> startdometalk_mm / dometalk_mm ->
+# domesci scripts (domesci_script_3 'lean' -> domesci_script_4) ->
+# start_ele_unlock_mm opens multisource start_ele_lock_1 (~40 s after the
+# trigger). test/m3/mon.sh reads the script / multisource log lines.
+waitmap hldemo1 600
+# the intro teleport is not this test's: wait it out, setpos to the dome
+wait 30
+stats mon-start
+setpos -2048 -496 70 0 270
+wait 4
+setpos -2000 -620 196 0 270
+wait 50
+stats mon-dome
+pass
