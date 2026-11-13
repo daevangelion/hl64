@@ -80,7 +80,7 @@ class CompileTest(Base):
         data = self.compile(ALL_VERBS)
         prog = rbc.read(data, self.table)
         names = [rbc.OPS[o.code][0] for o in prog.ops]
-        self.assertEqual(set(names), set(rbc.OPCODE))      # every op is produced
+        self.assertEqual(set(names) | {"START"}, set(rbc.OPCODE))  # every op (START: below)
         lines = [ln for ln, l in enumerate(ALL_VERBS.splitlines(), 1)
                  if l.strip() and not l.startswith("#")]
         self.assertEqual([o.line for o in prog.ops], lines)
@@ -109,6 +109,24 @@ class CompileTest(Base):
 
     def test_deterministic(self) -> None:
         self.assertEqual(self.compile(ALL_VERBS), self.compile(ALL_VERBS))
+
+    def test_startmap(self) -> None:
+        """startmap: the first op, sets the current map for the steps after it"""
+        prog = rbc.read(self.compile("startmap mapb\nwaitgone door1 5\nsetpos 1 2 3\npass\n"),
+                        self.table)
+        self.assertEqual([rbc.OPS[o.code][0] for o in prog.ops],
+                         ["START", "WAIT_GONE", "SETPOS", "PASS"])
+        self.assertEqual((prog.ops[0].a, prog.ops[0].b, prog.ops[0].words), (0, 1, ()))
+        self.assertEqual(prog.ops[1].b, self.table.target_id(1, "door1"))
+        self.assertEqual(prog.ops[2].b, 1)
+        self.assertIn("START mapb", rbc.disasm(prog, self.table))
+        for text, rule in (("wait 1\nstartmap mapa\npass\n", "first step"),
+                           ("startmap nomap\npass\n", "not in the campaign"),
+                           ("startmap\npass\n", "takes 1 arguments"),
+                           ("startmap mapa\nstartmap mapb\npass\n", "first step")):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(routec.CompileError, rule):
+                    routec.compile_route(text, "t.route", self.table)
 
     def test_errors(self) -> None:
         pre = "waitmap mapa 10\n"
@@ -215,6 +233,16 @@ class ReaderTest(Base):
                            "last op is not PASS")
         self.assertRejects(self.patch(3, ">B", 0, rbc.OPCODE["PASS"]), "PASS before")
 
+    def test_start_rules(self) -> None:
+        d = bytearray(self.compile("startmap mapa\nwait 1\npass\n"))
+        rbc.read(bytes(d), self.table)
+        struct.pack_into(">H", d, rbc.HEADER_SIZE + 2, len(self.table.map_names))
+        self.assertRejects(self.fix(d), "map")
+        d = bytearray(self.compile("wait 1\nwait 2\npass\n"))
+        struct.pack_into(">I", d, rbc.HEADER_SIZE + 8, rbc.OPCODE["START"] << 24)  # op 1 = START
+        struct.pack_into(">I", d, rbc.HEADER_SIZE + 12, 0)
+        self.assertRejects(self.fix(d), "START is not the first op")
+
     def test_fuzz(self) -> None:
         rng = random.Random(4321)
         for n in range(len(self.data)):
@@ -260,9 +288,9 @@ class CommittedRoutesTest(unittest.TestCase):
             if not tok:
                 continue
             v, a = tok[0], tok[1:]
-            if v == "waitmap" and a[0] not in t.map_names:
+            if v in ("waitmap", "startmap") and a[0] not in t.map_names:
                 t.map_names.append(a[0])
-            if v == "waitmap":
+            if v in ("waitmap", "startmap"):
                 cur = t.map_names.index(a[0])
             elif v in ("waitmoved", "waitgone") or (v == "lookat" and not re.match(
                     r"(monster|weapon|item|ammo)_", a[0])):

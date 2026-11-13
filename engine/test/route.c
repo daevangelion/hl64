@@ -41,7 +41,7 @@
 enum {
 	OP_WAIT = 1, OP_WAIT_MAP, OP_WAIT_NEAR, OP_WAIT_MOVED, OP_WAIT_GONE, OP_WAIT_CLASS,
 	OP_WAIT_GLOBAL, OP_WAIT_END, OP_LOOK, OP_LOOK_AT, OP_SETPOS, OP_BUTTONS, OP_IMPULSE,
-	OP_DROP, OP_GOD, OP_SHOT, OP_STATS, OP_PASS, OP_COUNT
+	OP_DROP, OP_GOD, OP_SHOT, OP_STATS, OP_PASS, OP_START, OP_COUNT
 };
 
 static const struct {
@@ -66,6 +66,7 @@ static const struct {
 	[OP_SHOT] = { "SHOT", "" },
 	[OP_STATS] = { "STATS", "" },
 	[OP_PASS] = { "PASS", "" },
+	[OP_START] = { "START", "" },
 };
 
 #define BUTTON_MASK	(0x3FFFu & ~(1u << 6))
@@ -91,6 +92,7 @@ static struct {
 	double		t0;		/* game time (s) the current op started */
 	uint32_t	rtb_rom, targ_ofs, tlmp_ofs, ntlmp;	/* campaign.rtb test part */
 	rt_targ_t	tg;		/* the current op's name */
+	int		start;		/* START map, -1 none */
 } rt;
 
 static uint32_t rd32(const uint8_t *p)
@@ -225,6 +227,7 @@ int rt_load(const char *path)
 	const uint8_t *b = rt.buf;
 
 	memset(&rt, 0, sizeof(rt));
+	rt.start = -1;
 	rom = sys_cart_addr(path, &size);
 	if (!rom)
 		return 0;
@@ -291,10 +294,20 @@ int rt_load(const char *path)
 		switch (code)
 		{
 		case OP_WAIT_MAP: case OP_WAIT_NEAR: case OP_WAIT_CLASS: case OP_SETPOS: case OP_DROP:
+		case OP_START:
 			if (bb >= ids.maps || (int)bb >= wld_map_count())
 				return bad(path, p, "map id");
 			if (code == OP_SETPOS)
 				ok_a = a <= 1;
+#ifdef HL64_TEST
+			if (code == OP_START && i)
+				return bad(path, p, "START is not the first op");
+			if (code == OP_START)
+				rt.start = (int)bb;
+#else
+			if (code == OP_START)
+				return bad(path, p, "START needs a test build");
+#endif
 			break;
 		case OP_WAIT_MOVED: case OP_WAIT_GONE:
 			if (bb >= ids.targ)
@@ -353,6 +366,11 @@ int rt_load(const char *path)
 int rt_active(void)
 {
 	return rt.loaded && !rt.done;
+}
+
+int rt_start_map(void)
+{
+	return rt.loaded ? rt.start : -1;
 }
 
 static void fail(const char *reason)
@@ -765,6 +783,8 @@ void rt_frame(double time)
 			break;
 		case OP_STATS:
 			push(DBG_STATS, rt.op);
+			break;
+		case OP_START:	/* boot used it (eng_boot: New Game on that map) */
 			break;
 		case OP_PASS:
 			/* the frame after it is reached: the debug commands queued

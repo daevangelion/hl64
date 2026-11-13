@@ -12,6 +12,9 @@
  * -1 rejected (logged). */
 int	rt_load(const char *path);
 int	rt_active(void);
+/* The loaded route's START map (HL64_TEST builds: New Game opens it instead
+ * of the campaign start), -1 none. */
+int	rt_start_map(void);
 /* Step 13: run ops until a wait is not yet satisfied (waits measure the
  * f64 game clock, s); PASS / FAIL exit. */
 void	rt_frame(double time);

@@ -437,12 +437,22 @@ void eng_boot(const char *platform)
 		}
 		/* a route plays from the campaign start (New Game): the start
 		 * map's records, then the player at its first info_player_start
-		 * (+1 u, as HLSDK spawns) */
+		 * (+1 u, as HLSDK spawns); test builds: a route's START map
+		 * instead (the free camera's start layer is closed) */
 		if (r > 0)
 		{
 			int map = wld_start_map(), slot;
 			float org[3], ang[3];
 
+#ifdef HL64_TEST
+			if (rt_start_map() >= 0 && rt_start_map() != map)
+			{
+				if (map >= 0)
+					wld_close(wld_open(map));
+				map = rt_start_map();
+				log_printf("route: start map %s\n", wld_map_name(map));
+			}
+#endif
 			if (map < 0)
 				sys_error("route: no start map");
 			game_new_campaign();

@@ -4,8 +4,9 @@
 # Rec slice tests (host): the cook's id step and resource table tests,
 # the record / resource driver (test/m3/rec.py: selftest, K5 on the
 # GoldSrc K-think fixtures, the hostile-input fuzz under ASan / UBSan),
-# R6 (no string compare on the cart's resource paths) and the cook's
-# RESTAB and HLE region proofs against the engine's mem lines.
+# R6 (no string compare on the cart's resource paths), the cook's RESTAB
+# and HLE region proofs against the engine's mem lines, and a route's
+# `startmap` (HL64_TEST New Game on another map) on hl64-host.
 #
 # Usage: test/m3/rec.sh
 # Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content with ids),
@@ -26,10 +27,11 @@ fail() { echo "REC FAIL: $*" >&2; exit 1; }
 
 cd "$ROOT"
 # R1 (restab determinism, unresolved names), the id step, titles
-make --no-print-directory BUILD_DIR="$BUILD_DIR" "$BUILD_DIR/tools/hlecook" rectest \
+make --no-print-directory BUILD_DIR="$BUILD_DIR" "$BUILD_DIR/tools/hlecook" rectest host \
 	>"$OUT/build.log" 2>&1 || { tail -30 "$OUT/build.log" >&2; fail "build"; }
 grep -E 'warning:' "$OUT/build.log" && fail "build has warnings"
-python3 -m unittest tools.restab.test_restab tools.cook.test_decals >"$OUT/unit.log" 2>&1 \
+python3 -m unittest tools.restab.test_restab tools.cook.test_decals tools.routec.test_routec \
+	>"$OUT/unit.log" 2>&1 \
 	&& HL64_HLECOOK="$BUILD_DIR/tools/hlecook" HL64_CONTENT="$CONTENT" python3 -m unittest \
 		tools.w64c.test_hleids tools.w64c.test_hlecook tools.w64c.test_touchrank >>"$OUT/unit.log" 2>&1 \
 	|| { tail -30 "$OUT/unit.log" >&2; fail "cook unit tests"; }
@@ -74,4 +76,24 @@ s = h.slot_bytes(m, h.w64_ents(open(p, 'rb').read(), p), rt, lg)
 print(m, s.chunk, s.runtime, tab)" "$CONTENT" "${S_ENG%% *}") || fail "HLE region proof (cook)"
 [[ "$S_COOK" == "$S_ENG" ]] || fail "HLE region proof: cook '$S_COOK', engine '$S_ENG'"
 echo "HLE region proof: cook = engine (map chunk runtime tables: $S_ENG)"
+# startmap: New Game on hldemo2 (its records live, the player at its first
+# info_player_start); control: the same route without it starts on the
+# campaign start and its `waitmap hldemo2 0` fails
+startroute() {	# name, first line
+	{ [[ -n "$2" ]] && echo "$2"; printf 'waitmap hldemo2 0\nwait 0.5\nstats start\npass\n'; } \
+		>"$OUT/$1.route"
+	python3 -m tools.routec.routec --rtb "$CONTENT/campaign.rtb" "$OUT/$1.route" -o "$OUT/$1.rbc" \
+		>/dev/null || fail "routec $1"
+	"$BUILD_DIR/host/hl64-host" --root "$CONTENT" --route "$OUT/$1.rbc" --cmd "@10 mem" \
+		>"$OUT/$1.log" 2>&1
+}
+startroute startmap "startmap hldemo2" || { tail -20 "$OUT/startmap.log" >&2; fail "startmap route"; }
+N=$(sed -n 's/^rec: new campaign hldemo2: \([0-9]*\) spawned.*/\1/p' "$OUT/startmap.log")
+[[ -n "$N" && "$N" -gt 0 ]] || fail "startmap: hldemo2 New Game spawned no records"
+grep -q '^route PASS' "$OUT/startmap.log" || fail "startmap: no route PASS"
+grep -q '^mem rec: slot 0 hldemo2 ' "$OUT/startmap.log" || fail "startmap: hldemo2 not in HLE slot 0"
+grep -q '^mem rec: slot [1-9]' "$OUT/startmap.log" && fail "startmap: a second HLE slot is open"
+if startroute startdefault ""; then fail "control: the route without startmap passed"; fi
+grep -q '^route FAIL 0 .*WAIT_MAP' "$OUT/startdefault.log" || fail "control: no WAIT_MAP failure"
+echo "startmap: hldemo2 New Game, $N records spawned, route PASS (control without it: WAIT_MAP FAIL)"
 echo "REC PASS"

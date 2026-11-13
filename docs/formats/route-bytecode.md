@@ -67,6 +67,7 @@ map (the VM adds the map's CWG placement `g_M`; architecture.md 5.4).
 | 0x10 | `SHOT` | 0 | label | — | request a screenshot tagged with the label (ares harness dump / host recorder) |
 | 0x11 | `STATS` | 0 | label | — | print one stats record line tagged with the label |
 | 0x12 | `PASS` | 0 | 0 | — | the route passed: log `route PASS`, harness exit 0; runs in the frame after it is reached, so the `STATS` / `SHOT` commands queued just before it still run |
+| 0x13 | `START` | 0 | map | — | test builds only, first op only: boot runs New Game on `map` instead of the campaign start (its records, the player at its first `info_player_start`; the free camera's start layer is closed); the VM passes over it. A build without `HL64_TEST` rejects the route |
 
 Ids: map = CWG map index, name id = `TARG` index (its map is the
 entity's map), class id = `classes.def` line, global id = `GLOB` index.
@@ -109,18 +110,20 @@ radii ≥ 0; map / name / class / global ids lie inside the rtb's counts;
 `GOD.a` ≤ 1, `WAIT_GLOBAL.a` ≤ 2, other unused `a` / `b` fields are 0;
 `BUTTONS` masks only use `IN_*` bits and do not overlap; label offsets are
 string starts with printable ASCII ≤ 47 characters; every line entry ≥ 1
-and the padding is 0; `PASS` occurs exactly once, as the last op.
+and the padding is 0; `START` only as the first op; `PASS` occurs exactly
+once, as the last op.
 
 ## Source language (`.route`)
 
 One step per line; `#` starts a comment (comments may hold any UTF-8; the
 rest of a line must be ASCII). Numbers are decimal (`-12`, `0.3`, `1e3`);
 times are seconds (0–4000). The current map is the one named by the latest
-`waitmap`: map-local positions and entity names refer to it, and steps that
-need it fail to compile before the first `waitmap`.
+`waitmap` (or `startmap`): map-local positions and entity names refer to it,
+and steps that need it fail to compile before the first `waitmap`.
 
 | step | op |
 |---|---|
+| `startmap <map>` | `START` (first step only; sets the current map) |
 | `wait <s>` | `WAIT` |
 | `waitmap <map> <timeout>` | `WAIT_MAP` (sets the current map) |
 | `waitnear <x> <y> <z> <r> <timeout>` | `WAIT_NEAR` |
