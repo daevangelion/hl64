@@ -46,6 +46,7 @@
 #include "hl64/limits.h"
 #include "hl64/rec.h"
 #include "hl64/studio.h"
+#include "engine/core/eng.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/ent/rec_int.h"
@@ -225,6 +226,8 @@ static struct {
 	uint32_t	ndefer, ntwin, fage;
 	uint16_t	next_rtid;
 	uint32_t	sync_wakes;	/* this frame's in-call hydrations */
+	uint32_t	box_wakes, box_us;	/* this frame's box wakes (links, pushers) before
+					   step 8: records and time, the pump's budget */
 	uint16_t	pass;		/* rec_run_timers pass number, never 0 */
 	gid_t16		running;	/* record whose timer callback runs, GID_NONE */
 	gid_t16		caller;		/* rec_caller_gid */
@@ -2545,6 +2548,17 @@ static int budget_left(uint64_t t0, uint32_t done)
 #endif
 }
 
+/* The frame's box wakes alone went over the whole entity budget (the
+ * same measure as budget_left). */
+static int box_over(void)
+{
+#ifdef HL64_TEST
+	return R.box_wakes > REC_BUDGET_HOST;
+#else
+	return R.box_us > REC_BUDGET_US;
+#endif
+}
+
 /* Deferred uses whose target map is open, in FIFO order per map (a use
  * that cannot be delivered yet holds back the later uses of its map);
  * a closed map's uses wait for its reopen. */
@@ -2839,8 +2853,9 @@ static int rides_moving_pusher(int e)
 
 /* One release batch of a slot every 0.1 s: live entities whose box is
  * beyond 1024 u of every anchor dehydrate, at least REC_RELEASE_BATCH
- * tries, more while the budget lasts; a refusal waits 0.5 s. 1 when a
- * batch ran. */
+ * tries, more while the budget lasts; a refusal waits 0.5 s, a falling
+ * entity a pusher woke REC_PUSH_HOLD (rec_hold_falling). 1 when a batch
+ * ran. */
 static int release_pass(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, uint32_t *done)
 {
 	const float r2 = REC_RELEASE_R * REC_RELEASE_R;
@@ -2869,7 +2884,7 @@ static int release_pass(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, ui
 				break;
 		if (a < n)
 			continue;
-		if ((double)R.retry[e] > now && (double)R.retry[e] <= now + REC_RELEASE_RETRY)
+		if ((double)R.retry[e] > now && (double)R.retry[e] <= now + REC_PUSH_HOLD)
 			continue;
 		if (rides_moving_pusher(e))
 			continue;
@@ -3001,14 +3016,28 @@ static int precache_held(rmap_t *m, const float (*loc)[3], int n)
 
 void rec_frame(const float (*anchors)[3], int nanchors)
 {
-	uint64_t t0 = sys_time_us();
-	uint32_t done = 0, us;
+	/* the frame's box wakes (links, pushers: synchronous, step 6) spent
+	 * the entity budget first; the pump and the releases get the rest
+	 * (6.4). A wake over the whole budget is logged and counted (stats
+	 * `rec: wakeover=`) */
+	uint64_t t0 = sys_time_us() - R.box_us;
+	uint32_t done = R.box_wakes, us;
 	float loc[REC_SLOTS][8][3];
 	int s, a, k, home = -1, batch = 0, n = nanchors > 8 ? 8 : nanchors;
 	uint32_t live = 0;	/* open slots with their layer (pumped) */
 
+	if (box_over())
+	{
+		R.st.wake_over++;
+		log_printf("rec: frame %lu: box wakes hydrated %lu records in %lu us, over the frame's "
+			"entity budget\n", (unsigned long)eng_frame_count(), (unsigned long)R.box_wakes,
+			(unsigned long)R.box_us);
+	}
 	if (!R.map)
+	{
+		R.box_wakes = R.box_us = 0;
 		return;
+	}
 	held_nanc = n > 0 ? n : 0;
 	if (held_nanc)
 		memcpy(held_anc, anchors, (size_t)held_nanc * sizeof(held_anc[0]));
@@ -3070,25 +3099,46 @@ void rec_frame(const float (*anchors)[3], int nanchors)
 	if (us > R.st.budget_max_us)
 		R.st.budget_max_us = us;
 	R.st.budget_us += us;
+	/* wakes in the pump (a spawn's link) are the pump's own */
+	R.box_wakes = R.box_us = 0;
 }
 
 /* ---- pending-record wakes ---------------------------------------------------------- */
 
+/* Hydrate record ri when its box meets [lo, hi] (map-local): the entity,
+ * or -1. Counted against the frame's entity budget (rec_frame). */
 static int wake_rec(rmap_t *m, int ri, const float lo[3], const float hi[3])
 {
 	const rrt_t *t = &m->rt[ri];
-	int k;
+	uint64_t t0;
+	int k, e;
 
 	for (k = 0; k < 3; k++)
 		if (t->hi[k] < lo[k] || t->lo[k] > hi[k])
-			return 0;
-	if ((R.ntwin && twin_blocked(gid_of(m, ri))) || hydrate(m, ri, ENT_ALLOC_OPTIONAL) < 0)
-		return 0;
+			return -1;
+	if (R.ntwin && twin_blocked(gid_of(m, ri)))
+		return -1;
+	t0 = sys_time_us();
+	e = hydrate(m, ri, ENT_ALLOC_OPTIONAL);
+	R.box_us += (uint32_t)(sys_time_us() - t0);
+	if (e < 0)
+		return -1;
 	R.st.woken++;
-	return 1;
+	R.box_wakes++;
+	return e;
 }
 
-int rec_wake_box(const float gmins[3], const float gmaxs[3])
+/* A wake hydrated e: a pusher's (out) lists it. */
+static void woke(int e, uint16_t *out, int max, int *n)
+{
+	if (out && *n < max)
+		out[*n] = (uint16_t)e;
+	(*n)++;
+}
+
+/* out: a pusher's wake (rec_wake_pusher), the box reaching REC_DROP
+ * higher */
+static int wake_box(const float gmins[3], const float gmaxs[3], uint16_t *out, int max)
 {
 	int s, n = 0;
 
@@ -3099,7 +3149,7 @@ int rec_wake_box(const float gmins[3], const float gmaxs[3])
 		rmap_t *m = &R.map[s];
 		const float *g;
 		float lo[3], hi[3];
-		int c0[3], c1[3], k, x, y, z, cells = 1, i;
+		int c0[3], c1[3], k, x, y, z, cells = 1, i, e;
 		uint16_t hit[64];
 		int nh = 0;
 
@@ -3109,7 +3159,7 @@ int rec_wake_box(const float gmins[3], const float gmaxs[3])
 		for (k = 0; k < 3; k++)
 		{
 			lo[k] = gmins[k] - g[k];
-			hi[k] = gmaxs[k] - g[k];
+			hi[k] = gmaxs[k] - g[k] + (k == 2 && out ? REC_DROP : 0);
 			if (hi[k] < m->pmin[k] || lo[k] > m->pmax[k])
 				break;
 			c0[k] = ifloor((lo[k] - PG_HALF) / PG_CELL);
@@ -3121,14 +3171,10 @@ int rec_wake_box(const float gmins[3], const float gmaxs[3])
 		if (cells > PG_SCAN_CELLS)
 		{
 			for (i = 0; i < m->npend;)
-			{
-				int ri = m->plist[i];
-
-				if (wake_rec(m, ri, lo, hi))
-					n++;	/* plist[i] now holds another record */
+				if ((e = wake_rec(m, m->plist[i], lo, hi)) >= 0)
+					woke(e, out, max, &n);	/* plist[i] now holds another record */
 				else
 					i++;
-			}
 			continue;
 		}
 		/* candidates first (hydration edits the chains) */
@@ -3141,10 +3187,34 @@ int rec_wake_box(const float gmins[3], const float gmaxs[3])
 						i = m->rt[i].pnext)
 						hit[nh++] = (uint16_t)i;
 		for (i = 0; i < nh; i++)
-			if (m->rt[hit[i]].state == REC_PENDING || m->rt[hit[i]].state == REC_DRY)
-				n += wake_rec(m, hit[i], lo, hi);
+			if ((m->rt[hit[i]].state == REC_PENDING || m->rt[hit[i]].state == REC_DRY)
+				&& (e = wake_rec(m, hit[i], lo, hi)) >= 0)
+				woke(e, out, max, &n);
 	}
 	return n;
+}
+
+int rec_wake_box(const float gmins[3], const float gmaxs[3])
+{
+	return wake_box(gmins, gmaxs, NULL, 0);
+}
+
+/* A pusher meets what rests on it. GoldSrc spawned every map entity at
+ * map start, so a func_pushable, a monster or an item placed above a
+ * pusher had fallen (gravity, DROP_TO_FLOOR) onto it before the pusher
+ * ever moved; a pending record still holds the mapper's place, up to
+ * REC_DROP above (hldemo3's dish func_pushable #137, 16 u over the
+ * dish_control momentary_doors). The pusher settles the woken entities
+ * (push.c). */
+int rec_wake_pusher(const float gmins[3], const float gmaxs[3], uint16_t *woken, int max)
+{
+	return wake_box(gmins, gmaxs, woken, max);
+}
+
+void rec_hold_falling(int e)
+{
+	if (e >= 2 && e < HL64_MAX_ENTITIES)
+		R.retry[e] = (float)(eng_time() + REC_PUSH_HOLD);
 }
 
 
@@ -3347,6 +3417,7 @@ void rec_reset(void)
 	for (j = 0; j < REC_HOLDERS; j++)
 		R.hold[j].n = NAME_NONE;
 	R.ntm = R.nfrozen = R.ndefer = R.ntwin = R.sync_wakes = R.fage = 0;
+	R.box_wakes = R.box_us = 0;
 	R.next_rtid = 0;
 	R.seq = 0;
 	R.caller = R.self = R.running = GID_NONE;

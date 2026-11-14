@@ -11,7 +11,7 @@ Lines:
   stats N frame=F ... over=O ...                       (eng.c stats record)
   stats N seam: switches= forced= open_fail= late= twins= carried= continuity_bad= closes=
   stats N stream: popin= popin_tele= blk1ms= pins= prefetch= recompute= reassert= ... late=frames/pieces
-  stats N rec: live= pending= dry= released= store=used/peak expired=
+  stats N rec: live= pending= dry= released= store=used/peak expired= wakeover=
   route: <op> ...  /  route PASS  /  route FAIL ...
   seamprof: switch N A->B frame=F frames=K [mark] [cut]
   seamprof: zone=<z> max_us=<v> frame=<f> avg_us=<v> switch_us=<v>

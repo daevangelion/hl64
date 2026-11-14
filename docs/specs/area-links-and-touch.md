@@ -180,7 +180,9 @@ trigger), which is what is observable.
 
 **Pending-record wake**: before the touch pass, pending map records whose
 cooked bounds meet the mover's box are hydrated (architecture.md 6.4) so a
-trigger that was never spawned is touched in the same link.
+trigger that was never spawned is touched in the same link. A pusher wakes
+before it moves, over its swept box and the 256 u above it
+(physics-movetypes.md 4.2 item 8).
 
 ## 4. Impact touch
 
