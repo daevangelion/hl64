@@ -13,4 +13,6 @@ HUD(320HUD2, "gfx/320hud2.ui8")
 HUD(CROSSHAIRS, "gfx/crosshairs.ui8")
 HUD(320HUD4, "gfx/320hud4.ui8")
 HUD(320_PAIN, "gfx/320_pain.ui8")
-FONT(CONCHARS, "gfx/conchars.ui8")
+// The text font: creditsfont, the white anti-aliased font of GoldSrc's text
+// messages (titles.txt; conchars is the console's outlined font).
+FONT(CREDITSFONT, "gfx/creditsfont.ui8")

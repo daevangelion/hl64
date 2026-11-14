@@ -212,7 +212,7 @@ information only.
 | sound (16 voice buffers, 10 wav64, loops) | 100 | 76.1 KB (79% of 96) | M5 hazard route 78.4 KB (80272 B) × 1.25 > 96 KB → 100 | **measured** (route; the earlier `snd_ares.sh` peak was 78144 B) |
 | sprite cache / decals / particles | 64 / 106 / 12 | — / 51.7 KB (92% of the old 56 KB, m3-a) / — | 64 / 8 / 512 | decals: global sheet + 2 per-map placed-decal sheets (`DECL`, one per open layer) + piece vertices, cook-proved (`tools/cook/decals.py`): Uplink 76672 B (29856 + 2 × 11888 t0a0b + 23040), retail 86528 B; carve = retail × 1.25 → **106 KB** (`HL64_DECAL_TEXELS_KB`) |
 | dlight scratch + flashlight pool | 48 | not reported | same | |
-| HUD sheets + font (ui8) | 128 | 71.5 KB (56%) | similar | **measured** |
+| HUD sheets + font (ui8) | 128 | 63.5 KB (50%; 65024 B, font creditsfont) | similar | **measured** |
 | debug log ring (cart) | 8 | — | 16 KB console text | 12 |
 | per-frame scratch arena | 96 | not reported | — | |
 | aithink (spread monster thinks: 6 contexts × (8 KB stack + 8 KB cover tables)) | 96 | stack peak 4552 B of 8192 (cart, routes uplink + m4); cover tables 2 × 1024 × f32 by construction | — (thinks ran whole) | **measured** stack (`prof ai_ctx stack=`; co.c logs a context past 3/4, overflow into its guard words is fatal); M5 `game/hl/aithink.c`, think-and-time.md 2.1 |

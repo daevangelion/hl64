@@ -307,6 +307,23 @@ class TestUi(unittest.TestCase):
         out = bake_ui.bake(self.wad([("lambda", 0x42, pic)]), bytes(gpal))["lambda.ui8"]
         self.assertEqual(out[68:], bytes([10, 255, 255, 10]))
 
+    def test_font_is_intensity(self):
+        # creditsfont-like: black cell background (index 0), greys, the key;
+        # a keyed bake made the background full coverage
+        pal = bytearray(768)
+        pal[3:6] = b"\x80\x80\x80"
+        pal[6:9] = b"\xff\xff\xff"
+        pal[9:12] = b"\x00\x00\xff"
+        table = struct.pack("<HH", 0, 4) * 256
+        sheet = bytes([0, 1, 2, 255] + [3, 0, 1, 2] + [0] * 248) + bytes(256)
+        font = (struct.pack("<iiii", 4, 2, 1, 2) + table + sheet + struct.pack("<H", 256)
+                + pal)
+        out = bake_ui.bake(self.wad([("creditsfont", 0x46, font)]), bytes(768))
+        ui8 = out["creditsfont.ui8"]
+        self.assertEqual(struct.unpack_from(">HHH", ui8, 6), (bake_ui.UI8_FLAG_INTENSITY, 256, 2))
+        self.assertEqual(ui8[68:76], bytes([0, 128, 255, 0, 0, 0, 128, 255]))
+        self.assertIn("creditsfont.fnt", out)
+
     def test_hostile(self):
         cases = {
             "magic": b"WAD2" + bytes(8),
