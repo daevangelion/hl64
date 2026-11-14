@@ -131,6 +131,46 @@ def w64_first_diff(new: bytes, old: bytes) -> str:
     return "trailing bytes"
 
 
+TEXF_RAMP = 16
+RAMP_SIZE = 40
+
+
+def v2_view(b: bytes) -> bytes:
+    """A version-3 package as the version-2 package the old cook wrote
+    (w64-format.md: version 3 = version 2 + the TEXP additive ramps): every
+    RAMP page loses its ramp (flag cleared, CI4 back at 48), the chunks
+    are laid out again in order, 16-aligned, from the first chunk's offset,
+    and the chunk directory, directory CRC, file size and version follow.
+    Anything else (a version-2 or unparsable package) is returned as is."""
+    if len(b) < W64_HDR or b[:4] != b"W64L" or struct.unpack_from(">H", b, 4)[0] != 3:
+        return b
+    dofs, dsz, nch = struct.unpack_from(">III", b, 12)
+    d = bytearray(b[dofs:dofs + dsz])
+    cdo = struct.unpack_from(">I", d, 16)[0]
+    ents = [struct.unpack_from(">4sIII", d, cdo + 16 * i) for i in range(nch)]
+    if not ents:
+        return b
+    out = bytearray(b[:ents[0][1]])
+    for i, (fc, o, n, _crc) in enumerate(ents):
+        data = b[o:o + n]
+        if fc == b"TEXP" and data[4] & TEXF_RAMP:
+            w, h = struct.unpack_from(">HH", data, 0)
+            head = bytearray(data[:48])
+            head[4] &= ~TEXF_RAMP & 0xFF
+            struct.pack_into(">I", head, 8, 48)
+            data = bytes(head) + data[48 + RAMP_SIZE:48 + RAMP_SIZE + w * h // 2]
+            data += b"\0" * (-len(data) % 16)
+        out += b"\0" * (-len(out) % 16)
+        struct.pack_into(">4sIII", d, cdo + 16 * i, fc, len(out), len(data),
+                         zlib.crc32(data) & 0xFFFFFFFF)
+        out += data
+    out[dofs:dofs + dsz] = d
+    struct.pack_into(">H", out, 4, 2)
+    struct.pack_into(">I", out, 8, len(out))
+    struct.pack_into(">I", out, 24, zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+    return bytes(out)
+
+
 def hle_split(b: bytes):
     """(HLE1 part, HLN1 tail) of an hlecook blob (hle-format-v1.md: the node
     graph starts at align16 of the HLE1 header's little-endian size)."""
@@ -227,9 +267,11 @@ def compare_map(a, fx: Path, td: Path, m: str):
         out = td / f"{m}.w64"
         run([sys.executable, "-m", "tools.w64c.w64c", bsp, wci4, out, "--hle", hle,
              "--materials", mats], f"{m}: w64c")
-        new, old = out.read_bytes(), (fx / f"{m}.w64").read_bytes()
+        # the old cook wrote version 2: compare the package without the
+        # version-3 additive ramps (v2_view)
+        new, old = v2_view(out.read_bytes()), (fx / f"{m}.w64").read_bytes()
         if new == old:
-            res.append(f"w64 identical ({len(new)} B)")
+            res.append(f"w64 identical ({len(new)} B, v2 view)")
         else:
             res.append(f"w64 DIFFERS: {w64_first_diff(new, old)}")
             bad += 1
