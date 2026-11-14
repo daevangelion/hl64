@@ -50,6 +50,7 @@ void settings_reset(void)
 	settings.r_dither = 1;
 	settings.ai_spread = 1;
 	settings.ai_budget = HL64_AI_BUDGET;
+	settings.ai_hold = HL64_AI_HOLD;
 }
 
 int settings_set(int id, float v)

@@ -311,6 +311,7 @@ static void aiw_print(const char *tag, const mon_ai_work_t *w);
  * think cost zones, the frame period) */
 #define AI_LOG_FRAME_US		10000
 #define AI_LOG_PERIOD_US	50000
+#define AI_LOG_EVENT_US		4000	/* an anim event (PROFILE `ai: event`) */
 
 /* PROFILE: the frame's think cost zones (machine us, never decisions):
  * Look, the animation half (StudioFrameAdvance .. DispatchAnimEvents),
@@ -509,7 +510,25 @@ void Mon_DispatchAnimEvents(int e, float interval)
 	{
 		ev.res = gs_anim_event_res(r->model, seq, next);
 		index = next;
+#ifdef HL64_PROFILE
+		{
+			uint64_t	t0 = Mon_PzBegin();
+			col_stats_t	c0, c1;
+			uint32_t	us;
+
+			col_counts(&c0);
+			Mon_HandleAnimEvent(e, &ev);
+			us = (uint32_t)(sys_time_us() - t0);
+			col_counts(&c1);
+			if (us >= AI_LOG_EVENT_US)
+				log_printf("ai: event t=%.3f e=%d %s event=%d options=%s us=%lu traces=%lu\n",
+					(double)gtime(), e, game_class_name(ent_idc(e)->cls), ev.event,
+					ev.options ? ev.options : "-", (unsigned long)us,
+					(unsigned long)(c1.traces - c0.traces));
+		}
+#else
 		Mon_HandleAnimEvent(e, &ev);
+#endif
 		if (!ent_is_live(e) || r->sequence != seq)
 			break;
 	}

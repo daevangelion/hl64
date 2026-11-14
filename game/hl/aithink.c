@@ -54,11 +54,12 @@
  *     the next frame start, after the paused thinks' slices, queued
  *     thinks start oldest first (as the engine dispatches a think:
  *     nextthink := 0, the frame's time) while the frame's work is under
- *     the budget; one queued for AI_MAX_HOLD of game time starts
- *     regardless (lateness bound; without a free context it runs whole
- *     at its next dispatch). A queued think leaves the queue unstarted
- *     when its entity is freed, its think function or nextthink is
- *     changed by something else, at a dehydrate / twin copy (Ai_Drop),
+ *     the budget; one queued for settings ai_hold (HL64_AI_HOLD 0.2 s)
+ *     of game time starts regardless (lateness bound; without a free
+ *     context it runs whole at its next dispatch). A queued think leaves
+ *     the queue unstarted when its entity is freed, its think function
+ *     or nextthink is changed by something else, at a dehydrate / twin
+ *     copy (Ai_Drop),
  *     with ai_spread != 1, or when the queue (AI_QUEUE) is full (it runs
  *     at once).
  *   - ai_spread 2 (test): pause at every point after the slice's first and
@@ -78,7 +79,7 @@
 
 #define AI_MAX_AGE	2.0f
 #define AI_MIN_START	2.5f
-#define AI_MAX_HOLD	0.2f	/* s: a queued think's lateness bound */
+#define AI_MAX_HOLD	(settings.ai_hold)	/* s: a queued think's lateness bound */
 #define AI_QUEUE	64
 
 enum { AC_FREE, AC_RUN, AC_PAUSED, AC_DONE };
