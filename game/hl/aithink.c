@@ -20,32 +20,44 @@
  * can walk a thousand CheckLocalMove steps (route triangulation, cover
  * search). Here every monster think (settings ai_spread 1) runs on a
  * cooperative context (include/hl64/co.h); at a pause point (each
- * CheckLocalMove, each cover candidate) it yields once the frame's think
- * work has reached the budget (settings ai_budget, work units: walk steps
- * and traces -- never time, so the host and the cart pause at the same
- * points), and continues at the start of the next frame. The decisions
- * are HLSDK's; only the world may have moved while a think was paused.
+ * CheckLocalMove and each of its walk steps, each cover candidate, each
+ * FindNearestNode trace, each FVisible of Look, each anim event) it
+ * yields once the frame's think work has reached the budget (settings
+ * ai_budget, work units fitted to cart microseconds -- counted, never
+ * timed, so the host and the cart pause at the same points), and
+ * continues at the start of a later frame. The decisions are HLSDK's;
+ * only the world may have moved while a think was paused.
  *
- *   - Fairness: paused thinks continue at the frame start (game step 4) in
- *     FIFO order, oldest first; each slice runs at least one check (the one
- *     it paused before), so every paused think progresses every frame.
+ *   - Per-frame bound: a slice runs from one pause point to the next at
+ *     least (its progress), so a frame's think work is the budget plus
+ *     one point's item per started or continued slice. Paused thinks
+ *     continue at the frame start in FIFO order, oldest first; the first
+ *     one always runs (it progresses every frame), each later one only
+ *     while the frame's units plus the reserve of the item it paused
+ *     before are under the budget. An anim event point reserves
+ *     AI_EVENT_RESERVE units (a firing event's traces and hitbox poses).
  *   - Shared scratch a pause would expose (CheckLocalMove memo scope, sight
  *     list, gpGlobals vectors) is saved per think (Mon_SharedSave / Load;
  *     the memo restarts on continuing); the cover search keeps its path
- *     lengths in the context's own tables (Ai_CoverTables). Pause points
- *     are outside FindNearestNode and the Dijkstra searches.
+ *     lengths in the context's own tables (Ai_CoverTables); a paused
+ *     FindNearestNode search rebuilds its candidate heap when another
+ *     search used it meanwhile (nodes.c). Pause points are outside the
+ *     Dijkstra searches.
  *   - A paused think ends (dropped; a live monster's half-built route is
  *     cleared) when its monster is freed or changes layer, is killed, its
  *     think function, schedule, task, monster state, enemy or target
  *     entity is changed by something else or its enemy / target entity is
  *     freed, or at a map open / close, a dehydrate or twin copy, New Game.
+ *     Paused at an anim event (MonsterThink's execution half, which reads
+ *     the monster afresh) only the freeing, death, layer or think
+ *     function change end it.
  *   - Entity indices a paused think holds come from its enemy / target
- *     handles (above: still the same live entities) or are read fresh
- *     after the pause point (the check's blocker); entity slots are not
- *     reused within 0.5 s of their free (engine/ent/ent.c). A think older
- *     than AI_MAX_AGE stops pausing and runs to its end (a bound on how
- *     old its picture of the world gets). Thinks before AI_MIN_START (the
- *     boot window where freed slots are reused at once) run whole.
+ *     handles (above: still the same live entities), are read fresh
+ *     after the pause point (the check's blocker) or re-checked against
+ *     their handle (Look's candidates). Thinks before AI_MIN_START (the
+ *     boot window where freed slots are reused at once) run whole. A
+ *     think still paused AI_MAX_AGE after it began is counted (overruns:
+ *     the budget did not hold the demand), not forced.
  *   - More paused thinks than contexts: a new think waits a frame.
  *   - Held thinks: a new think dispatched once the frame's think work has
  *     reached the budget, or while older thinks wait, does not start: it
@@ -54,17 +66,14 @@
  *     the next frame start, after the paused thinks' slices, queued
  *     thinks start oldest first (as the engine dispatches a think:
  *     nextthink := 0, the frame's time) while the frame's work is under
- *     the budget. Lateness bounds: one queued for settings ai_hold
- *     (HL64_AI_HOLD 0.2 s) of game time may start over the budget, at
- *     most HL64_AI_AGED_PER_FRAME such starts a frame, oldest first (the
- *     thinks queued in one busy frame age together: they start spread
- *     over frames); one queued for settings ai_hold_max
- *     (HL64_AI_HOLD_MAX 0.6 s) starts regardless (without a free context
- *     it runs whole at its next dispatch). A queued think leaves the
- *     queue unstarted when its entity is freed, its think function or
- *     nextthink is changed by something else, at a dehydrate / twin copy
- *     (Ai_Drop), with ai_spread != 1, or when the queue (AI_QUEUE) is
- *     full (it runs at once).
+ *     the budget. Over the budget, one queued for settings ai_hold
+ *     (HL64_AI_HOLD 0.2 s) of game time still starts, at most
+ *     HL64_AI_AGED_PER_FRAME such starts a frame, oldest first (a start
+ *     over the budget runs to its second pause point). A queued think
+ *     leaves the queue unstarted when its entity is freed, its think
+ *     function or nextthink is changed by something else, at a dehydrate
+ *     / twin copy (Ai_Drop), with ai_spread != 1, or when the queue
+ *     (AI_QUEUE) is full (it starts at once).
  *   - ai_spread 2 (test): pause at every point after the slice's first and
  *     continue at once after scribbling the shared scratch: decides
  *     exactly as ai_spread 0 (a frozen world); nothing is held.
@@ -76,6 +85,7 @@
  */
 #include <string.h>
 
+#include "engine/core/sys.h"
 #include "hl64/co.h"
 #include "hl64/settings.h"
 #include "game/hl/monster.h"
@@ -83,7 +93,6 @@
 #define AI_MAX_AGE	2.0f
 #define AI_MIN_START	2.5f
 #define AI_HOLD		(settings.ai_hold)	/* s: may start over the budget */
-#define AI_HOLD_MAX	(settings.ai_hold_max)	/* s: starts regardless */
 #define AI_QUEUE	64
 
 enum { AC_FREE, AC_RUN, AC_PAUSED, AC_DONE };
@@ -95,8 +104,9 @@ typedef struct {
 	CBaseMonster	*m;
 	fn_t		think;
 	float		t_start;
-	uint32_t	order, slice_points, frame_seen;
-	uint8_t		overrun;
+	uint32_t	order, slice_points, frame_seen, reserve;
+	uint8_t		old, tail;
+	uint64_t	paused_us;	/* PROFILE: time spent paused */
 	/* the monster at the pause: anything else changing these ends it */
 	const Schedule_t *sched;
 	int		sidx, tstat, mstate, dead;
@@ -107,10 +117,10 @@ typedef struct {
 
 /* counts since boot (`stats N ai:`: work units, host = cart) */
 static struct {
-	uint32_t	spread, pauses, resumes, drops, defers, overruns, absorbed;
+	uint32_t	spread, pauses, resumes, drops, defers, overruns, absorbed, waits;
 	uint32_t	max_paused, max_frames;
-	uint32_t	holds, held_runs, held_aged, held_whole, held_drops, max_held, max_late_ms;
-	uint32_t	held_over, held_hard;
+	uint32_t	holds, held_runs, held_aged, held_drops, max_held, max_late_ms;
+	uint32_t	held_over;
 } ac;
 
 /* queued (held) thinks, oldest first */
@@ -155,7 +165,9 @@ static int ai_handle_ok(ent_h now, ent_h then)
 }
 
 /* 1 while nothing but the think itself changed the monster since its
- * pause; 0 when its think must end (freed: also !*live) */
+ * pause; 0 when its think must end (freed: also !*live). Paused in the
+ * execution half (tail) only freeing, death, a layer or think function
+ * change end it. */
 static int ai_valid(const ai_ctx_t *c, int *live)
 {
 	const CBaseMonster *m;
@@ -165,11 +177,11 @@ static int ai_valid(const ai_ctx_t *c, int *live)
 	if (!*live)
 		return 0;
 	m = c->m;
-	return ent_idc(e)->layer == c->layer && ent_tm(e)->think == c->think &&
-		m->m_pSchedule == c->sched && m->m_iScheduleIndex == c->sidx &&
+	if (ent_idc(e)->layer != c->layer || ent_tm(e)->think != c->think || m->deadflag != c->dead)
+		return 0;
+	return c->tail || (m->m_pSchedule == c->sched && m->m_iScheduleIndex == c->sidx &&
 		m->m_iTaskStatus == c->tstat && m->m_MonsterState == c->mstate &&
-		m->deadflag == c->dead && ai_handle_ok(m->m_hEnemy, c->enemy) &&
-		ai_handle_ok(m->m_hTargetEnt, c->target);
+		ai_handle_ok(m->m_hEnemy, c->enemy) && ai_handle_ok(m->m_hTargetEnt, c->target));
 }
 
 static void ai_free(ai_ctx_t *c)
@@ -326,10 +338,9 @@ static void held_late(const ai_held_t *h)
 		ac.max_late_ms = ms;
 }
 
-/* queued AI_HOLD_MAX: it starts regardless of the budget */
-static int held_hard(const ai_held_t *h)
+static uint32_t ai_budget(void)
 {
-	return gtime() - h->t_held >= AI_HOLD_MAX;
+	return (uint32_t)settings.ai_budget;
 }
 
 int Ai_Think(int e)
@@ -365,9 +376,8 @@ int Ai_Think(int e)
 	if (q >= 0)
 	{
 		/* queued: the frame start starts it (oldest first); this
-		 * dispatch is absorbed until it is AI_HOLD_MAX late (then
-		 * the frame start found no free context: it runs here) */
-		if (mode == 1 && !held_hard(&held[q]))
+		 * dispatch is absorbed */
+		if (mode == 1)
 		{
 			ac.absorbed++;
 			ent_think_at(e, held[q].due);
@@ -375,21 +385,8 @@ int Ai_Think(int e)
 		}
 		held_late(&held[q]);
 		held_remove(q);
-		if (mode == 1)
-		{
-			ac.held_aged++;
-			ac.held_hard++;
-			c = ai_free_ctx();
-			if (!c)
-			{
-				ac.held_whole++;
-				return 0;
-			}
-			ai_begin(c, e, mode);
-			return 1;
-		}
 	}
-	else if (mode == 1 && (nheld > 0 || Mon_FrameUnits(NULL) >= (uint32_t)settings.ai_budget) &&
+	else if (mode == 1 && (nheld > 0 || Mon_FrameUnits(NULL) >= ai_budget()) &&
 		nheld < AI_QUEUE && (ent_tm(e)->think == FN_CBaseMonster_CallMonsterThink ||
 		ent_tm(e)->think == FN_CBaseMonster_MonsterThink))
 	{
@@ -419,33 +416,62 @@ int Ai_Think(int e)
 	return 1;
 }
 
-void Ai_PausePoint(int e)
+int Ai_PauseDue(int e, uint32_t reserve)
 {
 	ai_ctx_t *c = cur;
 
 	if (!c || c->e != e || co_running() != ai_index(c))
-		return;
-	if (c->slice_points++ == 0 || c->overrun)
-		return;
+		return 0;
+	if (c->slice_points++ == 0)
+		return 0;
 	if (settings.ai_spread == 1)
 	{
-		if (Mon_FrameUnits(&c->acc) < (uint32_t)settings.ai_budget)
-			return;
-		if (gtime() - c->t_start >= AI_MAX_AGE)
+		if (Mon_FrameUnits(&c->acc) + reserve < ai_budget())
+			return 0;
+		if (!c->old && gtime() - c->t_start >= AI_MAX_AGE)
 		{
-			c->overrun = 1;
+			c->old = 1;
 			ac.overruns++;
-			return;
 		}
 	}
+	c->reserve = reserve;
+	return 1;
+}
+
+void Ai_Pause(int e, int tail)
+{
+	ai_ctx_t *c = cur;
+#ifdef HL64_PROFILE
+	uint64_t t0 = sys_time_us();
+#endif
+
+	if (!c || c->e != e || co_running() != ai_index(c))
+		return;
+	c->tail = (uint8_t)tail;
 	c->state = AC_PAUSED;
 	co_yield();
+	c->tail = 0;
+	c->reserve = 0;
+#ifdef HL64_PROFILE
+	c->paused_us += sys_time_us() - t0;
+#endif
+}
+
+uint64_t Ai_PausedUs(void)
+{
+	return cur ? cur->paused_us : 0;
+}
+
+void Ai_PausePoint(int e)
+{
+	if (Ai_PauseDue(e, 0))
+		Ai_Pause(e, 0);
 }
 
 void Ai_FrameStart(void)
 {
 	ai_ctx_t	*c, *order[HL64_AI_CONTEXTS];
-	int		i, j, n = 0, live, layer;
+	int		i, j, n = 0, live, layer, ran = 0;
 
 	frame_no++;
 	aged_starts = 0;
@@ -483,18 +509,26 @@ void Ai_FrameStart(void)
 				ai_drop(c);
 			continue;
 		}
+		/* the oldest always progresses; a later one while its item
+		 * fits under the budget */
+		if (ran && Mon_FrameUnits(NULL) + c->reserve >= ai_budget())
+		{
+			ac.waits++;
+			continue;
+		}
+		ran = 1;
 		eng_set_frame_layer(c->layer);
 		ai_slice(c);
 	}
 	/* queued thinks, oldest first, while the frame's work is under the
 	 * budget; over it, one AI_HOLD late starts while this frame's such
-	 * starts are under HL64_AI_AGED_PER_FRAME, one AI_HOLD_MAX late
-	 * starts regardless (the queue is in hold order: the late ones lead) */
+	 * starts are under HL64_AI_AGED_PER_FRAME (the queue is in hold
+	 * order: the late ones lead) */
 	while (nheld > 0)
 	{
 		ai_held_t h = held[0];
 		float age;
-		int over, hard = 0;
+		int over;
 
 		if (!held_valid(&h))
 		{
@@ -503,13 +537,9 @@ void Ai_FrameStart(void)
 			continue;
 		}
 		age = gtime() - h.t_held;
-		over = Mon_FrameUnits(NULL) >= (uint32_t)settings.ai_budget;
-		if (over)
-		{
-			hard = held_hard(&h);
-			if (!hard && (age < AI_HOLD || aged_starts >= HL64_AI_AGED_PER_FRAME))
-				break;
-		}
+		over = Mon_FrameUnits(NULL) >= ai_budget();
+		if (over && (age < AI_HOLD || aged_starts >= HL64_AI_AGED_PER_FRAME))
+			break;
 		c = ai_free_ctx();
 		if (!c)
 			break;
@@ -520,8 +550,7 @@ void Ai_FrameStart(void)
 		if (over)
 		{
 			ac.held_over++;
-			ac.held_hard += (uint32_t)hard;
-			aged_starts += !hard;
+			aged_starts++;
 		}
 		/* as the engine dispatches a think: nextthink := 0 */
 		ent_think_at(h.e, 0);
@@ -572,15 +601,15 @@ void Ai_DropAll(void)
 
 void Ai_PrintCounts(void)
 {
-	log_printf(" spread=%lu pauses=%lu resumes=%lu drops=%lu defers=%lu overruns=%lu absorbed=%lu "
-		"max_paused=%lu max_frames=%lu holds=%lu held_runs=%lu held_aged=%lu held_over=%lu "
-		"held_hard=%lu held_whole=%lu held_drops=%lu max_held=%lu max_late_ms=%lu",
+	log_printf(" spread=%lu pauses=%lu resumes=%lu waits=%lu drops=%lu defers=%lu overruns=%lu "
+		"absorbed=%lu max_paused=%lu max_frames=%lu holds=%lu held_runs=%lu held_aged=%lu "
+		"held_over=%lu held_drops=%lu max_held=%lu max_late_ms=%lu",
 		(unsigned long)ac.spread, (unsigned long)ac.pauses, (unsigned long)ac.resumes,
-		(unsigned long)ac.drops, (unsigned long)ac.defers, (unsigned long)ac.overruns,
-		(unsigned long)ac.absorbed, (unsigned long)ac.max_paused, (unsigned long)ac.max_frames,
-		(unsigned long)ac.holds, (unsigned long)ac.held_runs, (unsigned long)ac.held_aged,
-		(unsigned long)ac.held_over, (unsigned long)ac.held_hard, (unsigned long)ac.held_whole,
-		(unsigned long)ac.held_drops, (unsigned long)ac.max_held, (unsigned long)ac.max_late_ms);
+		(unsigned long)ac.waits, (unsigned long)ac.drops, (unsigned long)ac.defers,
+		(unsigned long)ac.overruns, (unsigned long)ac.absorbed, (unsigned long)ac.max_paused,
+		(unsigned long)ac.max_frames, (unsigned long)ac.holds, (unsigned long)ac.held_runs,
+		(unsigned long)ac.held_aged, (unsigned long)ac.held_over, (unsigned long)ac.held_drops,
+		(unsigned long)ac.max_held, (unsigned long)ac.max_late_ms);
 }
 
 /* `prof ai_ctx` (after `prof ai`): the counts and each context's deepest

@@ -157,6 +157,13 @@ typedef struct {
 	uint8_t		pad[2];
 } game_pose_t;
 int	game_studio_pose(const game_pose_t *p, float (*out)[3][4], int max);
+/* The same pose for the renderer (temp models, the view model): it reads
+ * the game's memo but never fills it, so the game's memo hits are the
+ * same on every machine whatever it draws. */
+int	game_studio_pose_draw(const game_pose_t *p, float (*out)[3][4], int max);
+/* Bones of the poses game_studio_pose computed since boot (memo misses):
+ * the game's AI work counters take deltas around a think. */
+extern uint32_t	game_studio_pose_bones;
 /* An upper bound on the distance from the pose origin of any point of
  * model's hitboxes in any pose game_studio_pose gives for sequence
  * `sequence` (any frame, blend, controller; the bone chains' longest

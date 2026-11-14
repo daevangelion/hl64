@@ -24,6 +24,7 @@
 #include <string.h>
 
 #include "engine/core/hlmath.h"
+#include "game/hl/monster.h"
 #include "game/hl/util.h"
 
 game_globals_t	gpGlobals;
@@ -1324,6 +1325,7 @@ void UTIL_DecalTrace(const col_trace_t *tr, int decal)
 		return;
 	if (tr->ent > 0 && !IsBSPModel(tr->ent))
 		return;
+	mon_aiw.decals++;
 	fx_decal_trace(tr, decal);
 }
 
