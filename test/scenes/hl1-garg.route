@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: MIT
+# Scene hl1-garg (test/README.md): hldemo1's garg room: the glimpse trigger
+# (glimpse_garg), the cave-in (cavein2_mm, the vent pops and falls), the
+# vent's north leg onto garg_vent_break, the drop over the garg room, the
+# garg killing garg_sci_1 and kicking the CPU (cpu_debris_*):
+# uplink.route lines 696-731 with the vent crawl's long east leg replaced by
+# its x 1200 point (route ops 512-525: after WAIT_NEAR 2083 -232 518 ..
+# SHOT garg-look).
+# scene-window: uplink 512 garg-look
+startmap hldemo1
+waitmap hldemo1 60
+setpos -2048 744 36
+wait 0.3
+drop item_suit -2048 744 36
+drop weapon_crowbar -2048 744 36
+wait 1
+god 1
+setpos 530 -110 36 0 0
+waitgone glimpse_garg 20
+# cave-in trigger (#319) -> cavein2_mm -> launch_mm: vent pops and falls
+setpos 720 -180 36 0 0
+waitgone pop 5
+waitgone vent_fall_crate_2 10
+# the vent crawl (uplink 707-715) from x 1200 (where the route starts
+# swinging the crowbar) to its east end, ducked (a setpos straight to the
+# east end leaves the player stuck there)
+setpos 280 -232 36 0 0
++duck
+wait 0.5
+impulse 1
+setpos 1200 -232 400 30 0
+wait 0.3
++forward
++attack
+waitnear 2083 -232 518 6 60
+stats begin
+-forward
++moveleft
+waitnear 2072 64 482 16 20
+-moveleft
++back
+waitgone garg_vent_break 30
+-back
+-attack
+wait 2
+-duck
+# garg kicks the CPU after killing garg_sci_1 (debris 3..5 s later)
+waitgone cpu_debris_3 40
+shot garg
+# the garg itself (the shot above frames the vent it came through)
+lookat monster_gargantua
+shot garg-look
+stats end
+wait 0.2
+pass

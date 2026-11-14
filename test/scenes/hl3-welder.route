@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: MIT
+# Scene hl3-welder (test/README.md): hldemo3 after the dish: the control
+# room briefing (start_dish_mm), the dish wheel and button (global
+# hldemo_global_dish_ms), the rappel grunts, down the domelift, the welder
+# grunts (trigger_once #60, master welder_master) and the steam valve:
+# uplink.route lines 366-436, window SHOT dish-activated .. op 298
+# (after WAIT_GONE gauge_steam_hurt).
+# scene-window: uplink dish-activated 298
+startmap hldemo3
+waitmap hldemo3 60
+# the route's player has the suit here (hldemo1's item_suit): drop it on
+# him (HLSDK CBaseEntity::Create, touch pickup)
+setpos -438 -576 -476 0 177
+wait 0.3
+drop item_suit -438 -576 -476
+wait 1
+god 1
+# domelift: bottom button #23 -> func_train domelift p1 -> p2
+setpos 688 0 -470 0 0
+wait 0.5
++use
+wait 0.2
+-use
+waitmoved domelift 20
+# the upper corridor by the domelift top first (uplink 373-387; the route
+# arrives there by the lift): the dish track's func_pushable (x 1052..1084) is within its spawn
+# radius there; from the control room it stays a pending record and the
+# wheel's momentary doors move without pushing it (dish_light_ms never opens)
+setpos 500 0 46 0 180
+wait 0.3
+setpos 400 0 46 0 180
+wait 0.3
+setpos 360 0 58 0 180
+wait 0.3
+setpos 300 0 46 0 180
+wait 0.3
+setpos 250 150 46 0 135
+wait 0.3
+setpos 0 280 46 0 180
+wait 0.3
+setpos -250 150 46 0 225
+wait 0.3
+# control room: trigger_once #147 -> start_dish_mm (scientist briefing)
+setpos -260 0 46 0 0
+wait 12
+# turn the dish: hold +use on wheel #178 (momentary_rot_button 'dish');
+# dish_control momentary_doors push the func_pushable through trigger
+# 'on' #140 -> relay #146 -> multisource dish_light_ms
+setpos -224 -37 46 20 0
+wait 0.5
++use
+wait 9
+-use
+wait 0.5
+# dish button #176 (master dish_light_ms) -> dish_mm
+setpos -224 0 46 40 0
+wait 0.5
++use
+wait 0.2
+-use
+waitglobal hldemo_global_dish_ms 30
+shot dish-activated
+stats begin
+# rappel grunts (9.5 s), gauge crack (11.5 s), dome_exit_grate (12 s)
+wait 13
+# back down: top button #172 calls domelift p2 -> p1
+setpos 300 0 46 0 0
+wait 0.3
+setpos 360 0 58 0 0
+wait 0.3
+setpos 500 0 46 0 0
+wait 0.3
+setpos 688 0 46 10 0
+wait 0.5
++use
+wait 0.2
+-use
+waitnear 688 0 -476 4 20
+# inner dome floor: welder trigger_once #60 (master welder_master)
+setpos 500 0 -470 0 180
+wait 0.3
+setpos 200 0 -470 0 180
+wait 0.3
+setpos 140 -240 -470 0 270
+wait 0.5
+# steam valve func_rot_button #193 -> gauge_relay -> gauge_mm (steam off)
+setpos 116 -296 -470 30 180
+wait 0.5
++use
+wait 0.2
+-use
+waitgone gauge_steam_hurt 10
+stats end
+wait 0.2
+pass
