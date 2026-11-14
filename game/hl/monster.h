@@ -1208,6 +1208,8 @@ void	Ai_PausePoint(int e);
  * a firing event's traces, hitbox poses (~5 ms each on the cart), sounds
  * and decal: ~4-12 ms, up to ~20 ms with three poses */
 #define AI_EVENT_RESERVE	12000
+/* the reserve of a point before an attachment's pose (gargantua eye) */
+#define AI_POSE_RESERVE		6000
 /* PROFILE: us the running think has spent paused (its zones skip them) */
 uint64_t Ai_PausedUs(void);
 void	Ai_FrameStart(void);
