@@ -24,6 +24,7 @@
 
 #include "hl64/ent.h"
 #include "hl64/limits.h"
+#include "hl64/seam.h"
 #include "hl64/studio.h"
 #include "engine/core/hlmath.h"
 #include "engine/core/log.h"
@@ -138,13 +139,25 @@ int trans_blend_amt(int rendermode, int renderfx, int amt, int e, float dist)
 	}
 }
 
+/* An entity's draw origin (global): its layer's, + the seam ghost offset
+ * when it shows in the eye's map as one (seam_ghost) */
+static void ent_gm(int e, float gm[3])
+{
+	const float *o = eng_layer_origin(ent_idc(e)->layer);
+	float off[3];
+	int k, g = seam_ghost(e, fx_s.map, off);
+
+	for (k = 0; k < 3; k++)
+		gm[k] = o[k] + (g ? off[k] : 0);
+}
+
 int trans_blend(int e)
 {
 	const col_ent_t *cv = ent_cv(e);
-	const float *gm = eng_layer_origin(ent_idc(e)->layer);
-	float d = 0;
+	float gm[3], d = 0;
 	int k;
 
+	ent_gm(e, gm);
 	for (k = 0; k < 3; k++)
 	{
 		float v = cv->origin[k] + gm[k] - fx_s.eye[k];
@@ -303,10 +316,10 @@ void trans_add(int kind, int id, float d2, uint8_t blend, uint8_t mode)
 
 static float ent_dist2(int e, float org[3])
 {
-	const float *gm = eng_layer_origin(ent_idc(e)->layer);
-	float d = 0;
+	float gm[3], d = 0;
 	int k;
 
+	ent_gm(e, gm);
 	for (k = 0; k < 3; k++)
 	{
 		org[k] = ent_cv(e)->origin[k] + gm[k];
@@ -353,7 +366,8 @@ void ren_trans_brush(int e, float dist2)
 	trans_add(TK_BRUSH_ENT, e, dist2, b, (uint8_t)mode);
 }
 
-/* Sprite entities of the eye's map in front of the eye. */
+/* Sprite entities of the eye's map (and the seam ghosts it shows) in front
+ * of the eye. */
 static void list_sprite_ents(void)
 {
 	int e;
@@ -369,7 +383,8 @@ static void list_sprite_ents(void)
 		r = ent_rnd(e);
 		if (RES_KIND(r->model) != RES_K_SPRITE || (r->effects & EF_NODRAW))
 			continue;
-		if (!wld_layer(ent_idc(e)->layer) || wld_layer(ent_idc(e)->layer)->map != fx_s.map)
+		if (!wld_layer(ent_idc(e)->layer) || (wld_layer(ent_idc(e)->layer)->map != fx_s.map
+			&& !seam_ghost(e, fx_s.map, org)))
 			continue;
 		cv = ent_cv(e);
 		d2 = ent_dist2(e, org);
