@@ -341,6 +341,19 @@ void seamprof_end(uint32_t frame, uint32_t dt_us, uint32_t switch_frame)
 	f->map = (int16_t)(phy_player_active() ? phy_player_map() : -1);
 	sp.mark = 0;
 	seamprof_push(f, switch_frame, mark);
+	/* every frame over SEAMPROF_SLOW_US: its zones of 1 ms or more (M5
+	 * AI budget: a frame's mon beside the rest and the framebuffer wait) */
+	if (f->us[SEAMPROF_Z_FRAME] > SEAMPROF_SLOW_US)
+	{
+		int z;
+
+		log_printf("seamprof: slow frame=%lu frame_us=%lu", (unsigned long)frame,
+			(unsigned long)f->us[SEAMPROF_Z_FRAME]);
+		for (z = SEAMPROF_Z_FRAME + 1; z < SEAMPROF_ZONE_COUNT; z++)
+			if (f->us[z] >= 1000 || z == SEAMPROF_Z_MON || z == SEAMPROF_Z_WAIT)
+				log_printf(" %s=%lu", seamprof_zone_name[z], (unsigned long)f->us[z]);
+		log_printf("\n");
+	}
 }
 
 #endif
