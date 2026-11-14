@@ -50,8 +50,11 @@ typedef struct {
 
 static graph_t	graphs[GRAPH_SLOTS];
 
-/* Dijkstra scratch (MAX_NODES) */
-static float	dist_a[HLN_MAX_NODES], dist_b[HLN_MAX_NODES];
+/* Dijkstra scratch (MAX_NODES). FindShortestPath has its own distances
+ * (dist_r): the cover searches keep their path lengths (HLSDK PathLength
+ * over the static routing tables) in dist_a / dist_b across the routes
+ * MoveToLocation / BuildRoute build inside their candidate loops. */
+static float	dist_a[HLN_MAX_NODES], dist_b[HLN_MAX_NODES], dist_r[HLN_MAX_NODES];
 static int16_t	prev[HLN_MAX_NODES];
 static uint16_t	heap[HLN_MAX_NODES * 4];
 static float	heapk[HLN_MAX_NODES * 4];
@@ -372,7 +375,7 @@ static void dijkstra(int slot, graph_t *g, int start, int dest, int iHull, int a
 int Graph_FindShortestPath(int slot, int *piPath, int iStart, int iDest, int iHull, int afCapMask)
 {
 	graph_t	*g = graph(slot);
-	int	count, cur, i, all[HLN_MAX_NODES];
+	int	count, cur, i;
 
 	if (!g || iStart < 0 || iStart >= g->n || iDest < 0 || iDest >= g->n)
 		return 0;
@@ -383,22 +386,21 @@ int Graph_FindShortestPath(int slot, int *piPath, int iStart, int iDest, int iHu
 		piPath[1] = iDest;
 		return 2;
 	}
-	dijkstra(slot, g, iStart, iDest, iHull, afCapMask, dist_a);
-	if (dist_a[iDest] < -0.5f)
+	dijkstra(slot, g, iStart, iDest, iHull, afCapMask, dist_r);
+	if (dist_r[iDest] < -0.5f)
 		return 0;
 	count = 1;
 	for (cur = iDest; cur != iStart; cur = prev[cur])
 		count++;
+	/* the first MAX_PATH_SIZE nodes of the path start -> dest */
 	cur = iDest;
 	for (i = count - 1; i >= 0; i--)
 	{
-		all[i] = cur;
+		if (i < MAX_PATH_SIZE)
+			piPath[i] = cur;
 		cur = prev[cur];
 	}
-	if (count > MAX_PATH_SIZE)
-		count = MAX_PATH_SIZE;
-	memcpy(piPath, all, (size_t)count * sizeof(int));
-	return count;
+	return count > MAX_PATH_SIZE ? MAX_PATH_SIZE : count;
 }
 
 /* the door to open on the route link from -> to (AdvanceRoute) */
