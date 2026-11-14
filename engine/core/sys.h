@@ -59,6 +59,23 @@ int		sys_stack_peak(void);
  * (no-op on the host). */
 void		sys_cache_writeback(const void *p, uint32_t n);
 
+/* ---- cooperative contexts (engine/core/co.c) --------------------------- */
+
+/* A context runs entry() on its own stack [stack, stack + bytes) from its
+ * first sys_co_resume until it calls sys_co_yield, which returns to the
+ * sys_co_resume; the next sys_co_resume continues after that yield. entry
+ * never returns (re-init the context instead). One level only: a context
+ * never resumes another. The register state saved is the ABI's
+ * callee-saved set (cart: libdragon ucontext, s0-s8 / ra / sp, f20-f31,
+ * FCR31 -- a new context starts with the main stack's FCR31; host: glibc
+ * ucontext). The storage is opaque. */
+typedef struct {
+	uint64_t	opaque[64];
+} sys_co_t;
+void		sys_co_init(sys_co_t *co, void *stack, uint32_t bytes, void (*entry)(void));
+void		sys_co_resume(sys_co_t *co);
+void		sys_co_yield(sys_co_t *co);
+
 /* ---- controller (11; M1: the free camera's debug pad) ------------------ */
 
 typedef struct {

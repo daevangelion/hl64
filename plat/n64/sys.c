@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <malloc.h>
+#include <ucontext.h>	/* libdragon: makecontext / swapcontext */
 
 #include <libdragon.h>
 #include <system.h>	/* stdio_t, hook_stdio_calls */
@@ -133,6 +134,42 @@ uint32_t sys_image_bytes(void)
 void sys_cache_writeback(const void *p, uint32_t n)
 {
 	data_cache_hit_writeback(p, n);
+}
+
+/* ---- cooperative contexts ------------------------------------------------- */
+
+/* libdragon's swapcontext saves s0-s7, fp, ra, sp, f20-f31 and FCR31 (the
+ * o64 ABI's callee-saved set; $gp is one value for the whole image). Its
+ * makecontext zeroes the FPU control word: the new context takes the main
+ * stack's (denormals flushed, traps masked: main.c). The entry runs with
+ * ra = entry and must never return. */
+typedef struct {
+	ucontext_t	ctx;
+} n64_co_t;
+
+typedef char n64_co_fits[sizeof(n64_co_t) <= sizeof(sys_co_t) ? 1 : -1];
+
+static ucontext_t co_main;
+
+void sys_co_init(sys_co_t *co, void *stack, uint32_t bytes, void (*entry)(void))
+{
+	n64_co_t *h = (n64_co_t *)(void *)co;
+
+	memset(h, 0, sizeof(*h));
+	h->ctx.uc_stack.ss_sp = stack;
+	h->ctx.uc_stack.ss_size = bytes & ~15u;
+	makecontext(&h->ctx, entry, 0, 0);
+	h->ctx.uc_mcontext.fc32 = C1_FCR31();
+}
+
+void sys_co_resume(sys_co_t *co)
+{
+	swapcontext(&co_main, &((n64_co_t *)(void *)co)->ctx);
+}
+
+void sys_co_yield(sys_co_t *co)
+{
+	swapcontext(&((n64_co_t *)(void *)co)->ctx, &co_main);
 }
 
 /*
