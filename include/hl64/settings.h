@@ -59,9 +59,11 @@ typedef struct {
 	/* monster thinks over the frame's AI work budget (game/hl/aithink.c):
 	 * 0 run whole (HLSDK), 1 pause and continue next frame, 2 test: pause
 	 * at every check and continue at once after scribbling the shared
-	 * scratch (decides as 0); ai_budget in work units per frame */
+	 * scratch (decides as 0); ai_budget in work units per frame; ai_hold
+	 * a held think's lateness bound, seconds of game time */
 	uint8_t		ai_spread;
 	float		ai_budget;
+	float		ai_hold;
 } settings_t;
 
 extern settings_t settings;
@@ -100,7 +102,8 @@ extern settings_t settings;
 	X(R_OPENSEAM, r_openseam, U8, 0, 2, 0) \
 	X(R_DITHER, r_dither, U8, 0, 1, 0) \
 	X(AI_SPREAD, ai_spread, U8, 0, 2, 0) \
-	X(AI_BUDGET, ai_budget, F32, 0, 1000000, 0)
+	X(AI_BUDGET, ai_budget, F32, 0, 1000000, 0) \
+	X(AI_HOLD, ai_hold, F32, 0, 2, 0)
 
 enum {
 #define SETTINGS_ENUM(id, field, type, lo, hi, persist) SET_##id,

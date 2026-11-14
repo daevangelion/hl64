@@ -285,14 +285,22 @@ static void aiw_add(mon_ai_work_t *s, const mon_ai_work_t *d)
 		ps[i] += pd[i];
 }
 
-/* Budget units of think work (Mon_FrameUnits, ai_budget): a walk step
- * (its hull trace counts among the traces) and a collision trace. */
-#define AI_UNIT_STEP	1
-#define AI_UNIT_TRACE	4
+/* Budget units of think work (Mon_FrameUnits, ai_budget), 1 unit ~ 5 us
+ * of cart CPU: a think begun (its fixed part: schedule, conditions,
+ * StudioFrameAdvance, anim events), a collision trace, a BSP node a trace
+ * visited, a walk step (its hull trace counts among the traces). Fitted
+ * to the `ai: frame` lines of an ares PROFILE m4 run (main e06aa4b, 1380
+ * frames: us ~ 916 x thinks + 50 x traces + 5.4 x bsp + 28 x steps,
+ * r2 0.93). */
+#define AI_UNIT_START	180
+#define AI_UNIT_TRACE	10
+#define AI_UNIT_BSP	1
+#define AI_UNIT_STEP	5
 
 static uint32_t aiw_units(const mon_ai_work_t *w)
 {
-	return w->steps * AI_UNIT_STEP + w->traces * AI_UNIT_TRACE;
+	return w->starts * AI_UNIT_START + w->traces * AI_UNIT_TRACE + w->bsp * AI_UNIT_BSP +
+		w->steps * AI_UNIT_STEP;
 }
 
 static void aiw_print(const char *tag, const mon_ai_work_t *w);
@@ -303,6 +311,7 @@ static void aiw_print(const char *tag, const mon_ai_work_t *w);
  * think cost zones, the frame period) */
 #define AI_LOG_FRAME_US		10000
 #define AI_LOG_PERIOD_US	50000
+#define AI_LOG_EVENT_US		4000	/* an anim event (PROFILE `ai: event`) */
 
 /* PROFILE: the frame's think cost zones (machine us, never decisions):
  * Look, the animation half (StudioFrameAdvance .. DispatchAnimEvents),
@@ -398,11 +407,11 @@ void mon_stats_route(void) { mstat.routes++; }
 static void aiw_print(const char *tag, const mon_ai_work_t *w)
 {
 	log_printf(" %s=lm:%lu,steps:%lu,traces:%lu,bsp:%lu,routes:%lu,tri:%lu,cover:%lu,nn:%lu,"
-		"nnt:%lu,dj:%lu,djpop:%lu,lmhit:%lu", tag, (unsigned long)w->lm,
+		"nnt:%lu,dj:%lu,djpop:%lu,lmhit:%lu,starts:%lu", tag, (unsigned long)w->lm,
 		(unsigned long)w->steps, (unsigned long)w->traces, (unsigned long)w->bsp,
 		(unsigned long)w->routes, (unsigned long)w->tri, (unsigned long)w->cover,
 		(unsigned long)w->nn, (unsigned long)w->nnt, (unsigned long)w->dj,
-		(unsigned long)w->djpop, (unsigned long)w->lmhit);
+		(unsigned long)w->djpop, (unsigned long)w->lmhit, (unsigned long)w->starts);
 }
 
 /* `prof ai` (after `prof mon_us`): the window's AI work per frame (avg),
@@ -501,7 +510,25 @@ void Mon_DispatchAnimEvents(int e, float interval)
 	{
 		ev.res = gs_anim_event_res(r->model, seq, next);
 		index = next;
+#ifdef HL64_PROFILE
+		{
+			uint64_t	t0 = Mon_PzBegin();
+			col_stats_t	c0, c1;
+			uint32_t	us;
+
+			col_counts(&c0);
+			Mon_HandleAnimEvent(e, &ev);
+			us = (uint32_t)(sys_time_us() - t0);
+			col_counts(&c1);
+			if (us >= AI_LOG_EVENT_US)
+				log_printf("ai: event t=%.3f e=%d %s event=%d options=%s us=%lu traces=%lu\n",
+					(double)gtime(), e, game_class_name(ent_idc(e)->cls), ev.event,
+					ev.options ? ev.options : "-", (unsigned long)us,
+					(unsigned long)(c1.traces - c0.traces));
+		}
+#else
 		Mon_HandleAnimEvent(e, &ev);
+#endif
 		if (!ent_is_live(e) || r->sequence != seq)
 			break;
 	}
@@ -889,6 +916,7 @@ void Mon_ThinkRun(int e)
 	int		seq;
 	uint64_t	t0;
 
+	mon_aiw.starts++;
 	ThinkIn(e, 0.1f);
 	if (m->m_MonsterState != MONSTERSTATE_DEAD)
 		mon_want_attacks(e);

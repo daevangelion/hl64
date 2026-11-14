@@ -100,10 +100,13 @@ enum {
 };
 
 /* Window half-width (frame time, us) and the ring: 2 s of the shortest
- * frame (HL64_DT_MIN_US) plus the switch frame. */
+ * frame (HL64_DT_MIN_US) plus the switch frame. Every frame longer than
+ * SEAMPROF_SLOW_US (any time) logs `seamprof: slow frame=F frame_us=U
+ * <zone>=<us> ...` with its zones of 1 ms or more (mon and wait always). */
 #define SEAMPROF_HALF_US	2000000u
 #define SEAMPROF_RING		(SEAMPROF_HALF_US / 16667u + 2u)
 #define SEAMPROF_WINDOWS	2
+#define SEAMPROF_SLOW_US	50000u
 
 /* One frame. */
 typedef struct {
