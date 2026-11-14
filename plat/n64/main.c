@@ -25,7 +25,9 @@
 #include "plat/n64/n64.h"
 
 #define AUDIO_HZ	22050
-#define AUDIO_BUFFERS	4
+/* AI headroom: libdragon carves it into 512-sample buffers (the mixer's
+ * round size, mixer_init), 7 of them at 22050 Hz. */
+#define AUDIO_LATENCY_MS	160
 #define FB_BYTES	(320 * 240 * 2)
 
 int main(void)
@@ -65,7 +67,7 @@ int main(void)
 	rdpq_init();
 	joypad_init();
 	timer_init();
-	audio_init(AUDIO_HZ, AUDIO_BUFFERS);
+	audio_init(AUDIO_HZ, AUDIO_INIT_LATENCY_MS(AUDIO_LATENCY_MS));
 	t3d_init((T3DInitParams){});
 	vid_init();
 

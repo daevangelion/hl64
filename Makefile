@@ -2,7 +2,7 @@
 #
 # hl64 build (docs/architecture.md 18.1).
 #
-#   make rom      $(BUILD_DIR)/hl64.z64 (libdragon n64.mk + t3d.mk, banked libdragon)
+#   make rom      $(BUILD_DIR)/hl64.z64 (libdragon n64.mk + t3d.mk, our libdragon fork)
 #   make host     $(BUILD_DIR)/host/hl64-host (HOST_M32=1 default: -m32)
 #   make cook     HL64_DATA (the player's .../Half-Life/valve) -> HL64_CONTENT
 #                 [MAPS='hldemo* t0a0*'] [HL64_REF_PALETTE=<palette.lmp>], then
@@ -15,7 +15,13 @@
 # written into the source tree.
 
 BUILD_DIR ?= build
-N64_INST ?= $(HOME)/sdks/n64-sdk
+# The N64 SDK (docs/architecture.md 18.1): libdragon from our fork
+# (~/src/libdragon-hl64 branch hl64: DragonMinded preview + the banked RDRAM
+# overlay + the debugcpp debloat + the PI dispatch fix) and tiny3d, installed
+# together by plat/n64/build_sdk.sh into a prefix named after the fork commit.
+LIBDRAGON_REV := ef4435505a57b25de7fbc41753a9a08dbf29d8bc
+TINY3D_REV := e84172f29f719680ac3213a7f408c2f721ef7b24
+N64_INST ?= $(HOME)/sdks/n64-sdk-hl64-$(shell printf %.12s $(LIBDRAGON_REV))
 N64_GCCPREFIX ?= $(HOME)/sdks/mips64-toolchain
 # n64sym and friends read both from the environment
 export N64_INST N64_GCCPREFIX
@@ -147,33 +153,25 @@ all: rom
 
 ifeq ($(wildcard $(N64_INST)/include/n64.mk),)
 rom elf sdk-check:
-	@echo "N64 SDK not found at N64_INST=$(N64_INST)" >&2; exit 2
+	@echo "N64 SDK not found at N64_INST=$(N64_INST) (build it: plat/n64/build_sdk.sh)" >&2; exit 2
 else
 include $(N64_INST)/include/n64.mk
 include $(T3D_INST)/include/t3d.mk
 SOURCE_DIR := .
 
-# Banked libdragon (FB / Z / stream in separate RDRAM banks): the SDK's
-# libdragon rev plus the banked overlay and plat/n64/libdragon-patches,
-# built into its own prefix. Its MANIFEST must name the SDK's rev and the
-# sha256 of our patches; it replaces both SDK archives.
-SDK_REV := $(shell sed -n 's/.*"libdragon_rev": *"\([0-9a-f]*\)".*/\1/p' $(N64_INST)/EMERGENCE_SDK_MANIFEST.json)
-LIBDRAGON_BANKED ?= $(HOME)/sdks/libdragon-banked-$(shell printf %.12s "$(SDK_REV)")
-BANKED_REV := $(shell sed -n 's/.*"libdragon_rev": *"\([0-9a-f]*\)".*/\1/p' $(LIBDRAGON_BANKED)/MANIFEST.json 2>/dev/null)
-BANKED_PATCHES := $(shell sed -n 's/.*"port_patches_sha256": *"\([0-9a-f]*\)".*/\1/p' $(LIBDRAGON_BANKED)/MANIFEST.json 2>/dev/null)
-PATCHES_SHA := $(shell cat plat/n64/libdragon-patches/*.patch | sha256sum | cut -d' ' -f1)
+# The prefix's MANIFEST.json (plat/n64/build_sdk.sh) must name the pinned
+# fork and tiny3d commits.
+SDK_REV := $(shell sed -n 's/.*"libdragon_rev": *"\([0-9a-f]*\)".*/\1/p' $(N64_INST)/MANIFEST.json 2>/dev/null)
+SDK_T3D_REV := $(shell sed -n 's/.*"tiny3d_rev": *"\([0-9a-f]*\)".*/\1/p' $(N64_INST)/MANIFEST.json 2>/dev/null)
 
 sdk-check:
-	@if [ -z "$(SDK_REV)" ] || [ "$(BANKED_REV)" != "$(SDK_REV)" ]; then \
-		echo "libdragon-banked at $(LIBDRAGON_BANKED) has rev '$(BANKED_REV)', SDK wants '$(SDK_REV)'" >&2; exit 2; fi
-	@if [ "$(BANKED_PATCHES)" != "$(PATCHES_SHA)" ]; then \
-		echo "libdragon-banked at $(LIBDRAGON_BANKED) lacks plat/n64/libdragon-patches (sha $(PATCHES_SHA))" >&2; exit 2; fi
+	@if [ "$(SDK_REV)" != "$(LIBDRAGON_REV)" ] || [ "$(SDK_T3D_REV)" != "$(TINY3D_REV)" ]; then \
+		echo "N64 SDK at $(N64_INST) has libdragon '$(SDK_REV)' tiny3d '$(SDK_T3D_REV)'," \
+			"hl64 wants $(LIBDRAGON_REV) / $(TINY3D_REV) (plat/n64/build_sdk.sh)" >&2; exit 2; fi
 
-N64_LDFLAGS := $(patsubst -ldragon,$(LIBDRAGON_BANKED)/lib/libdragon.a,\
-	$(patsubst -ldragonsys,$(LIBDRAGON_BANKED)/lib/libdragonsys.a,$(N64_LDFLAGS)))
 # libdragon's headers are system headers to us: their own warnings are not
 # ours to fix (-isystem wins over n64.mk's -I for the same directory).
-N64_CFLAGS += -isystem $(N64_INCLUDEDIR) -isystem $(LIBDRAGON_BANKED)/include -I. -Iinclude
+N64_CFLAGS += -isystem $(N64_INCLUDEDIR) -I. -Iinclude
 # hl64 rules, after n64.mk's: every warning an error (n64.mk demotes the
 # unused-* family; promote it back), no auto-var pattern fill. engine/ is
 # C99; plat/n64 keeps n64.mk's -std=gnu17: libdragon's headers #error

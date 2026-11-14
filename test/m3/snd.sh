@@ -41,9 +41,10 @@ with open(os.path.join(content, "maps", "campaign.cwg"), "wb") as f:
 
 def wav64(name, freq, seconds, loop=0, nsamples=None):
     n = nsamples if nsamples is not None else int(freq * seconds)
-    # libdragon wav64 header: id, version 6, format 0 (raw), channels 1,
-    # 16 bits, rate, length, loop length, data offset, state size
-    hdr = b"WV64" + struct.pack(">bbbbiiiII", 6, 0, 1, 16, freq, n, loop, 28, 0)
+    # libdragon wav64 header: id, version 10, format 0 (raw), channels 1,
+    # 16 bits, rate, length, loop length, loop end (0: the length), data
+    # offset, state size
+    hdr = b"WV64" + struct.pack(">bbbbiiiiII", 10, 0, 1, 16, freq, n, loop, 0, 32, 0)
     with open(os.path.join(content, "sound", "t", name + ".wav64"), "wb") as f:
         f.write(hdr + bytes(2 * n))
 

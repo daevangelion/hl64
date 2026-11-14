@@ -4,9 +4,13 @@
  * mixer voices over cart-streamed wav64 (WAV64_STREAMING_FULL). Retargeted
  * from the old tree's n64/port/snd_n64.c (audit entry n64/port/snd_n64.c
  * QUAKE-INTERFACE / CLEAN): its per-voice limits (16-bit, the 130 % rate
- * cap, a fixed buffer), the boot-time voice buffer preallocation, the RSP
- * wait before a wave is closed and the streaming load parameters are
- * kept; the Quake S_* glue, cvars, path building and Sys_* calls are not.
+ * cap), the boot-time voice buffer preallocation and the
+ * streaming load parameters are kept; the Quake S_* glue, cvars, path
+ * building and Sys_* calls are not.
+ *
+ * The pump is libdragon's mixer_try_play: it queues the mixer's RSP rounds
+ * and returns without waiting for them, unless the AI is down to its last
+ * queued buffer (libdragon preview, mixer_poll_async).
  *
  * Memory (architecture 4.3, nothing on the system heap after boot): every
  * block libdragon's mixer and wav64 allocate for us comes from a
@@ -35,17 +39,8 @@
 
 #define BOUNCE		2048
 #define FILES		16
-#define HDR_BYTES	28
+#define HDR_BYTES	32
 #define BLK_HDR		16u
-/* rsp_mixer.S VADPCM_Decompress DMAs a fixed VADPCM_CODEBOOK_SIZE * 16 * 2
- * bytes from the codebook pointer, whatever the wave's own codebook size,
- * and its decode loop's look-ahead loads a predictor row for the frame
- * after the last (unused). The window runs past the wav64 block's
- * extended header into the next arena block: a stale RSP read where that
- * block's CPU lines are dirty (ares: a wave state just opened by
- * internal_open). A VADPCM wave's block ends in this much padding,
- * written back at allocation and never written again. */
-#define CB_WINDOW	256u
 
 /* ---- arena ----------------------------------------------------------------- */
 
@@ -57,8 +52,6 @@ typedef struct {
 
 static uint8_t		*a_lo, *a_hi;	/* KSEG0 */
 static uint32_t		a_used, a_peak;
-static uint32_t		pad_next;	/* the next allocation's CB_WINDOW tail */
-static uint8_t		*pad_block;	/* the block it went to (KSEG0) */
 
 static uint8_t *kseg0(const void *p)
 {
@@ -74,8 +67,7 @@ static int arena_owns(const void *p)
 
 static void *arena_alloc(size_t align, size_t size)
 {
-	uint32_t body = ((uint32_t)size + 15u) & ~15u, pad = pad_next;
-	uint32_t need = BLK_HDR + body + pad;
+	uint32_t need = BLK_HDR + (((uint32_t)size + 15u) & ~15u);
 	uint8_t *q;
 
 	if (align > 16)
@@ -98,14 +90,6 @@ static void *arena_alloc(size_t align, size_t size)
 		a_used += b->size;
 		if (a_used > a_peak)
 			a_peak = a_used;
-		if (pad)
-		{
-			/* RDRAM = cache for the tail, its lines dropped: an
-			 * earlier owner's dirty lines cannot land on it later */
-			data_cache_hit_writeback_invalidate(q + BLK_HDR + body, pad);
-			pad_next = 0;
-			pad_block = q + BLK_HDR;
-		}
 		return q + BLK_HDR;
 	}
 	return NULL;
@@ -179,6 +163,27 @@ static uint32_t hex(const char **s)
 	}
 }
 
+/*
+ * Voice buffers are sized at boot: every voice plays this silent wave once
+ * and stops. libdragon sizes a voice's sample ring for the format it plays
+ * (compressed VADPCM frames since libdragon preview), and a mono 4-bit
+ * VADPCM ring (9-byte frames plus their mirrored margin) is the largest
+ * the cook makes (mono VADPCM, PCM fallback), so no later play reallocates.
+ * A wav64 version 10 file: header (32 B), VADPCM extension (96 B: 4
+ * predictors of order 2, no flags or skip points, 4-bit residuals), one
+ * zero codebook (136 B), two zero frames (18 B). Served by snd_fs as rom 0.
+ */
+static const uint8_t	silent_vadpcm[32 + 96 + 136 + 18] __attribute__((aligned(16))) = {
+	'W', 'V', '6', '4', 10, 1, 1, 16,
+	0, 0, 0x56, 0x22,	/* 22050 Hz */
+	0, 0, 0, 32,		/* 32 samples */
+	0, 0, 0, 0,		/* loop length */
+	0, 0, 0, 0,		/* loop end */
+	0, 0, 0x01, 0x08,	/* samples at 264 */
+	0, 0, 0, 48,		/* decoder state bytes */
+	4, 2, 0, 0, 0, 0, 4, 0,	/* predictors, order, flags, skip points, residual bits, attack frames */
+};
+
 static void *fs_open(char *name, int flags)
 {
 	const char *s = name;
@@ -199,6 +204,11 @@ static void *fs_open(char *name, int flags)
 		return NULL;
 	}
 	files[i].size = hex(&s);
+	if (!files[i].rom && files[i].size != sizeof(silent_vadpcm))
+	{
+		errno = ENOENT;
+		return NULL;
+	}
 	files[i].pos = 0;
 	files[i].used = 1;
 	return &files[i];
@@ -233,6 +243,12 @@ static int fs_read(void *file, uint8_t *ptr, int len)
 
 	if (len > (int)(f->size - f->pos))
 		len = (int)(f->size - f->pos);
+	if (!f->rom)
+	{
+		memcpy(ptr, silent_vadpcm + f->pos, (size_t)len);
+		f->pos += (uint32_t)len;
+		done = len;
+	}
 	while (done < len)
 	{
 		uint32_t at = f->rom + f->pos, odd = at & 1u;
@@ -276,9 +292,9 @@ static cwave_t	waves[SND_WAVES];
 
 void snd_hw_init(void *mem, uint32_t bytes)
 {
-	static waveform_t silent = {
-		.name = "prealloc", .channels = 1, .bits = 16, .frequency = SND_HZ, .state_size = 48,
-	};
+	wav64_loadparms_t parms;
+	wav64_t *silent;
+	char path[32];
 	uint8_t *m = kseg0(mem);
 	blk_t *b;
 	int i;
@@ -299,17 +315,27 @@ void snd_hw_init(void *mem, uint32_t bytes)
 	mixer_init(SND_VOICES);
 	/*
 	 * Voice buffers now, not on a voice's first play: mixer_ch_play
-	 * allocates a voice's sample buffer (limits below + the wave's decoder
-	 * state) when it first sounds and keeps it. A silent mono 16-bit wave
-	 * with the VADPCM state size (48) sizes it; stopped before any poll.
+	 * allocates a voice's sample ring when it first sounds and keeps it
+	 * while the formats that follow fit. libdragon sizes it for two AI
+	 * buffers of input at the voice's rate cap (no byte cap of ours: a
+	 * smaller ring would wrap onto samples the RSP has yet to read), in
+	 * the wave's units, plus its decoder state; silent_vadpcm sizes it
+	 * (mono 4-bit VADPCM: 4224 + 48 B). Stopped before any poll.
 	 */
+	snprintf(path, sizeof(path), "snd:/0/%x", (unsigned)sizeof(silent_vadpcm));
+	memset(&parms, 0, sizeof(parms));
+	parms.streaming_mode = WAV64_STREAMING_FULL;
+	silent = wav64_load(path, &parms);
+	if (!silent)
+		sys_error("snd: cannot open the voice-sizing wave");
 	for (i = 0; i < SND_VOICES; i++)
 	{
-		mixer_ch_set_limits(i, 16, (float)SND_HZ * (SND_PITCH_CAP * 0.01f), SND_VOICE_BUF);
-		mixer_ch_play(i, &silent);
+		mixer_ch_set_limits(i, 16, (float)SND_HZ * (SND_PITCH_CAP * 0.01f), 0);
+		wav64_play(silent, i);
 		mixer_ch_stop(i);
 		mixer_ch_set_vol(i, 1.0f, 1.0f);
 	}
+	wav64_close(silent);
 	redirect.active = 0;
 	mixer_set_vol(1.0f);
 }
@@ -332,37 +358,30 @@ int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
 		return -1;
 	io_read_audio(bounce, rom, HDR_BYTES);
 	memcpy(h, bounce, HDR_BYTES);
-	/* wav64 asserts on what it cannot play: check first (VADPCM or raw,
-	 * mono / stereo, 16-bit, data inside the file) */
-	if (memcmp(h, "WV64", 4) || h[4] != 6 || (h[5] != 0 && h[5] != 1) || (h[6] != 1 && h[6] != 2)
+	/* wav64 asserts on what it cannot play: check first (version 10, VADPCM
+	 * or raw, mono / stereo, 16-bit, a loop only at the end, data inside
+	 * the file) */
+	if (memcmp(h, "WV64", 4) || h[4] != 10 || (h[5] != 0 && h[5] != 1) || (h[6] != 1 && h[6] != 2)
 		|| h[7] != 16 || !be32(h + 8) || !be32(h + 12) || be32(h + 16) > be32(h + 12)
-		|| be32(h + 20) < HDR_BYTES || be32(h + 20) > size)
+		|| be32(h + 20) || be32(h + 24) < HDR_BYTES || be32(h + 24) > size)
 		return -1;
 	for (i = 0; i < SND_WAVES && waves[i].wav; i++)
 		;
 	/* wav64 state + waveform + name + extended header (+ VADPCM Huffman
-	 * tables 3 x 256, + the codebook window's padding) in one block,
-	 * then the file handle */
-	ext = be32(h + 20) - HDR_BYTES;
-	need = 256 + ((ext + 15u) & ~15u) + 3 * 256 + 64 + (h[5] == 1 ? CB_WINDOW : 0);
+	 * tables 3 x 256) in one block, then the file handle */
+	ext = be32(h + 24) - HDR_BYTES;
+	need = 256 + ((ext + 15u) & ~15u) + 3 * 256 + 64;
 	if (i == SND_WAVES || arena_largest() < need)
 		return -2;
 	/* wav64 opens (and closes) the file through snd_fs */
 	snprintf(path, sizeof(path), "snd:/%lx/%lx", (unsigned long)rom, (unsigned long)size);
 	memset(&parms, 0, sizeof(parms));
 	parms.streaming_mode = WAV64_STREAMING_FULL;
-	/* wav64's first allocation is its block (internal_open's memalign) */
-	pad_next = h[5] == 1 ? CB_WINDOW : 0;
-	pad_block = NULL;
 	redirect.active = 1;
 	waves[i].wav = wav64_load(path, &parms);
 	redirect.active = 0;
-	pad_next = 0;
 	if (!waves[i].wav)
 		return -2;
-	if (h[5] == 1 && pad_block != kseg0(waves[i].wav->st))
-		sys_error("snd: wav64 block %p is not the padded allocation %p",
-			(void *)waves[i].wav->st, (void *)pad_block);
 	memset(info, 0, sizeof(*info));
 	info->format = h[5];
 	info->channels = h[6];
@@ -377,8 +396,7 @@ void snd_hw_close(void *wave)
 {
 	cwave_t *w = wave;
 
-	/* the RSP may still be decoding the last buffer of a finished voice */
-	rspq_wait();
+	/* wav64_close waits for the mixer rounds still reading the wave */
 	wav64_close(w->wav);
 	w->wav = NULL;
 }
@@ -420,10 +438,10 @@ void snd_hw_vol(int v, float left, float right)
 }
 
 #ifdef HL64_PROFILE
-static unsigned	pump_n[2], pump_mixes[2];
+static unsigned	pump_n[2];
 static uint64_t	pump_ticks[2];
 
-void audio_pump_take(unsigned n[2], uint64_t ticks[2], unsigned mixes[2])
+void audio_pump_take(unsigned n[2], uint64_t ticks[2])
 {
 	int k;
 
@@ -431,8 +449,7 @@ void audio_pump_take(unsigned n[2], uint64_t ticks[2], unsigned mixes[2])
 	{
 		n[k] = pump_n[k];
 		ticks[k] = pump_ticks[k];
-		mixes[k] = pump_mixes[k];
-		pump_n[k] = pump_mixes[k] = 0;
+		pump_n[k] = 0;
 		pump_ticks[k] = 0;
 	}
 }
@@ -446,17 +463,7 @@ void snd_hw_pump(double dt)
 #endif
 
 	(void)dt;
-	/* mixer_try_play, the buffers counted */
-	while (audio_can_write())
-	{
-		short *buf = audio_write_begin();
-
-		mixer_poll(buf, audio_get_buffer_length());
-		audio_write_end();
-#ifdef HL64_PROFILE
-		pump_mixes[busy]++;
-#endif
-	}
+	mixer_try_play();
 #ifdef HL64_PROFILE
 	pump_n[busy]++;
 	pump_ticks[busy] += TICKS_READ() - t0;

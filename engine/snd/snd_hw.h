@@ -24,10 +24,6 @@
 #define SND_PITCH_CAP		130	/* playback rate cap, % of SND_HZ */
 #define SND_AUDIBLE		0.002f	/* loop ear-gain sum that holds a voice */
 #define SND_CLIP_DIST		1000.0f	/* nominal clip distance (sound.md 2) */
-/* Per-voice sample buffer (bytes, 16-bit mono): 2048 samples hold one
- * 40 ms AI buffer (882 samples) at the 130 % rate cap (1147) plus VADPCM
- * frame rounding. */
-#define SND_VOICE_BUF		4096
 
 typedef struct {
 	uint32_t	freq;		/* sample rate, Hz */

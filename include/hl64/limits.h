@@ -35,13 +35,15 @@
  * Measured (ares, HL64_TEST ROMs of 403070a, "mem: heap free ... free N
  * B"): no content 2866008 B at __bss_end 0x801709f8; N = 10 / 501 / 1230:
  * 200 / 8056 / 19720 B less; PROFILE + 1230 files, __bss_end 0x80170da8:
- * 2845344 B -- every value exact. The host build reads __bss_end from
- * its HL64_TEST cart ELF (Makefile, cart_image.h) and plat/host/io_host.c
- * mounts the same table for its content root. test/run/m3.sh --ares
- * asserts host == cart to the byte.
+ * 2845344 B -- every value exact. The libdragon preview SDK (fork ef44355,
+ * m6-sdk) boots with 3448 B more (m3-a PROFILE ROM: cart 1886776 B after
+ * the carve, host 1890224 B at the old value). The host build reads
+ * __bss_end from its HL64_TEST cart ELF (Makefile, cart_image.h) and
+ * plat/host/io_host.c mounts the same table for its content root.
+ * test/run/m3.sh --ares asserts host == cart to the byte.
  */
 #define HL64_CART_STACK_BYTES		0x10000		/* libdragon STACK_SIZE */
-#define HL64_CART_BOOT_BYTES		754328
+#define HL64_CART_BOOT_BYTES		757776
 
 /* Image (code + data + bss) budget, 4.1 first row; boot logs the size. */
 #define HL64_IMAGE_BUDGET_KB		900

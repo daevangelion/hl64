@@ -96,8 +96,15 @@ static void ChainLaunch(void)
 	}
 }
 
+/* Re-entered (cart) when sys_pi_busy's queue poll delivers a completion
+ * to the PI handlers: the outer call's loop sees that completion. */
 static void ChainStep(void)
 {
+	static volatile int stepping;
+
+	if (stepping)
+		return;
+	stepping = 1;
 	while (fly >= 0 && !sys_pi_busy())
 	{
 		piece_t *p = &pieces[fly];
@@ -108,6 +115,7 @@ static void ChainStep(void)
 		if (!hold && !paused)
 			ChainLaunch();
 	}
+	stepping = 0;
 }
 
 /* ---- main thread ---------------------------------------------------------- */
@@ -428,8 +436,7 @@ static int PlanLive(void)
 
 void io_init(void)
 {
-	if (fly >= 0)
-		sys_pi_wait(0);
+	Stop(0);	/* the piece in flight lands, nothing more launches */
 	memset(q_head, 0, sizeof(q_head));
 	memset(q_tail, 0, sizeof(q_tail));
 	q_len = 0;

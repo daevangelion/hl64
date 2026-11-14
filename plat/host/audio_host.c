@@ -2,8 +2,8 @@
 /*
  * audio_host.c -- the host build's null audio (engine/snd/snd_hw.h): no
  * output. A wave is opened by reading its wav64 header (libdragon's
- * documented layout: "WV64", version 6, format, channels, bits, then
- * big-endian rate, length, loop length, data offset, state size) through
+ * layout: "WV64", version 10, format, channels, bits, then big-endian
+ * rate, length, loop length, loop end, data offset, state size) through
  * the engine/io AUDIO class like the cart; each voice's play position
  * advances by rate x dt at every pump, a looped wave wraps to its loop
  * start, a one-shot ends at its length. engine/snd/snd.c above it is the
@@ -16,7 +16,7 @@
 #include "engine/io/io.h"
 #include "engine/snd/snd_hw.h"
 
-#define HDR_BYTES	28
+#define HDR_BYTES	32
 
 typedef struct {
 	uint8_t		used;
@@ -64,7 +64,7 @@ int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
 	if (!rom || size < HDR_BYTES || (rom & 1))
 		return -1;
 	io_read_audio(H->hdr, rom, HDR_BYTES);
-	if (memcmp(h, "WV64", 4) || h[4] != 6 || (h[5] != 0 && h[5] != 1) || (h[6] != 1 && h[6] != 2)
+	if (memcmp(h, "WV64", 4) || h[4] != 10 || (h[5] != 0 && h[5] != 1) || (h[6] != 1 && h[6] != 2)
 		|| h[7] != 16)
 		return -1;
 	memset(info, 0, sizeof(*info));
@@ -73,7 +73,8 @@ int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
 	info->freq = be32(h + 8);
 	info->len = be32(h + 12);
 	info->loop_len = be32(h + 16);
-	if (!info->freq || !info->len || info->loop_len > info->len || be32(h + 20) > size)
+	if (!info->freq || !info->len || info->loop_len > info->len || be32(h + 20)
+		|| be32(h + 24) < HDR_BYTES || be32(h + 24) > size)
 		return -1;
 	for (i = 0; i < SND_WAVES; i++)
 		if (!H->w[i].used)

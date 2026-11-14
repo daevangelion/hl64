@@ -105,23 +105,14 @@ void sys_prof_dump(unsigned nframes)
 		acct_us(ACCT_RSP, nf), acct_us(ACCT_DISP, nf),
 		acct_us(ACCT_RSPQ, nf), acct_us(ACCT_VI, nf));
 	{
-		/* libdragon's own mixer counters: ticks from the mix job's
-		 * submit to its highpri sync's return, and in wav64 reads */
-		extern int64_t __mixer_profile_rsp, __wav64_profile_dma;
-		static int64_t rsp_mark, dma_mark;
-		unsigned n[2], mx[2];
+		unsigned n[2];
 		uint64_t t[2];
 
-		audio_pump_take(n, t, mx);
-		/* the mixer pump with the last frame's RDP work still running
-		 * (busy) or finished (idle): pumps, us per frame, buffers mixed */
-		log_printf("acct pump_busy=%u pump_busy_us=%u pump_busy_mix=%u pump_idle=%u "
-			"pump_idle_us=%u pump_idle_mix=%u mix_rsp_us=%u wav_dma_us=%u\n", n[1],
-			us_of(t[1], nf), mx[1], n[0], us_of(t[0], nf), mx[0],
-			us_of((uint64_t)(__mixer_profile_rsp - rsp_mark), nf),
-			us_of((uint64_t)(__wav64_profile_dma - dma_mark), nf));
-		rsp_mark = __mixer_profile_rsp;
-		dma_mark = __wav64_profile_dma;
+		audio_pump_take(n, t);
+		/* the mixer pump (mixer_try_play) with the last frame's RDP work
+		 * still running (busy) or finished (idle): pumps, us per frame */
+		log_printf("acct pump_busy=%u pump_busy_us=%u pump_idle=%u pump_idle_us=%u\n",
+			n[1], us_of(t[1], nf), n[0], us_of(t[0], nf));
 	}
 	io_rd_calls = io_sk_calls = io_dma_calls = 0;
 	io_rd_bytes = io_dma_bytes = 0;

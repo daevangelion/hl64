@@ -113,13 +113,20 @@ int sys_cart_read(void *dst, size_t dst_cap, uint32_t rom, uint32_t rom_size,
 
 /* ---- engine/io backend: one PI piece at a time -------------------------- */
 
+/* libdragon (preview) owns the PI through its DMA queue: a launched piece
+ * may wait there behind other transfers (the mixer's async sample reads,
+ * DFS), so the PI's status says nothing about it; the piece's queue ticket
+ * does. 0: none launched. */
+static volatile uint64_t pi_ticket;
+
 static uint32_t pi_addr(uint32_t rom)
 {
 	return (rom | 0x10000000u) & 0x1FFFFFFFu;
 }
 
-/* The PI completion interrupt (libdragon clears it, then calls the
- * handler with interrupts disabled): engine/io's chain step. */
+/* The PI completion handler (libdragon clears the interrupt, advances its
+ * DMA queue, then calls the handler with interrupts disabled; the queue
+ * also delivers the completions it polls itself): engine/io's chain step. */
 void sys_pi_set_isr(void (*isr)(void))
 {
 	static void (*cur)(void);
@@ -147,23 +154,26 @@ void sys_pi_launch(void *dst, uint32_t rom, uint32_t len)
 {
 	/* invalidate before, not after: stale dirty lines would land on the DMA */
 	data_cache_hit_writeback_invalidate(dst, (len + 15) & ~15u);
-	dma_read_raw_async(dst, pi_addr(rom), len);
+	pi_ticket = dma_read_raw_async(dst, pi_addr(rom), len);
 }
 
 int sys_pi_busy(void)
 {
-	return (*PI_STATUS & (PI_STATUS_DMA_BUSY | PI_STATUS_IO_BUSY)) != 0;
+	uint64_t t = pi_ticket;
+
+	return t && !dma_finished(t);
 }
 
 uint32_t sys_pi_wait(int audio)
 {
+	uint64_t t = pi_ticket;
 	uint32_t t0;
 
 	(void)audio;
-	if (!sys_pi_busy())
+	if (!t || dma_finished(t))
 		return 0;
 	t0 = TICKS_READ();
-	dma_wait();
+	dma_wait_finished(t);
 	return (uint32_t)TICKS_TO_US(TICKS_DISTANCE(t0, TICKS_READ()));
 }
 
@@ -172,8 +182,7 @@ uint32_t sys_pi_read(void *dst, uint32_t rom, uint32_t len)
 	uint32_t t0 = TICKS_READ();
 
 	data_cache_hit_writeback_invalidate(dst, (len + 15) & ~15u);
-	dma_read_raw_async(dst, pi_addr(rom), len);
-	dma_wait();
+	dma_wait_finished(dma_read_raw_async(dst, pi_addr(rom), len));
 	return (uint32_t)TICKS_TO_US(TICKS_DISTANCE(t0, TICKS_READ()));
 }
 
