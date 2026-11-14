@@ -1127,6 +1127,11 @@ extern mon_ai_work_t	mon_aiw;
 void	mon_stats_script(void);
 /* monster think us since boot (dispatch.c, game_prof_us) */
 extern uint32_t	game_mon_us_sum;
+/* PROFILE: the frame's think cost zones (monsters.c `ai: frame` lines;
+ * machine us, no-ops without PROFILE) */
+enum { MPZ_LOOK, MPZ_ANIM, MPZ_NN, MPZ_LM, MPZ_N };
+uint64_t	Mon_PzBegin(void);
+void		Mon_PzEnd(int z, uint64_t t0);
 
 /* ---- spread thinks (aithink.c; monsters.c's think halves) ---------------------------------------- */
 

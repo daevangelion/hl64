@@ -69,7 +69,13 @@ int mon_is_monster(int e)
 static void	nop_e(int e) { (void)e; }
 static int	zero_e(int e) { (void)e; return 0; }
 
-void Mon_Look(int e, int d) { DISPATCHV(Look, CBaseMonster_Look, e, d); }
+void Mon_Look(int e, int d)
+{
+	uint64_t t0 = Mon_PzBegin();
+
+	DISPATCHV(Look, CBaseMonster_Look, e, d);
+	Mon_PzEnd(MPZ_LOOK, t0);
+}
 void Mon_RunAI(int e) { DISPATCHV(RunAI, CBaseMonster_RunAI, e); }
 void Mon_MonsterInit(int e) { DISPATCHV(MonsterInit, CBaseMonster_MonsterInit, e); }
 void Mon_MonsterInitDead(int e) { DISPATCHV(MonsterInitDead, CBaseMonster_MonsterInitDead, e); }
@@ -82,8 +88,15 @@ void Mon_HandleAnimEvent(int e, const MonsterEvent_t *ev)
 { DISPATCHV(HandleAnimEvent, CBaseMonster_HandleAnimEvent, e, ev); }
 int Mon_CheckLocalMove(int e, const float s[3], const float t[3], int target, float *d)
 {
+	uint64_t	t0;
+	int		r;
+
 	Ai_PausePoint(e);
-	DISPATCH(CheckLocalMove, CBaseMonster_CheckLocalMove, e, s, t, target, d);
+	t0 = Mon_PzBegin();
+	r = VT(e)->CheckLocalMove ? VT(e)->CheckLocalMove(e, s, t, target, d) :
+		CBaseMonster_CheckLocalMove(e, s, t, target, d);
+	Mon_PzEnd(MPZ_LM, t0);
+	return r;
 }
 void Mon_Move(int e, float i) { DISPATCHV(Move, CBaseMonster_Move, e, i); }
 void Mon_MoveExecute(int e, int target, const float dir[3], float i)
@@ -284,9 +297,37 @@ static uint32_t aiw_units(const mon_ai_work_t *w)
 
 static void aiw_print(const char *tag, const mon_ai_work_t *w);
 
-/* PROFILE builds log a frame whose monster thinks took this long (the
- * budget's calibration: its work units beside the machine's us) */
-#define AI_LOG_FRAME_US	10000
+/* PROFILE builds log a frame whose monster thinks took this long, or
+ * whose period (game frame start to the next) passed AI_LOG_PERIOD_US
+ * (the budget's calibration: its work units beside the machine's us, the
+ * think cost zones, the frame period) */
+#define AI_LOG_FRAME_US		10000
+#define AI_LOG_PERIOD_US	50000
+
+/* PROFILE: the frame's think cost zones (machine us, never decisions):
+ * Look, the animation half (StudioFrameAdvance .. DispatchAnimEvents),
+ * FindNearestNode searches, CheckLocalMove bodies (after the pause
+ * point). None contains a pause point. */
+static uint32_t	pz_us[MPZ_N];
+
+uint64_t Mon_PzBegin(void)
+{
+#ifdef HL64_PROFILE
+	return sys_time_us();
+#else
+	return 0;
+#endif
+}
+
+void Mon_PzEnd(int z, uint64_t t0)
+{
+#ifdef HL64_PROFILE
+	pz_us[z] += (uint32_t)(sys_time_us() - t0);
+#else
+	(void)z;
+	(void)t0;
+#endif
+}
 
 static const char *sched_name(const CBaseMonster *m)
 {
@@ -315,6 +356,13 @@ void mon_stats(mon_stats_t *s, int reset)
 
 void mon_stats_frame(void)
 {
+#ifdef HL64_PROFILE
+	static uint64_t	t_last;
+	uint64_t	t = sys_time_us();
+	uint32_t	period = t_last ? (uint32_t)(t - t_last) : 0;
+
+	t_last = t;
+#endif
 	mstat.frames++;
 	mstat.us += mstat_frame_us;
 	if (mstat_frame_us > mstat.us_max)
@@ -326,15 +374,19 @@ void mon_stats_frame(void)
 		aip.wf = aip.frame;
 	}
 #ifdef HL64_PROFILE
-	if (mstat_frame_us >= AI_LOG_FRAME_US)
+	if (mstat_frame_us >= AI_LOG_FRAME_US || period >= AI_LOG_PERIOD_US)
 	{
-		log_printf("ai: frame t=%.3f us=%lu thinks=%lu units=%lu", (double)gtime(),
-			(unsigned long)mstat_frame_us, (unsigned long)aip.frame_thinks,
-			(unsigned long)aiw_units(&aip.frame));
+		log_printf("ai: frame t=%.3f us=%lu thinks=%lu units=%lu fr=%lu look=%lu anim=%lu nn=%lu "
+			"lm=%lu", (double)gtime(), (unsigned long)mstat_frame_us,
+			(unsigned long)aip.frame_thinks, (unsigned long)aiw_units(&aip.frame),
+			(unsigned long)period, (unsigned long)pz_us[MPZ_LOOK],
+			(unsigned long)pz_us[MPZ_ANIM], (unsigned long)pz_us[MPZ_NN],
+			(unsigned long)pz_us[MPZ_LM]);
 		aiw_print("w", &aip.frame);
 		log_printf("\n");
 	}
 #endif
+	memset(pz_us, 0, sizeof(pz_us));
 	aiw_add(&aip.win, &aip.frame);
 	memset(&aip.frame, 0, sizeof(aip.frame));
 	aip.frame_thinks = 0;
@@ -835,6 +887,7 @@ void Mon_ThinkRun(int e)
 	CBaseMonster	*m = MON(e);
 	float		flInterval;
 	int		seq;
+	uint64_t	t0;
 
 	ThinkIn(e, 0.1f);
 	if (m->m_MonsterState != MONSTERSTATE_DEAD)
@@ -842,6 +895,7 @@ void Mon_ThinkRun(int e)
 	Mon_RunAI(e);
 	if (!ent_is_live(e) || MON(e) != m)
 		return;
+	t0 = Mon_PzBegin();
 	flInterval = Mon_StudioFrameAdvance(e, 0);
 	if (m->m_MonsterState != MONSTERSTATE_SCRIPT && m->m_MonsterState != MONSTERSTATE_DEAD &&
 		m->m_Activity == ACT_IDLE && m->anim.m_fSequenceFinished)
@@ -857,6 +911,7 @@ void Mon_ThinkRun(int e)
 		}
 	}
 	Mon_DispatchAnimEvents(e, flInterval);
+	Mon_PzEnd(MPZ_ANIM, t0);
 	if (!ent_is_live(e) || MON(e) != m)
 		return;
 	if (!Mon_MovementIsComplete(m))
