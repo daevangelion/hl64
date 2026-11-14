@@ -180,9 +180,12 @@
  * that runs out of the frame's AI work budget pauses on its own context
  * and continues next frame. Each context: a stack + the cover search's
  * scratch (FindCover's two path-length tables, 2 x HLN_MAX_NODES 1024
- * x f32). More paused thinks than contexts defer a new think a frame. */
+ * x f32). More paused thinks than contexts defer a new think a frame.
+ * Stack: peak measured 4552 B (cart, uplink + m4 routes) / 4532 B (host
+ * x86-64); 8 KB keeps 1.8x; co.c logs a context past 3/4 and fails on
+ * overflow into its guard words. */
 #define HL64_AI_CONTEXTS		6
-#define HL64_AI_STACK_BYTES		16384
+#define HL64_AI_STACK_BYTES		8192
 #define HL64_AI_SCRATCH_BYTES		8192
 #define HL64_AI_THINK_KB		((HL64_AI_CONTEXTS * (HL64_AI_STACK_BYTES + HL64_AI_SCRATCH_BYTES) + 1023) / 1024)
 /* The frame's monster-think work budget (settings ai_budget default), in
