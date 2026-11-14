@@ -1242,11 +1242,22 @@ static void test_screen(void)
 		fx_view(org, ang, rgba);
 		CHECK(org[0] == 0 && org[1] == 0 && org[2] == 0, "shake did not end");
 	}
-	fx_text(0);
-	step(0.01);
-	CHECK(fx_text_current(&a) == 0 && a >= 0, "title 0 showing");
-	step(60);
-	CHECK(fx_text_current(&a) == 0xFFFF, "title over");
+	/* titles.txt: fade in + hold + fade out, the fade in per character
+	 * under effect 2 (write out) */
+	{
+		const res_title_t *t = res_title(0);
+		float end = !t ? 2.0f : (t->effect == 2 ? t->fadein * t->text_len : t->fadein)
+			+ t->holdtime + t->fadeout;
+
+		fx_text(0);
+		step(0.01);
+		CHECK(fx_text_current(&a) == 0 && fabsf(a - 0.01f) < 0.005f, "title 0 showing %g", a);
+		step(end - 0.06);
+		CHECK(fx_text_current(&a) == 0 && fabsf(a - (end - 0.05f)) < 0.005f,
+			"title 0 (effect %d) still showing at %g of %g s", t ? t->effect : -1, a, end);
+		step(0.1);
+		CHECK(fx_text_current(&a) == 0xFFFF, "title over");
+	}
 	finish("SCREEN", ent_is_live(1) ? "fade in/out/hold, shake inside radius and decay, title timing"
 		: "fade in/out/hold, title timing (shake needs the player: not run)");
 }
