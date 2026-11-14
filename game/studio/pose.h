@@ -40,8 +40,9 @@ float			gs_estimate_frame(const sfmt_seq_t *pseqdesc, const gs_clent_t *ent,
 /* The model's resident info block (loaded on first use), NULL for a
  * res_t that is not a studio model. */
 const sfmt_info_t	*gs_info(res_t model);
-/* Server pose of entity e (its components, map-local) into the shared
- * result buffer; returns the bone count (0: none). */
-int			gs_entity_pose(int e, const float (**bones)[3][4]);
+/* Bone `bone` of entity e's server pose (its components, map-local): only
+ * the bone's chain is posed (memoised); NULL when e has no studio pose or
+ * no such bone. Valid until the next server pose. */
+const float		(*gs_entity_bone(int e, int bone))[4];
 
 #endif

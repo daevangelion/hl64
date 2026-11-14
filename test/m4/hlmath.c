@@ -123,34 +123,32 @@ static acc_t f_sin = { "sinf", 0, 0, 0, 0 }, f_cos = { "cosf", 0, 0, 0, 0 },
 	f_acos = { "acosf", 0, 0, 0, 0 };
 
 /* sin / cos at x (both types; tan away from its poles, where the
- * reference itself is ill-conditioned) */
+ * reference itself is ill-conditioned); hl_sincos / hl_sincosf give the
+ * bits of hl_sin, hl_cos / hl_sinf, hl_cosf */
 static void trig(double x)
 {
-	float xf = (float)x, sf, cf, sf1, cf1;
+	float xf = (float)x, sf, cf;
 	long double cl = cosl(x), cfl = cosl(xf);
-	double s, c, s1, c1;
+	double s, c, ws = hl_sin(x), wc = hl_cos(x);
+	float wsf = hl_sinf(xf), wcf = hl_cosf(xf);
 
-	acc(&a_sin, hl_sin(x), sinl(x), x, 0, 0);
-	acc(&a_cos, hl_cos(x), cl, x, 0, 0);
-	acc(&f_sin, hl_sinf(xf), sinl(xf), xf, 0, 1);
-	acc(&f_cos, hl_cosf(xf), cfl, xf, 0, 1);
+	acc(&a_sin, ws, sinl(x), x, 0, 0);
+	acc(&a_cos, wc, cl, x, 0, 0);
+	acc(&f_sin, wsf, sinl(xf), xf, 0, 1);
+	acc(&f_cos, wcf, cfl, xf, 0, 1);
+	hl_sincos(x, &s, &c);
+	hl_sincosf(xf, &sf, &cf);
+	if (memcmp(&s, &ws, sizeof(s)) || memcmp(&c, &wc, sizeof(c))
+		|| memcmp(&sf, &wsf, sizeof(sf)) || memcmp(&cf, &wcf, sizeof(cf)))
+	{
+		if (fails < 20)
+			printf("FAIL sincos(%a) != sin, cos\n", x);
+		fails++;
+	}
 	if (fabsl(cl) > 1e-3L)
 		acc(&a_tan, hl_tan(x), tanl(x), x, 0, 0);
 	if (fabsl(cfl) > 1e-3L)
 		acc(&f_tan, hl_tanf(xf), tanl(xf), xf, 0, 1);
-	/* sincos: bit for bit the two calls */
-	s1 = hl_sin(x);
-	c1 = hl_cos(x);
-	hl_sincos(x, &s, &c);
-	sf1 = hl_sinf(xf);
-	cf1 = hl_cosf(xf);
-	hl_sincosf(xf, &sf, &cf);
-	if (memcmp(&s, &s1, sizeof s) || memcmp(&c, &c1, sizeof c) || memcmp(&sf, &sf1, sizeof sf)
-		|| memcmp(&cf, &cf1, sizeof cf))
-	{
-		if (fails++ < 10)
-			printf("FAIL sincos(%.17g) differs from sin / cos\n", x);
-	}
 }
 
 static void at2(double y, double x)

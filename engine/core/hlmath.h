@@ -29,7 +29,7 @@ double	hl_atan(double x);
 double	hl_atan2(double y, double x);
 double	hl_asin(double x);
 double	hl_acos(double x);
-/* hl_sin(x) and hl_cos(x) from one argument reduction (the same results) */
+/* sin x and cos x from one reduction: the values hl_sin / hl_cos give */
 void	hl_sincos(double x, double *s, double *c);
 
 float	hl_sinf(float x);
