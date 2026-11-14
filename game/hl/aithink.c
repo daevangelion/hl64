@@ -51,6 +51,12 @@
  *     Paused at an anim event (MonsterThink's execution half, which reads
  *     the monster afresh) only the freeing, death, layer or think
  *     function change end it.
+ *   - Conditions something else sets on the monster while its think is
+ *     paused (TakeDamage's LIGHT / HEAVY_DAMAGE, another monster's) are
+ *     held back from the rest of the think and set when it ends: an HLSDK
+ *     think runs whole, so they arrive after it (a NOINTERRUPT script
+ *     must not see damage between RunAI's ClearConditions and
+ *     GetIdealState).
  *   - Entity indices a paused think holds come from its enemy / target
  *     handles (above: still the same live entities), are read fresh
  *     after the pause point (the check's blocker) or re-checked against
@@ -107,6 +113,10 @@ typedef struct {
 	uint32_t	order, slice_points, frame_seen, reserve;
 	uint8_t		old, tail;
 	uint64_t	paused_us;	/* PROFILE: time spent paused */
+	/* conditions something else set on the monster while the think was
+	 * paused (TakeDamage's damage bits, another monster's): an HLSDK
+	 * think runs whole, so they land after it (ai_land) */
+	int		late;
 	/* the monster at the pause: anything else changing these ends it */
 	const Schedule_t *sched;
 	int		sidx, tstat, mstate, dead;
@@ -191,6 +201,14 @@ static void ai_free(ai_ctx_t *c)
 	c->drop = 0;
 }
 
+/* the conditions held back from the think (late) land when it ends, as
+ * if set after a whole think */
+static void ai_land(const ai_ctx_t *c)
+{
+	if (c->late && ent_of(c->h) == c->e && ent_is_live(c->e) && MON(c->e) == c->m)
+		c->m->m_afConditions |= c->late;
+}
+
 /* end a paused think here: its stack is abandoned (it holds nothing but
  * its own frames); a live monster loses the route it was building */
 static void ai_drop(ai_ctx_t *c)
@@ -199,6 +217,7 @@ static void ai_drop(ai_ctx_t *c)
 
 	if (live)
 		Mon_RouteClear(c->e);
+	ai_land(c);
 	ac.drops++;
 	ai_free(c);
 }
@@ -255,6 +274,7 @@ static void ai_slice(ai_ctx_t *c)
 	if (c->acc.frames > ac.max_frames)
 		ac.max_frames = c->acc.frames;
 	Mon_ThinkEnd(c->e, &c->acc);
+	ai_land(c);
 	ai_free(c);
 }
 
@@ -441,6 +461,7 @@ int Ai_PauseDue(int e, uint32_t reserve)
 void Ai_Pause(int e, int tail)
 {
 	ai_ctx_t *c = cur;
+	int before, added;
 #ifdef HL64_PROFILE
 	uint64_t t0 = sys_time_us();
 #endif
@@ -449,7 +470,17 @@ void Ai_Pause(int e, int tail)
 		return;
 	c->tail = (uint8_t)tail;
 	c->state = AC_PAUSED;
+	before = c->m->m_afConditions;
 	co_yield();
+	/* continued (ai_valid: the monster is live and its own). Conditions
+	 * set meanwhile wait for the think's end: a garg in a NOINTERRUPT
+	 * scripted_sequence paused in PrescheduleThink (after RunAI's
+	 * ClearConditions(IgnoreConditions())) met barney's LIGHT_DAMAGE in
+	 * GetIdealState and left garg_barney_script_0 (HLSDK
+	 * CBaseMonster::RunAI, CCineMonster::IgnoreConditions) */
+	added = c->m->m_afConditions & ~before;
+	c->late |= added;
+	c->m->m_afConditions &= ~added;
 	c->tail = 0;
 	c->reserve = 0;
 #ifdef HL64_PROFILE
