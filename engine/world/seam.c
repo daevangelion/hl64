@@ -39,6 +39,7 @@
 #include "hl64/rec.h"
 #include "hl64/seam.h"
 #include "engine/core/eng.h"
+#include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/ent/rec_int.h"
@@ -618,17 +619,66 @@ static void ent_pos(int e, float p[3])
 			? 0.5f * (c->absmin[k] + c->absmax[k]) : c->origin[k];
 }
 
-/* rendered (a model, not EF_NODRAW) live entity of layer `slot` meeting
- * the box (map-local) */
+/* the box an entity is drawn in (map-local): a rotated brush model's
+ * bounds rotated (the linked box is the cube of the largest extent,
+ * grid.c, broadphase only: a 560 u falling rafter 12 u outside the carry
+ * box links ±560 around its hinge), else the linked box */
+static void draw_box(int e, float mins[3], float maxs[3])
+{
+	const float k = 3.14159265358979323846f / 180.0f;
+	const col_ent_t *c = ent_cv(e);
+	float sp, cp, sy, cy, sr, cr, f[3], r[3], u[3], m[3], h[3];
+	int i;
+
+	if (RES_KIND(ent_rnd(e)->model) != RES_K_SUBMODEL
+		|| (c->angles[0] == 0.0f && c->angles[1] == 0.0f && c->angles[2] == 0.0f))
+	{
+		memcpy(mins, c->absmin, 3 * sizeof(float));
+		memcpy(maxs, c->absmax, 3 * sizeof(float));
+		return;
+	}
+	sp = hl_sinf(c->angles[0] * k);
+	cp = hl_cosf(c->angles[0] * k);
+	sy = hl_sinf(c->angles[1] * k);
+	cy = hl_cosf(c->angles[1] * k);
+	sr = hl_sinf(c->angles[2] * k);
+	cr = hl_cosf(c->angles[2] * k);
+	/* model axes in the map: x = f, y = -r, z = u (HLSDK AngleVectors) */
+	f[0] = cp * cy;
+	f[1] = cp * sy;
+	f[2] = -sp;
+	r[0] = -sr * sp * cy + cr * sy;
+	r[1] = -sr * sp * sy - cr * cy;
+	r[2] = -sr * cp;
+	u[0] = cr * sp * cy + sr * sy;
+	u[1] = cr * sp * sy - sr * cy;
+	u[2] = cr * cp;
+	for (i = 0; i < 3; i++)
+	{
+		m[i] = 0.5f * (c->mins[i] + c->maxs[i]);
+		h[i] = 0.5f * (c->maxs[i] - c->mins[i]);
+	}
+	for (i = 0; i < 3; i++)
+	{
+		float o = c->origin[i] + m[0] * f[i] - m[1] * r[i] + m[2] * u[i];
+		float x = h[0] * fabsf(f[i]) + h[1] * fabsf(r[i]) + h[2] * fabsf(u[i]);
+
+		mins[i] = o - x - 1.0f;	/* grid.c's 1 u */
+		maxs[i] = o + x + 1.0f;
+	}
+}
+
+/* rendered (a model, not EF_NODRAW) live entity of layer `slot` drawn
+ * into the box (map-local) */
 static int cont_member(int e, int slot, const float mins[3], const float maxs[3])
 {
-	const col_ent_t *c;
+	float dmin[3], dmax[3];
 
 	if (!ent_is_live(e) || ent_idc(e)->layer != slot || ent_rnd(e)->model == RES_NONE
 		|| (ent_rnd(e)->effects & EF_NODRAW))
 		return 0;
-	c = ent_cv(e);
-	return boxes_meet(c->absmin, c->absmax, mins, maxs);
+	draw_box(e, dmin, dmax);
+	return boxes_meet(dmin, dmax, mins, maxs);
 }
 
 /* ---- the layers ---------------------------------------------------------------- */

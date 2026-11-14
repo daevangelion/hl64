@@ -903,12 +903,58 @@ static void test_continuity_bad(void)
 		"continuity_bad %u", st.continuity_bad - st0.continuity_bad);
 }
 
+/* hldemo1's rafter_fall_1 (lump 40, model *13: mins -1 -5 -1, maxs 559 3
+ * 39, func_door_rotating about x, 43 deg open) hinged 12 u east of and
+ * 47 u above the carry box: its linked cube (+-560) meets the box, the
+ * rafter does not, so it is no continuity miss; hinged inside, it is */
+static void rafter(int inside)
+{
+	static const float mins[3] = { -1, -5, -1 }, maxs[3] = { 559, 3, 39 };
+	seam_info_t s;
+	seam_stats_t st0, st;
+	float org[3], hinge[3];
+	int a, e, k;
+
+	if (find_seam("hldemo1", "hldemo2", "hldemo1to2", &s) < 0)
+		return;
+	for (k = 0; k < 3; k++)
+		org[k] = 0.5f * (s.carry_mins[k] + s.carry_maxs[k]);
+	org[2] = s.carry_mins[2] + 40;
+	if ((a = start("hldemo1", org)) < 0)
+		return;
+	hinge[0] = inside ? s.carry_maxs[0] - 100 : s.carry_maxs[0] + 13;
+	hinge[1] = 0.5f * (s.carry_mins[1] + s.carry_maxs[1]);
+	hinge[2] = inside ? s.carry_maxs[2] - 40 : s.carry_maxs[2] + 47;
+	eng_set_frame_layer(slot_of(a));
+	e = make_ent(hinge, 1, GID_MAKE(slot_of(a), 500));
+	ent_cv(e)->angles[2] = 43;
+	ent_set_size(e, mins, maxs);
+	ent_set_movetype(e, MOVETYPE_PUSH);
+	ent_set_solid(e, COL_SOLID_BSP);
+	eng_set_frame_layer(-1);
+	CHECK(ent_cv(e)->absmin[0] <= s.carry_maxs[0] && ent_cv(e)->absmin[2] <= s.carry_maxs[2]
+		&& ent_cv(e)->absmax[0] - ent_cv(e)->absmin[0] > 1000,
+		"rafter linked as the rotated cube");
+	step();
+	st0 = stats();
+	seam_changelevel(GID_MAKE(slot_of(a), s.trigger), 1);
+	step();
+	step();
+	st = stats();
+	CHECK(phy_player_map() == s.to
+		&& st.continuity_bad == st0.continuity_bad + (inside ? 1u : 0u),
+		"rafter %s: continuity_bad %u", inside ? "inside" : "outside",
+		st.continuity_bad - st0.continuity_bad);
+}
+
 static void selftest(void)
 {
 	test_approach();
 	test_touch();
 	test_use();
 	test_continuity_bad();
+	rafter(0);
+	rafter(1);
 }
 
 /* ---- dump ---------------------------------------------------------------------- */
