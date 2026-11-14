@@ -1722,11 +1722,18 @@ int wld_point_leaf(const wld_layer_t *L, const float p[3])
 	const w64_grid_t *g = L->grid;
 	int32_t node = L->models[0].head[0];
 	int k, cell = 0, steps, ix[3];
+	int max = L->dir->coll_pinned * W64_COLL_MAX_NODES;
+	uint32_t pinned = L->dir->coll_pinned, cur = 0xFFFFFFFFu, nnodes = 0, nx = 0, ny = 0, nz = 0;
+	const w64_cnode_t *nodes = NULL;
+	const w64_cplane_t *planes = NULL;
 
-	/* cell = floor((p - origin) / 256); points outside walk from the root */
+	/* cell = floor((p - origin) / 256); points outside walk from the root.
+	 * The format's cell is a power of two: times its exact reciprocal
+	 * rounds as the division does, without a 29-cycle divide per axis. */
 	for (k = 0; k < 3; k++)
 	{
-		float f = (p[k] - g->origin[k]) / (float)g->cell;
+		float f = g->cell == W64_GRID_CELL ? (p[k] - g->origin[k]) * (1.0f / W64_GRID_CELL)
+			: (p[k] - g->origin[k]) / (float)g->cell;
 
 		if (!(f >= 0) || f >= g->dims[k])
 			break;
@@ -1738,37 +1745,49 @@ int wld_point_leaf(const wld_layer_t *L, const float p[3])
 		node = L->starts[L->cells[cell].start];
 	}
 	/* every hull-0 node is in a pinned chunk; the walk visits each node
-	 * at most once (a tree), bounded by the pinned node total */
-	for (steps = 0; node >= 0 && steps < L->dir->coll_pinned * W64_COLL_MAX_NODES; steps++)
+	 * at most once (a tree), bounded by the pinned node total. A chunk's
+	 * header is read once per chunk change, not per node. */
+	for (steps = 0; node >= 0 && steps < max; steps++)
 	{
 		uint32_t ci = W64_GID_COLL(node), li = W64_GID_LOCAL(node);
-		const uint8_t *cp;
-		const w64_coll_t *h;
 		const w64_cnode_t *nd;
 		float d;
 		int child;
 
-		if (ci >= L->dir->coll_pinned)
-			sys_error("%s: hull-0 node %ld outside the pinned chunks", maps[L->map].name,
-				(long)node);
-		cp = L->ch[L->dir->coll_first + ci].data;
-		h = (const w64_coll_t *)cp;
-		if (li >= h->nnodes)
+		if (ci != cur)
+		{
+			const uint8_t *cp;
+			const w64_coll_t *h;
+
+			if (ci >= pinned)
+				sys_error("%s: hull-0 node %ld outside the pinned chunks", maps[L->map].name,
+					(long)node);
+			cp = L->ch[L->dir->coll_first + ci].data;
+			h = (const w64_coll_t *)cp;
+			planes = (const w64_cplane_t *)(cp + 16);
+			nodes = (const w64_cnode_t *)(cp + 16 + 16 * h->nplanes);
+			nnodes = h->nnodes;
+			nx = h->nx;
+			ny = h->ny;
+			nz = h->nz;
+			cur = ci;
+		}
+		if (li >= nnodes)
 			sys_error("%s: hull-0 node %ld past its chunk", maps[L->map].name, (long)node);
-		nd = (const w64_cnode_t *)(cp + 16 + 16 * h->nplanes) + li;
-		if (li < h->nz)
-			d = p[li < h->nx ? 0 : li < h->ny ? 1 : 2] - nd->u.dist;
+		nd = nodes + li;
+		if (li < nz)
+			d = p[li < nx ? 0 : li < ny ? 1 : 2] - nd->u.dist;
 		else
 		{
-			const w64_cplane_t *pl = (const w64_cplane_t *)(cp + 16) + nd->u.plane;
+			const w64_cplane_t *pl = planes + nd->u.plane;
 
 			d = pl->normal[0] * p[0] + pl->normal[1] * p[1] + pl->normal[2] * p[2] - pl->dist;
 		}
 		child = nd->child[d >= 0 ? 0 : 1];
 		if (child < 0)
 			return W64_LEAF_OF(child) < L->dir->nleaf ? W64_LEAF_OF(child) : 0;
-		node = child < h->nnodes ? (int32_t)(ci << W64_GID_LOCAL_BITS | (uint32_t)child)
-			: (int32_t)((const uint32_t *)(nd - li + h->nnodes))[child - h->nnodes];
+		node = (uint32_t)child < nnodes ? (int32_t)(ci << W64_GID_LOCAL_BITS | (uint32_t)child)
+			: (int32_t)((const uint32_t *)(nodes + nnodes))[child - (int)nnodes];
 	}
 	if (node >= 0)
 		return 0;
