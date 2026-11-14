@@ -3,10 +3,13 @@
 # test/m3/add_ares.sh: hldemo1 env_glows over lit walls, each shot looking
 # straight at one glow from its height (the glow at the screen centre;
 # test/m3/add_shot.py checks its core for the RDP adder's wrap), the last
-# one a red glow02 (rendercolor 238 30 46: the tint), then an MP5 grenade
-# whose explosion leaves TE_SMOKE puffs (steam1, an index-alpha sprite).
-# Shot labels: g<glow>_d<distance>_k<pose>; `_red` = tinted glow; smoke_*
-# are viewed, not checked. Syntax: docs/formats/route-bytecode.md.
+# one a red glow02 (rendercolor 238 30 46: the tint), then hldemo1's
+# TransTexture func_illusionary strips *76 / *87 (amount 0: invisible since
+# the cook stopped folding non-Normal brushes into the opaque world), then
+# an MP5 grenade fired at the floor whose explosion leaves TE_SMOKE puffs
+# (steam1, an index-alpha sprite).
+# Shot labels: g<glow>_d<distance>_k<pose>; `_red` = tinted glow; brush*
+# and smoke_* are viewed, not checked. Syntax: docs/formats/route-bytecode.md.
 startmap hldemo1
 wait 3
 god 1
@@ -31,17 +34,27 @@ shot g11_d120_k4
 setpos 1768 32 250 0 0
 wait 0.5
 shot g13_d220_k4_red
-# grenade at the wall under glow 0: the explosion, then the smoke
-setpos -2528 -583 201 0 -45
-drop weapon_9mmAR -2528 -583 201
-drop ammo_ARgrenades -2528 -583 201
-wait 2
-look 0 -45
+# *76 (x 513-616, y -32..-24, z 49-66) and *87 (x 536-599, y 152-160)
+setpos 565 64 41 10 -90
 wait 0.5
-+attack2
-wait 0.2
--attack2
+shot brush76
+look 10 90
+wait 0.5
+shot brush87
+# MP5 + grenades (impulse 101, test builds), slot 3 = the MP5, one grenade
+# level into the wall under glow 5, 120 u ahead (pitched down, it burst at
+# the muzzle): the explosion, then the smoke rising in view
+setpos -489 -295 41 0 0
+impulse 101
+wait 0.5
+impulse 3
+wait 1.5
+look 0 0
 wait 0.3
++attack2
+wait 0.1
+-attack2
+wait 0.2
 shot smoke_a
 wait 0.4
 shot smoke_b
