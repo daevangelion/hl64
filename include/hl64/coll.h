@@ -221,5 +221,8 @@ typedef struct {
 	uint32_t	sync_loads, sync_us;	/* chunks read mid-trace (blocked I/O) */
 } col_stats_t;
 void		col_stats(col_stats_t *s);
+/* The same counters without resetting them (since the last col_stats):
+ * the game's AI work counters take deltas around a monster think. */
+void		col_counts(col_stats_t *s);
 
 #endif

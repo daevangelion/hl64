@@ -1108,6 +1108,18 @@ typedef struct {
 void	mon_stats(mon_stats_t *s, int reset);
 void	mon_stats_frame(void);
 void	mon_stats_route(void);
+/* AI work counters (cumulative; the think / frame / window deltas go to
+ * the `prof mon_us` / `prof ai` roll-up lines and the PROFILE `ai: think`
+ * lines). Work units, never time: identical on host and cart. */
+typedef struct {
+	uint32_t	traces, bsp;	/* collision traces / BSP nodes visited (col_counts) */
+	uint32_t	lm, steps;	/* CheckLocalMove calls, their walk-move steps */
+	uint32_t	routes, tri;	/* BuildRoute, FTriangulate */
+	uint32_t	cover;		/* FindCover / BuildNearestRoute candidate nodes traced */
+	uint32_t	nn, nnt;	/* FindNearestNode searches (cache misses), their traces */
+	uint32_t	dj, djpop;	/* Dijkstra runs, nodes expanded */
+} mon_ai_work_t;
+extern mon_ai_work_t	mon_aiw;
 void	mon_stats_script(void);
 /* monster think us since boot (dispatch.c, game_prof_us) */
 extern uint32_t	game_mon_us_sum;
