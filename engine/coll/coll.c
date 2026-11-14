@@ -45,23 +45,33 @@ const float col_hull_maxs[COL_HULLS][3] = {
 static const char mat_chars[] = "CMDVGTSWPYFN";	/* W64_MAT_CHARS */
 #define MAT_MIXED	15
 
+/* A hull's current COLL chunk as the walks read it: the node, plane and
+ * extern arrays and the axial ranges of its header, derived once per chunk
+ * change instead of per node. */
+typedef struct {
+	const w64_cnode_t	*nodes;
+	const w64_cplane_t	*planes;
+	const uint32_t		*ext;		/* extern child gids */
+	uint32_t		base;		/* the chunk's gid base: ci << W64_GID_LOCAL_BITS */
+	uint32_t		nnodes, nx, ny, nz;
+} view_t;
+
 /* A hull to walk: a layer's COLL tree, or the box tree. */
 typedef struct {
 	wld_layer_t	*L;		/* NULL: box tree */
-	const uint8_t	*box;		/* box tree chunk */
 	int32_t		root;		/* gid, or a leaf child */
 	uint8_t		hull0;		/* leaves are BSP leaf indices (hull 0) */
-	/* chunk cache: the current chunk and its header's derived view */
+	/* the current chunk: index (COL_NO_CHUNK: none yet), data and view */
 	uint32_t	ci;
 	const uint8_t	*cp;
-	const w64_cnode_t	*nodes;		/* the chunk's node array */
-	const w64_cplane_t	*planes;	/* its plane array */
-	uint16_t	nnodes, nx, ny, nz;
+	view_t		v;
 	/* impact node (materials) and its crossing point, model frame */
 	const uint8_t	*hit_cp;
 	uint32_t	hit_ci, hit_li;
 	float		hit_p[3];
 } src_t;
+
+#define COL_NO_CHUNK	0xFFFFFFFFu	/* no gid's chunk: the first node reads its own */
 
 typedef struct {
 	int32_t		far;		/* far child: gid or leaf child */
@@ -69,7 +79,7 @@ typedef struct {
 	uint32_t	ci;
 	uint16_t	li;		/* the split node */
 	uint8_t		side;		/* 1: the sub-segment starts behind the plane */
-	uint8_t		pad;
+	uint8_t		done;		/* its far part is being (or was) walked */
 	float		frac;		/* stand-off fraction of the sub-segment */
 	float		p1f, p2f;
 	float		p1[3], p2[3];
@@ -95,29 +105,28 @@ static __attribute__((noreturn)) void bad_model(uint16_t model)
 #define NODES(cp)	((const w64_cnode_t *)((cp) + 16 + 16 * HDR(cp)->nplanes))
 #define PLANES(cp)	((const w64_cplane_t *)((cp) + 16))
 
-/* s->cp's header, read once per chunk change instead of per node */
+/* s->v from s->cp / s->ci */
 static void chunk_view(src_t *s)
 {
 	const w64_coll_t *h = HDR(s->cp);
 
-	s->nodes = NODES(s->cp);
-	s->planes = PLANES(s->cp);
-	s->nnodes = h->nnodes;
-	s->nx = h->nx;
-	s->ny = h->ny;
-	s->nz = h->nz;
+	s->v.nodes = NODES(s->cp);
+	s->v.planes = PLANES(s->cp);
+	s->v.ext = (const uint32_t *)(s->v.nodes + h->nnodes);
+	s->v.base = s->ci << W64_GID_LOCAL_BITS;
+	s->v.nnodes = h->nnodes;
+	s->v.nx = h->nx;
+	s->v.ny = h->ny;
+	s->v.nz = h->nz;
 }
 
-/* The COLL chunk of a node: cached, resident, or read now. */
-static const uint8_t *chunk_of(src_t *s, uint32_t ci)
+/* COLL chunk ci of s's layer becomes the current chunk: resident, or read
+ * now. Out of line: the walks' per-node path only compares the index. */
+static __attribute__((noinline)) void chunk_switch(src_t *s, uint32_t ci)
 {
 	wld_layer_t *L = s->L;
 	const uint8_t *cp;
 
-	if (!L)
-		return s->box;
-	if (s->cp && ci == s->ci)
-		return s->cp;
 	if (ci >= L->dir->ncoll)
 		sys_error("coll: %s: node chunk %lu >= %u", wld_map_name(L->map), (unsigned long)ci,
 			L->dir->ncoll);
@@ -133,69 +142,23 @@ static const uint8_t *chunk_of(src_t *s, uint32_t ci)
 	s->ci = ci;
 	s->cp = cp;
 	chunk_view(s);
-	return cp;
 }
 
-/* Node gid of s: its chunk becomes s->cp (the view), *lip its local index. */
-static const w64_cnode_t *node_of(src_t *s, int32_t gid, uint32_t *lip)
-{
-	uint32_t ci = W64_GID_COLL(gid), li = W64_GID_LOCAL(gid);
-
-	if (s->L && !(s->cp && ci == s->ci))
-		chunk_of(s, ci);
-	if (li >= s->nnodes)
-		sys_error("coll: node %ld past its chunk", (long)gid);
-	*lip = li;
-	st.nodes++;
-	return s->nodes + li;
-}
-
-/* Child c of a node of the current chunk -> gid or leaf child. */
-static int32_t child_of(const src_t *s, int c)
+/* Child c of a node of view v -> gid or leaf child. */
+static inline int32_t child_of(const view_t *v, int c)
 {
 	if (c < 0)
 		return c;
-	if (c < s->nnodes)
-		return (int32_t)(s->ci << W64_GID_LOCAL_BITS | (uint32_t)c);
-	return (int32_t)((const uint32_t *)(s->nodes + s->nnodes))[c - s->nnodes];
+	if ((uint32_t)c < v->nnodes)
+		return (int32_t)(v->base | (uint32_t)c);
+	return (int32_t)v->ext[c - (int)v->nnodes];
 }
 
-/* Signed distance of p from node li's plane (current chunk): axial nodes
- * 0-2 (unit normal), else the plane, in double as plane_dist. */
-static inline float view_dist(const src_t *s, const w64_cnode_t *nd, uint32_t li, const float p[3])
+/* Signed distance of p from a non-axial plane, in double. */
+static inline float plane_eval(const w64_cplane_t *pl, const float p[3])
 {
-	const w64_cplane_t *pl;
-
-	if (li < s->nx)
-		return p[0] - nd->u.dist;
-	if (li < s->ny)
-		return p[1] - nd->u.dist;
-	if (li < s->nz)
-		return p[2] - nd->u.dist;
-	pl = s->planes + nd->u.plane;
 	return (float)((double)pl->normal[0] * p[0] + (double)pl->normal[1] * p[1]
 		+ (double)pl->normal[2] * p[2] - pl->dist);
-}
-
-/* The same for two points (one node / plane fetch). */
-static inline void view_dist2(const src_t *s, const w64_cnode_t *nd, uint32_t li, const float a[3],
-	const float b[3], float *ta, float *tb)
-{
-	const w64_cplane_t *pl;
-	int k;
-
-	if (li < s->nz)
-	{
-		k = li < s->nx ? 0 : li < s->ny ? 1 : 2;
-		*ta = a[k] - nd->u.dist;
-		*tb = b[k] - nd->u.dist;
-		return;
-	}
-	pl = s->planes + nd->u.plane;
-	*ta = (float)((double)pl->normal[0] * a[0] + (double)pl->normal[1] * a[1]
-		+ (double)pl->normal[2] * a[2] - pl->dist);
-	*tb = (float)((double)pl->normal[0] * b[0] + (double)pl->normal[1] * b[1]
-		+ (double)pl->normal[2] * b[2] - pl->dist);
 }
 
 /* Plane of node li in chunk cp: axis 0-2 (unit normal) or 3 (pl). */
@@ -203,7 +166,6 @@ static float plane_dist(const uint8_t *cp, uint32_t li, const float p[3])
 {
 	const w64_coll_t *h = HDR(cp);
 	const w64_cnode_t *nd = NODES(cp) + li;
-	const w64_cplane_t *pl;
 
 	if (li < h->nx)
 		return p[0] - nd->u.dist;
@@ -211,9 +173,7 @@ static float plane_dist(const uint8_t *cp, uint32_t li, const float p[3])
 		return p[1] - nd->u.dist;
 	if (li < h->nz)
 		return p[2] - nd->u.dist;
-	pl = PLANES(cp) + nd->u.plane;
-	return (float)((double)pl->normal[0] * p[0] + (double)pl->normal[1] * p[1]
-		+ (double)pl->normal[2] * p[2] - pl->dist);
+	return plane_eval(PLANES(cp) + nd->u.plane, p);
 }
 
 static void plane_get(const uint8_t *cp, uint32_t li, float n[3], float *d)
@@ -251,20 +211,53 @@ static int leaf_contents(const src_t *s, int32_t ref)
 	return s->L->leafc[leaf];
 }
 
+/* The leaf (contents) of p below node ref. */
 static int walk_point(src_t *s, int32_t ref, const float p[3])
 {
+	view_t v = s->v;
+	uint32_t cur = s->ci;
 	int steps;
 
 	for (steps = 0; ref >= 0; steps++)
 	{
-		uint32_t li;
-		const w64_cnode_t *nd = node_of(s, ref, &li);
+		uint32_t li = W64_GID_LOCAL(ref);
+		const w64_cnode_t *nd;
+		float d;
 
+		if (W64_GID_COLL(ref) != cur)
+		{
+			chunk_switch(s, W64_GID_COLL(ref));
+			v = s->v;
+			cur = s->ci;
+		}
+		if (li >= v.nnodes)
+			sys_error("coll: node %ld past its chunk", (long)ref);
 		if (steps == COL_WALK_MAX)
 			sys_error("coll: hull walk deeper than %d", COL_WALK_MAX);
-		ref = child_of(s, nd->child[view_dist(s, nd, li, p) >= 0 ? 0 : 1]);
+		nd = v.nodes + li;
+		if (li < v.nz)
+			d = p[li < v.nx ? 0 : li < v.ny ? 1 : 2] - nd->u.dist;
+		else
+			d = plane_eval(v.planes + nd->u.plane, p);
+		ref = child_of(&v, nd->child[d >= 0 ? 0 : 1]);
 	}
+	st.nodes += (uint32_t)steps;
 	return leaf_contents(s, ref);
+}
+
+/* Submodel sub of layer L, hull hull (both valid). */
+static void src_layer(src_t *s, wld_layer_t *L, unsigned sub, int hull)
+{
+	s->L = L;
+	s->root = L->models[sub].head[hull];
+	s->hull0 = hull == 0;
+	s->ci = COL_NO_CHUNK;
+	s->cp = NULL;
+	s->v.nodes = NULL;
+	s->v.planes = NULL;
+	s->v.ext = NULL;
+	s->v.base = s->v.nnodes = s->v.nx = s->v.ny = s->v.nz = 0;
+	s->hit_cp = NULL;
 }
 
 static int src_model(src_t *s, uint16_t model, int hull)
@@ -274,10 +267,7 @@ static int src_model(src_t *s, uint16_t model, int hull)
 
 	if (!L || sub >= L->dir->nsub || hull < 0 || hull >= COL_HULLS)
 		return 0;
-	memset(s, 0, sizeof(*s));
-	s->L = L;
-	s->root = L->models[sub].head[hull];
-	s->hull0 = hull == 0;
+	src_layer(s, L, sub, hull);
 	return 1;
 }
 
@@ -306,11 +296,13 @@ static void src_box(src_t *s, const float lo[3], const float hi[3])
 		nd[2 * k + 1].child[0] = k < 2 ? (int16_t)(2 * k + 2) : COL_SOLID;
 		nd[2 * k + 1].child[1] = COL_EMPTY;
 	}
-	memset(s, 0, sizeof(*s));
-	s->box = box_tree;
+	s->L = NULL;
 	s->root = 0;
+	s->hull0 = 0;
+	s->ci = 0;
 	s->cp = box_tree;
 	chunk_view(s);
+	s->hit_cp = NULL;
 }
 
 /* ---- segment walk (spec 3) -------------------------------------------------- */
@@ -322,38 +314,129 @@ static void lerp(float out[3], const float a[3], const float b[3], float f)
 	out[2] = a[2] + f * (b[2] - a[2]);
 }
 
+/* Element copies: aligned single loads / stores (memcpy of a float[3]
+ * compiles to unaligned pairs and byte moves here). */
+static inline void copy3(float d[3], const float s[3])
+{
+	d[0] = s[0];
+	d[1] = s[1];
+	d[2] = s[2];
+}
+
+/* fr's far child is SOLID at the split point m (fraction mf): the plane
+ * is the impact, backed off while the point is still solid. */
+static __attribute__((noinline)) void trace_impact(src_t *s, const split_t *fr,
+	const float split[3], float mf, col_trace_t *tr)
+{
+	float m[3], frac = fr->frac, t1, t2;
+
+	copy3(m, split);
+	s->cp = fr->cp;			/* the frame's chunk stays resident (used this frame) */
+	s->ci = fr->ci;
+	chunk_view(s);
+	plane_get(fr->cp, fr->li, tr->normal, &tr->dist);
+	t1 = plane_dist(fr->cp, fr->li, fr->p1);
+	t2 = plane_dist(fr->cp, fr->li, fr->p2);
+	if (fr->side)
+	{
+		tr->normal[0] = -tr->normal[0];
+		tr->normal[1] = -tr->normal[1];
+		tr->normal[2] = -tr->normal[2];
+		tr->dist = -tr->dist;
+	}
+	s->hit_cp = fr->cp;
+	s->hit_ci = fr->ci;
+	s->hit_li = fr->li;
+	lerp(s->hit_p, fr->p1, fr->p2, t1 / (t1 - t2));
+	/* acute corners: back off while the point is still solid */
+	while (walk_point(s, s->root, m) == COL_SOLID)
+	{
+		frac -= 0.1f;
+		if (frac < 0)
+			break;		/* keep the last point; never past the start */
+		mf = fr->p1f + (fr->p2f - fr->p1f) * frac;
+		lerp(m, fr->p1, fr->p2, frac);
+	}
+	tr->frac = mf;
+	copy3(tr->end, m);
+}
+
 /* Walks p1 -> p2 (model frame) from s->root. Flags accumulate in tr;
  * returns 1 with tr->frac / end / normal / dist (model frame) on an
- * impact. tr->allsolid must start at 1. */
+ * impact. tr->allsolid must start at 1.
+ *
+ * The far part of a split starts with the contents of the split point m
+ * in the far child (spec 3). That is the first leaf the far part's own
+ * walk reaches: at every node the walk of [m, p2] takes m's side (both
+ * ends on one side: m's; split: the near child, m's), so the far part is
+ * walked at once and its first leaf decides -- SOLID: the impact, the
+ * frames above dropped; else the walk goes on -- instead of walking m's
+ * path twice. A NaN distance of m (no side) falls back to the separate
+ * point walk. */
 static int walk_trace(src_t *s, const float p1[3], const float p2[3], col_trace_t *tr)
 {
 	float a[3], b[3], af = 0, bf = 1;
 	int32_t ref = s->root;
-	int sp = 0;
+	int steps = 0;
+	view_t v = s->v;
+	uint32_t cur = s->ci;
+	split_t *top = stack, *fr, *first = NULL;	/* first: the frame whose far part is before its first leaf */
 
-	memcpy(a, p1, sizeof(a));
-	memcpy(b, p2, sizeof(b));
+	copy3(a, p1);
+	copy3(b, p2);
 	for (;;)
 	{
 		int c;
 
 		while (ref >= 0)
 		{
-			uint32_t li;
-			const w64_cnode_t *nd = node_of(s, ref, &li);
+			uint32_t li = W64_GID_LOCAL(ref);
+			const w64_cnode_t *nd;
 			float t1, t2, frac;
-			split_t *fr;
 			int side;
 
-			view_dist2(s, nd, li, a, b, &t1, &t2);
-			if (t1 >= 0 && t2 >= 0)
+			if (W64_GID_COLL(ref) != cur)
 			{
-				ref = child_of(s, nd->child[0]);
+				chunk_switch(s, W64_GID_COLL(ref));
+				v = s->v;
+				cur = s->ci;
+			}
+			if (li >= v.nnodes)
+				sys_error("coll: node %ld past its chunk", (long)ref);
+			steps++;
+			nd = v.nodes + li;
+			if (li < v.nz)
+			{
+				int k = li < v.nx ? 0 : li < v.ny ? 1 : 2;
+
+				t1 = a[k] - nd->u.dist;
+				t2 = b[k] - nd->u.dist;
+			}
+			else
+			{
+				const w64_cplane_t *pl = v.planes + nd->u.plane;
+
+				t1 = plane_eval(pl, a);
+				t2 = plane_eval(pl, b);
+			}
+			if ((t1 >= 0 && t2 >= 0) || (t1 < 0 && t2 < 0))
+			{
+				ref = child_of(&v, nd->child[t1 < 0]);	/* front: 0, back: 1 */
 				continue;
 			}
-			if (t1 < 0 && t2 < 0)
+			if (first && t1 != t1)
 			{
-				ref = child_of(s, nd->child[1]);
+				/* m has no side: classify it apart, then walk its far part */
+				fr = first;
+				top = first + 1;
+				first = NULL;
+				if (walk_point(s, fr->far, a) == COL_SOLID)
+					goto impact;
+				ref = fr->far;
+				copy3(b, fr->p2);
+				bf = fr->p2f;
+				v = s->v;
+				cur = s->ci;
 				continue;
 			}
 			side = t1 < 0;
@@ -362,24 +445,33 @@ static int walk_trace(src_t *s, const float p1[3], const float p2[3], col_trace_
 				frac = 0;
 			if (frac > 1)
 				frac = 1;
-			if (sp == COL_STACK)
+			if (top == stack + COL_STACK)
 				sys_error("coll: hull walk deeper than %d splits", COL_STACK);
-			fr = &stack[sp++];
-			fr->far = child_of(s, nd->child[side ^ 1]);
+			fr = top++;
+			fr->far = child_of(&v, nd->child[side ^ 1]);
 			fr->cp = s->cp;
-			fr->ci = s->ci;
+			fr->ci = cur;
 			fr->li = (uint16_t)li;
 			fr->side = (uint8_t)side;
+			fr->done = 0;
 			fr->frac = frac;
 			fr->p1f = af;
 			fr->p2f = bf;
-			memcpy(fr->p1, a, sizeof(a));
-			memcpy(fr->p2, b, sizeof(b));
-			ref = child_of(s, nd->child[side]);
+			copy3(fr->p1, a);
+			copy3(fr->p2, b);
+			ref = child_of(&v, nd->child[side]);
 			bf = af + (bf - af) * frac;
 			lerp(b, fr->p1, fr->p2, frac);
 		}
 		c = leaf_contents(s, ref);
+		if (first)
+		{
+			/* a far part's first leaf: m's contents in the far child */
+			fr = first;
+			first = NULL;
+			if (c == COL_SOLID)
+				goto impact;
+		}
 		if (c != COL_SOLID)
 		{
 			tr->allsolid = 0;
@@ -391,60 +483,34 @@ static int walk_trace(src_t *s, const float p1[3], const float p2[3], col_trace_
 		else
 			tr->startsolid = 1;
 
-		/* the near part ended without an impact: the far parts, innermost first */
-		for (;;)
+		/* the near part ended without an impact: the far parts, innermost
+		 * first (a frame stays until the frames above it are done) */
+		do
 		{
-			split_t *fr;
-			float m[3], mf, frac, t1, t2;
-
-			if (!sp)
+			if (top == stack)
+			{
+				st.nodes += (uint32_t)steps;
 				return 0;
-			fr = &stack[--sp];
-			frac = fr->frac;
-			mf = fr->p1f + (fr->p2f - fr->p1f) * frac;
-			lerp(m, fr->p1, fr->p2, frac);
-			if (walk_point(s, fr->far, m) != COL_SOLID)
-			{
-				ref = fr->far;
-				memcpy(a, m, sizeof(a));
-				af = mf;
-				memcpy(b, fr->p2, sizeof(b));
-				bf = fr->p2f;
-				break;
 			}
-			if (tr->allsolid)
-				return 0;		/* never left the solid */
-			s->cp = fr->cp;			/* the frame's chunk stays resident (used this frame) */
-			s->ci = fr->ci;
-			chunk_view(s);
-			plane_get(fr->cp, fr->li, tr->normal, &tr->dist);
-			t1 = plane_dist(fr->cp, fr->li, fr->p1);
-			t2 = plane_dist(fr->cp, fr->li, fr->p2);
-			if (fr->side)
-			{
-				tr->normal[0] = -tr->normal[0];
-				tr->normal[1] = -tr->normal[1];
-				tr->normal[2] = -tr->normal[2];
-				tr->dist = -tr->dist;
-			}
-			s->hit_cp = fr->cp;
-			s->hit_ci = fr->ci;
-			s->hit_li = fr->li;
-			lerp(s->hit_p, fr->p1, fr->p2, t1 / (t1 - t2));
-			/* acute corners: back off while the point is still solid */
-			while (walk_point(s, s->root, m) == COL_SOLID)
-			{
-				frac -= 0.1f;
-				if (frac < 0)
-					break;		/* keep the last point; never past the start */
-				mf = fr->p1f + (fr->p2f - fr->p1f) * frac;
-				lerp(m, fr->p1, fr->p2, frac);
-			}
-			tr->frac = mf;
-			memcpy(tr->end, m, sizeof(m));
-			return 1;
-		}
+			fr = --top;
+		} while (fr->done);
+		top++;
+		fr->done = 1;
+		first = fr;
+		ref = fr->far;
+		af = fr->p1f + (fr->p2f - fr->p1f) * fr->frac;
+		lerp(a, fr->p1, fr->p2, fr->frac);
+		copy3(b, fr->p2);
+		bf = fr->p2f;
 	}
+
+impact:
+	/* fr's far child is SOLID at the split point m = a (fraction af) */
+	st.nodes += (uint32_t)steps;
+	if (tr->allsolid)
+		return 0;		/* never left the solid */
+	trace_impact(s, fr, a, af, tr);
+	return 1;
 }
 
 /* ---- frames ---------------------------------------------------------------- */
@@ -472,35 +538,95 @@ static int rotated(const float *ang)
 	return ang && (ang[0] != 0 || ang[1] != 0 || ang[2] != 0);
 }
 
+/* isfinite on the bits: an all-ones exponent is inf or NaN (no FPU
+ * compare, no FPU hazard slots) */
 static int finite3(const float v[3])
 {
-	return isfinite(v[0]) && isfinite(v[1]) && isfinite(v[2]);
+	union { float f; uint32_t u; } a, b, c;
+
+	a.f = v[0];
+	b.f = v[1];
+	c.f = v[2];
+	return (a.u & 0x7F800000u) != 0x7F800000u && (b.u & 0x7F800000u) != 0x7F800000u
+		&& (c.u & 0x7F800000u) != 0x7F800000u;
 }
 
-static void tr_init(col_trace_t *tr, const float end[3])
+/* Every field (no padding: the struct's pad is a field), without a
+ * memset call. */
+static inline void tr_init(col_trace_t *tr, const float end[3])
 {
-	memset(tr, 0, sizeof(*tr));
 	tr->frac = 1;
-	tr->allsolid = 1;
+	tr->end[0] = end[0];
+	tr->end[1] = end[1];
+	tr->end[2] = end[2];
+	tr->normal[0] = tr->normal[1] = tr->normal[2] = 0;
+	tr->dist = 0;
 	tr->ent = -1;
-	memcpy(tr->end, end, sizeof(tr->end));
+	tr->allsolid = 1;
+	tr->startsolid = tr->inopen = tr->inwater = 0;
+	tr->hitgroup = 0;
+	tr->pad = 0;
+}
+
+/* Rotated placement (spec 4.2): the segment into the model frame, the
+ * impact back. Out of line: the world's and most entities' traces are
+ * not rotated, and their path stays short. */
+static __attribute__((noinline)) void trace_rotated(src_t *s, const float o[3],
+	const float ang[3], const float start[3], const float end[3], col_trace_t *tr)
+{
+	float ls[3], le[3], f[3], r[3], u[3], a[3], b[3], n[3];
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		a[k] = start[k] - o[k];
+		b[k] = end[k] - o[k];
+	}
+	angle_vectors(ang, f, r, u);
+	ls[0] = a[0] * f[0] + a[1] * f[1] + a[2] * f[2];
+	ls[1] = -(a[0] * r[0] + a[1] * r[1] + a[2] * r[2]);
+	ls[2] = a[0] * u[0] + a[1] * u[1] + a[2] * u[2];
+	le[0] = b[0] * f[0] + b[1] * f[1] + b[2] * f[2];
+	le[1] = -(b[0] * r[0] + b[1] * r[1] + b[2] * r[2]);
+	le[2] = b[0] * u[0] + b[1] * u[1] + b[2] * u[2];
+	if (!walk_trace(s, ls, le, tr))
+	{
+		memcpy(tr->end, end, sizeof(tr->end));
+		return;
+	}
+	memcpy(n, tr->normal, sizeof(n));
+	for (k = 0; k < 3; k++)
+	{
+		tr->normal[k] = n[0] * f[k] - n[1] * r[k] + n[2] * u[k];
+		tr->end[k] = start[k] + tr->frac * (end[k] - start[k]);
+	}
+}
+
+static __attribute__((noinline, cold)) void trace_nan(col_trace_t *tr)
+{
+	if (!warned_nan)
+		log_printf("coll: non-finite trace input: start solid\n");
+	warned_nan = 1;
+	tr->startsolid = 1;
 }
 
 /* Trace s placed at o (rotated by ang about o when non-zero): spec 4.2. */
 static void trace_src(src_t *s, const float o[3], const float *ang, const float start[3],
 	const float end[3], col_trace_t *tr)
 {
-	float ls[3], le[3], f[3], r[3], u[3];
-	int k, rot = rotated(ang);
+	float ls[3], le[3];
+	int k;
 
 	tr_init(tr, end);
 	st.traces++;
 	if (!finite3(start) || !finite3(end) || !finite3(o))
 	{
-		if (!warned_nan)
-			log_printf("coll: non-finite trace input: start solid\n");
-		warned_nan = 1;
-		tr->startsolid = 1;
+		trace_nan(tr);
+		return;
+	}
+	if (rotated(ang))
+	{
+		trace_rotated(s, o, ang, start, end, tr);
 		return;
 	}
 	for (k = 0; k < 3; k++)
@@ -508,52 +634,29 @@ static void trace_src(src_t *s, const float o[3], const float *ang, const float 
 		ls[k] = start[k] - o[k];
 		le[k] = end[k] - o[k];
 	}
-	if (rot)
-	{
-		float a[3], b[3];
-
-		angle_vectors(ang, f, r, u);
-		memcpy(a, ls, sizeof(a));
-		memcpy(b, le, sizeof(b));
-		ls[0] = a[0] * f[0] + a[1] * f[1] + a[2] * f[2];
-		ls[1] = -(a[0] * r[0] + a[1] * r[1] + a[2] * r[2]);
-		ls[2] = a[0] * u[0] + a[1] * u[1] + a[2] * u[2];
-		le[0] = b[0] * f[0] + b[1] * f[1] + b[2] * f[2];
-		le[1] = -(b[0] * r[0] + b[1] * r[1] + b[2] * r[2]);
-		le[2] = b[0] * u[0] + b[1] * u[1] + b[2] * u[2];
-	}
 	if (!walk_trace(s, ls, le, tr))
 	{
-		memcpy(tr->end, end, sizeof(tr->end));
+		copy3(tr->end, end);
 		return;
 	}
-	if (rot)
-	{
-		float n[3];
-
-		memcpy(n, tr->normal, sizeof(n));
-		for (k = 0; k < 3; k++)
-		{
-			tr->normal[k] = n[0] * f[k] - n[1] * r[k] + n[2] * u[k];
-			tr->end[k] = start[k] + tr->frac * (end[k] - start[k]);
-		}
-	}
-	else
-		for (k = 0; k < 3; k++)
-			tr->end[k] += o[k];
+	for (k = 0; k < 3; k++)
+		tr->end[k] += o[k];
 }
 
 /* ---- frames (architecture.md 8) ---------------------------------------------- */
 
-/* Origin of layer L in the frame of eng_frame_layer(): g_M(L) - g_M(frame)
- * (the frame's own layer: exactly 0). */
-static void layer_in_frame(const wld_layer_t *L, float o[3])
+/* Origin of layer L in the frame whose origin is f (eng_layer_origin of
+ * eng_frame_layer()): g_M(L) - g_M(frame) (the frame's own layer: exactly 0). */
+static inline void layer_in_frame(const wld_layer_t *L, const float f[3], float o[3])
 {
-	const float *f = eng_layer_origin(eng_frame_layer());
-	int k;
+	o[0] = L->gofs[0] - f[0];
+	o[1] = L->gofs[1] - f[1];
+	o[2] = L->gofs[2] - f[2];
+}
 
-	for (k = 0; k < 3; k++)
-		o[k] = L->gofs[k] - f[k];
+static const float *frame_origin(void)
+{
+	return eng_layer_origin(eng_frame_layer());
 }
 
 /* A collision view in the entity layer's storage (else a caller's copy,
@@ -565,8 +668,8 @@ static int stored(const col_ent_t *e)
 
 /* ---- contents ------------------------------------------------------------------ */
 
-static int layer_has(const wld_layer_t *L, const float o[3], const float p[3], const float lo[3],
-	const float hi[3])
+static inline int layer_has(const wld_layer_t *L, const float o[3], const float p[3],
+	const float lo[3], const float hi[3])
 {
 	const w64_model_t *m = &L->models[0];
 	int k;
@@ -581,10 +684,12 @@ static const float zero3[3] = { 0, 0, 0 };
 
 int col_true_contents(const float p[3])
 {
+	const float *f;
 	int slot, c = COL_SOLID;
 
 	if (!finite3(p))
 		return COL_SOLID;
+	f = frame_origin();
 	for (slot = 0; slot < HL64_WORLD_LAYERS && c == COL_SOLID; slot++)
 	{
 		wld_layer_t *L = wld_layer(slot);
@@ -592,7 +697,7 @@ int col_true_contents(const float p[3])
 
 		if (!L)
 			continue;
-		layer_in_frame(L, o);
+		layer_in_frame(L, f, o);
 		if (!layer_has(L, o, p, zero3, zero3))
 			continue;
 		lp[0] = p[0] - o[0];
@@ -771,36 +876,59 @@ static int nearer(const col_trace_t *a, const col_trace_t *b)
 	return a->startsolid < b->startsolid;
 }
 
+/* A world trace's inputs, for its per-layer step. */
+typedef struct {
+	const float	*start, *mins, *end;
+	const float	*f;		/* the frame's origin */
+	float		lo[3], hi[3];	/* the move's box */
+	int		hull;
+} wtrace_t;
+
+/* Layer L's trace of w into d; 0 (d untouched): the move's box is
+ * outside the layer. */
+static __attribute__((noinline)) int trace_layer(wld_layer_t *L, const wtrace_t *w,
+	col_trace_t *d)
+{
+	src_t s;
+	float o[3], lo3[3];
+
+	layer_in_frame(L, w->f, lo3);
+	if (!layer_has(L, lo3, zero3, w->lo, w->hi))
+		return 0;
+	src_layer(&s, L, 0, w->hull);
+	hull_place(o, lo3, w->hull, w->mins);
+	trace_src(&s, o, NULL, w->start, w->end, d);
+	if (d->frac < 1)
+		d->dist += d->normal[0] * lo3[0] + d->normal[1] * lo3[1] + d->normal[2] * lo3[2];
+	return 1;
+}
+
 void col_trace_world(const float start[3], const float mins[3], const float maxs[3],
 	const float end[3], col_trace_t *tr)
 {
-	int hull = col_hull_for_size(mins, maxs), slot, any = 0, k;
-	float lo[3], hi[3];
+	wtrace_t w;
+	int slot, any = 0, k;
 
+	w.start = start;
+	w.mins = mins;
+	w.end = end;
+	w.f = frame_origin();
+	w.hull = col_hull_for_size(mins, maxs);
 	for (k = 0; k < 3; k++)
 	{
-		lo[k] = (start[k] < end[k] ? start[k] : end[k]) + mins[k];
-		hi[k] = (start[k] < end[k] ? end[k] : start[k]) + maxs[k];
+		w.lo[k] = (start[k] < end[k] ? start[k] : end[k]) + mins[k];
+		w.hi[k] = (start[k] < end[k] ? end[k] : start[k]) + maxs[k];
 	}
 	tr_init(tr, end);
 	for (slot = 0; slot < HL64_WORLD_LAYERS; slot++)
 	{
 		wld_layer_t *L = wld_layer(slot);
 		col_trace_t t;
-		src_t s;
-		float o[3], lo3[3];
 
-		if (!L)
+		/* the first layer's trace is the result so far: straight into tr */
+		if (!L || !trace_layer(L, &w, any ? &t : tr))
 			continue;
-		layer_in_frame(L, lo3);
-		if (!layer_has(L, lo3, zero3, lo, hi))
-			continue;
-		src_model(&s, COL_MODEL(slot, 0), hull);
-		hull_place(o, lo3, hull, mins);
-		trace_src(&s, o, NULL, start, end, &t);
-		if (t.frac < 1)
-			t.dist += t.normal[0] * lo3[0] + t.normal[1] * lo3[1] + t.normal[2] * lo3[2];
-		if (!any || nearer(&t, tr))
+		if (any && nearer(&t, tr))
 			*tr = t;
 		any = 1;
 	}
@@ -1002,7 +1130,7 @@ void col_move(const float start[3], const float mins[3], const float maxs[3], co
 	 * (start -> the world's end point); their fractions scale back to the
 	 * whole move (an entity the start is stuck in reports all-solid at the
 	 * world's end) [probe:measured T-segments] */
-	memcpy(wend, tr->end, sizeof(wend));
+	copy3(wend, tr->end);
 	wfrac = tr->frac;
 	n = col_ents_box(lo, hi, cand, HL64_MAX_ENTITIES);
 	for (i = 0; i < n; i++)
