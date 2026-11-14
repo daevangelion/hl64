@@ -95,11 +95,19 @@ static int finite_d(double x)
 }
 
 /* x = n pi / 2 + r + c with |r + c| <= ~pi / 4, |c| <= ulp(r) / 2;
- * returns n mod 4. x finite. */
+ * returns n mod 4. x finite. Below 3/4 the steps give n = 0, r = x,
+ * c = +0 exactly (fn rounds to +0, every product with it is +0 and
+ * x - +0 = x): they are skipped. */
 static int reduce(double x, double *r, double *c)
 {
 	double fn, t, w, y, e;
 
+	if (fabs(x) < 0.75)
+	{
+		*r = x;
+		*c = 0.0;
+		return 0;
+	}
 	if (!(fabs(x) < REDUCE_MAX))
 		x = fmod(x, TWO_PI);
 	fn = x * INV_PIO2 + ROUND_MAGIC;
@@ -171,6 +179,43 @@ double hl_cos(double x)
 		return -kcos(r, c);
 	default:
 		return ksin(r, c);
+	}
+}
+
+/* hl_sin and hl_cos of one argument from one reduction (the same values) */
+void hl_sincos(double x, double *s, double *c)
+{
+	double r, cc;
+
+	if (!finite_d(x))
+	{
+		*s = *c = nan_d();
+		return;
+	}
+	if (fabs(x) < TINY)
+	{
+		*s = x;
+		*c = 1.0;
+		return;
+	}
+	switch (reduce(x, &r, &cc))
+	{
+	case 0:
+		*s = ksin(r, cc);
+		*c = kcos(r, cc);
+		break;
+	case 1:
+		*s = kcos(r, cc);
+		*c = -ksin(r, cc);
+		break;
+	case 2:
+		*s = -ksin(r, cc);
+		*c = -kcos(r, cc);
+		break;
+	default:
+		*s = -kcos(r, cc);
+		*c = ksin(r, cc);
+		break;
 	}
 }
 
@@ -259,6 +304,15 @@ float hl_sinf(float x)
 float hl_cosf(float x)
 {
 	return (float)hl_cos(x);
+}
+
+void hl_sincosf(float x, float *s, float *c)
+{
+	double ds, dc;
+
+	hl_sincos(x, &ds, &dc);
+	*s = (float)ds;
+	*c = (float)dc;
 }
 
 float hl_tanf(float x)

@@ -1131,6 +1131,8 @@ typedef struct {
 	uint32_t	bones;		/* server pose bones computed (game_studio_pose_bones) */
 	uint32_t	sounds;		/* sounds and sentences started (snd_emit_count) */
 	uint32_t	decals;		/* decals traced (UTIL_DecalTrace) */
+	uint32_t	poses;		/* server poses begun (game_studio_poses) */
+	uint32_t	btests;		/* hitbox pose cull tests (game_studio_cull_tests) */
 } mon_ai_work_t;
 extern mon_ai_work_t	mon_aiw;
 void	mon_stats_script(void);

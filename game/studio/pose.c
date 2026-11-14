@@ -28,8 +28,10 @@
  *    animtime and framerate, controllers / blends interpolated over the
  *    0.1 s after a change, the previous sequence blended out over 0.2 s
  *    (the client's latched state, kept here per entity slot);
- *  - server (game_studio_pose: hitboxes, attachments, bone positions):
- *    pev->frame as is, no interpolation, memoised by its inputs.
+ *  - server (game_studio_hitbox_pose, gs_entity_bone: hitboxes,
+ *    attachments, bone positions): pev->frame as is, no interpolation,
+ *    computed per bone (only the chains asked for) and memoised by its
+ *    inputs.
  * A sequence whose chunk is not resident (studio_anim NULL: requested)
  * holds the entity's last resident sequence and frame, else the bones'
  * default values. The pose is computed in float (hl_sinf / hl_cosf).
@@ -82,14 +84,11 @@ static void AngleMatrix(const float *angles, float (*matrix)[4])
 	float sr, sp, sy, cr, cp, cy;
 
 	angle = angles[YAW] * (float)(M_PI * 2 / 360);
-	sy = hl_sinf(angle);
-	cy = hl_cosf(angle);
+	hl_sincosf(angle, &sy, &cy);
 	angle = angles[PITCH] * (float)(M_PI * 2 / 360);
-	sp = hl_sinf(angle);
-	cp = hl_cosf(angle);
+	hl_sincosf(angle, &sp, &cp);
 	angle = angles[ROLL] * (float)(M_PI * 2 / 360);
-	sr = hl_sinf(angle);
-	cr = hl_cosf(angle);
+	hl_sincosf(angle, &sr, &cr);
 
 	// matrix = (YAW * PITCH) * ROLL
 	matrix[0][0] = cp * cy;
@@ -135,27 +134,70 @@ static void ConcatTransforms(const float in1[3][4], const float in2[3][4], float
 		+ in1[2][3];
 }
 
-// angles index are not the same as ROLL, PITCH, YAW
-static void AngleQuaternion(const float *angles, vec4_t quaternion)
+/* AngleQuaternion's sin / cos of the half angles: sc[j] = sin, cos of
+ * angles[j] * 0.5 (one reduction each: hl_sincosf); a half angle with
+ * the bits of the same component of `same` (NULL: none) takes its
+ * values (scs) instead */
+static void half_sincos(const float *angles, const float *same, float (*scs)[2],
+	float (*sc)[2])
 {
-	float angle;
+	float h, hs;
+	int j;
+
+	for (j = 0; j < 3; j++)
+	{
+		h = angles[j] * 0.5f;
+		if (same)
+		{
+			hs = same[j] * 0.5f;
+			if (!memcmp(&h, &hs, sizeof(h)))
+			{
+				sc[j][0] = scs[j][0];
+				sc[j][1] = scs[j][1];
+				continue;
+			}
+		}
+		hl_sincosf(h, &sc[j][0], &sc[j][1]);
+	}
+}
+
+// angles index are not the same as ROLL, PITCH, YAW
+static void quat_of(float (*sc)[2], vec4_t quaternion)
+{
 	float sr, sp, sy, cr, cp, cy;
 
 	// FIXME: rescale the inputs to 1/2 angle
-	angle = angles[2] * 0.5f;
-	sy = hl_sinf(angle);
-	cy = hl_cosf(angle);
-	angle = angles[1] * 0.5f;
-	sp = hl_sinf(angle);
-	cp = hl_cosf(angle);
-	angle = angles[0] * 0.5f;
-	sr = hl_sinf(angle);
-	cr = hl_cosf(angle);
+	sy = sc[2][0];
+	cy = sc[2][1];
+	sp = sc[1][0];
+	cp = sc[1][1];
+	sr = sc[0][0];
+	cr = sc[0][1];
 
 	quaternion[0] = sr * cp * cy - cr * sp * sy; // X
 	quaternion[1] = cr * sp * cy + sr * cp * sy; // Y
 	quaternion[2] = cr * cp * sy - sr * sp * cy; // Z
 	quaternion[3] = cr * cp * cy + sr * sp * sy; // W
+}
+
+static void AngleQuaternion(const float *angles, vec4_t quaternion)
+{
+	float sc[3][2];
+
+	half_sincos(angles, NULL, NULL, sc);
+	quat_of(sc, quaternion);
+}
+
+/* AngleQuaternion of two angle sets (a frame and the next): a component
+ * equal in both is reduced once */
+static void AngleQuaternion2(const float *angles1, const float *angles2, vec4_t q1, vec4_t q2)
+{
+	float sc1[3][2], sc2[3][2];
+
+	half_sincos(angles1, NULL, NULL, sc1);
+	half_sincos(angles2, angles1, sc1, sc2);
+	quat_of(sc1, q1);
+	quat_of(sc2, q2);
 }
 
 static void QuaternionSlerp(const vec4_t p, vec4_t q, float t, vec4_t qt)
@@ -371,8 +413,7 @@ static void StudioCalcBoneQuaterion(int frame, float s, const sfmt_bone_t *pbone
 
 	if (!VectorCompare(angle1, angle2))
 	{
-		AngleQuaternion(angle1, q1);
-		AngleQuaternion(angle2, q2);
+		AngleQuaternion2(angle1, angle2, q1, q2);
 		QuaternionSlerp(q1, q2, s, q);
 	}
 	else
@@ -431,10 +472,9 @@ static void StudioCalcBonePosition(int frame, float s, const sfmt_bone_t *pbone,
 	}
 }
 
-static void StudioSlerpBones(int numbones, vec4_t q1[], float pos1[][3], vec4_t q2[],
-	float pos2[][3], float s)
+/* StudioSlerpBones' step for one bone */
+static void slerp_bone(vec4_t q1, float pos1[3], vec4_t q2, const float pos2[3], float s)
 {
-	int i;
 	vec4_t q3;
 	float s1;
 
@@ -445,17 +485,23 @@ static void StudioSlerpBones(int numbones, vec4_t q1[], float pos1[][3], vec4_t 
 
 	s1 = 1.0f - s;
 
+	QuaternionSlerp(q1, q2, s, q3);
+	q1[0] = q3[0];
+	q1[1] = q3[1];
+	q1[2] = q3[2];
+	q1[3] = q3[3];
+	pos1[0] = pos1[0] * s1 + pos2[0] * s;
+	pos1[1] = pos1[1] * s1 + pos2[1] * s;
+	pos1[2] = pos1[2] * s1 + pos2[2] * s;
+}
+
+static void StudioSlerpBones(int numbones, vec4_t q1[], float pos1[][3], vec4_t q2[],
+	float pos2[][3], float s)
+{
+	int i;
+
 	for (i = 0; i < numbones; i++)
-	{
-		QuaternionSlerp(q1[i], q2[i], s, q3);
-		q1[i][0] = q3[0];
-		q1[i][1] = q3[1];
-		q1[i][2] = q3[2];
-		q1[i][3] = q3[3];
-		pos1[i][0] = pos1[i][0] * s1 + pos2[i][0] * s;
-		pos1[i][1] = pos1[i][1] * s1 + pos2[i][1] * s;
-		pos1[i][2] = pos1[i][2] * s1 + pos2[i][2] * s;
-	}
+		slerp_bone(q1[i], pos1[i], q2[i], pos2[i], s);
 }
 
 static void StudioCalcRotations(const sfmt_info_t *hdr, float pos[][3], vec4_t *q,
@@ -583,8 +629,8 @@ static void seq_pose(const sfmt_info_t *hdr, const sfmt_seq_t *pseqdesc, const u
 	}
 }
 
-/* Bone matrices from (pos, q): root bones under `root` (NULL: model space). */
-static void build_matrices(const sfmt_info_t *hdr, const float (*root)[4], float (*out)[3][4])
+/* Bone matrices from (pos1, q1), in model space (the client pose). */
+static void build_matrices(const sfmt_info_t *hdr, float (*out)[3][4])
 {
 	const sfmt_bone_t *pbones = SFMT_BONES(hdr);
 	float bonematrix[3][4];
@@ -597,82 +643,199 @@ static void build_matrices(const sfmt_info_t *hdr, const float (*root)[4], float
 		bonematrix[1][3] = pos1[i][1];
 		bonematrix[2][3] = pos1[i][2];
 		if (pbones[i].parent == -1)
-		{
-			if (root)
-				ConcatTransforms(root, (const float (*)[4])bonematrix, out[i]);
-			else
-				memcpy(out[i], bonematrix, sizeof(bonematrix));
-		}
+			memcpy(out[i], bonematrix, sizeof(bonematrix));
 		else
 			ConcatTransforms((const float (*)[4])out[pbones[i].parent],
 				(const float (*)[4])bonematrix, out[i]);
 	}
 }
 
-/* ---- server pose (memoised) -------------------------------------------------- */
+/* ---- server pose (per bone, memoised) ---------------------------------------- */
 
-/* 4: an islave zap's two beams pose the slave (attachments) and the
+/* What the bones of one server pose share (the preamble of the HLSDK
+ * server bone setup: StudioEstimateFrame, StudioCalcBoneAdj, the blends,
+ * StudioCalcRotations' frame clamp, the root transform). */
+typedef struct {
+	const sfmt_info_t	*hdr;
+	const sfmt_seq_t	*pseqdesc;
+	const uint16_t		*chunk;
+	int			frame, nblends;
+	float			s, adj[8], blend[2];
+	float			root[3][4];
+} sv_ctx_t;
+
+static void sv_ctx(sv_ctx_t *c, const sfmt_info_t *hdr, const game_pose_t *p)
+{
+	gs_clent_t cl;
+	float f, angles[3];
+	int seq, i;
+
+	seq = p->sequence < hdr->numseq ? p->sequence : 0;
+	c->hdr = hdr;
+	c->pseqdesc = &SFMT_SEQS(hdr)[seq];
+	c->chunk = studio_anim_now(p->model, seq, NULL);
+	cl.curstate.frame = p->frame;
+	cl.curstate.animtime = 0;
+	cl.curstate.framerate = 0;
+	f = gs_estimate_frame(c->pseqdesc, &cl, 0, 0);
+	StudioCalcBoneAdj(hdr, 1.0f, c->adj, p->controller, p->controller, 0);
+	c->blend[0] = p->blending[0] / 255.0f;
+	c->blend[1] = p->blending[1] / 255.0f;
+	/* StudioCalcRotations */
+	if (f > c->pseqdesc->numframes - 1)
+		f = 0;
+	else if (f < -0.01f)
+		f = -0.01f;
+	c->frame = (int)f;
+	c->s = (f - c->frame);
+	/* seq_pose: blend 1 when numblends > 1, blends 2 and 3 when 4 */
+	c->nblends = c->pseqdesc->numblends == 4 ? 4 : c->pseqdesc->numblends > 1 ? 2 : 1;
+	angles[PITCH] = -p->angles[PITCH];
+	angles[YAW] = p->angles[YAW];
+	angles[ROLL] = p->angles[ROLL];
+	AngleMatrix(angles, c->root);
+	for (i = 0; i < 3; i++)
+		c->root[i][3] = p->origin[i];
+}
+
+/* Bone i into out[i], its parent's matrix in out: seq_pose's and
+ * build_matrices' steps for this bone, in their order (each bone's
+ * values depend only on its own channels and its parent's matrix, so
+ * they are the bits of the whole pose's). */
+static void sv_bone(const sv_ctx_t *c, int i, float (*out)[3][4])
+{
+	const sfmt_bone_t *pbone = SFMT_BONES(c->hdr) + i;
+	const sfmt_seq_t *pseqdesc = c->pseqdesc;
+	vec4_t q[4];
+	float pos[4][3], bonematrix[3][4];
+	int b;
+
+	for (b = 0; b < c->nblends; b++)
+	{
+		StudioCalcBoneQuaterion(c->frame, c->s, pbone, c->chunk, c->hdr->numbones, b, i,
+			c->adj, q[b]);
+		StudioCalcBonePosition(c->frame, c->s, pbone, c->chunk, c->hdr->numbones, b, i,
+			c->adj, pos[b]);
+		if (i == pseqdesc->motionbone)
+		{
+			if (pseqdesc->motiontype & STUDIO_X)
+				pos[b][0] = 0.0f;
+			if (pseqdesc->motiontype & STUDIO_Y)
+				pos[b][1] = 0.0f;
+			if (pseqdesc->motiontype & STUDIO_Z)
+				pos[b][2] = 0.0f;
+		}
+	}
+	if (c->nblends > 1)
+	{
+		slerp_bone(q[0], pos[0], q[1], pos[1], c->blend[0]);
+		if (c->nblends == 4)
+		{
+			slerp_bone(q[2], pos[2], q[3], pos[3], c->blend[0]);
+			slerp_bone(q[0], pos[0], q[2], pos[2], c->blend[1]);
+		}
+	}
+	QuaternionMatrix(q[0], bonematrix);
+	bonematrix[0][3] = pos[0][0];
+	bonematrix[1][3] = pos[0][1];
+	bonematrix[2][3] = pos[0][2];
+	if (pbone->parent == -1)
+		ConcatTransforms((const float (*)[4])c->root, (const float (*)[4])bonematrix, out[i]);
+	else
+		ConcatTransforms((const float (*)[4])out[pbone->parent],
+			(const float (*)[4])bonematrix, out[i]);
+}
+
+/* 4 poses: an islave zap's two beams pose the slave (attachments) and the
  * entities its traces pass by, a shotgun's pellets the same few
- * entities; 2 entries thrashed between three poses */
+ * entities; 2 entries thrashed between three poses. An entry holds the
+ * bones computed so far of one pose (key: the whole game_pose_t); a later
+ * use of the same pose computes only the bones it lacks. */
 #define SV_CACHE	4
 
 typedef struct {
 	game_pose_t	in;
-	int		n;
 	int		valid;
+	uint32_t	have[GS_MAXBONES / 32];
 	float		bones[GS_MAXBONES][3][4];
 } pose_memo_t;
 
-/* the game's memo: the renderer reads it but never fills it */
-static pose_memo_t	sv_cache[SV_CACHE];
+/* the game's memo (the renderer reads it but never fills it); a pose
+ * whose chunk is missing (a bad file) goes to the scratch, unmemoised */
+static pose_memo_t	sv_cache[SV_CACHE], sv_scratch;
 static int		sv_next;
-uint32_t		game_studio_pose_bones;
+uint32_t		game_studio_pose_bones, game_studio_poses, game_studio_cull_tests;
 
-static int memo_get(const pose_memo_t *m, const game_pose_t *p, float (*out)[3][4])
+/* one server pose in the making */
+typedef struct {
+	const sfmt_info_t	*hdr;
+	const game_pose_t	*p;
+	pose_memo_t		*m;	/* NULL until a bone is needed */
+	sv_ctx_t		c;
+	int			c_ok;
+} sv_pose_t;
+
+static int has_bone(const pose_memo_t *m, int i)
 {
-	if (!m->valid || memcmp(&m->in, p, sizeof(*p)))
-		return 0;
-	memcpy(out, m->bones, sizeof(out[0]) * (size_t)m->n);
-	return m->n;
+	return (m->have[i >> 5] >> (i & 31)) & 1;
 }
 
-static void memo_put(pose_memo_t *m, const game_pose_t *p, int n, float (*out)[3][4])
+static void sv_open(sv_pose_t *sp, const game_pose_t *p, const sfmt_info_t *hdr)
 {
-	m->in = *p;
-	m->n = n;
-	m->valid = 1;
-	memcpy(m->bones, out, sizeof(out[0]) * (size_t)n);
+	int c;
+
+	sp->hdr = hdr;
+	sp->p = p;
+	sp->m = NULL;
+	sp->c_ok = 0;
+	for (c = 0; c < SV_CACHE; c++)
+		if (sv_cache[c].valid && !memcmp(&sv_cache[c].in, p, sizeof(*p)))
+			sp->m = &sv_cache[c];
 }
 
-/* the pose of p (hdr its info); 0 when its chunk is missing (a bad file) */
-static int pose_compute(const sfmt_info_t *hdr, const game_pose_t *p, float (*out)[3][4])
+static void sv_need_ctx(sv_pose_t *sp)
 {
-	const sfmt_seq_t *pseqdesc;
-	const uint16_t *chunk;
-	float adj[8], s[2], f, angles[3], rot[3][4];
-	gs_clent_t cl;
-	int seq, i;
+	if (sp->c_ok)
+		return;
+	sv_ctx(&sp->c, sp->hdr, sp->p);
+	sp->c_ok = 1;
+	game_studio_poses++;
+}
 
-	seq = p->sequence < hdr->numseq ? p->sequence : 0;
-	pseqdesc = &SFMT_SEQS(hdr)[seq];
-	chunk = studio_anim_now(p->model, seq, NULL);
-	cl.curstate.frame = p->frame;
-	cl.curstate.animtime = 0;
-	cl.curstate.framerate = 0;
-	f = gs_estimate_frame(pseqdesc, &cl, 0, 0);
-	StudioCalcBoneAdj(hdr, 1.0f, adj, p->controller, p->controller, 0);
-	s[0] = p->blending[0] / 255.0f;
-	s[1] = p->blending[1] / 255.0f;
-	seq_pose(hdr, pseqdesc, chunk, f, adj, s, pos1, q1);
+/* Bone i of the pose and its chain (parents have lower indices), computed
+ * where the entry lacks them; returns the matrices */
+static float (*sv_need(sv_pose_t *sp, int i))[3][4]
+{
+	const sfmt_bone_t *pb = SFMT_BONES(sp->hdr);
+	int chain[GS_MAXBONES], n = 0;
+	pose_memo_t *m = sp->m;
 
-	angles[PITCH] = -p->angles[PITCH];
-	angles[YAW] = p->angles[YAW];
-	angles[ROLL] = p->angles[ROLL];
-	AngleMatrix(angles, rot);
-	for (i = 0; i < 3; i++)
-		rot[i][3] = p->origin[i];
-	build_matrices(hdr, (const float (*)[4])rot, out);
-	return chunk != NULL;
+	if (!m)
+	{
+		sv_need_ctx(sp);
+		if (sp->c.chunk)
+		{
+			m = &sv_cache[sv_next];
+			sv_next = (sv_next + 1) % SV_CACHE;
+			m->in = *sp->p;
+			m->valid = 1;
+		}
+		else
+			m = &sv_scratch;
+		memset(m->have, 0, sizeof(m->have));
+		sp->m = m;
+	}
+	for (; i >= 0 && !has_bone(m, i); i = pb[i].parent)
+		chain[n++] = i;
+	if (n)
+		sv_need_ctx(sp);
+	while (n--)
+	{
+		sv_bone(&sp->c, chain[n], m->bones);
+		m->have[chain[n] >> 5] |= 1u << (chain[n] & 31);
+		game_studio_pose_bones++;
+	}
+	return m->bones;
 }
 
 static const sfmt_info_t *pose_info(const game_pose_t *p, int max)
@@ -684,47 +847,127 @@ static const sfmt_info_t *pose_info(const game_pose_t *p, int max)
 	return hdr;
 }
 
-/* The game's poses (hitboxes, attachments, bone positions), memoised:
- * only game code uses the memo, so its hits and the bones computed
- * (game_studio_pose_bones, the AI work units) are the same on the host
- * and the cart. */
-int game_studio_pose(const game_pose_t *p, float (*out)[3][4], int max)
+int game_studio_pose_draw(const game_pose_t *p, float (*out)[3][4], int max)
 {
 	const sfmt_info_t *hdr = pose_info(p, max);
-	int c, n;
+	sv_pose_t sp;
+	int i;
 
 	if (!hdr)
 		return 0;
-	for (c = 0; c < SV_CACHE; c++)
-		if ((n = memo_get(&sv_cache[c], p, out)) != 0)
-			return n;
-	game_studio_pose_bones += (uint32_t)hdr->numbones;
-	/* a pose missing its chunk (a bad file) is not memoised */
-	if (pose_compute(hdr, p, out))
+	sv_open(&sp, p, hdr);
+	for (i = 0; i < hdr->numbones; i++)
 	{
-		memo_put(&sv_cache[sv_next], p, hdr->numbones, out);
-		sv_next = (sv_next + 1) % SV_CACHE;
+		if (sp.m && has_bone(sp.m, i))
+			memcpy(out[i], sp.m->bones[i], sizeof(out[i]));
+		else
+		{
+			if (!sp.c_ok)
+			{
+				sv_ctx(&sp.c, hdr, p);
+				sp.c_ok = 1;
+			}
+			sv_bone(&sp.c, i, out);
+		}
 	}
 	return hdr->numbones;
 }
 
-int game_studio_pose_draw(const game_pose_t *p, float (*out)[3][4], int max)
-{
-	const sfmt_info_t *hdr = pose_info(p, max);
-	int c, n;
+/* ---- the hitbox source's pose ------------------------------------------------- */
 
-	if (!hdr)
+static const uint8_t *reach_cull(res_t model, int sequence);
+
+/* CULL_UNIT game units per step of a bone's cull radius (reach_cull);
+ * CULL_ANY: no bound (always posed), 0: no hitbox below the bone */
+#define CULL_UNIT	2.0f
+#define CULL_ANY	255
+
+/* the segment a -> a + ab passes farther than r from c */
+static int seg_beyond(const float a[3], const float ab[3], float l2, const float c[3], float r)
+{
+	float ac[3], d, t, d2 = 0;
+	int k;
+
+	game_studio_cull_tests++;
+	for (k = 0; k < 3; k++)
+		ac[k] = c[k] - a[k];
+	t = l2 > 0 ? (ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / l2 : 0;
+	if (!(t > 0))
+		t = 0;
+	else if (t > 1)
+		t = 1;
+	for (k = 0; k < 3; k++)
+	{
+		d = a[k] + t * ab[k] - c[k];
+		d2 += d * d;
+	}
+	return d2 > r * r;
+}
+
+int game_studio_hitbox_pose(const game_pose_t *p, const float start[3], const float end[3],
+	const float (**bones)[3][4], uint8_t *keep)
+{
+	const sfmt_info_t *hdr = pose_info(p, GS_MAXBONES);
+	const sfmt_hitbox_t *x;
+	const sfmt_bone_t *pb;
+	const uint8_t *cull;
+	uint8_t live[GS_MAXBONES];
+	float ab[3], l2 = 0, (*m)[3][4] = NULL;
+	sv_pose_t sp;
+	int i, k, kept = 0;
+
+	*bones = NULL;
+	if (!hdr || !hdr->numhitboxes)
 		return 0;
-	for (c = 0; c < SV_CACHE; c++)
-		if ((n = memo_get(&sv_cache[c], p, out)) != 0)
-			return n;
-	pose_compute(hdr, p, out);
-	return hdr->numbones;
+	x = SFMT_HITBOXES(hdr);
+	pb = SFMT_BONES(hdr);
+	sv_open(&sp, p, hdr);
+	cull = start ? reach_cull(p->model, p->sequence) : NULL;
+	if (!cull)
+	{
+		for (i = 0; i < hdr->numhitboxes; i++)
+		{
+			m = sv_need(&sp, x[i].bone);
+			keep[i] = 1;
+		}
+		*bones = (const float (*)[3][4])m;
+		return hdr->numhitboxes;
+	}
+	/* a bone's subtree is posed only where the line passes within its
+	 * cull radius of the bone's parent (of the pose origin for a root) */
+	for (k = 0; k < 3; k++)
+	{
+		ab[k] = end[k] - start[k];
+		l2 += ab[k] * ab[k];
+	}
+	for (i = 0; i < hdr->numbones; i++)
+	{
+		int par = pb[i].parent;
+
+		live[i] = 0;
+		if (!cull[i] || (par >= 0 && !live[par]))
+			continue;
+		if (cull[i] != CULL_ANY)
+		{
+			float c[3];
+
+			for (k = 0; k < 3; k++)
+				c[k] = par < 0 ? p->origin[k] : m[par][k][3];
+			if (seg_beyond(start, ab, l2, c, cull[i] * CULL_UNIT))
+				continue;
+		}
+		m = sv_need(&sp, i);
+		live[i] = 1;
+	}
+	for (i = 0; i < hdr->numhitboxes; i++)
+		kept += keep[i] = live[x[i].bone];
+	*bones = (const float (*)[3][4])m;
+	return kept ? kept : -1;
 }
 
 /* ---- hitbox reach (the hitbox source's line cull) ----------------------------- */
 
-/* How far game_studio_pose can put a hitbox point from the pose origin:
+/* How far a server pose can put a hitbox point from the pose origin:
  * every bone matrix is a rotation (a slerped or nearly-equal-lerped unit
  * quaternion: norm <= 1) with the bone's translation, so a bone's origin
  * lies within the sum of its chain's translation lengths and a hitbox
@@ -734,13 +977,18 @@ int game_studio_pose_draw(const game_pose_t *p, float (*out)[3][4], int max)
  * clamp extrapolates by 1 %) plus a controller's adjustment (at most
  * max(|start|, |end|), + 360 for a wrapping one). The result carries 3 %
  * + 2 units for the float rounding of the pose and the hitbox walk's
- * plane epsilon. */
+ * plane epsilon. Per bone the same bound of its subtree's hitbox points
+ * from its parent's origin (the pose origin for a root): its translation
+ * plus the farthest of its own hitboxes' corners and its children's
+ * bounds, the cull radius of game_studio_hitbox_pose (CULL_UNIT steps,
+ * rounded up). */
 #define REACH_CACHE	32
 
 static struct {
 	res_t		model;
 	uint16_t	seq;
 	float		reach;
+	uint8_t		cull[GS_MAXBONES];
 } reach_c[REACH_CACHE];
 static int	reach_n, reach_next;
 
@@ -773,13 +1021,14 @@ static int channel_max(const uint16_t *chunk, uint32_t words, uint32_t w, int nu
 	return m;
 }
 
-static float hitbox_reach(const sfmt_info_t *hdr, int seq, const uint16_t *chunk, uint32_t size)
+static float hitbox_reach(const sfmt_info_t *hdr, int seq, const uint16_t *chunk, uint32_t size,
+	uint8_t *cull)
 {
 	const sfmt_seq_t *pseqdesc = &SFMT_SEQS(hdr)[seq];
 	const sfmt_bone_t *pbone = SFMT_BONES(hdr);
 	const sfmt_ctl_t *pctl = SFMT_CTLS(hdr);
 	const sfmt_hitbox_t *x = SFMT_HITBOXES(hdr);
-	float chain[GS_MAXBONES], reach = 0;
+	float chain[GS_MAXBONES], tl[GS_MAXBONES], sub[GS_MAXBONES], reach = 0;
 	uint32_t words = size / 2;
 	int nb = hdr->numbones, blends = pseqdesc->numblends, i, j, b, c, m;
 
@@ -829,7 +1078,9 @@ static float hitbox_reach(const sfmt_info_t *hdr, int seq, const uint16_t *chunk
 			}
 			len2 += mj * mj;
 		}
-		chain[i] = sqrtf(len2) + (pbone->parent >= 0 ? chain[pbone->parent] : 0);
+		tl[i] = sqrtf(len2);
+		chain[i] = tl[i] + (pbone->parent >= 0 ? chain[pbone->parent] : 0);
+		sub[i] = -1;
 	}
 	for (i = 0; i < hdr->numhitboxes; i++)
 	{
@@ -844,19 +1095,37 @@ static float hitbox_reach(const sfmt_info_t *hdr, int seq, const uint16_t *chunk
 
 			c2 += a * a;
 		}
-		r = chain[x[i].bone] + sqrtf(c2);
+		r = sqrtf(c2);
+		if (r > sub[x[i].bone])
+			sub[x[i].bone] = r;
+		r += chain[x[i].bone];
 		if (r > reach)
 			reach = r;
+	}
+	pbone = SFMT_BONES(hdr);
+	for (i = nb - 1; i >= 0; i--)
+	{
+		float r = tl[i] + sub[i], q;
+		int p = pbone[i].parent;
+
+		cull[i] = 0;
+		if (sub[i] < 0)
+			continue;
+		if (p >= 0 && r > sub[p])
+			sub[p] = r;
+		q = (r * 1.03f + 2.0f) / CULL_UNIT;
+		cull[i] = q < CULL_ANY - 1 ? (uint8_t)((int)q + 1) : CULL_ANY;
 	}
 	return reach * 1.03f + 2.0f;
 }
 
-float game_studio_hitbox_reach(res_t model, int sequence)
+/* the (model, sequence) entry of the reach memo; -1 when its animation
+ * is not resident (no bound, not memoised) */
+static int reach_entry(res_t model, int sequence)
 {
 	const sfmt_info_t *hdr = gs_info(model);
 	const uint16_t *chunk;
 	uint32_t size = 0;
-	float r;
 	int seq, i;
 
 	if (!hdr || !hdr->numbones || hdr->numbones > GS_MAXBONES || !hdr->numseq)
@@ -864,30 +1133,43 @@ float game_studio_hitbox_reach(res_t model, int sequence)
 	seq = sequence < hdr->numseq ? sequence : 0;
 	for (i = 0; i < reach_n; i++)
 		if (reach_c[i].model == model && reach_c[i].seq == seq)
-			return reach_c[i].reach;
+			return i;
 	chunk = studio_anim_now(model, seq, &size);
 	if (!chunk && SFMT_SEQS(hdr)[seq].anim_size)
-		return -1;	/* not resident: no bound (not memoised) */
-	r = hitbox_reach(hdr, seq, chunk, chunk ? size : 0);
+		return -1;
 	i = reach_n < REACH_CACHE ? reach_n++ : reach_next++ % REACH_CACHE;
 	reach_c[i].model = model;
 	reach_c[i].seq = (uint16_t)seq;
-	reach_c[i].reach = r;
-	return r;
+	reach_c[i].reach = hitbox_reach(hdr, seq, chunk, chunk ? size : 0, reach_c[i].cull);
+	return i;
 }
 
-static float	ent_bones[GS_MAXBONES][3][4];
+float game_studio_hitbox_reach(res_t model, int sequence)
+{
+	int i = reach_entry(model, sequence);
 
-int gs_entity_pose(int e, const float (**bones)[3][4])
+	return i < 0 ? -1 : reach_c[i].reach;
+}
+
+static const uint8_t *reach_cull(res_t model, int sequence)
+{
+	int i = reach_entry(model, sequence);
+
+	return i < 0 || reach_c[i].reach < 0 ? NULL : reach_c[i].cull;
+}
+
+/* Bone `bone` of entity e's server pose (its chain only), map-local;
+ * NULL when e has no studio pose or no such bone */
+const float (*gs_entity_bone(int e, int bone))[4]
 {
 	const ent_rnd_t *r;
 	const col_ent_t *cv;
+	const sfmt_info_t *hdr;
 	game_pose_t p;
-	int n;
+	sv_pose_t sp;
 
-	*bones = (const float (*)[3][4])ent_bones;
 	if (!ent_is_live(e))
-		return 0;
+		return NULL;
 	r = ent_rnd(e);
 	cv = ent_cv(e);
 	memset(&p, 0, sizeof(p));
@@ -898,8 +1180,11 @@ int gs_entity_pose(int e, const float (**bones)[3][4])
 	memcpy(p.angles, cv->angles, sizeof(p.angles));
 	memcpy(p.controller, r->controller, sizeof(p.controller));
 	memcpy(p.blending, r->blending, sizeof(p.blending));
-	n = game_studio_pose(&p, ent_bones, GS_MAXBONES);
-	return n;
+	hdr = pose_info(&p, GS_MAXBONES);
+	if (!hdr || bone < 0 || bone >= hdr->numbones)
+		return NULL;
+	sv_open(&sp, &p, hdr);
+	return (const float (*)[4])sv_need(&sp, bone)[bone];
 }
 
 /* ---- client pose (latched per entity) ------------------------------------------ */
@@ -1057,7 +1342,7 @@ int game_studio_setup_bones(int e, float (*out)[3][4], int max)
 		s[1] = L->blend[1] / 255.0f;
 		pseqdesc = &seqs[hc ? L->heldseq : seq];
 		seq_pose(hdr, pseqdesc, hc, hc ? L->heldframe : 0, adj, s, pos1, q1);
-		build_matrices(hdr, NULL, out);
+		build_matrices(hdr, out);
 		return hdr->numbones;
 	}
 
@@ -1079,7 +1364,7 @@ int game_studio_setup_bones(int e, float (*out)[3][4], int max)
 	}
 	else
 		L->prevframe = f;
-	build_matrices(hdr, NULL, out);
+	build_matrices(hdr, out);
 	return hdr->numbones;
 }
 

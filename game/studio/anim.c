@@ -432,10 +432,10 @@ int gs_get_bodygroup(res_t model, int body, int iGroup)
 
 int gs_attachment(int e, int i, float out[3])
 {
-	const float (*bones)[3][4];
+	const float (*bone)[4];
 	const sfmt_info_t *h;
 	const sfmt_attach_t *a;
-	int n, k;
+	int k;
 
 	if (!ent_is_live(e))
 		return 0;
@@ -443,13 +443,12 @@ int gs_attachment(int e, int i, float out[3])
 	h = gs_info(ent_rnd(e)->model);
 	if (!h || i < 0 || i >= h->numattach)
 		return 0;
-	n = gs_entity_pose(e, &bones);
 	a = SFMT_ATTACHES(h) + i;
-	if (a->bone >= n)
+	if (!(bone = gs_entity_bone(e, a->bone)))
 		return 0;
 	for (k = 0; k < 3; k++)
-		out[k] = a->org[0] * bones[a->bone][k][0] + a->org[1] * bones[a->bone][k][1]
-			+ a->org[2] * bones[a->bone][k][2] + bones[a->bone][k][3];
+		out[k] = a->org[0] * bone[k][0] + a->org[1] * bone[k][1]
+			+ a->org[2] * bone[k][2] + bone[k][3];
 	return 1;
 }
 
@@ -462,16 +461,15 @@ int game_attachment(int e, int i, float out[3])
 
 int gs_bone_position(int e, int bone, float out[3])
 {
-	const float (*bones)[3][4];
-	int n, k;
+	const float (*m)[4];
+	int k;
 
 	if (!ent_is_live(e))
 		return 0;
-	n = gs_entity_pose(e, &bones);
-	if (bone < 0 || bone >= n)
+	if (!(m = gs_entity_bone(e, bone)))
 		return 0;
 	for (k = 0; k < 3; k++)
-		out[k] = bones[bone][k][3];
+		out[k] = m[k][3];
 	return 1;
 }
 

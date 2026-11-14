@@ -142,10 +142,10 @@ void	game_studio_event(int e, int event, const char *options);
 int	game_attachment(int e, int i, float out[3]);
 /* Server-side studio pose (GoldSrc's server bone setup: pev->frame as is,
  * no client interpolation, no sequence blend-in): bone-to-world 3x4
- * matrices of the pose *p describes into out (<= max); returns the bone
- * count, 0 for a non-studio model. A pure function of *p (memoised): the
- * hitbox source (trace-and-hulls.md 4.5), attachments, bone positions and
- * the view model's pose (frame from gs_view_frame). */
+ * matrices of the pose *p describes. A pure function of *p, computed per
+ * bone (a bone's matrix needs only its chain) and memoised per bone: the
+ * hitbox source (trace-and-hulls.md 4.5), attachments and bone positions
+ * (one bone's chain), the view model's pose (frame from gs_view_frame). */
 typedef struct {
 	res_t		model;
 	uint16_t	sequence;
@@ -156,16 +156,27 @@ typedef struct {
 	uint8_t		blending[2];
 	uint8_t		pad[2];
 } game_pose_t;
-int	game_studio_pose(const game_pose_t *p, float (*out)[3][4], int max);
-/* The same pose for the renderer (temp models, the view model): it reads
+/* The hitbox source's pose: the bones of the hitboxes of *p the line
+ * start -> end (pose frame; NULL: no line) may meet. A bone's subtree is
+ * posed only where the line passes within the subtree's bound of the
+ * bone's parent (game_studio_hitbox_reach's, per bone); keep[h] = 1 for
+ * a hitbox whose bone was posed, *bones its matrices (valid until the
+ * next server pose). Returns the count kept, -1 when the line passes
+ * beyond them all, 0 for no hitboxes (or no pose). The kept hitboxes
+ * are every one the line can meet: col_trace_hitboxes over them gives
+ * the result over all. */
+int	game_studio_hitbox_pose(const game_pose_t *p, const float start[3], const float end[3],
+		const float (**bones)[3][4], uint8_t *keep);
+/* The whole pose for the renderer (temp models, the view model): it reads
  * the game's memo but never fills it, so the game's memo hits are the
  * same on every machine whatever it draws. */
 int	game_studio_pose_draw(const game_pose_t *p, float (*out)[3][4], int max);
-/* Bones of the poses game_studio_pose computed since boot (memo misses):
- * the game's AI work counters take deltas around a think. */
-extern uint32_t	game_studio_pose_bones;
+/* Server pose work since boot, the game's AI work counters take deltas
+ * around a think: bones computed (memo misses), poses begun (their shared
+ * preamble), hitbox cull tests (a point-to-line distance each). */
+extern uint32_t	game_studio_pose_bones, game_studio_poses, game_studio_cull_tests;
 /* An upper bound on the distance from the pose origin of any point of
- * model's hitboxes in any pose game_studio_pose gives for sequence
+ * model's hitboxes in any server pose of sequence
  * `sequence` (any frame, blend, controller; the bone chains' longest
  * translations plus the hitbox corners); -1 when unknown (no animation,
  * a pose that fails). Memoised per (model, sequence). */
