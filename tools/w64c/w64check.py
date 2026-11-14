@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""w64check — validate a version-2 .w64 against its BSP30 source.
+"""w64check — validate a version-3 .w64 against its BSP30 source.
 
 Cook-side proof that the package is exact (docs/formats/w64-format.md):
   - header / directory / chunk CRCs and bounds, every directory table checked
@@ -224,7 +224,7 @@ class W64:
         bad(len(b) >= 64, path, f"{len(b)} bytes: shorter than the 64-byte header")
         magic, ver, fl, fsz, dofs, dsz, nch, crc = struct.unpack_from(">4sHHIIIII", b, 0)
         bad(magic == b"W64L", path, f"bad magic {magic!r}")
-        bad(ver == 2, path, f"version {ver}, want 2")
+        bad(ver == 3, path, f"version {ver}, want 3")
         bad(fl & 1, path, "W64_HF_COLL not set")
         bad(fsz == len(b), path, f"file_size {fsz} != file length {len(b)}")
         self.idx_stride, self.idx_base = struct.unpack_from(">HH", b, 28)

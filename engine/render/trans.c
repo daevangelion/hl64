@@ -16,18 +16,23 @@
  * movers (world.c hands them over) and translucent studio entities
  * (studio_draw hands them over) go into one list per frame; the nearest
  * HL64_FX_TRANS_MAX are kept, drawn back to front with depth test and no
- * depth write. Cutout sprites (Normal / TransAlpha) draw first, unsorted.
- * Additive items cap their blend at HL64_FX_ADD_CAP (the RDP adder wraps).
+ * depth write. Cutout sprites (Normal / TransColor / TransAlpha) and
+ * TransAlpha brushes (Z write, the pages' alpha compare) draw first,
+ * unsorted.
+ * Additive items draw through the alpha blender as a screen-like blend
+ * (render-fx.md 2a, addblend.h): the RDP adder wraps.
  */
 #include <math.h>
 #include <string.h>
 
 #include "hl64/ent.h"
 #include "hl64/limits.h"
+#include "hl64/seam.h"
 #include "hl64/studio.h"
 #include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
+#include "engine/render/addblend.h"
 #include "engine/render/fx_int.h"
 #include "engine/render/gpu_studio.h"
 #include "engine/render/ren.h"
@@ -39,23 +44,25 @@
 
 /* The RDP state per effects mode (X1); both platforms apply this table. */
 const gpu_fx_rdp_t gpu_fx_rdp[GPU_FX_MODES] = {
-	/* blender            combiner              zt zw zd ac tex */
-	[GPU_FX_CUTOUT]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_TEX_SHADE,  1, 1, 0, 1, 1, 0 },
-	[GPU_FX_BLEND]       = { GPU_FX_BL_ALPHA, GPU_FX_CC_TEX_SHADE,  1, 0, 0, 0, 1, 0 },
-	[GPU_FX_ADD]         = { GPU_FX_BL_ADD,   GPU_FX_CC_TEX_SHADE,  1, 0, 0, 0, 1, 0 },
-	[GPU_FX_GLOW]        = { GPU_FX_BL_ADD,   GPU_FX_CC_TEX_SHADE,  0, 0, 0, 0, 1, 0 },
-	[GPU_FX_DECAL]       = { GPU_FX_BL_ALPHA, GPU_FX_CC_SHADE_TEXA, 1, 0, 1, 0, 2, 0 },
-	[GPU_FX_POINT]       = { GPU_FX_BL_NONE,  GPU_FX_CC_PRIM,       1, 1, 0, 0, 0, 0 },
-	[GPU_FX_STREAK]      = { GPU_FX_BL_ADD,   GPU_FX_CC_SHADE,      1, 0, 0, 0, 0, 0 },
-	[GPU_FX_BRUSH_BLEND] = { GPU_FX_BL_ALPHA, GPU_FX_CC_TEX_PRIM,   1, 0, 0, 0, 3, 0 },
-	[GPU_FX_BRUSH_ADD]   = { GPU_FX_BL_ADD,   GPU_FX_CC_TEX_PRIM,   1, 0, 0, 0, 3, 0 },
-	[GPU_FX_BRUSH_COLOR] = { GPU_FX_BL_ALPHA, GPU_FX_CC_PRIM_A,     1, 0, 0, 0, 0, 0 },
-	[GPU_FX_SCREEN]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_SHADE,      0, 0, 0, 0, 0, 0 },
+	/* blender            combiner              zt zw zd ac tex tlut */
+	[GPU_FX_CUTOUT]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_TEX_SHADE,  1, 1, 0, 1, 1, GPU_FX_TLUT_RGBA16 },
+	[GPU_FX_BLEND]       = { GPU_FX_BL_ALPHA, GPU_FX_CC_TEX_SHADE,  1, 0, 0, 0, 1, GPU_FX_TLUT_RGBA16 },
+	[GPU_FX_ADD]         = { GPU_FX_BL_ALPHA, GPU_FX_CC_RAMP,       1, 0, 0, 0, 1, GPU_FX_TLUT_IA16 },
+	[GPU_FX_GLOW]        = { GPU_FX_BL_ALPHA, GPU_FX_CC_RAMP,       0, 0, 0, 0, 1, GPU_FX_TLUT_IA16 },
+	[GPU_FX_DECAL]       = { GPU_FX_BL_ALPHA, GPU_FX_CC_SHADE_TEXA, 1, 0, 1, 0, 2, GPU_FX_TLUT_NONE },
+	[GPU_FX_POINT]       = { GPU_FX_BL_NONE,  GPU_FX_CC_PRIM,       1, 1, 0, 0, 0, GPU_FX_TLUT_NONE },
+	[GPU_FX_STREAK]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_SHADE,      1, 0, 0, 0, 0, GPU_FX_TLUT_NONE },
+	[GPU_FX_BRUSH_BLEND] = { GPU_FX_BL_ALPHA, GPU_FX_CC_TEX_PRIM,   1, 0, 0, 0, 3, GPU_FX_TLUT_RGBA16 },
+	[GPU_FX_BRUSH_ADD]   = { GPU_FX_BL_ALPHA, GPU_FX_CC_RAMP,       1, 0, 0, 0, 3, GPU_FX_TLUT_IA16 },
+	[GPU_FX_BRUSH_COLOR] = { GPU_FX_BL_ALPHA, GPU_FX_CC_PRIM_A,     1, 0, 0, 0, 0, GPU_FX_TLUT_NONE },
+	[GPU_FX_SCREEN]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_SHADE,      0, 0, 0, 0, 0, GPU_FX_TLUT_NONE },
+	[GPU_FX_IALPHA]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_RAMP,       1, 0, 0, 0, 1, GPU_FX_TLUT_IA16 },
+	[GPU_FX_BRUSH_SOLID] = { GPU_FX_BL_NONE,  GPU_FX_CC_TEX_SHADE,  1, 1, 0, 0, 3, GPU_FX_TLUT_RGBA16 },
 };
 
 const char *const gpu_fx_mode_name[GPU_FX_MODES] = {
 	"cutout", "blend", "add", "glow", "decal", "point", "streak", "brush_blend", "brush_add",
-	"brush_color", "screen"
+	"brush_color", "screen", "ialpha", "brush_solid"
 };
 
 typedef struct {
@@ -138,13 +145,25 @@ int trans_blend_amt(int rendermode, int renderfx, int amt, int e, float dist)
 	}
 }
 
+/* An entity's draw origin (global): its layer's, + the seam ghost offset
+ * when it shows in the eye's map as one (seam_ghost) */
+static void ent_gm(int e, float gm[3])
+{
+	const float *o = eng_layer_origin(ent_idc(e)->layer);
+	float off[3];
+	int k, g = seam_ghost(e, fx_s.map, off);
+
+	for (k = 0; k < 3; k++)
+		gm[k] = o[k] + (g ? off[k] : 0);
+}
+
 int trans_blend(int e)
 {
 	const col_ent_t *cv = ent_cv(e);
-	const float *gm = eng_layer_origin(ent_idc(e)->layer);
-	float d = 0;
+	float gm[3], d = 0;
 	int k;
 
+	ent_gm(e, gm);
 	for (k = 0; k < 3; k++)
 	{
 		float v = cv->origin[k] + gm[k] - fx_s.eye[k];
@@ -205,8 +224,6 @@ void trans_frame(double dt)
 
 int trans_gpu_mode(int rendermode, int kind, uint8_t *blend)
 {
-	int mode;
-
 	if (kind == 1)		/* studio */
 	{
 		switch (rendermode)
@@ -216,8 +233,6 @@ int trans_gpu_mode(int rendermode, int kind, uint8_t *blend)
 			return GPU_STUDIO_BLEND;
 		case FX_RM_GLOW:
 		case FX_RM_TRANSADD:
-			if (*blend > HL64_FX_ADD_CAP)
-				*blend = HL64_FX_ADD_CAP;
 			return GPU_STUDIO_ADD;
 		default:
 			return -1;	/* opaque studio pass */
@@ -233,33 +248,31 @@ int trans_gpu_mode(int rendermode, int kind, uint8_t *blend)
 			return GPU_FX_BRUSH_BLEND;
 		case FX_RM_GLOW:
 		case FX_RM_TRANSADD:
-			if (*blend > HL64_FX_ADD_CAP)
-				*blend = HL64_FX_ADD_CAP;
 			return GPU_FX_BRUSH_ADD;
+		case FX_RM_TRANSALPHA:
+			return GPU_FX_BRUSH_SOLID;
 		default:
-			return -1;	/* opaque world pass (TransAlpha: alpha compare) */
+			return -1;	/* opaque world pass */
 		}
 	}
 	switch (rendermode)	/* sprite */
 	{
-	case FX_RM_TRANSCOLOR:
 	case FX_RM_TRANSTEXTURE:
-		mode = GPU_FX_BLEND;
-		break;
+		return GPU_FX_BLEND;
 	case FX_RM_GLOW:
-		mode = GPU_FX_GLOW;
-		break;
+		return GPU_FX_GLOW;
 	case FX_RM_TRANSADD:
-		mode = GPU_FX_ADD;
-		break;
+		return GPU_FX_ADD;
+	case FX_RM_TRANSCOLOR:
+		/* drawn as Normal, untinted; the blend only switches it on */
+		if (*blend)
+			*blend = 255;
+		return GPU_FX_CUTOUT;
 	default:		/* Normal (blend forced 255), TransAlpha */
 		if (rendermode == FX_RM_NORMAL)
 			*blend = 255;
 		return GPU_FX_CUTOUT;
 	}
-	if ((mode == GPU_FX_ADD || mode == GPU_FX_GLOW) && *blend > HL64_FX_ADD_CAP)
-		*blend = HL64_FX_ADD_CAP;
-	return mode;
 }
 
 /* ---- list ---------------------------------------------------------------------------- */
@@ -269,8 +282,10 @@ void trans_add(int kind, int id, float d2, uint8_t blend, uint8_t mode)
 	item_t *it;
 	int i;
 
-	/* cutout sprites (entity or temp; studio temps never come as mode 0) */
-	if ((kind == TK_SPRITE_ENT || kind == TK_TEMP) && mode == GPU_FX_CUTOUT)
+	/* cutout sprites (entity or temp; studio temps never come as mode 0)
+	 * and TransAlpha brushes: Z-writing, unblended, drawn first unsorted */
+	if (((kind == TK_SPRITE_ENT || kind == TK_TEMP) && mode == GPU_FX_CUTOUT)
+		|| (kind == TK_BRUSH_ENT && mode == GPU_FX_BRUSH_SOLID))
 	{
 		if (ncuts >= HL64_FX_TRANS_MAX)
 		{
@@ -303,10 +318,10 @@ void trans_add(int kind, int id, float d2, uint8_t blend, uint8_t mode)
 
 static float ent_dist2(int e, float org[3])
 {
-	const float *gm = eng_layer_origin(ent_idc(e)->layer);
-	float d = 0;
+	float gm[3], d = 0;
 	int k;
 
+	ent_gm(e, gm);
 	for (k = 0; k < 3; k++)
 	{
 		org[k] = ent_cv(e)->origin[k] + gm[k];
@@ -353,7 +368,8 @@ void ren_trans_brush(int e, float dist2)
 	trans_add(TK_BRUSH_ENT, e, dist2, b, (uint8_t)mode);
 }
 
-/* Sprite entities of the eye's map in front of the eye. */
+/* Sprite entities of the eye's map (and the seam ghosts it shows) in front
+ * of the eye. */
 static void list_sprite_ents(void)
 {
 	int e;
@@ -369,7 +385,8 @@ static void list_sprite_ents(void)
 		r = ent_rnd(e);
 		if (RES_KIND(r->model) != RES_K_SPRITE || (r->effects & EF_NODRAW))
 			continue;
-		if (!wld_layer(ent_idc(e)->layer) || wld_layer(ent_idc(e)->layer)->map != fx_s.map)
+		if (!wld_layer(ent_idc(e)->layer) || (wld_layer(ent_idc(e)->layer)->map != fx_s.map
+			&& !seam_ghost(e, fx_s.map, org)))
 			continue;
 		cv = ent_cv(e);
 		d2 = ent_dist2(e, org);
@@ -401,7 +418,11 @@ static void draw_sprite_ent(int e, uint8_t blend, int mode)
 	if (!s)
 		return;
 	d = sqrtf(ent_dist2(e, org));
-	if (cv->rendermode == FX_RM_TRANSCOLOR)
+	/* render-fx.md 2: rendercolor tints the sprite in every mode but
+	 * TransColor (the red env_glows of hldemo1: glow02 x 238 30 46);
+	 * 0 0 0 = untinted */
+	if ((r->rendercolor[0] | r->rendercolor[1] | r->rendercolor[2])
+		&& cv->rendermode != FX_RM_TRANSCOLOR)
 		memcpy(rgba, r->rendercolor, 3);
 	if (cv->rendermode == FX_RM_GLOW)
 	{

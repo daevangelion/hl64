@@ -60,7 +60,7 @@ from pathlib import Path
 
 import numpy as np
 
-from tools.cook import decals
+from tools.cook import addramp, decals, hl_classes
 from tools.hlsdk.materials import Materials, MaterialsError
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -69,7 +69,7 @@ LIMITS_H = ROOT / "include" / "hl64" / "limits.h"
 F32 = np.float32
 
 W64_MAGIC = b"W64L"
-W64_VERSION = 2
+W64_VERSION = 3          # 3: TEXP additive ramps (TEXF_RAMP)
 W64_HF_COLL = 1
 
 # tiny3d pin: strip indices are cooked as DMEM pointers
@@ -101,7 +101,11 @@ LIGHT_SCALE = F32(2.5)
 SKIP_TEX = {"clip", "origin", "null", "bevel", "skip", "hint", "aaatrigger"}
 
 # Submodels folded into the static world: never move, never toggle (no
-# targetname means nothing can fire them), drawn at identity.
+# targetname means nothing can fire them), drawn at identity, opaque. A
+# non-Normal rendermode keeps the entity a mover: GoldSrc draws it in the
+# translucent pass (e.g. hldemo1 *76 / *87, func_wall TransTexture);
+# renderamt / rendercolor / renderfx change nothing under rendermode Normal
+# (w64-format.md, render-fx.md 2).
 FOLD_CLASSES = {"func_wall", "func_illusionary"}
 
 CHUNK_REND, CHUNK_MOVR, CHUNK_TEXP = b"REND", b"MOVR", b"TEXP"
@@ -136,6 +140,7 @@ SWITCH_STYLE_FIRST = 32    # switchable light styles 32..
 SUB_NONE, SUB_FOLDED, SUB_MOVR = 0, 1, 2
 
 TEXF_FENCE, TEXF_SKY, TEXF_ANIM, TEXF_MISSING = 1, 2, 4, 8
+TEXF_RAMP = 16           # TEXP: the additive ramp at 48, CI4 at 88 (render-fx.md 2a)
 
 
 class InputError(ValueError):
@@ -978,11 +983,16 @@ def build_sectors(polys, face_leaves, pvs):
 # TEXP
 # --------------------------------------------------------------------------
 
-def encode_texp(s):
-    """One texture page: hdr (w, h, flags, ci4_ofs) | TLUT16 @16 | CI4 @48."""
-    out = bytearray(48)
-    struct.pack_into(">HHB3xI", out, 0, s["w"], s["h"], s["flags"], 48)
+def encode_texp(s, ramp: bool = False):
+    """One texture page: hdr (w, h, flags, ci4_ofs) | TLUT16 @16 | CI4 @48;
+    ramp: the additive ramp (tools/cook/addramp.py) @48, flag RAMP, CI4 @88."""
+    first = 48 + addramp.SIZE if ramp else 48
+    out = bytearray(first)
+    struct.pack_into(">HHB3xI", out, 0, s["w"], s["h"], s["flags"] | (TEXF_RAMP if ramp else 0),
+                     first)
     out[16:48] = s["tlut"]
+    if ramp:
+        out[48:first] = addramp.ramp(struct.unpack(">16H", s["tlut"]))
     out += s["ci4"]
     while len(out) & 15:
         out.append(0)
@@ -1692,17 +1702,9 @@ def load_decl(path: Path) -> bytes:
     return b
 
 
-def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
-         mats: "Materials | None" = None, decl: "bytes | None" = None):
-    """Cook one map; hle = the ENTS blob bytes or None; decl = the DECL
-    chunk (the map's placed-decal sheet) or None."""
-    bsp = Bsp(bsp_path)
-    pack = TexPack(wci4_path)
-    tex, missing = build_textures(bsp, pack)
-    ents = parse_entities(bsp.entities)
-
-    # submodel classification
-    nmod = len(bsp.models)
+def submodel_kinds(ents, nmod: int):
+    """Per BSP model index: (SUB_* kind, classname of its last user). One
+    non-static user of *N makes it a mover (see FOLD_CLASSES)."""
     sub_kind = [SUB_NONE] * nmod
     sub_class = [""] * nmod
     for e in ents:
@@ -1721,13 +1723,26 @@ def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
             continue
         static = (cls in FOLD_CLASSES and not e.get("targetname")
                   and e.get("origin", "0 0 0").split() in (["0", "0", "0"], [])
-                  and e.get("angles", "0 0 0").split() in (["0", "0", "0"], []))
-        kind = SUB_FOLDED if static else SUB_MOVR
-        # one non-static user of *N makes it a mover
-        if kind == SUB_MOVR or sub_kind[mi] == SUB_MOVR:
+                  and e.get("angles", "0 0 0").split() in (["0", "0", "0"], [])
+                  and not int(atof(e.get("rendermode"))))
+        if not static or sub_kind[mi] == SUB_MOVR:
             sub_kind[mi] = SUB_MOVR
         else:
             sub_kind[mi] = SUB_FOLDED
+    return sub_kind, sub_class
+
+
+def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
+         mats: "Materials | None" = None, decl: "bytes | None" = None):
+    """Cook one map; hle = the ENTS blob bytes or None; decl = the DECL
+    chunk (the map's placed-decal sheet) or None."""
+    bsp = Bsp(bsp_path)
+    pack = TexPack(wci4_path)
+    tex, missing = build_textures(bsp, pack)
+    ents = parse_entities(bsp.entities)
+
+    nmod = len(bsp.models)
+    sub_kind, sub_class = submodel_kinds(ents, nmod)
 
     # world + folded faces
     polys = []
@@ -1799,6 +1814,12 @@ def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
         movr[mi] = {"blob": blob, "stats": st, "bbox": bbox,
                     "sheets": tex_pages(tex, {p.tex for p in ps})}
 
+    # pages an additive mover can bind carry the additive ramp (render-fx.md
+    # 2a): movers some entity draws Glow / TransAdd (keys or env_render)
+    add_subs = {int(e["model"][1:]) for e in hl_classes.additive_entities(ents)
+                if re.fullmatch(r"\*\d+", e.get("model", ""))}
+    ramp_pages = {s for mi, m in movr.items() if mi in add_subs for s in m["sheets"]}
+
     # only the pages some cooked face can bind; remap to TEXP order
     used = sorted({s for r in rend for s in r["sheets"]}
                   | {s for m in movr.values() for s in m["sheets"]})
@@ -1809,7 +1830,7 @@ def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
         r["sheets"] = [remap[s] for s in r["sheets"]]
     for m in movr.values():
         m["sheets"] = [remap[s] for s in m["sheets"]]
-    texp = [encode_texp(pack.pages[p]) for p in used]
+    texp = [encode_texp(pack.pages[p], p in ramp_pages) for p in used]
 
     # vis table: leaf -> visible sectors (leaf 0 / no vis row: all)
     all_list = tuple(range(len(rend)))
@@ -2057,7 +2078,7 @@ def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
         "folded_submodels": sum(1 for k in sub_kind if k == SUB_FOLDED),
         "folded_faces": folded_faces,
         "skipped_submodels": sum(1 for mi in range(1, nmod) if sub_kind[mi] == SUB_NONE),
-        "texp_sheets": len(texp), "texp_bytes": sum(tsz),
+        "texp_sheets": len(texp), "texp_bytes": sum(tsz), "texp_ramps": len(ramp_pages),
         "sector_bytes_p50": sect_sizes[len(sect_sizes) // 2] if sect_sizes else 0,
         "sector_bytes_max": sect_sizes[-1] if sect_sizes else 0,
         "visleafs": nleaf - 1, "vis_lists": len(uniq),
@@ -2090,7 +2111,8 @@ def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
           f"meshlets={rs.get('meshlets', 0)} verts={rs.get('verts', 0)} tris={rs.get('tris', 0)} "
           f"styled={rs.get('styled', 0)} probes={rep['probes']} | movr={len(movr)} "
           f"({ms.get('bytes', 0)} B) folded={rep['folded_submodels']} | texp={len(texp)} "
-          f"({sum(tsz)} B) | coll={len(coll)} ({coll_total} B, {rep['coll_ratio']}x base, "
+          f"({sum(tsz)} B, {len(ramp_pages)} additive) | coll={len(coll)} ({coll_total} B, "
+          f"{rep['coll_ratio']}x base, "
           f"pinned {rep['coll_pinned_bytes']}) | worst leaf render {worst_r[0]} B "
           f"tex {worst_t[0]} B, worst cell coll {cb['bytes']} B | materials "
           f"{rep['mat_nodes']} nodes ({rep['mat_mixed']} mixed, {rep['mat_faces']} faces) "

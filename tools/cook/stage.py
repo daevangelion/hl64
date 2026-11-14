@@ -273,15 +273,22 @@ def stage_models(data: Data, maps: List[str], ents, res: Dict[str, Set[str]],
                 break
             out[seq] = data.need(seq)
     low = {k.lower(): v for k, v in out.items()}
+    # models some entity can draw Glow / TransAdd carry the additive ramp
+    # (render-fx.md 2a)
+    additive: Set[str] = set()
+    for m in maps:
+        additive |= hl_classes.additive_models(ents[m])
     for n in sorted({x.lower(): x for x in names}.values()):
         try:
-            model, anim, _ = studiocook.cook_model(lambda rel: low.get(rel.lower()), n)
+            model, anim, _ = studiocook.cook_model(lambda rel: low.get(rel.lower()), n,
+                                                   additive=n.lower() in additive)
         except studiocook.CookError as e:
             raise CookError(f"studio: {e}") from None
         ct.put(n[:-4] + ".s64", model)
         ct.put(n[:-4] + ".a64", anim)
     log(f"    {len(names)} models cooked to .s64 / .a64 ({len(out) - len(names)} texture / "
-        f"sequence-group files read)")
+        f"sequence-group files read; additive ramps: "
+        f"{', '.join(sorted(n for n in names if n.lower() in additive)) or 'none'})")
     return out
 
 

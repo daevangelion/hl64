@@ -135,5 +135,38 @@ lookat startele1
 pass
 EOF
 
+# SHOT captures the pose the route set up before it, not the next op's:
+# LOOK up (pitch -30, HLSDK down +) and a SETPOS to another pose right
+# after the SHOT; the shot's view keeps -30 / 90
+case_ look-pitch-shot PASS \
+	'^shot [0-9]+ ren: map=hldemo1 eye=[^ ]+ ang=-30,90,0 ' <<'EOF'
+waitmap hldemo1 600
+setpos -2327 -230 196 0 180
+wait 0.5
+look -30 90
+wait 0.2
+shot look-pitch
+setpos -2327 -230 196 0 0
+wait 0.2
+pass
+EOF
+# LOOK_AT an item on the floor below the eye: a positive (down) pitch,
+# kept by the shot taken before the next SETPOS (the view yaw is the
+# usercmd's, wrapped to [0, 360))
+case_ lookat-pitch-shot PASS \
+	'^route: look_at angles 12\.407[0-9]* -50\.021[0-9]*$' \
+	'^shot [0-9]+ ren: map=hldemo1 eye=[^ ]+ ang=12\.407[0-9]*,309\.978[0-9]*,0 ' <<'EOF'
+waitmap hldemo1 600
+setpos -2327 -230 196 0 180
+drop weapon_9mmAR -2000 -620 196
+waitclass weapon_9mmAR -2000 -620 112 1 5
+lookat weapon_9mmAR
+wait 0.2
+shot lookat-pitch
+setpos -2327 -230 196 0 0
+wait 0.2
+pass
+EOF
+
 echo "route ops: $((CASES - FAILS))/$CASES cases pass"
 [[ $FAILS -eq 0 ]]

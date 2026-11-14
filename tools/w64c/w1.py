@@ -28,9 +28,14 @@ Compare (default):
   --hlecook PATH also the new hlecook, whose HLN1 node graph tail must equal
   the fixture's (its HLE1 part differs on purpose: the HLSDK entvars
   retarget, hle-format-v1.md "Cook rules"; reported, not counted).
-  --w64c-only cooks only the .w64, from the fixture .wci4 and .hle. A .w64
-  mismatch names the first differing part: header, directory table, or
-  chunk (fourcc, index). Exit 1 on any mismatch or failed tool.
+  --w64c-only cooks only the .w64, from the fixture .wci4 and .hle. The .w64
+  compares as version 2 (v2_view: the additive ramps removed); a map whose
+  translucent func_wall / func_illusionary version 3 no longer folds is
+  cooked again under the old fold rule (cook_v2_fold), which must give the
+  fixture bytes, and the only submodel kind change allowed is FOLDED ->
+  MOVR (listed). A .w64 mismatch names the first differing part: header,
+  directory table, or chunk (fourcc, index). Exit 1 on any mismatch or
+  failed tool.
 """
 from __future__ import annotations
 
@@ -131,6 +136,68 @@ def w64_first_diff(new: bytes, old: bytes) -> str:
     return "trailing bytes"
 
 
+TEXF_RAMP = 16
+RAMP_SIZE = 40
+
+
+def v2_view(b: bytes) -> bytes:
+    """A version-3 package as the version-2 package the old cook wrote
+    (w64-format.md: version 3 = version 2 + the TEXP additive ramps): every
+    RAMP page loses its ramp (flag cleared, CI4 back at 48), the chunks
+    are laid out again in order, 16-aligned, from the first chunk's offset,
+    and the chunk directory, directory CRC, file size and version follow.
+    Anything else (a version-2 or unparsable package) is returned as is."""
+    if len(b) < W64_HDR or b[:4] != b"W64L" or struct.unpack_from(">H", b, 4)[0] != 3:
+        return b
+    dofs, dsz, nch = struct.unpack_from(">III", b, 12)
+    d = bytearray(b[dofs:dofs + dsz])
+    cdo = struct.unpack_from(">I", d, 16)[0]
+    ents = [struct.unpack_from(">4sIII", d, cdo + 16 * i) for i in range(nch)]
+    if not ents:
+        return b
+    out = bytearray(b[:ents[0][1]])
+    for i, (fc, o, n, _crc) in enumerate(ents):
+        data = b[o:o + n]
+        if fc == b"TEXP" and data[4] & TEXF_RAMP:
+            w, h = struct.unpack_from(">HH", data, 0)
+            head = bytearray(data[:48])
+            head[4] &= ~TEXF_RAMP & 0xFF
+            struct.pack_into(">I", head, 8, 48)
+            data = bytes(head) + data[48 + RAMP_SIZE:48 + RAMP_SIZE + w * h // 2]
+            data += b"\0" * (-len(data) % 16)
+        out += b"\0" * (-len(out) % 16)
+        struct.pack_into(">4sIII", d, cdo + 16 * i, fc, len(out), len(data),
+                         zlib.crc32(data) & 0xFFFFFFFF)
+        out += data
+    out[dofs:dofs + dsz] = d
+    struct.pack_into(">H", out, 4, 2)
+    struct.pack_into(">I", out, 8, len(out))
+    struct.pack_into(">I", out, 24, zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+    return bytes(out)
+
+
+SUB_NONE, SUB_FOLDED, SUB_MOVR = 0, 1, 2
+
+
+def sub_kinds(b: bytes):
+    """The submodel kinds of a package's directory (w64_sub_t.kind)."""
+    dofs = struct.unpack_from(">I", b, 12)[0]
+    nsub = struct.unpack_from(">H", b, dofs + 8)[0]
+    so = dofs + struct.unpack_from(">I", b, dofs + 32)[0]
+    return [struct.unpack_from(">H", b, so + 16 * i)[0] for i in range(nsub)]
+
+
+def cook_v2_fold(argv) -> int:
+    """tools.w64c.w64c with the old cook's fold rule: rendermode ignored, so
+    translucent func_wall / func_illusionary fold as version 2 did (the one
+    by-design change of version 3's sectors, w64-format.md 'FOLDED')."""
+    from tools.w64c import w64c as W
+    kinds = W.submodel_kinds
+    W.submodel_kinds = lambda ents, n: kinds(
+        [{k: v for k, v in e.items() if k != "rendermode"} for e in ents], n)
+    return W.main(argv)
+
+
 def hle_split(b: bytes):
     """(HLE1 part, HLN1 tail) of an hlecook blob (hle-format-v1.md: the node
     graph starts at align16 of the HLE1 header's little-endian size)."""
@@ -225,14 +292,41 @@ def compare_map(a, fx: Path, td: Path, m: str):
                 bad += n2 != o2
                 res.append("hle1 " + ("identical" if n1 == o1 else "differs (entvars retarget)"))
         out = td / f"{m}.w64"
-        run([sys.executable, "-m", "tools.w64c.w64c", bsp, wci4, out, "--hle", hle,
-             "--materials", mats], f"{m}: w64c")
-        new, old = out.read_bytes(), (fx / f"{m}.w64").read_bytes()
+        opts = ["--hle", hle, "--materials", mats]
+        run([sys.executable, "-m", "tools.w64c.w64c", bsp, wci4, out] + opts, f"{m}: w64c")
+        # the old cook wrote version 2: compare the package without the
+        # version-3 additive ramps (v2_view)
+        cooked = out.read_bytes()
+        new, old = v2_view(cooked), (fx / f"{m}.w64").read_bytes()
         if new == old:
-            res.append(f"w64 identical ({len(new)} B)")
-        else:
-            res.append(f"w64 DIFFERS: {w64_first_diff(new, old)}")
+            res.append(f"w64 identical ({len(new)} B, v2 view)")
+            return res, bad
+        # version 3 keeps non-Normal brushes out of the sectors: the cook
+        # under the version-2 fold rule must give the old bytes, and the
+        # submodels it folds that the real cook keeps are those (FOLDED ->
+        # MOVR, or NONE when no face cooks: nothing drawn either way)
+        old_rule = td / f"{m}.v2fold.w64"
+        run([sys.executable, "-c", "import sys; from tools.w64c import w1; "
+             "sys.exit(w1.cook_v2_fold(sys.argv[1:]))", bsp, wci4, old_rule] + opts,
+            f"{m}: w64c (v2 fold rule)")
+        ob = old_rule.read_bytes()
+        kn, ko = sub_kinds(cooked), sub_kinds(ob)
+        kept = [i for i, (a, b) in enumerate(zip(kn, ko)) if a != b]
+        stray = [i for i in kept if ko[i] != SUB_FOLDED or kn[i] not in (SUB_MOVR, SUB_NONE)]
+        if v2_view(ob) != old:
+            res.append(f"w64 DIFFERS under the v2 fold rule: {w64_first_diff(v2_view(ob), old)}")
             bad += 1
+        elif stray or len(kn) != len(ko) or not kept:
+            res.append(f"w64 DIFFERS: submodel kinds {stray or 'unchanged'}")
+            bad += 1
+        else:
+            empty = [i for i in kept if kn[i] == SUB_NONE]
+            movr = [i for i in kept if kn[i] == SUB_MOVR]
+            res.append(f"w64 identical under the v2 fold rule ({len(ob)} B, v2 view); "
+                       f"by design {len(movr)} non-Normal submodels now MOVR"
+                       + (" (" + " ".join(f"*{i}" for i in movr) + ")" if len(movr) <= 8 else "")
+                       + (f", {len(empty)} without faces now NONE ("
+                          + " ".join(f"*{i}" for i in empty) + ")" if empty else ""))
     except (RuntimeError, OSError) as e:
         res.append(f"FAILED: {e}")
         bad += 1

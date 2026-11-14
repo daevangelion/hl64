@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * fx.c -- host harness for docs/specs/render-fx.md (X1, X2, X3 exact-rate
- * part, X4 synthetic part, X5, X6), dlights.md (D1, D2, D4 and the model
- * term of 4) and lightstyles.md (L1, L2, the model term of 4) on the real
+ * part, X4 synthetic part, X5, X6, ADD: 2a over the cooked sprites),
+ * dlights.md (D1, D2, D4 and the model term of 4) and lightstyles.md (L1,
+ * L2, the model term of 4) on the real
  * engine/render effects modules, the draw-list recorder and a cooked map
  * (the player start of the campaign's start map); test/m3/fx.py runs it.
  *
@@ -120,8 +121,9 @@ static void be32(uint8_t *p, uint32_t v)
 	be16(p + 2, v & 0xFFFF);
 }
 
-/* v2: entity frame 0 = image 0; frame 1 = a group of images 1-3 with
- * cumulative interval ends 100, 300, 600 ms; 16 x 16 units each */
+/* v3: entity frame 0 = image 0; frame 1 = a group of images 1-3 with
+ * cumulative interval ends 100, 300, 600 ms; 16 x 16 units each; images
+ * at 88, groups at 152, ends at 160, CI4 from 168 */
 static void make_sprite(int type)
 {
 	static const uint16_t ends[4] = { 0, 100, 300, 600 };
@@ -129,15 +131,15 @@ static void make_sprite(int type)
 
 	memset(sc4, 0, sizeof(sc4));
 	be32(sc4, 0x53433431u);
-	be16(sc4 + 4, 2);
+	be16(sc4 + 4, 3);
 	be16(sc4 + 6, 2);
 	sc4[8] = (uint8_t)type;
-	be16(sc4 + 14, 4);
+	be16(sc4 + 10, 4);
 	for (i = 0; i < 16; i++)
 		be16(sc4 + 16 + 2 * i, 0xFFFF);
 	for (i = 0; i < 4; i++)
 	{
-		uint8_t *f = sc4 + 80 + 16 * i;
+		uint8_t *f = sc4 + 88 + 16 * i;
 
 		be16(f, (unsigned)(uint16_t)-8);
 		be16(f + 2, 8);
@@ -145,16 +147,16 @@ static void make_sprite(int type)
 		be16(f + 6, 16);
 		f[8] = 16;
 		f[9] = 16;
-		be32(f + 12, 160 + 128 * (uint32_t)i);
-		be16(sc4 + 152 + 2 * i, ends[i]);
+		be32(f + 12, 168 + 128 * (uint32_t)i);
+		be16(sc4 + 160 + 2 * i, ends[i]);
 	}
-	be16(sc4 + 144, 0);
-	be16(sc4 + 146, 1);
-	be16(sc4 + 148, 1);
-	be16(sc4 + 150, 3);
+	be16(sc4 + 152, 0);
+	be16(sc4 + 154, 1);
+	be16(sc4 + 156, 1);
+	be16(sc4 + 158, 3);
 	/* a sprite id no cooked file uses: past the table's sprites */
 	test_spr = RES_MAKE(RES_K_SPRITE, 8000);
-	if (sprite_test_inject(test_spr, sc4, 160 + 4 * 128))
+	if (sprite_test_inject(test_spr, sc4, 168 + 4 * 128))
 	{
 		printf("setup FAIL sprite inject\n");
 		exit(1);
@@ -176,14 +178,18 @@ static int sprite_ent(const float g[3], int rm, int amt)
 static void test_x1(void)
 {
 	static const char *kinds[3] = { "sprite", "studio", "brush" };
-	/* expected (render-fx.md 2): blender (0 none, 1 alpha, 2 add, -1 opaque
-	 * pass), Z test, Z write, alpha compare, flat colour */
+	/* expected (render-fx.md 2, 2a): blender (0 none, 1 alpha, -1 opaque
+	 * pass; studio: the GPU_STUDIO mode), Z test, Z write, alpha compare,
+	 * flat colour; additive rows go through the alpha blender. Sprite
+	 * TransColor draws as Normal; brush TransAlpha draws in the
+	 * translucent pass, opaque with Z write (its pages' fence flags set
+	 * the alpha compare) */
 	static const int want[3][6][5] = {
-		{ { 1, 1, 1, 1, 0 }, { 1, 1, 0, 0, 0 }, { 1, 1, 0, 0, 0 }, { 2, 0, 0, 0, 0 },
-		  { 1, 1, 1, 1, 0 }, { 2, 1, 0, 0, 0 } },
+		{ { 1, 1, 1, 1, 0 }, { 1, 1, 1, 1, 0 }, { 1, 1, 0, 0, 0 }, { 1, 0, 0, 0, 0 },
+		  { 1, 1, 1, 1, 0 }, { 1, 1, 0, 0, 0 } },
 		{ { -1 }, { 1 }, { 1 }, { 2 }, { -1 }, { 2 } },
-		{ { -1 }, { 1, 1, 0, 0, 1 }, { 1, 1, 0, 0, 0 }, { 2, 1, 0, 0, 0 }, { -1 },
-		  { 2, 1, 0, 0, 0 } },
+		{ { -1 }, { 1, 1, 0, 0, 1 }, { 1, 1, 0, 0, 0 }, { 1, 1, 0, 0, 0 }, { 0, 1, 1, 0, 0 },
+		  { 1, 1, 0, 0, 0 } },
 	};
 	float g[3];
 	gpu_fx_stats_t gs;
@@ -218,9 +224,27 @@ static void test_x1(void)
 					&& (r->combiner == GPU_FX_CC_PRIM_A) == want[k][rm][4],
 					"%s rm %d state", kinds[k], rm);
 			}
+			/* additive (Glow 3, TransAdd 5): full blend, the ramp combiner
+			 * over the IA16 ramp TLUT (studio: GPU_STUDIO_ADD, checked above) */
 			if (rm == 3 || rm == 5)
-				CHECK(b == HL64_FX_ADD_CAP, "%s rm %d additive cap %d", kinds[k], rm, b);
+			{
+				CHECK(b == 255, "%s rm %d blend %d (no cap)", kinds[k], rm, b);
+				if (k != 1 && m >= 0)
+					CHECK(gpu_fx_rdp[m].combiner == GPU_FX_CC_RAMP
+						&& gpu_fx_rdp[m].tlut == GPU_FX_TLUT_IA16,
+						"%s rm %d not the ramp", kinds[k], rm);
+			}
 		}
+	/* sprite TransColor: the blend only switches it on (full, or off) */
+	{
+		uint8_t b0 = 0, b1 = 60;
+
+		CHECK(trans_gpu_mode(FX_RM_TRANSCOLOR, 0, &b0) == GPU_FX_CUTOUT && b0 == 0
+			&& trans_gpu_mode(FX_RM_TRANSCOLOR, 0, &b1) == GPU_FX_CUTOUT && b1 == 255,
+			"sprite TransColor blend %d %d", b0, b1);
+		CHECK(gpu_fx_rdp[GPU_FX_BRUSH_SOLID].combiner == GPU_FX_CC_TEX_SHADE
+			&& gpu_fx_rdp[GPU_FX_BRUSH_SOLID].textured == 3, "brush TransAlpha: lit page");
+	}
 	/* recorder: one sprite per render mode, drawn in the pass */
 	make_sprite(FX_SPR_PARALLEL);
 	eye(L->start_org, 0, 0);
@@ -244,16 +268,50 @@ static void test_x1(void)
 		if (gs.calls[i])
 			printf("x1 recorder mode=%s calls=%lu\n", gpu_fx_mode_name[i],
 				(unsigned long)gs.calls[i]);
-	CHECK(gs.calls[GPU_FX_CUTOUT] == 2 && gs.calls[GPU_FX_BLEND] == 2 && gs.calls[GPU_FX_GLOW] == 1
+	CHECK(gs.calls[GPU_FX_CUTOUT] == 3 && gs.calls[GPU_FX_BLEND] == 1 && gs.calls[GPU_FX_GLOW] == 1
 		&& gs.calls[GPU_FX_ADD] == 1, "recorder calls cut %lu blend %lu glow %lu add %lu",
 		(unsigned long)gs.calls[GPU_FX_CUTOUT], (unsigned long)gs.calls[GPU_FX_BLEND],
 		(unsigned long)gs.calls[GPU_FX_GLOW], (unsigned long)gs.calls[GPU_FX_ADD]);
 	(void)e;
 	kill_all();
-	finish("X1", "render mode table + recorder");
+	/* brush TransAlpha joins the translucent pass (blend 0: not drawn) */
+	for (i = 0; i < L->dir->nsub; i++)
+		if (L->subs[i].kind == W64_SUB_MOVR)
+			break;
+	CHECK(i < L->dir->nsub, "no MOVR submodel");
+	if (i < L->dir->nsub)
+	{
+		static const int amt[2] = { 255, 0 };
+		fx_draw_stats_t ds;
+		float z[3] = { 0, 0, 0 };
+		int b = make_ent(z), j;
+
+		eng_set_frame_layer(L->slot);
+		ent_set_model(b, RES_SUBMODEL(L->slot, i));
+		eng_set_frame_layer(-1);
+		ent_cv(b)->rendermode = FX_RM_TRANSALPHA;
+		for (j = 0; j < 2; j++)
+		{
+			ent_rnd(b)->renderamt = (uint8_t)amt[j];
+			fx_draw_begin();
+			ren_trans_brush(b, 100.0f);
+			fx_draw_particles();
+			fx_draw_trans();
+			fx_draw_decals();
+			fx_draw_stats(&ds);
+			printf("x1 brush TransAlpha amt=%d first=%lu sorted=%lu brushes=%lu\n", amt[j],
+				(unsigned long)ds.cutouts, (unsigned long)ds.items, (unsigned long)ds.brushes);
+			/* drawn first, unsorted (Z write), before the blended items */
+			CHECK(ds.brushes == (amt[j] ? 1u : 0u) && ds.cutouts == ds.brushes && !ds.items,
+				"brush TransAlpha amt %d: %lu drawn, %lu first", amt[j],
+				(unsigned long)ds.brushes, (unsigned long)ds.cutouts);
+		}
+	}
+	kill_all();
+	finish("X1", "render mode table + recorder; brush TransAlpha in the translucent pass");
 }
 
-/* ---- X2 ordering, cap, blend 0 ------------------------------------------------- */
+/* ---- X2 ordering, full additive blend, blend 0 ---------------------------------- */
 
 static void test_x2(void)
 {
@@ -302,7 +360,7 @@ static void test_x2(void)
 				CHECK(dist[e] >= dist[id[maxkept]], "dropped %d nearer than kept", e);
 		}
 	for (i = 0; i < n; i++)
-		CHECK(kind[i] == TK_SPRITE_ENT && bl[i] == HL64_FX_ADD_CAP, "item %d", i);
+		CHECK(kind[i] == TK_SPRITE_ENT && bl[i] == 255, "item %d", i);
 	kill_all();
 
 	/* blend 0: not drawn, still solid */
@@ -1420,6 +1478,295 @@ static void test_styles(void)
 		"(lightstyles.md 4)");
 }
 
+/* ---- ADD: additive without the RDP adder's wrap (render-fx.md 2a) ---------------- */
+
+static const char *root;
+
+/* The RDP's 1-cycle integer path (angrylion's model, which ares'
+ * parallel-RDP reproduces): combiner (a - b) c + d, rounded, clamped. */
+static int rdp_cc(int a, int b, int c, int d)
+{
+	int v = ((a - b) * c + (d << 8) + 0x80) >> 8;
+
+	return v < 0 ? 0 : v > 255 ? 255 : v;
+}
+
+/* Blender of an effects mode, one channel: P (combined), a (combined
+ * alpha), M (memory, 16-bit framebuffer: 5 bits << 3). The 8-bit sum the
+ * RDP keeps (u8: a sum past 255 wraps); -1 for a blender this model does
+ * not know. */
+static int rdp_blend(int bl, int p, int a, int m)
+{
+	int q = a >> 3;
+
+	if (bl == GPU_FX_BL_NONE)
+		return p;
+	if (bl == GPU_FX_BL_ALPHA)
+		return (p * q + m * (32 - q)) >> 5;
+	return -1;
+}
+
+static int c8(unsigned v)
+{
+	return (int)((v << 3) | (v >> 2));
+}
+
+/* A cooked sprite file into buf (bytes read; 0 when missing). */
+static size_t load_sc4(const char *name, uint8_t *buf, size_t max)
+{
+	char path[512];
+	FILE *f;
+	size_t n;
+
+	snprintf(path, sizeof(path), "%s/sprites/%s.sc4", root, name);
+	f = fopen(path, "rb");
+	n = f ? fread(buf, 1, max, f) : 0;
+	if (f)
+		fclose(f);
+	return n;
+}
+
+static unsigned rd16(const uint8_t *p)
+{
+	return (unsigned)(p[0] << 8 | p[1]);
+}
+
+/* The ramp each cooked sprite carries (sc4-format.md): no wrap through the
+ * RDP model for any framebuffer colour, tint and blend; its colours near
+ * the TLUT's. */
+static void add_cooked(unsigned long *cases, unsigned long *oldwrap, double *dev, double *devold)
+{
+	static const char *spr[] = { "glow01", "glow02", "glow03", "flare1", "zerogxplode", "fexplo",
+		"muzzleflash1", "muzzleflash3", "xffloor", "laserbeam" };
+	static const uint8_t tints[3][3] = { { 255, 255, 255 }, { 238, 30, 46 }, { 254, 248, 203 } };
+	static uint8_t buf[1 << 16];
+	int s, k, i, j;
+
+	for (s = 0; s < (int)(sizeof(spr) / sizeof(spr[0])); s++)
+	{
+		size_t n = load_sc4(spr[s], buf, sizeof(buf));
+		uint16_t tl[16];
+		add_ramp_t r;
+		double use[16] = { 0 }, err = 0, wsum = 0;
+		unsigned ni, im;
+
+		CHECK(n > 88 && rd16(buf + 4) == 3, "%s: no v3 sprite", spr[s]);
+		if (n <= 88 || rd16(buf + 4) != 3)
+			continue;
+		for (i = 0; i < 16; i++)
+		{
+			tl[i] = (uint16_t)rd16(buf + 16 + 2 * i);
+			r.ia[i] = (uint16_t)rd16(buf + 48 + 2 * i);
+		}
+		memcpy(r.lo, buf + 80, 3);
+		memcpy(r.hi, buf + 83, 3);
+		/* texel use of every entry over every image (the error's weights) */
+		ni = rd16(buf + 10);
+		for (im = 0; im < ni; im++)
+		{
+			const uint8_t *fr = buf + 88 + 16 * im;
+			uint32_t ofs = (uint32_t)fr[12] << 24 | (uint32_t)fr[13] << 16 | fr[14] << 8 | fr[15];
+			uint32_t b, nb = (uint32_t)fr[8] * fr[9] / 2;
+
+			for (b = 0; b < nb && ofs + b < n; b++)
+			{
+				use[buf[ofs + b] >> 4]++;
+				use[buf[ofs + b] & 15]++;
+			}
+		}
+		for (i = 0; i < 16; i++)
+		{
+			int c[3] = { c8((tl[i] >> 11) & 31), c8((tl[i] >> 6) & 31), c8((tl[i] >> 1) & 31) };
+			int A = r.ia[i] & 255, I = r.ia[i] >> 8;
+
+			if (!(tl[i] & 1))
+				CHECK(A == 0, "%s entry %d: transparent, A %d", spr[s], i, A);
+			for (k = 0; k < 3; k++)
+			{
+				/* the ramp's term at full blend and tint, against the colour */
+				double v = ((double)r.lo[k] + (r.hi[k] - r.lo[k]) * I / 255.0) * A / 255.0;
+
+				err += use[i] * (v - c[k]) * (v - c[k]);
+			}
+			wsum += 3 * use[i];
+			/* the RDP over every framebuffer colour, tint and blend */
+			for (j = 0; j < 3; j++)
+			{
+				uint8_t prim[4], env[4];
+				int bl;
+
+				for (bl = 32; bl <= 256; bl += 32)
+				{
+					int blend = bl > 255 ? 255 : bl, old = blend > 128 ? 128 : blend, a, m;
+
+					add_ramp_ends(&r, tints[j], (uint8_t)blend, prim, env);
+					a = rdp_cc(A, 0, prim[3], 0);
+					for (k = 0; k < 3; k++)
+					{
+						int p = rdp_cc(prim[k], env[k], I, env[k]);
+						int ideal = c[k] * tints[j][k] / 255 * blend / 255;
+						int cold = c[k] * tints[j][k] / 255;
+
+						for (m = 0; m < 256; m += 8)
+						{
+							int o = rdp_blend(gpu_fx_rdp[GPU_FX_ADD].blender, p, a, m);
+							int sum = ideal + m > 255 ? 255 : ideal + m;
+							/* the old path: the adder at blend capped to 128, u8 */
+							int ob = (cold * (old >> 3) + m * 32) >> 5;
+
+							CHECK(o >= 0 && o <= 255, "%s entry %d: out %d", spr[s], i, o);
+							*oldwrap += ob > 255;
+							*dev += fabs((double)o - sum);
+							*devold += fabs((double)(ob & 255) - sum);
+							(*cases)++;
+						}
+					}
+				}
+			}
+		}
+		err = wsum > 0 ? sqrt(err / wsum) : 0;
+		printf("add %s ramp lo %d,%d,%d hi %d,%d,%d rms %.1f\n", spr[s], r.lo[0], r.lo[1],
+			r.lo[2], r.hi[0], r.hi[1], r.hi[2], err);
+		/* greys exact (8-bit rounding), the rest within two RGBA5551 steps */
+		CHECK(err <= (s < 3 ? 2.0 : 16.0), "%s ramp rms %.1f", spr[s], err);
+	}
+}
+
+/* One sprite entity of res r drawn alone: its mode and ramp ends. */
+static int add_draw_one(res_t r, int rm, int amt, const uint8_t col[3], uint8_t prim[4],
+	uint8_t env[4], const uint16_t **tlut)
+{
+	float g[3];
+	gpu_fx_vert_t v[4];
+	int e, k, mode = -1;
+
+	kill_all();
+	for (k = 0; k < 3; k++)
+		g[k] = L->start_org[k] + L->gofs[k] + (k == 0 ? 60 : 0);
+	e = sprite_ent(g, rm, amt);
+	ent_rnd(e)->model = r;
+	memcpy(ent_rnd(e)->rendercolor, col, 3);
+	for (k = 0; k < 3; k++)
+		g[k] = L->start_org[k] + L->gofs[k];
+	eye(g, 0, 0);
+	draw();
+	gpu_fx_host_last(v, 4, &mode);
+	*tlut = gpu_fx_host_last_ramp(prim, env);
+	kill_all();
+	return mode;
+}
+
+static void test_add(void)
+{
+	static const int modes[4] = { GPU_FX_ADD, GPU_FX_GLOW, GPU_FX_BRUSH_ADD, GPU_FX_IALPHA };
+	static uint8_t glow[1 << 12] __attribute__((aligned(16)));
+	static uint8_t steam[1 << 14] __attribute__((aligned(16)));
+	static const uint8_t red[3] = { 238, 30, 46 }, none[3] = { 0, 0, 0 }, grey[3] = { 100, 100, 100 };
+	unsigned long cases = 0, oldwrap = 0;
+	double dev = 0, devold = 0;
+	int k, i;
+
+	begin();
+	/* every additive effects mode (and the index-alpha blend): alpha
+	 * blender, ramp combiner + IA16 TLUT; streaks: alpha blender (unit
+	 * shade colour) */
+	for (k = 0; k < 4; k++)
+		CHECK(gpu_fx_rdp[modes[k]].blender == GPU_FX_BL_ALPHA
+			&& gpu_fx_rdp[modes[k]].combiner == GPU_FX_CC_RAMP
+			&& gpu_fx_rdp[modes[k]].tlut == GPU_FX_TLUT_IA16, "mode %s", gpu_fx_mode_name[modes[k]]);
+	CHECK(gpu_fx_rdp[GPU_FX_STREAK].blender == GPU_FX_BL_ALPHA, "streak blender");
+	add_cooked(&cases, &oldwrap, &dev, &devold);
+	printf("add rdp model: %lu cases, 0 wrapped (old capped adder: %lu wrapped, %.1f%%), mean "
+		"|out - saturating add| %.1f (old %.1f)\n", cases, oldwrap, cases ? 100.0
+		* (double)oldwrap / (double)cases : 0.0, cases ? dev / (double)cases : 0.0,
+		cases ? devold / (double)cases : 0.0);
+	CHECK(oldwrap > 0, "the model's old adder never wrapped: the model is blind");
+	/* untextured / I4 colours: unit colour x brightness, the same term */
+	for (i = 0; i < 64; i++)
+	{
+		uint8_t c[3] = { (uint8_t)(i * 37), (uint8_t)(255 - i * 3), (uint8_t)(i * 11) }, o[4];
+		int a = (i * 53) & 255;
+
+		add_split(c, (uint8_t)a, o);
+		CHECK(o[0] == 255 || o[1] == 255 || o[2] == 255, "split %d: no unit colour", i);
+		for (k = 0; k < 3; k++)
+			CHECK(fabs(o[k] * o[3] / 255.0 - c[k] * a / 255.0) <= 2.0, "split %d ch %d", i, k);
+	}
+	/* the draws bind what the cook stored (render-fx.md 2a, 3): the
+	 * rendercolor tint of a glow (hldemo1's red glow02), untinted at
+	 * 0 0 0; an index-alpha sprite (steam1: alpha = palette index, colour
+	 * = its last palette colour) through its level TLUT */
+	{
+		size_t ng = load_sc4("glow02", glow, sizeof(glow)), ns = load_sc4("steam1", steam, sizeof(steam));
+		res_t rg = RES_MAKE(RES_K_SPRITE, 8001), rs = RES_MAKE(RES_K_SPRITE, 8002);
+		const fx_sprite_t *sg, *ss;
+		const uint16_t *tl;
+		uint8_t prim[4], env[4];
+		int m;
+
+		CHECK(ng > 88 && !sprite_test_inject(rg, glow, (uint32_t)ng), "glow02 inject");
+		CHECK(ns > 88 && !sprite_test_inject(rs, steam, (uint32_t)ns), "steam1 inject");
+		sg = sprite_get(rg);
+		ss = sprite_get(rs);
+		CHECK(sg && ss && ss->texformat == FX_SPR_TEX_INDEXALPHA, "cooked sprites");
+		if (sg && ss)
+		{
+			m = add_draw_one(rg, FX_RM_GLOW, 255, red, prim, env, &tl);
+			printf("add glow02 red: mode %s prim %d,%d,%d,%d\n", m >= 0 ? gpu_fx_mode_name[m] : "-",
+				prim[0], prim[1], prim[2], prim[3]);
+			CHECK(m == GPU_FX_GLOW && tl == sg->ramp->ia, "glow02 red: mode %d", m);
+			for (k = 0; k < 3; k++)
+				CHECK(prim[k] == (sg->ramp->hi[k] * red[k] + 127) / 255
+					&& env[k] == (sg->ramp->lo[k] * red[k] + 127) / 255, "glow02 red ch %d", k);
+			m = add_draw_one(rg, FX_RM_GLOW, 255, none, prim, env, &tl);
+			CHECK(m == GPU_FX_GLOW && prim[0] == sg->ramp->hi[0] && prim[1] == sg->ramp->hi[1]
+				&& prim[2] == sg->ramp->hi[2], "glow02 at 0 0 0 not untinted: %d,%d,%d", prim[0],
+				prim[1], prim[2]);
+			for (k = 0; k < 16; k++)
+				CHECK(ss->ramp->ia[k] == (0xFF00 | 17 * k), "steam1 level %d: %04x", k,
+					ss->ramp->ia[k]);
+			/* smoke (fx_smoke: TransTexture, grey): alpha-blended through
+			 * the level TLUT, colour = last palette colour x tint */
+			m = add_draw_one(rs, FX_RM_TRANSTEXTURE, 200, grey, prim, env, &tl);
+			printf("add steam1 smoke: mode %s prim %d,%d,%d,%d\n", m >= 0 ? gpu_fx_mode_name[m] : "-",
+				prim[0], prim[1], prim[2], prim[3]);
+			CHECK(m == GPU_FX_IALPHA && tl == ss->ramp->ia && prim[3] == 200, "steam1 smoke: mode %d",
+				m);
+			for (k = 0; k < 3; k++)
+				CHECK(prim[k] == (ss->ramp->hi[k] * grey[k] + 127) / 255 && env[k] == prim[k],
+					"steam1 smoke ch %d: %d", k, prim[k]);
+			/* TransColor sprite (render-fx.md 2): as Normal, untinted,
+			 * renderamt only a visibility switch */
+			m = add_draw_one(rs, FX_RM_TRANSCOLOR, 60, red, prim, env, &tl);
+			printf("add steam1 transcolor: mode %s prim %d,%d,%d,%d\n",
+				m >= 0 ? gpu_fx_mode_name[m] : "-", prim[0], prim[1], prim[2], prim[3]);
+			CHECK(m == GPU_FX_IALPHA && tl == ss->ramp->ia && prim[3] == 255
+				&& prim[0] == ss->ramp->hi[0] && prim[1] == ss->ramp->hi[1]
+				&& prim[2] == ss->ramp->hi[2], "steam1 TransColor not untinted / full: mode %d", m);
+			{
+				gpu_fx_stats_t gs;
+
+				add_draw_one(rs, FX_RM_TRANSCOLOR, 0, red, prim, env, &tl);
+				gpu_fx_stats(&gs);
+				CHECK(!gs.calls[GPU_FX_IALPHA] && !gs.calls[GPU_FX_CUTOUT],
+					"TransColor at amount 0 drawn");
+			}
+			/* additive: unit colour, brightness x blend (2a) */
+			m = add_draw_one(rs, FX_RM_TRANSADD, 200, none, prim, env, &tl);
+			CHECK(m == GPU_FX_ADD && tl == ss->ramp->ia, "steam1 add: mode %d", m);
+			{
+				uint8_t o[4];
+
+				add_split(ss->ramp->hi, 200, o);
+				CHECK(!memcmp(prim, o, 4), "steam1 add ends %d,%d,%d,%d", prim[0], prim[1], prim[2],
+					prim[3]);
+			}
+		}
+	}
+	finish("ADD", "cooked additive ramps, RDP blender model: no wrap, split; glow rendercolor tint, "
+		"index-alpha levels (render-fx.md 2a, 3)");
+}
+
 /* ---- PLACED: infodecal and env_glow of one map (w64-format.md "DECL") ---- */
 
 /* A New Game on map (logic records and those near the start spawn as in a
@@ -1566,6 +1913,7 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	host_io_init(argv[2]);
+	root = argv[2];
 	mem_boot_carve();
 	settings_reset();
 	io_init();
@@ -1616,6 +1964,7 @@ int main(int argc, char **argv)
 	test_screen();
 	test_dlights();
 	test_styles();
+	test_add();
 	printf(fails ? "fx FAIL (%d)\n" : "fx ok\n", fails);
 	return fails ? 1 : 0;
 }

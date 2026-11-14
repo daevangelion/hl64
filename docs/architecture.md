@@ -362,7 +362,11 @@ SA2 §4.2 as built):
   lapse after 3 s or on arrival.
 - **prefetch**: eye-leaf sets at eye + v·{0.25, 0.5, 1} s; collision window
   + v·0.5 s; cells of moving monsters/projectiles; hulls of brush entities
-  in the box spanned by thinking monsters and projectiles.
+  in the box spanned by thinking monsters and projectiles; cells of the
+  hydration candidates' spawn boxes and of the boxes the thinks of a
+  neighbour map's spawner logic records due within 1 s will create
+  entities in (`game_spawner_box`: a monstermaker's child far from the
+  player).
 - **pinned**: world hull-0 COLL while the layer is open.
 
 Eviction: queued-not-started first, then LRU among chunks not wanted this
@@ -400,6 +404,15 @@ translation `T`). Requirements:
    (4.1); everything thaws on reopen.
 5. OPEN seams draw B's draw set translated by −T, scaled about the eye by
    1 + 1/256, limited to meshlets touching the carry box.
+6. Approach ghosts: while the approached seam's B is ready (B runs while
+   the player approaches), B's live entities drawn into B's carry box —
+   not a twin's B copy, not one an A entity of the same class within 1 u
+   of the mapped place stands for — draw in A's view at their global
+   position − T (studio, brush and sprite entities; culled by A's visible
+   sectors), so what the arrival shows in the carry box shows before the
+   switch (seam.h `seam_ghost`). Drawing only: not solid, no touches or
+   sound in A. The switch's continuity check holds them in its "before"
+   set and matches each to itself after the switch.
 
 GoldSrc shows a loading pause and a level transition at these points; the
 continuous world is a deliberate improvement, and every state rule above
@@ -845,7 +858,9 @@ builds per-frame lists straight from components (no client entity copies).
    flashlight as a decal-Z pool pass. OPEN-seam cross-layer draw per 5.4.
    Texture animation from the cooked sequence fields (world-surfaces.md).
 3. **Movers**: visible brush entities with their MOVR meshlets under the
-   entity matrix; static submodels are baked into sectors.
+   entity matrix; static opaque submodels are baked into sectors (a
+   `func_wall` / `func_illusionary` with a non-normal rendermode stays a
+   mover in the translucent pass, w64-format.md).
 4. **Studio**: STB2 v4 bone-local meshlets recorded once per model into an
    rspq block (packing budget 2 ms/frame); per entity per frame the bone
    matrices from `game_studio_setup_bones` (D3) into a double-buffered
@@ -855,7 +870,9 @@ builds per-frame lists straight from components (no client entity copies).
    (physics-movetypes.md 7), as GoldSrc's client does.
 5. **Particles**: one pool, TinyPX ucode, one call, s16 view-relative.
 6. **Translucent**: render modes/fx per render-fx.md; back to front; depth
-   test without write; additive through the RDP adder with the wrap guard.
+   test without write; additive as unit colour × brightness through the
+   alpha blender (render-fx.md 2a: the RDP adder wraps; ramp TLUTs fitted
+   by the cook, bound by the cart).
 7. **Decals**: on cooked faces of resident sectors/movers, decal Z, I4
    texels from the cooked decal sheet (render-fx.md 4).
 8. **HUD/2D**: ui8 sheets, numbers, crosshair, damage indicators, text
@@ -979,7 +996,10 @@ mostly block copies.
   opened by a seam has one open gate after its layer and HLE reads: its
   records hydrate once its precache infos and spawn windows are
   resident, bounded (`REC_PRECACHE_FRAMES`; an expiry is logged, counted
-  in `stats N rec: expired=` and fails the M4 gate). Seam pins B as soon
+  in `stats N rec: expired=` and fails the M4 gate); while it waits on
+  spawn windows they are named at the pin class (after the want measure),
+  so they may evict prefetch chunks of a full collision pool, and no
+  spawner box is named. Seam pins B as soon
   as its layer is ready. Playable builds publish a request as soon as its
   last piece lands (at the next io call), plan again once a plan has
   landed, and chain across frame boundaries. Triage:

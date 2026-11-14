@@ -21,7 +21,9 @@
  *    blocks): carried entities, twins, the player re-base
  *    (phy_player_rebase), the stream re-base, the changetarget in B;
  *  - a non-home layer no seam leads into from where the player stands, and
- *    with nothing live in its HLE slot, closes.
+ *    with nothing live in its HLE slot, closes;
+ *  - the approached seam's ghosts (seam_ghost): B's entities drawn into
+ *    B's carry box that A's view shows at their place - T.
  *
  * Behaviour oracle: the old tree's seam controller (n64/port/q64_world.c,
  * docs/provenance-audit.md entry "n64/port/q64_world.c": CLEAN +
@@ -39,6 +41,7 @@
 #include "hl64/rec.h"
 #include "hl64/seam.h"
 #include "engine/core/eng.h"
+#include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/ent/rec_int.h"
@@ -96,6 +99,7 @@ static struct {
 
 typedef struct {
 	cls_t		cls;
+	int16_t		e;		/* a ghost: B's entity itself; -1 an A entity */
 	float		pos[3];		/* B frame */
 } cont_t;
 
@@ -126,6 +130,11 @@ static struct {
 	int		cont_slot, cont_n, cont_over;
 	float		cont_mins[3], cont_maxs[3];	/* B frame */
 	cont_t		cont[CONT_MAX];
+	/* approach ghosts (seam_ghost): this frame's set, A's map, B's slot,
+	 * the global offset (-T) and B's carry box (B frame) */
+	int		ghost_n, ghost_map, ghost_slot;
+	int16_t		ghost[CONT_MAX];
+	float		ghost_off[3], ghost_mins[3], ghost_maxs[3];
 	seam_stats_t	st;
 	uint32_t	frames, us_sum, us_max;
 } S;
@@ -618,17 +627,66 @@ static void ent_pos(int e, float p[3])
 			? 0.5f * (c->absmin[k] + c->absmax[k]) : c->origin[k];
 }
 
-/* rendered (a model, not EF_NODRAW) live entity of layer `slot` meeting
- * the box (map-local) */
+/* the box an entity is drawn in (map-local): a rotated brush model's
+ * bounds rotated (the linked box is the cube of the largest extent,
+ * grid.c, broadphase only: a 560 u falling rafter 12 u outside the carry
+ * box links ±560 around its hinge), else the linked box */
+static void draw_box(int e, float mins[3], float maxs[3])
+{
+	const float k = 3.14159265358979323846f / 180.0f;
+	const col_ent_t *c = ent_cv(e);
+	float sp, cp, sy, cy, sr, cr, f[3], r[3], u[3], m[3], h[3];
+	int i;
+
+	if (RES_KIND(ent_rnd(e)->model) != RES_K_SUBMODEL
+		|| (c->angles[0] == 0.0f && c->angles[1] == 0.0f && c->angles[2] == 0.0f))
+	{
+		memcpy(mins, c->absmin, 3 * sizeof(float));
+		memcpy(maxs, c->absmax, 3 * sizeof(float));
+		return;
+	}
+	sp = hl_sinf(c->angles[0] * k);
+	cp = hl_cosf(c->angles[0] * k);
+	sy = hl_sinf(c->angles[1] * k);
+	cy = hl_cosf(c->angles[1] * k);
+	sr = hl_sinf(c->angles[2] * k);
+	cr = hl_cosf(c->angles[2] * k);
+	/* model axes in the map: x = f, y = -r, z = u (HLSDK AngleVectors) */
+	f[0] = cp * cy;
+	f[1] = cp * sy;
+	f[2] = -sp;
+	r[0] = -sr * sp * cy + cr * sy;
+	r[1] = -sr * sp * sy - cr * cy;
+	r[2] = -sr * cp;
+	u[0] = cr * sp * cy + sr * sy;
+	u[1] = cr * sp * sy - sr * cy;
+	u[2] = cr * cp;
+	for (i = 0; i < 3; i++)
+	{
+		m[i] = 0.5f * (c->mins[i] + c->maxs[i]);
+		h[i] = 0.5f * (c->maxs[i] - c->mins[i]);
+	}
+	for (i = 0; i < 3; i++)
+	{
+		float o = c->origin[i] + m[0] * f[i] - m[1] * r[i] + m[2] * u[i];
+		float x = h[0] * fabsf(f[i]) + h[1] * fabsf(r[i]) + h[2] * fabsf(u[i]);
+
+		mins[i] = o - x - 1.0f;	/* grid.c's 1 u */
+		maxs[i] = o + x + 1.0f;
+	}
+}
+
+/* rendered (a model, not EF_NODRAW) live entity of layer `slot` drawn
+ * into the box (map-local) */
 static int cont_member(int e, int slot, const float mins[3], const float maxs[3])
 {
-	const col_ent_t *c;
+	float dmin[3], dmax[3];
 
 	if (!ent_is_live(e) || ent_idc(e)->layer != slot || ent_rnd(e)->model == RES_NONE
 		|| (ent_rnd(e)->effects & EF_NODRAW))
 		return 0;
-	c = ent_cv(e);
-	return boxes_meet(c->absmin, c->absmax, mins, maxs);
+	draw_box(e, dmin, dmax);
+	return boxes_meet(dmin, dmax, mins, maxs);
 }
 
 /* ---- the layers ---------------------------------------------------------------- */
@@ -920,7 +978,8 @@ static void leave(const float org[3])
 
 /* ---- the crossing ---------------------------------------------------------------- */
 
-static int is_twin_a(const seam_info_t *s, int slot, int e)
+/* e is a twin's copy on `side` (0 A, 1 B) of seam s, in slot */
+static int is_twin(const seam_info_t *s, int slot, int e, int side)
 {
 	gid_t16 g = ent_idc(e)->gid;
 	int i;
@@ -928,47 +987,111 @@ static int is_twin_a(const seam_info_t *s, int slot, int e)
 	if (g == GID_NONE || (int)GID_SLOT(g) != slot)
 		return 0;
 	for (i = 0; i < s->ntwin; i++)
-		if (s->twins[2 * i] == GID_LUMP(g))
+		if (s->twins[2 * i + side] == GID_LUMP(g))
 			return 1;
 	return 0;
 }
 
+static float dist2(const float a[3], const float b[3])
+{
+	return (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1])
+		+ (a[2] - b[2]) * (a[2] - b[2]);
+}
+
+/* The carry-box sets of seam s (A in slot sa, B in sb), B frame: A's
+ * members into a (CONT_MAX; more counted in *over), the count; and B's
+ * ghosts into g (CONT_MAX; more dropped, never drawn), *ng: B's members
+ * that are not a twin's B copy and that no A member of the same class
+ * within CONT_MATCH stands for (one for one: A's copy is drawn). */
+static int carry_sets(const seam_info_t *s, int sa, int sb, cont_t *a, int *over, int16_t *g,
+	int *ng)
+{
+	uint8_t used[CONT_MAX];
+	float bmin[3], bmax[3];
+	int e, i, j, k, na = 0, n = 0;
+
+	*over = 0;
+	for (k = 0; k < 3; k++)
+	{
+		bmin[k] = s->carry_mins[k] + s->delta[k];
+		bmax[k] = s->carry_maxs[k] + s->delta[k];
+	}
+	for (e = ent_next_live(ENT_PLAYER); e >= 0; e = ent_next_live(e))
+	{
+		if (cont_member(e, sa, s->carry_mins, s->carry_maxs))
+		{
+			if (na == CONT_MAX)
+			{
+				(*over)++;
+				continue;
+			}
+			a[na].cls = ent_idc(e)->cls;
+			a[na].e = -1;
+			ent_pos(e, a[na].pos);
+			for (k = 0; k < 3; k++)
+				a[na].pos[k] += s->delta[k];
+			na++;
+		}
+		else if (n < CONT_MAX && cont_member(e, sb, bmin, bmax) && !is_twin(s, sb, e, 1))
+			g[n++] = (int16_t)e;
+	}
+	memset(used, 0, sizeof(used));
+	for (i = j = 0; i < n; i++)
+	{
+		float p[3];
+
+		ent_pos(g[i], p);
+		for (k = 0; k < na; k++)
+			if (!used[k] && a[k].cls == ent_idc(g[i])->cls
+				&& dist2(p, a[k].pos) <= CONT_MATCH * CONT_MATCH)
+				break;
+		if (k < na)
+			used[k] = 1;
+		else
+			g[j++] = g[i];
+	}
+	*ng = j;
+	return na;
+}
+
+/* the switch frame: A's carry-box set and B's ghosts (drawn in A's view
+ * until now: architecture.md 5.4 item 6), compared next frame */
 static void continuity_before(const seam_info_t *s, int sa, int sb)
 {
-	int e, k;
+	int16_t g[CONT_MAX];
+	int i, k, ng;
 
-	S.cont_n = S.cont_over = 0;
 	S.cont_slot = sb;
 	for (k = 0; k < 3; k++)
 	{
 		S.cont_mins[k] = s->carry_mins[k] + s->delta[k];
 		S.cont_maxs[k] = s->carry_maxs[k] + s->delta[k];
 	}
-	for (e = ent_next_live(ENT_PLAYER); e >= 0; e = ent_next_live(e))
+	S.cont_n = carry_sets(s, sa, sb, S.cont, &S.cont_over, g, &ng);
+	for (i = 0; i < ng; i++)
 	{
 		cont_t *c;
 
-		if (!cont_member(e, sa, s->carry_mins, s->carry_maxs))
-			continue;
 		if (S.cont_n == CONT_MAX)
 		{
 			S.cont_over++;
 			continue;
 		}
 		c = &S.cont[S.cont_n++];
-		c->cls = ent_idc(e)->cls;
-		ent_pos(e, c->pos);
-		for (k = 0; k < 3; k++)
-			c->pos[k] += s->delta[k];
+		c->cls = ent_idc(g[i])->cls;
+		c->e = g[i];
+		ent_pos(g[i], c->pos);
 	}
 	S.cont_pending = 1;
 }
 
-/* the frame after the switch: B's carry-box set against the one before */
+/* the frame after the switch: B's carry-box set against the one before (a
+ * ghost matches itself, wherever it walked in the frame; an A entity, a
+ * B entity of its class within CONT_MATCH) */
 static void continuity_after(void)
 {
 	uint8_t used[CONT_MAX];
-	int e, i, k, matched = 0, extra = 0, missing;
+	int e, i, matched = 0, extra = 0, missing;
 
 	S.cont_pending = 0;
 	memset(used, 0, sizeof(used));
@@ -980,16 +1103,13 @@ static void continuity_after(void)
 			continue;
 		ent_pos(e, p);
 		for (i = 0; i < S.cont_n; i++)
-		{
-			float d = 0;
-
-			if (used[i] || S.cont[i].cls != ent_idc(e)->cls)
-				continue;
-			for (k = 0; k < 3; k++)
-				d += (p[k] - S.cont[i].pos[k]) * (p[k] - S.cont[i].pos[k]);
-			if (d <= CONT_MATCH * CONT_MATCH)
+			if (!used[i] && S.cont[i].e == e && S.cont[i].cls == ent_idc(e)->cls)
 				break;
-		}
+		if (i == S.cont_n)
+			for (i = 0; i < S.cont_n; i++)
+				if (!used[i] && S.cont[i].e < 0 && S.cont[i].cls == ent_idc(e)->cls
+					&& dist2(p, S.cont[i].pos) <= CONT_MATCH * CONT_MATCH)
+					break;
 		if (i < S.cont_n)
 		{
 			used[i] = 1;
@@ -1072,7 +1192,7 @@ static void cross(int si)
 		const col_ent_t *c;
 		float org[3];
 
-		if (ent_idc(e)->layer != sa || is_twin_a(&s, sa, e))
+		if (ent_idc(e)->layer != sa || is_twin(&s, sa, e, 0))
 			continue;
 		c = ent_cv(e);
 		if (!boxes_meet(c->absmin, c->absmax, s.carry_mins, s.carry_maxs) || !game_carry(e))
@@ -1181,6 +1301,33 @@ static void cross(int si)
 		(unsigned long)S.last_switch, twins, carried);
 }
 
+/* ---- approach ghosts ------------------------------------------------------------- */
+
+/* This frame's ghosts (seam_ghost): the approached seam with B ready. What
+ * the arrival shows in B's carry box shows in A's view before the switch
+ * (A's own copies and the twins draw there already). */
+static void ghost_frame(void)
+{
+	cont_t a[CONT_MAX];
+	seam_info_t s;
+	const wld_layer_t *A, *B;
+	int k, over;
+
+	S.ghost_n = 0;
+	if (S.near < 0 || !S.ready || seam_info(S.near, &s) || !(A = wld_layer_of_map(s.from))
+		|| !(B = wld_layer_of_map(s.to)) || !S.hle_open[B->slot])
+		return;
+	carry_sets(&s, A->slot, B->slot, a, &over, S.ghost, &S.ghost_n);
+	S.ghost_map = s.from;
+	S.ghost_slot = B->slot;
+	for (k = 0; k < 3; k++)
+	{
+		S.ghost_off[k] = -s.T[k];
+		S.ghost_mins[k] = s.carry_mins[k] + s.delta[k];
+		S.ghost_maxs[k] = s.carry_maxs[k] + s.delta[k];
+	}
+}
+
 /* ---- game -> engine, frame ------------------------------------------------------- */
 
 int seam_changelevel(gid_t16 trigger, int use)
@@ -1238,6 +1385,7 @@ void seam_new_game(int map)
 	S.why = NULL;
 	S.settle = S.have_eye = S.ready = S.near_failed = S.near_dead = S.cont_pending = 0;
 	S.wait_frame = 0;
+	S.ghost_n = 0;
 	memset(S.hle_open, 0, sizeof(S.hle_open));
 	memset(S.lmap, 0xFF, sizeof(S.lmap));
 	if (map >= 0)
@@ -1253,6 +1401,7 @@ void seam_frame(void)
 	uint64_t t0;
 	uint32_t us;
 
+	S.ghost_n = 0;
 	if (!S.loaded || !phy_player_active())
 		return;
 	t0 = sys_time_us();
@@ -1310,6 +1459,7 @@ void seam_frame(void)
 			S.st.late++;
 	}
 	leave(org);
+	ghost_frame();
 	memcpy(S.prev_eye, eye, sizeof(eye));
 	S.have_eye = 1;
 	S.tick++;
@@ -1319,6 +1469,35 @@ void seam_frame(void)
 	S.us_sum += us;
 	if (us > S.us_max)
 		S.us_max = us;
+}
+
+int seam_ghost(int e, int map, float off[3])
+{
+	int i;
+
+	if (!S.ghost_n || map != S.ghost_map
+		|| !cont_member(e, S.ghost_slot, S.ghost_mins, S.ghost_maxs))
+		return 0;
+	for (i = 0; i < S.ghost_n; i++)
+		if (S.ghost[i] == e)
+		{
+			memcpy(off, S.ghost_off, sizeof(S.ghost_off));
+			return 1;
+		}
+	return 0;
+}
+
+int seam_ghosts(int map, int16_t ents[SEAM_GHOSTS], float off[3])
+{
+	int i, n = 0;
+
+	if (!S.ghost_n || map != S.ghost_map)
+		return 0;
+	for (i = 0; i < S.ghost_n && n < SEAM_GHOSTS; i++)
+		if (cont_member(S.ghost[i], S.ghost_slot, S.ghost_mins, S.ghost_maxs))
+			ents[n++] = S.ghost[i];
+	memcpy(off, S.ghost_off, sizeof(S.ghost_off));
+	return n;
 }
 
 int seam_anchors(float (*out)[3], int max)

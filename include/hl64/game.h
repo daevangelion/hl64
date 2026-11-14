@@ -70,6 +70,12 @@ int	game_end_section(void);
  * CMonsterMaker::MakeMonster clears its think and use when its count runs
  * out (route WAIT_GONE of a spawned name). 0 for any other record. */
 int	game_spawner_done(gid_t16 gid);
+/* A spawner logic record whose think will create an entity (a
+ * monstermaker with its think set): 1 and the map-local box the child
+ * spawns, falls and first moves in, else 0 (any other record). Pure (no
+ * game state read but the record's): rec names the box's collision as a
+ * prefetch spawn window while the think is pending. */
+int	game_spawner_box(gid_t16 gid, float box[6]);
 
 /* ---- frame (architecture.md 3.2) ------------------------------------------- */
 
@@ -151,6 +157,12 @@ typedef struct {
 	uint8_t		pad[2];
 } game_pose_t;
 int	game_studio_pose(const game_pose_t *p, float (*out)[3][4], int max);
+/* An upper bound on the distance from the pose origin of any point of
+ * model's hitboxes in any pose game_studio_pose gives for sequence
+ * `sequence` (any frame, blend, controller; the bone chains' longest
+ * translations plus the hitbox corners); -1 when unknown (no animation,
+ * a pose that fails). Memoised per (model, sequence). */
+float	game_studio_hitbox_reach(res_t model, int sequence);
 /* Chrome texture coordinates (HLSDK mdlviewer StudioModel::Chrome): per
  * bone of a pose (bone-to-view-space matrices, viewer at the origin) the
  * chrome up / right vectors in the bone frame for the view's right axis,

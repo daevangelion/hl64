@@ -153,19 +153,24 @@ static void BarneyFirePistol(int e)
 	CBarney	*b = BA(e);
 	float	so[3], dir[3], ang[3];
 	int	ps;
+	uint64_t t0;
 
+	t0 = Mon_PzBegin();
 	UTIL_MakeVectors(ent_cv(e)->angles);
 	VecCopy(ent_cv(e)->origin, so);
 	so[2] += 55;
 	Mon_ShootAtEnemy(e, so, dir);
 	UTIL_VecToAngles(dir, ang);
 	gs_set_blending(ent_rnd(e)->model, ent_rnd(e)->sequence, ent_rnd(e)->blending, 0, ang[0]);
+	Mon_PzEnd(MPZ_SHOOT, t0);
 	ent_rnd(e)->effects = EF_MUZZLEFLASH;
 	FireBullets(e, 1, so, dir, VECTOR_CONE_2DEGREES, 1024, BULLET_MONSTER_9MM, 4, 0, -1);
 	ps = RANDOM_LONG(0, 20);
 	ps = ps > 10 ? 0 : ps - 5;
+	t0 = Mon_PzBegin();
 	EMIT_SOUND_DYN(e, CHAN_WEAPON, RESID(BA_ATTACK2), 1, ATTN_NORM, 0, 100 + ps);
 	CSoundEnt_InsertSound(bits_SOUND_COMBAT, ent_cv(e)->origin, 384, 0.3f);
+	Mon_PzEnd(MPZ_ESND, t0);
 	b->m_cAmmoLoaded--;
 }
 

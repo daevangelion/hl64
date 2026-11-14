@@ -1123,14 +1123,23 @@ typedef struct {
 	uint32_t	dj, djpop;	/* Dijkstra runs, nodes expanded */
 	uint32_t	lmhit;		/* CheckLocalMoves answered by the scope memo */
 	uint32_t	starts;		/* thinks begun (Mon_ThinkRun) */
+	uint32_t	looks;		/* RunAI sensing (Look / Listen / GetEnemy) runs */
+	uint32_t	nopvs;		/* RunAI sensing skipped: no client in PVS, not in combat */
 } mon_ai_work_t;
 extern mon_ai_work_t	mon_aiw;
 void	mon_stats_script(void);
 /* monster think us since boot (dispatch.c, game_prof_us) */
 extern uint32_t	game_mon_us_sum;
 /* PROFILE: the frame's think cost zones (monsters.c `ai: frame` lines;
- * machine us, no-ops without PROFILE) */
-enum { MPZ_LOOK, MPZ_ANIM, MPZ_NN, MPZ_LM, MPZ_N };
+ * machine us, no-ops without PROFILE; none contains a pause point).
+ * LOOK .. LM as named; the rest: Look's entity box search / FVisible,
+ * Listen, GetEnemy .. CheckAmmo, anim events, and the parts of a firing
+ * event (FireBullets' traces / TraceAttack + ApplyMultiDamage / texture
+ * sound / gunshot decal / tracer, shell tempent, weapon sound +
+ * InsertSound, ShootAtEnemy + gun position + blending). Zones nest. */
+enum { MPZ_LOOK, MPZ_ANIM, MPZ_NN, MPZ_LM, MPZ_LBOX, MPZ_LVIS, MPZ_LISTEN, MPZ_ENEMY,
+	MPZ_EV, MPZ_FBTR, MPZ_FBATT, MPZ_FBTEX, MPZ_FBDEC, MPZ_FBFX, MPZ_BRASS, MPZ_ESND,
+	MPZ_SHOOT, MPZ_N };
 uint64_t	Mon_PzBegin(void);
 void		Mon_PzEnd(int z, uint64_t t0);
 

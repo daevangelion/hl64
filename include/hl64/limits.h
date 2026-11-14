@@ -106,8 +106,8 @@
 /* Effects (docs/specs/render-fx.md 2-5): temp entities and the studio
  * temps drawn per frame, particles (the particles region holds them),
  * beams and their segments, decals, the decal placement queue, the
- * translucent list per frame and the additive blend cap (RDP wrap guard),
- * the sprite models the sprite cache tracks. */
+ * translucent list per frame, the sprite models the sprite cache tracks.
+ * (Additive items have no blend cap: render-fx.md 2a.) */
 #define HL64_FX_TEMPS			48
 #define HL64_FX_TEMPS_STUDIO		6
 #define HL64_FX_PARTICLES		512
@@ -117,7 +117,6 @@
 #define HL64_FX_DECAL_VERTS		24
 #define HL64_FX_DECAL_QUEUE		16
 #define HL64_FX_TRANS_MAX		64
-#define HL64_FX_ADD_CAP			128
 #define HL64_FX_SPRITE_MODELS		16
 
 /* ---- boot carve regions, KB (4.1) ------------------------------------ */
@@ -192,8 +191,12 @@
  * work units (game/hl/monsters.c aiw_units: think starts, traces, BSP
  * nodes, walk steps; 1 unit ~ 5 us of cart CPU): ~20 ms of AI a frame. */
 #define HL64_AI_BUDGET			4000
-/* A held (queued) monster think's lateness bound, seconds of game time
- * (settings ai_hold default): queued that long, it starts regardless. */
+/* A held (queued) monster think's lateness bounds, seconds of game time
+ * (settings ai_hold / ai_hold_max defaults): queued ai_hold, it may start
+ * over the frame's budget, at most HL64_AI_AGED_PER_FRAME such starts a
+ * frame, oldest first; queued ai_hold_max, it starts regardless. */
 #define HL64_AI_HOLD			0.2f
+#define HL64_AI_HOLD_MAX		0.6f
+#define HL64_AI_AGED_PER_FRAME		2
 
 #endif

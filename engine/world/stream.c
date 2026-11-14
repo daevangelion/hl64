@@ -71,7 +71,8 @@
 #define EW_REQUERY	30		/* frames between a window's model queries */
 #define GOAL_SPAN	1024.0f		/* a route span is prefetched this far at most */
 #define GOAL_MARGIN	40.0f		/* ... around the hull (a step up and down: 2 x 18 u) */
-#define SPAWN_WANTS	24		/* hydration windows per layer (wld_stream_spawns) */
+#define SPAWN_WANTS	26		/* hydration windows per layer (wld_stream_spawns: rec's
+					   16 candidates, 6 ring, 4 pending spawners) */
 #define SPAWN_MARGIN	32.0f		/* around a record's spawn box */
 #define TELE_PINS	4		/* teleport destinations pinned at once */
 #define SEEN_MODELS	64		/* brush entities' hulls named in the eye's sectors */
@@ -149,6 +150,7 @@ static struct {
 	/* hydration windows per layer (wld_stream_spawns) */
 	spawn_want_t		spawn[HL64_WORLD_LAYERS][SPAWN_WANTS];
 	int		nspawn[HL64_WORLD_LAYERS];
+	uint8_t		spawn_gate[HL64_WORLD_LAYERS];	/* wld_stream_spawn_gate */
 	/* reachable teleport destinations (ent_scan) */
 	tele_pin_t	tele[TELE_PINS];
 	int		ntele;
@@ -894,9 +896,15 @@ static void name_all(void)
 				S.measured_gen = wld_tgen;
 			}
 			for (s = 0; s < HL64_WORLD_LAYERS; s++)
+			{
 				for (i = 0; wld_layer(s) && i < POINT_PINS; i++)
 					if (S.point[i].live && S.point[i].map == wld_layer(s)->map)
 						name_point(wld_layer(s), S.point[i].org, WLD_CLS_PIN);
+				/* a map's open gate waits on its spawn windows:
+				 * they may evict prefetch (wld_stream_spawn_gate) */
+				for (i = 0; wld_layer(s) && S.spawn_gate[s] && i < S.nspawn[s]; i++)
+					name_spawn(wld_layer(s), &S.spawn[s][i], WLD_CLS_PIN);
+			}
 		}
 		for (s = 0; s < HL64_WORLD_LAYERS; s++)
 		{
@@ -986,7 +994,7 @@ static void name_delta(void)
 			name_ewin(L, s, &S.ew[S.dwin[i]], WLD_CLS_PREFETCH);
 		for (i = 0; i < S.ndspawn; i++)
 			if (S.dspawn_slot[i] == s)
-				name_spawn(L, &S.dspawn[i], WLD_CLS_PREFETCH);
+				name_spawn(L, &S.dspawn[i], S.spawn_gate[s] ? WLD_CLS_PIN : WLD_CLS_PREFETCH);
 		if (S.dseen && s == S.home_slot)
 			name_models(S.seen, S.nseen, WLD_CLS_PREFETCH);
 	}
@@ -1417,6 +1425,7 @@ void wld_stream_closed(int slot)
 	/* the slot's cell ranges index its grid: none outlives the map; the
 	 * changes not named yet go with a rebuild */
 	S.nspawn[slot] = 0;
+	S.spawn_gate[slot] = 0;
 	S.ndwin = S.ndspawn = 0;
 	S.dseen = 0;
 	S.coll_gen++;
@@ -1620,6 +1629,14 @@ void wld_stream_spawns(int slot, const float (*box)[6], const int *sub, int n)
 		memcpy(S.spawn[slot], w, (size_t)m * sizeof(w[0]));
 		S.nspawn[slot] = m;
 	}
+}
+
+void wld_stream_spawn_gate(int slot, int on)
+{
+	if (slot < 0 || slot >= HL64_WORLD_LAYERS || S.spawn_gate[slot] == (on != 0))
+		return;
+	S.spawn_gate[slot] = (uint8_t)(on != 0);
+	S.coll_gen++;	/* a rebuild names its windows at the new class */
 }
 
 int wld_spawn_resident(int slot, const float box[6], int sub)

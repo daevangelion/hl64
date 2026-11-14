@@ -40,6 +40,7 @@
 #include "hl64/game.h"
 #include "hl64/limits.h"
 #include "hl64/rec.h"
+#include "hl64/seam.h"
 #include "hl64/settings.h"
 #include "hl64/studio.h"
 #include "hl64/studio_fmt.h"
@@ -373,17 +374,19 @@ static int fix_mesh(sfmt_mesh_t *m, uint32_t size, const sfmt_info_t *h)
 	sw32(b + m->tex_ofs, m->ntex);
 	for (i = 0; i < m->ntex; i++)
 	{
-		uint32_t o = ((const uint32_t *)(b + m->tex_ofs))[i];
+		uint32_t o = ((const uint32_t *)(b + m->tex_ofs))[i], first;
 		w64_texp_t *t = (w64_texp_t *)(b + o);
 
 		if ((o & 15) || !in(o, 48, size))
 			return -1;
 		sw16(&t->w, 2);
 		sw32(&t->ci4_ofs, 2);
-		if (t->ci4_ofs != 48 || !t->w || !t->h || (t->w & (t->w - 1)) || (t->h & (t->h - 1))
-			|| !in(o, 48u + (uint32_t)t->w * t->h / 2u, size))
+		/* CI4 after the TLUT, or after the cooked additive ramp */
+		first = t->flags & W64_TEXF_RAMP ? W64_TEXP_RAMP + 40 : 48;
+		if (t->ci4_ofs != first || !t->w || !t->h || (t->w & (t->w - 1)) || (t->h & (t->h - 1))
+			|| !in(o, first + (uint32_t)t->w * t->h / 2u, size))
 			return -1;
-		sw16(b + o + 16, 16);
+		sw16(b + o + 16, first == 48 ? 16 : 32);	/* TLUT, the ramp's IA16 TLUT */
 	}
 	return 0;
 }
@@ -1451,17 +1454,19 @@ static int blend_mode(int e, uint8_t *alpha)
 		*alpha = ent_rnd(e)->renderamt;
 		return GPU_STUDIO_BLEND;
 	case 3:		/* Glow: as TransAdd */
-	case 5:		/* TransAdd; the RDP adder wraps: cap at 128 */
-		*alpha = ent_rnd(e)->renderamt > 128 ? 128 : ent_rnd(e)->renderamt;
+	case 5:		/* TransAdd (render-fx.md 2a: the screen-like blend, no cap) */
+		*alpha = ent_rnd(e)->renderamt;
 		return GPU_STUDIO_ADD;
 	default:	/* Normal, TransAlpha */
 		return GPU_STUDIO_OPAQUE;
 	}
 }
 
-/* mode < 0: the entity's own render mode and blend. */
+/* mode < 0: the entity's own render mode and blend. shift: added to the
+ * entity's place to put it in L's frame (a seam ghost, seam_ghost), or
+ * NULL. */
 static void draw_entity(int e, double time, wld_layer_t *L, const uint16_t *list, int cnt,
-	const float eye[3], int mode, uint8_t alpha)
+	const float eye[3], int mode, uint8_t alpha, const float *shift)
 {
 	const ent_rnd_t *r = ent_rnd(e);
 	gpu_studio_ent_t ge;
@@ -1483,7 +1488,11 @@ static void draw_entity(int e, double time, wld_layer_t *L, const uint16_t *list
 	slot_matrices(m);
 	placement(e, time, org, ang);
 	for (k = 0; k < 3; k++)
+	{
+		if (shift)
+			org[k] += shift[k];
 		org_g[k] = org[k] + L->gofs[k];
+	}
 	memset(&ge, 0, sizeof(ge));
 	model_matrix(&ge.model, org_g, ang, r->scale > 0 ? r->scale : 1.0f, eye);
 	ge.bones = (const float (*)[3][4])slots;
@@ -1508,21 +1517,27 @@ static void draw_entity(int e, double time, wld_layer_t *L, const uint16_t *list
 	st.drawn++;
 }
 
-/* Visible: a sector of the eye leaf's list meets the linked box (map-local)
- * and the box is inside the frustum. */
+/* Visible: a sector of the eye leaf's list meets the linked box (map-local,
+ * + shift when not NULL) and the box is inside the frustum. */
 static int visible(const wld_layer_t *L, const uint16_t *list, int cnt, const col_ent_t *cv,
-	const float eye[3])
+	const float *shift, const float eye[3])
 {
 	const float (*fr)[3] = ren_frustum();
+	float lo[3], hi[3];
 	int i, k;
 
+	for (k = 0; k < 3; k++)
+	{
+		lo[k] = cv->absmin[k] + (shift ? shift[k] : 0);
+		hi[k] = cv->absmax[k] + (shift ? shift[k] : 0);
+	}
 	for (i = 0; i < 4; i++)
 	{
 		float d = 0;
 
 		for (k = 0; k < 3; k++)
 		{
-			float v = fr[i][k] >= 0 ? cv->absmax[k] : cv->absmin[k];
+			float v = fr[i][k] >= 0 ? hi[k] : lo[k];
 
 			d += fr[i][k] * (v + L->gofs[k] - eye[k]);
 		}
@@ -1534,7 +1549,7 @@ static int visible(const wld_layer_t *L, const uint16_t *list, int cnt, const co
 		const int16_t *b = L->sects[list[i]].bbox;
 
 		for (k = 0; k < 3; k++)
-			if (cv->absmin[k] > b[k + 3] || cv->absmax[k] < b[k])
+			if (lo[k] > b[k + 3] || hi[k] < b[k])
 				break;
 		if (k == 3)
 			return 1;
@@ -1557,14 +1572,30 @@ static void timed(uint64_t t0)
 		st.us_max = (uint32_t)(t1 - t0);
 }
 
+/* A seam ghost (seam_ghost) seen from home layer L: 1, shift = its place
+ * (its layer's frame) -> L's frame. */
+static int ghost_shift(int e, const wld_layer_t *L, float shift[3])
+{
+	const wld_layer_t *B;
+	float off[3];
+	int k;
+
+	if (!seam_ghost(e, L->map, off) || !(B = wld_layer(ent_idc(e)->layer)))
+		return 0;
+	for (k = 0; k < 3; k++)
+		shift[k] = B->gofs[k] + off[k] - L->gofs[k];
+	return 1;
+}
+
 /* A non-home layer's studio entities: none draws (counted, ren
  * other_ents), except, through an OPEN seam whose B layer this is
  * (ren_open_layer), the opaque ones whose origin is in the carry box,
- * drawn at B's origin - T: what the eye sees of B through the seam. */
+ * drawn at B's origin - T: what the eye sees of B through the seam. Seam
+ * ghosts draw with the home layer's entities (studio_draw). */
 static void draw_other_layer(wld_layer_t *L, double time, const float eye[3])
 {
 	static wld_layer_t bt;		/* L with its content's draw origin */
-	float off[3] = { 0, 0, 0 }, lo[3] = { 0, 0, 0 }, hi[3] = { 0, 0, 0 }, eye_l[3];
+	float off[3] = { 0, 0, 0 }, lo[3] = { 0, 0, 0 }, hi[3] = { 0, 0, 0 }, eye_l[3], g[3];
 	const uint16_t *list = NULL;
 	int e, k, cnt = 0, open = ren_open_layer(L->slot, off, lo, hi);
 
@@ -1583,19 +1614,20 @@ static void draw_other_layer(wld_layer_t *L, double time, const float eye[3])
 		const col_ent_t *cv;
 		uint8_t a;
 
-		if (!is_studio(e) || ent_idc(e)->layer != L->slot || (ent_rnd(e)->effects & EF_NODRAW))
+		if (!is_studio(e) || ent_idc(e)->layer != L->slot || (ent_rnd(e)->effects & EF_NODRAW)
+			|| seam_ghost(e, ren_cam.map, g))
 			continue;
 		cv = ent_cv(e);
 		for (k = 0; open && k < 3; k++)
 			if (cv->origin[k] < lo[k] || cv->origin[k] > hi[k])
 				break;
 		if (!open || k < 3 || blend_mode(e, &a) != GPU_STUDIO_OPAQUE
-			|| !visible(&bt, list, cnt, cv, eye))
+			|| !visible(&bt, list, cnt, cv, NULL, eye))
 		{
 			ren_other_layer_ent(0);
 			continue;
 		}
-		draw_entity(e, time, &bt, list, cnt, eye, -1, 0);
+		draw_entity(e, time, &bt, list, cnt, eye, -1, 0, NULL);
 		ren_other_layer_ent(1);
 	}
 }
@@ -1633,19 +1665,32 @@ void studio_draw(double time)
 		for (e = ent_next_live(1); e >= 0; e = ent_next_live(e))
 		{
 			const col_ent_t *cv;
+			const float *sh = NULL;
+			float shift[3];
 			uint8_t a;
 			float d = 0;
 
-			if (!is_studio(e) || ent_idc(e)->layer != li || (ent_rnd(e)->effects & EF_NODRAW))
+			if (!is_studio(e) || (ent_rnd(e)->effects & EF_NODRAW))
 				continue;
+			/* the home layer's own, and the seam ghosts it shows */
+			if (ent_idc(e)->layer != li)
+			{
+				if (!ghost_shift(e, L, shift))
+					continue;
+				sh = shift;
+			}
 			cv = ent_cv(e);
-			if (!visible(L, list, cnt, cv, eye))
+			if (!visible(L, list, cnt, cv, sh, eye))
 			{
 				st.culled++;
 				continue;
 			}
 			for (k = 0; k < 3; k++)
-				d += (cv->origin[k] - eye_l[k]) * (cv->origin[k] - eye_l[k]);
+			{
+				float v = cv->origin[k] + (sh ? sh[k] : 0) - eye_l[k];
+
+				d += v * v;
+			}
 			if (n < HL64_STUDIO_DRAWN)
 				i = n++;
 			else
@@ -1668,10 +1713,16 @@ void studio_draw(double time)
 		/* opaque here; translucent ones join the renderer's back-to-front
 		 * pass (engine/render/trans.c calls studio_draw_trans) */
 		for (i = 0; i < n; i++)
+		{
+			float shift[3];
+			const float *sh = ent_idc(cand[i].e)->layer != li && ghost_shift(cand[i].e, L, shift)
+				? shift : NULL;
+
 			if (!cand[i].trans)
-				draw_entity(cand[i].e, time, L, list, cnt, eye, -1, 0);
+				draw_entity(cand[i].e, time, L, list, cnt, eye, -1, 0, sh);
 			else
 				ren_trans_studio(cand[i].e, cand[i].dist);
+		}
 	}
 	gpu_studio_end();
 	timed(t0);
@@ -1681,16 +1732,28 @@ void studio_draw(double time)
 void studio_draw_trans(int e, int gpu_mode, uint8_t alpha)
 {
 	uint64_t t0 = sys_time_us();
+	float shift[3];
+	const float *sh = NULL;
 	int li;
 
 	if (!is_studio(e))
 		return;
 	li = ent_idc(e)->layer;
-	if (li < 0 || li >= HL64_WORLD_LAYERS || !lay_list[li])
+	if (li < 0 || li >= HL64_WORLD_LAYERS)
 		return;
+	if (!lay_list[li])
+	{
+		/* a seam ghost: drawn in the home layer */
+		for (li = 0; li < HL64_WORLD_LAYERS; li++)
+			if (lay_list[li] && ghost_shift(e, wld_layer(li), shift))
+				break;
+		if (li == HL64_WORLD_LAYERS)
+			return;
+		sh = shift;
+	}
 	gpu_studio_begin();
 	draw_entity(e, draw_time, wld_layer(li), lay_list[li], lay_cnt[li], ren_cam.org, gpu_mode,
-		alpha);
+		alpha, sh);
 	gpu_studio_end();
 	timed(t0);
 }
@@ -1938,13 +2001,40 @@ static void draw_view(const float eye[3])
 
 static col_hitbox_t	hb[255];
 
-int studio_hitboxes(const col_ent_t *e, const col_hitbox_t **out)
+/* 1 when the segment a -> b passes farther than r from c */
+static int seg_beyond(const float a[3], const float b[3], const float c[3], float r)
+{
+	float ab[3], ac[3], p[3], t, l2, d2 = 0;
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		ab[k] = b[k] - a[k];
+		ac[k] = c[k] - a[k];
+	}
+	l2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+	t = l2 > 0 ? (ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / l2 : 0;
+	if (!(t > 0))
+		t = 0;
+	else if (t > 1)
+		t = 1;
+	for (k = 0; k < 3; k++)
+	{
+		p[k] = a[k] + t * ab[k] - c[k];
+		d2 += p[k] * p[k];
+	}
+	return d2 > r * r;
+}
+
+int studio_hitboxes(const col_ent_t *e, const float start[3], const float end[3],
+	const col_hitbox_t **out)
 {
 	const ent_rnd_t *r;
 	const sfmt_hitbox_t *x;
 	smodel_t *m;
 	game_pose_t p;
-	int i, n;
+	float reach;
+	int i, n, ready;
 
 	*out = hb;
 	if (!ent_is_live(e->index))
@@ -1954,9 +2044,14 @@ int studio_hitboxes(const col_ent_t *e, const col_hitbox_t **out)
 	 * current sequence's animation (or the info) is still landing (a
 	 * sequence change a frame or two ago; requested here), the box stands
 	 * for the hitboxes; load I/O (boot, tools, map loads) reads it */
-	if ((!anim_ready(r->model, r->sequence) && !io_loading()) || !(m = info_of(r->model))
-		|| !m->info->numhitboxes)
+	ready = anim_ready(r->model, r->sequence);
+	if ((!ready && !io_loading()) || !(m = info_of(r->model)) || !m->info->numhitboxes)
 		return 0;
+	/* a line beyond every hitbox of every pose of the sequence: no pose
+	 * (a long trace's box meets many entities' boxes) */
+	if (start && ready && (reach = game_studio_hitbox_reach(r->model, r->sequence)) >= 0
+		&& seg_beyond(start, end, e->origin, reach))
+		return -1;
 	memset(&p, 0, sizeof(p));
 	p.model = r->model;
 	p.sequence = r->sequence;

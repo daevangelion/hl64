@@ -19,6 +19,8 @@ static int		last_n, last_mode = -1;
 static ren_mat_t	frame, last_frame;
 static int		framed, last_framed;
 static int		used, full;	/* ring pairs this frame; a frame matrix did not fit */
+static uint8_t		last_prim[4], last_env[4];	/* the last gpu_fx_ramp */
+static const uint16_t	*last_tlut;		/* the last gpu_fx_tex_ci4 TLUT */
 
 static void mix(const void *p, uint32_t n)
 {
@@ -54,6 +56,14 @@ void gpu_fx_mode(int m, const uint8_t prim[4])
 		mix(prim, 4);
 }
 
+void gpu_fx_ramp(const uint8_t prim[4], const uint8_t env[4])
+{
+	mix(prim, 4);
+	mix(env, 4);
+	memcpy(last_prim, prim, 4);
+	memcpy(last_env, env, 4);
+}
+
 /* as on the cart: a draw needs a gpu_fx_mode after this */
 void gpu_fx_state_lost(void)
 {
@@ -67,6 +77,7 @@ void gpu_fx_tex_ci4(const uint16_t *tlut, const uint8_t *ci4, int w, int h)
 	mix(&h, sizeof(h));
 	if (tlut)
 		mix(tlut, 32);
+	last_tlut = tlut;
 	cur.texloads++;
 }
 
@@ -134,6 +145,13 @@ int gpu_fx_host_last_frame(ren_mat_t *m)
 {
 	*m = last_frame;
 	return last_framed;
+}
+
+const uint16_t *gpu_fx_host_last_ramp(uint8_t prim[4], uint8_t env[4])
+{
+	memcpy(prim, last_prim, 4);
+	memcpy(env, last_env, 4);
+	return last_tlut;
 }
 
 void gpu_fx_points(const gpu_fx_point_t *p, int n)

@@ -15,6 +15,7 @@
 #include "hl64/coll.h"
 #include "hl64/fx.h"
 #include "hl64/types.h"
+#include "engine/render/addblend.h"
 #include "engine/render/gpu_fx.h"
 
 /* HLSDK common/const.h values the effects interpret (interface constants). */
@@ -67,6 +68,11 @@
 #define FX_SPR_PARALLEL		2
 #define FX_SPR_ORIENTED		3
 #define FX_SPR_PARALLEL_ORIENTED 4
+/* SPR v2 texture formats (file format values) */
+#define FX_SPR_TEX_NORMAL	0
+#define FX_SPR_TEX_ADDITIVE	1
+#define FX_SPR_TEX_INDEXALPHA	2
+#define FX_SPR_TEX_ALPHTEST	3
 
 /* ---- shared state (fx.c) ---------------------------------------------------- */
 
@@ -205,8 +211,9 @@ typedef struct {
 	int		nframes;	/* entity frames (a group counts once) */
 	int		nimages;
 	uint8_t		type;		/* FX_SPR_* */
-	uint8_t		texformat;
-	uint8_t		tint[3];
+	uint8_t		texformat;	/* FX_SPR_TEX_* */
+	const add_ramp_t *ramp;		/* the cooked additive ramp (render-fx.md 2a); for
+					 * FX_SPR_TEX_INDEXALPHA the alpha levels + colour */
 } fx_sprite_t;
 
 void		sprite_init(void);
@@ -218,6 +225,12 @@ const fx_sprite_t *sprite_get(res_t r);
  * blend mode decided by the caller. */
 void		sprite_draw(const fx_sprite_t *s, int f, const float org[3], const float ang[3],
 			float scale, int gpu_mode, const uint8_t rgba[4]);
+/* Mode and texture of a draw of image fr of s (gpu_mode GPU_FX_*); the
+ * ramp modes take their tint from rgba's colour and their blend from its
+ * alpha (render-fx.md 2a); an index-alpha sprite always draws through its
+ * alpha-level TLUT (render-fx.md 3), GPU_FX_IALPHA for the blended modes. */
+void		sprite_bind(const fx_sprite_t *s, const fx_sprframe_t *fr, int gpu_mode,
+			const uint8_t rgba[4]);
 /* Image of entity frame f at effects time t (render-fx.md 3: a group
  * frame picks its member by time within the group's intervals). */
 int		sprite_image(const fx_sprite_t *s, int f, double t);

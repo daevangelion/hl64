@@ -764,11 +764,14 @@ static void Hg_FireAtEnemy(int e, int shotgun)
 {
 	CHGrunt	*g = HG(e);
 	float	so[3], dir[3], shell[3], at[3], ang[3];
+	uint64_t t0;
 
 	if (EHGet(g->m_hEnemy) < 0)
 		return;
+	t0 = Mon_PzBegin();
 	Hg_GetGunPosition(e, so);
 	Mon_ShootAtEnemy(e, so, dir);
+	Mon_PzEnd(MPZ_SHOOT, t0);
 	UTIL_MakeVectors(ent_cv(e)->angles);
 	VecScale(gpGlobals.v_right, RANDOM_FLOAT(40, 90), shell);
 	VecMA(shell, RANDOM_FLOAT(75, 200), gpGlobals.v_up, shell);
@@ -776,19 +779,25 @@ static void Hg_FireAtEnemy(int e, int shotgun)
 	VecMA(so, -24, dir, at);
 	if (shotgun)
 	{
+		t0 = Mon_PzBegin();
 		EjectBrass(at, shell, ent_cv(e)->angles[1], RESID(W_SHOTGUNSHELL), TE_BOUNCE_SHOTSHELL);
+		Mon_PzEnd(MPZ_BRASS, t0);
 		FireBullets(e, (int)mon_skill(sk_hgruntShotgunPellets), so, dir, VECTOR_CONE_15DEGREES,
 			2048, BULLET_PLAYER_BUCKSHOT, 0, 0, -1);
 	}
 	else
 	{
+		t0 = Mon_PzBegin();
 		EjectBrass(at, shell, ent_cv(e)->angles[1], RESID(W_SHELL), TE_BOUNCE_SHELL);
+		Mon_PzEnd(MPZ_BRASS, t0);
 		FireBullets(e, 1, so, dir, VECTOR_CONE_10DEGREES, 2048, BULLET_MONSTER_MP5, 4, 0, -1);
 	}
 	ent_rnd(e)->effects |= EF_MUZZLEFLASH;
 	g->m_cAmmoLoaded--;
+	t0 = Mon_PzBegin();
 	UTIL_VecToAngles(dir, ang);
 	gs_set_blending(ent_rnd(e)->model, ent_rnd(e)->sequence, ent_rnd(e)->blending, 0, ang[0]);
+	Mon_PzEnd(MPZ_SHOOT, t0);
 }
 
 static void Hg_HandleAnimEvent(int e, const MonsterEvent_t *ev)
@@ -841,19 +850,26 @@ static void Hg_HandleAnimEvent(int e, const MonsterEvent_t *ev)
 		CGrenade_ShootTimed(e, pos, v, 3);
 		break;
 	case HGRUNT_AE_BURST1:
-		if (g->m_weapons & HGRUNT_9MMAR)
 		{
-			Hg_FireAtEnemy(e, 0);
-			/* the first round of the burst plays the sound */
-			EMIT_SOUND(e, CHAN_WEAPON, RANDOM_LONG(0, 1) ? RESID(HG_MGUN1) : RESID(HG_MGUN2), 1,
-				ATTN_NORM);
+			uint64_t t0;
+
+			if (g->m_weapons & HGRUNT_9MMAR)
+			{
+				Hg_FireAtEnemy(e, 0);
+				/* the first round of the burst plays the sound */
+				t0 = Mon_PzBegin();
+				EMIT_SOUND(e, CHAN_WEAPON, RANDOM_LONG(0, 1) ? RESID(HG_MGUN1) : RESID(HG_MGUN2),
+					1, ATTN_NORM);
+			}
+			else
+			{
+				Hg_FireAtEnemy(e, 1);
+				t0 = Mon_PzBegin();
+				EMIT_SOUND(e, CHAN_WEAPON, RESID(W_SBARREL1), 1, ATTN_NORM);
+			}
+			CSoundEnt_InsertSound(bits_SOUND_COMBAT, ent_cv(e)->origin, 384, 0.3f);
+			Mon_PzEnd(MPZ_ESND, t0);
 		}
-		else
-		{
-			Hg_FireAtEnemy(e, 1);
-			EMIT_SOUND(e, CHAN_WEAPON, RESID(W_SBARREL1), 1, ATTN_NORM);
-		}
-		CSoundEnt_InsertSound(bits_SOUND_COMBAT, ent_cv(e)->origin, 384, 0.3f);
 		break;
 	case HGRUNT_AE_BURST2:
 	case HGRUNT_AE_BURST3:

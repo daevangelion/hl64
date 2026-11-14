@@ -22,7 +22,8 @@
 /* Studio render modes the platform blends (render-fx.md 2 "studio"). */
 #define GPU_STUDIO_OPAQUE	0
 #define GPU_STUDIO_BLEND	1	/* alpha = rgba[3] (TransTexture / TransColor) */
-#define GPU_STUDIO_ADD		2	/* additive x rgba[3] (Glow / TransAdd) */
+#define GPU_STUDIO_ADD		2	/* additive x rgba[3] (Glow / TransAdd): page ramps,
+					 * tint rgba[0..2] (render-fx.md 2a) */
 
 /* Boot: the matrix frame pools (bytes from the studio scratch region;
  * the platform keeps two halves, one per frame in flight). Returns the

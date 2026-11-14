@@ -1,4 +1,4 @@
-# Cooked studio models — `.s64` model, `.a64` animation chunks, version 1
+# Cooked studio models — `.s64` model, `.a64` animation chunks, version 2
 
 `tools/studio/studiocook.py` cooks every staged Half-Life studio model
 (`models/<name>.mdl` with its `<name>t.mdl` texture file and `<name>NN.mdl`
@@ -29,7 +29,7 @@ the empty string.
 | off | field | rule |
 |---:|---|---|
 | 0 | `magic` u32 | `0x5336344D` (`S64M`) |
-| 4 | `version` u16 | 1 |
+| 4 | `version` u16 | 2 (version 1: no texture carried the additive ramp) |
 | 6 | `flags` u16 | bit 0 CHROME (a texture has STUDIO_NF_CHROME), bit 1 VIEW (`v_*.mdl`) |
 | 8 | `info_ofs` u32 | 64 |
 | 12 | `info_size` u32 | padded to 16 |
@@ -161,11 +161,18 @@ Header 64 B:
 - **skin** u16[nfamilies × nskinref]: texture of each skin reference per
   skin family.
 - **tex** u32[ntex] offsets to the textures (16-aligned): a `w64_texp_t`
-  header (`w`, `h`, `flags` W64_TEXF_FENCE for STUDIO_NF_MASKED, `ci4_ofs`
-  48, `pad2` = the MDL texture flags), the 16-entry RGBA5551 TLUT, then
+  header (`w`, `h`, `flags` W64_TEXF_FENCE 1 for STUDIO_NF_MASKED and
+  W64_TEXF_RAMP 16, `ci4_ofs` 48 or 88 with RAMP, `pad2` = the MDL texture
+  flags), the 16-entry RGBA5551 TLUT, with RAMP the 40-byte additive ramp
+  ([sc4-format.md](sc4-format.md) "Ramp", render-fx.md 2a), then
   `w × h / 2` CI4 bytes. Side ≤ 64, powers of two; quantisation as the
   world's TEXP pages (tools/cook/bake_world_tex.py build_ci4; masked: slot 0
-  transparent).
+  transparent). RAMP is set on every texture of a model some entity of the
+  cooked maps can draw Glow / TransAdd (its `model` key, its class's model
+  or an env_shooter's `shootmodel`, for an entity with `rendermode` 3 / 5
+  or named by an env_render that sets one: `tools/cook/hl_classes.py
+  additive_models`; Uplink + Hazard: holo.mdl); the cart draws a skin
+  without one additive as nothing (counted).
 - **nbone** u8[nslots] (0 when the model has no chrome): the normal's bone
   of each slot (chrome texture coordinates use the normal bone).
 

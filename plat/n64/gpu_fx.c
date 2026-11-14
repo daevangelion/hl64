@@ -102,6 +102,8 @@ static rdpq_combiner_t combiner(int cc)
 		return RDPQ_COMBINER1((TEX0, 0, PRIM, 0), (0, 0, 0, PRIM));
 	case GPU_FX_CC_PRIM_A:
 		return RDPQ_COMBINER1((0, 0, 0, PRIM), (0, 0, 0, PRIM));
+	case GPU_FX_CC_RAMP:
+		return RDPQ_COMBINER1((PRIM, ENV, TEX0, ENV), (TEX0, 0, PRIM, 0));
 	default:
 		return RDPQ_COMBINER1((TEX0, 0, SHADE, 0), (TEX0, 0, SHADE, 0));
 	}
@@ -123,8 +125,7 @@ void gpu_fx_mode(int m, const uint8_t prim[4])
 	rdpq_set_mode_standard();
 	rdpq_mode_dithering(N64_DITHER_MODE());
 	rdpq_mode_combiner(combiner(r->combiner));
-	rdpq_mode_blender(r->blender == GPU_FX_BL_ADD ? RDPQ_BLENDER_ADDITIVE
-		: r->blender == GPU_FX_BL_ALPHA ? RDPQ_BLENDER_MULTIPLY : 0);
+	rdpq_mode_blender(r->blender == GPU_FX_BL_ALPHA ? RDPQ_BLENDER_MULTIPLY : 0);
 	rdpq_mode_zbuf(r->ztest, r->zwrite);
 	if (r->zdecal)
 		rdpq_mode_zmode(ZMODE_DECAL);
@@ -132,12 +133,19 @@ void gpu_fx_mode(int m, const uint8_t prim[4])
 		rdpq_mode_zoverride(true, 0, 0);
 	rdpq_mode_alphacompare(r->acompare);
 	gpu_state_lost();	/* a translucent brush's page bind re-applies its fence */
-	rdpq_mode_tlut(r->textured == 1 || r->textured == 3 ? TLUT_RGBA16 : TLUT_NONE);
+	rdpq_mode_tlut(r->tlut == GPU_FX_TLUT_RGBA16 ? TLUT_RGBA16
+		: r->tlut == GPU_FX_TLUT_IA16 ? TLUT_IA16 : TLUT_NONE);
 	rdpq_mode_filter(FILTER_BILINEAR);
 	rdpq_mode_persp(true);
 	if (r->textured)
 		flags |= T3D_FLAG_TEXTURED;
 	t3d_state_set_drawflags(flags);
+}
+
+void gpu_fx_ramp(const uint8_t prim[4], const uint8_t env[4])
+{
+	rdpq_set_prim_color(RGBA32(prim[0], prim[1], prim[2], prim[3]));
+	rdpq_set_env_color(RGBA32(env[0], env[1], env[2], env[3]));
 }
 
 void gpu_fx_state_lost(void)

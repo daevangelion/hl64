@@ -1061,41 +1061,45 @@ int col_trace_hitboxes(const col_hitbox_t *hb, int n, const float start[3], cons
  * studio-model box entity is traced against its hitboxes instead of its
  * bounding box (hitboxes reach past the box: arms at the box faces are hit
  * [probe:measured T-hitbox]); 0 when the entity has none (box stands).
- * The hitboxes are in e's frame; d = e's frame - the caller's. */
+ * The hitboxes are in e's frame; d = e's frame - the caller's. The source
+ * gets the line in e's frame and may answer that it misses every hitbox
+ * without posing them (-1: as a miss). */
 static int trace_hitboxes(const col_ent_t *e, const float d[3], int moved, const float start[3],
 	const float end[3], col_trace_t *t)
 {
 	const col_hitbox_t *hb;
+	float s[3], en[3];
 	int n, k;
 
-	if (!hitbox_fn || (n = hitbox_fn(e, &hb)) <= 0)
+	if (!hitbox_fn)
+		return 0;
+	for (k = 0; k < 3; k++)
+	{
+		s[k] = start[k] - d[k];
+		en[k] = end[k] - d[k];
+	}
+	n = hitbox_fn(e, moved ? s : start, moved ? en : end, &hb);
+	if (n == 0)
 		return 0;
 	tr_init(t, end);
 	t->allsolid = 0;
+	if (n < 0)
+		return 1;
 	if (!moved)
 	{
 		if (col_trace_hitboxes(hb, n, start, end, t))
 			t->ent = (int16_t)e->index;
 		return 1;
 	}
+	if (col_trace_hitboxes(hb, n, s, en, t))
 	{
-		float s[3], en[3];
-
+		t->ent = (int16_t)e->index;
 		for (k = 0; k < 3; k++)
-		{
-			s[k] = start[k] - d[k];
-			en[k] = end[k] - d[k];
-		}
-		if (col_trace_hitboxes(hb, n, s, en, t))
-		{
-			t->ent = (int16_t)e->index;
-			for (k = 0; k < 3; k++)
-				t->end[k] += d[k];
-			t->dist += t->normal[0] * d[0] + t->normal[1] * d[1] + t->normal[2] * d[2];
-		}
-		else
-			memcpy(t->end, end, sizeof(t->end));
+			t->end[k] += d[k];
+		t->dist += t->normal[0] * d[0] + t->normal[1] * d[1] + t->normal[2] * d[2];
 	}
+	else
+		memcpy(t->end, end, sizeof(t->end));
 	return 1;
 }
 

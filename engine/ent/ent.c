@@ -547,14 +547,16 @@ int ent_in_box(const float mins[3], const float maxs[3], uint32_t flagmask, uint
 {
 	int i, n = 0, k;
 
-	for (i = 1; i < ent_s.top && n < max; i++)
+	/* the linked slots in index order (a word of the set at a time) */
+	for (i = ent_sets_next_linked(1); i >= 0 && i < ent_s.top && n < max;
+		i = ent_sets_next_linked(i + 1))
 	{
 		const col_ent_t *v = &ent_c.cv[i];
 		float d[3];
 
-		if (!ent_is_live(i) || !ent_sets_linked(i))
-			continue;
 		if (flagmask && !(v->flags & flagmask))
+			continue;
+		if (!ent_is_live(i))
 			continue;
 		ent_frame_delta(i, d);
 		for (k = 0; k < 3; k++)

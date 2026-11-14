@@ -139,16 +139,28 @@ void gpu_studio_frame(void)
 	done = cur;
 }
 
+#define CC_TEX_PRIM	RDPQ_COMBINER1((TEX0, 0, PRIM, 0), (TEX0, 0, PRIM, 0))
+/* render-fx.md 2a: rgb = ENV + (PRIM - ENV) x I, a = A x PRIM alpha */
+#define CC_RAMP		RDPQ_COMBINER1((PRIM, ENV, TEX0, ENV), (TEX0, 0, PRIM, 0))
+
+static int	ramp;		/* the ramp combiner + IA16 TLUT are set */
+
 void gpu_studio_begin(void)
 {
-	rdpq_mode_combiner(RDPQ_COMBINER1((TEX0, 0, PRIM, 0), (TEX0, 0, PRIM, 0)));
+	rdpq_mode_combiner(CC_TEX_PRIM);
+	rdpq_mode_tlut(TLUT_RGBA16);
+	ramp = 0;
 	t3d_state_set_drawflags(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH | T3D_FLAG_NO_LIGHT | N64_CULL);
 }
 
 void gpu_studio_end(void)
 {
 	/* the world's state (gpu_begin) back for later passes */
+	gpu_page_ramp(NULL);
 	rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
+	if (ramp)
+		rdpq_mode_tlut(TLUT_RGBA16);
+	ramp = 0;
 	rdpq_mode_blender(0);
 	rdpq_mode_zbuf(true, true);
 	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
@@ -158,15 +170,24 @@ void gpu_studio_end(void)
 
 static void set_mode(const gpu_studio_ent_t *e)
 {
-	rdpq_set_prim_color(RGBA32(e->rgba[0], e->rgba[1], e->rgba[2], e->rgba[3]));
+	int add = e->mode == GPU_STUDIO_ADD;
+
+	/* additive: each skin page binds its ramp TLUT and sets PRIM / ENV to
+	 * its ends, tinted by rgba (render-fx.md 2a) */
+	gpu_page_ramp(add ? e->rgba : NULL);
+	if (add != ramp)
+	{
+		rdpq_mode_combiner(add ? CC_RAMP : CC_TEX_PRIM);
+		rdpq_mode_tlut(add ? TLUT_IA16 : TLUT_RGBA16);
+		ramp = add;
+	}
+	if (!add)
+		rdpq_set_prim_color(RGBA32(e->rgba[0], e->rgba[1], e->rgba[2], e->rgba[3]));
 	switch (e->mode)
 	{
 	case GPU_STUDIO_BLEND:
-		rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-		rdpq_mode_zbuf(true, false);
-		break;
 	case GPU_STUDIO_ADD:
-		rdpq_mode_blender(RDPQ_BLENDER_ADDITIVE);
+		rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 		rdpq_mode_zbuf(true, false);
 		break;
 	default:

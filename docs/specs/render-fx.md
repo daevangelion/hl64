@@ -82,10 +82,45 @@ in the translucent pass below, even when nothing can move or fire them.
 Translucent items (every entity whose mode is not Normal, except studio models in TransAlpha, which draw as Normal) draw after the
 opaque world, movers, studio models and particles, sorted back to front by
 the distance of their origin (brushes: their box centre), with depth test
-and without depth write; at most 64 per frame (nearest kept, overflow
-counted). The RDP additive blender wraps instead of saturating: additive
-items cap their blend at 128 and the colour sum is kept below wrap by
-the CI4 TLUT range (old tree finding).
+and without depth write (TransAlpha brushes write depth, opaque texels
+only, and draw first, unsorted, with the cutout sprites: nothing blended
+lies under them yet); at most 64 per frame (nearest kept, overflow
+counted). Additive items follow 2a.
+
+### 2a. Additive on the RDP
+
+The RDP blender keeps the low 8 bits of in × a + mem × b (no saturation):
+an additive item over a framebuffer already brighter than 255 − c wraps to
+black or a false colour (measured on ares, whose parallel-RDP blender is
+the angrylion integer model (P a₀ + M (b₀ + 1)) >> 5 truncated to u8;
+hldemo2 shots: glow01 over a lit wall, the orange HUD digits turning
+green over a grey wall). A blend cap does not help (the framebuffer can
+be at 255 already). No additive item uses the adder:
+
+- every additive term c (GoldSrc's texture × tint × blend) is drawn as
+  c = n × a, n a unit colour (max channel 255), a its brightness, through
+  the alpha blender: out = c + mem × (1 − a) ≤ 255 for every framebuffer
+  value and any number of stacked items. The background dims by (1 − a)
+  instead of saturating (a screen-like blend): dim sources over dark
+  surfaces look additive, bright cores keep their own colour instead of
+  burning to white;
+- textures (CI4 + 16-entry RGBA5551 TLUT: sprites, beams, brush and studio
+  pages) draw through an IA16 ramp TLUT: A = the entry's brightness, I =
+  its place between two unit colours lo, hi of the palette (the best pair
+  of the palette's unit colours by brightness-weighted squared error of
+  the non-negative fit); combiner rgb = ENV + (PRIM − ENV) × I, a = A ×
+  PRIM alpha; PRIM = hi × tint with alpha = blend, ENV = lo × tint. The
+  cook fits the ramp (`tools/cook/addramp.py`; fitting on the cart cost up
+  to 4 ms per sprite load on ares) and stores it in every sprite
+  ([sc4-format.md](../formats/sc4-format.md)), in the TEXP pages of the
+  movers some entity can draw Glow / TransAdd and in the skins of the
+  studio models some entity can draw so (keys `rendermode` 3 / 5, or
+  named by an env_render that sets one; w64-format.md TEXP,
+  studio-format.md). A page drawn additive without a cooked ramp adds
+  nothing (counted, `add: miss`);
+- untextured and I4 colours (tracer streaks, HUD additive pictures, text
+  and fills) are split per vertex / per draw the same way;
+- the full blend applies (no cap).
 
 ## 3. Sprites (SPR v2, cooked to CI4 frames)
 
@@ -98,6 +133,13 @@ the CI4 TLUT range (old tree finding).
 - Frames: the entity's `frame` selects; group frames pick by time within
   the group's cumulative intervals. env_sprite animation itself is game
   logic (HLSDK `CSprite::Animate`).
+- Texture formats (SPR `texformat`): normal / additive / alpha-test use the
+  palette; **index-alpha** (2) takes the texel's alpha from its palette
+  index and its colour from the palette's last colour (× tint, 2); it
+  alpha-blends in Normal / TransColor / TransTexture / TransAlpha (alpha =
+  index × blend, blend 1 in Normal and in a visible TransColor) and adds
+  colour × index × blend in Glow / TransAdd (the explosion and TE_SMOKE
+  puffs, steam1). Cooked as 16 alpha levels.
 - Glow occlusion: a line trace (NOMONSTERS) from the eye to the sprite
   origin; blocked → blend × 0; otherwise blend × min(1, distance-based
   factor) so glows stay visible far away at constant screen size (fixture

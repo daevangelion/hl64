@@ -58,10 +58,11 @@ static uint32_t		frame;
 static char		bound[64][2][256];
 
 /* The synthetic hitboxes of hb_ent (G), else the studio pose (B / M). */
-static int hitboxes(const col_ent_t *e, const col_hitbox_t **out)
+static int hitboxes(const col_ent_t *e, const float start[3], const float end[3],
+	const col_hitbox_t **out)
 {
 	if (e->index != hb_ent)
-		return studio_hitboxes(e, out);
+		return studio_hitboxes(e, start, end, out);
 	*out = hb;
 	return hb_n;
 }
@@ -233,7 +234,7 @@ int main(int argc, char **argv)
 			/* H slot: the entity's hitboxes -> R H n, then n lines */
 			if (!ints(&s, n, 1) || !ent_get((int)n[0]))
 				bad(line);
-			cnt = hitboxes(ent_get((int)n[0]), &h);
+			cnt = hitboxes(ent_get((int)n[0]), NULL, NULL, &h);
 			printf("R H %d\n", cnt);
 			for (i = 0; i < cnt; i++)
 			{
