@@ -318,6 +318,23 @@ static void aiw_print(const char *tag, const mon_ai_work_t *w);
  * FindNearestNode searches, CheckLocalMove bodies (after the pause
  * point). None contains a pause point. */
 static uint32_t	pz_us[MPZ_N];
+#ifdef HL64_PROFILE
+static const char *const pz_name[MPZ_N] = {
+	"look", "anim", "nn", "lm", "lbox", "lvis", "listen", "enemy", "ev", "fbtr", "fbatt",
+	"fbtex", "fbdec", "fbfx", "brass", "esnd", "shoot"
+};
+
+/* the sub-zones (after LM) that moved since `base` (all zeros: the frame) */
+static void pz_print(const uint32_t *base)
+{
+	int z;
+
+	log_printf(" z=");
+	for (z = MPZ_LM + 1; z < MPZ_N; z++)
+		if (pz_us[z] != base[z])
+			log_printf("%s:%lu,", pz_name[z], (unsigned long)(pz_us[z] - base[z]));
+}
+#endif
 
 uint64_t Mon_PzBegin(void)
 {
@@ -392,6 +409,11 @@ void mon_stats_frame(void)
 			(unsigned long)pz_us[MPZ_ANIM], (unsigned long)pz_us[MPZ_NN],
 			(unsigned long)pz_us[MPZ_LM]);
 		aiw_print("w", &aip.frame);
+		{
+			static const uint32_t zero[MPZ_N];
+
+			pz_print(zero);
+		}
 		log_printf("\n");
 	}
 #endif
@@ -407,11 +429,12 @@ void mon_stats_route(void) { mstat.routes++; }
 static void aiw_print(const char *tag, const mon_ai_work_t *w)
 {
 	log_printf(" %s=lm:%lu,steps:%lu,traces:%lu,bsp:%lu,routes:%lu,tri:%lu,cover:%lu,nn:%lu,"
-		"nnt:%lu,dj:%lu,djpop:%lu,lmhit:%lu,starts:%lu", tag, (unsigned long)w->lm,
-		(unsigned long)w->steps, (unsigned long)w->traces, (unsigned long)w->bsp,
-		(unsigned long)w->routes, (unsigned long)w->tri, (unsigned long)w->cover,
-		(unsigned long)w->nn, (unsigned long)w->nnt, (unsigned long)w->dj,
-		(unsigned long)w->djpop, (unsigned long)w->lmhit, (unsigned long)w->starts);
+		"nnt:%lu,dj:%lu,djpop:%lu,lmhit:%lu,starts:%lu,looks:%lu,nopvs:%lu", tag,
+		(unsigned long)w->lm, (unsigned long)w->steps, (unsigned long)w->traces,
+		(unsigned long)w->bsp, (unsigned long)w->routes, (unsigned long)w->tri,
+		(unsigned long)w->cover, (unsigned long)w->nn, (unsigned long)w->nnt,
+		(unsigned long)w->dj, (unsigned long)w->djpop, (unsigned long)w->lmhit,
+		(unsigned long)w->starts, (unsigned long)w->looks, (unsigned long)w->nopvs);
 }
 
 /* `prof ai` (after `prof mon_us`): the window's AI work per frame (avg),
@@ -514,17 +537,24 @@ void Mon_DispatchAnimEvents(int e, float interval)
 		{
 			uint64_t	t0 = Mon_PzBegin();
 			col_stats_t	c0, c1;
-			uint32_t	us;
+			uint32_t	us, z0[MPZ_N];
 
+			memcpy(z0, pz_us, sizeof(z0));
 			col_counts(&c0);
 			Mon_HandleAnimEvent(e, &ev);
 			us = (uint32_t)(sys_time_us() - t0);
+			pz_us[MPZ_EV] += us;
 			col_counts(&c1);
 			if (us >= AI_LOG_EVENT_US)
-				log_printf("ai: event t=%.3f e=%d %s event=%d options=%s us=%lu traces=%lu\n",
-					(double)gtime(), e, game_class_name(ent_idc(e)->cls), ev.event,
-					ev.options ? ev.options : "-", (unsigned long)us,
-					(unsigned long)(c1.traces - c0.traces));
+			{
+				log_printf("ai: event t=%.3f e=%d %s event=%d options=%s us=%lu traces=%lu "
+					"sync=%lu", (double)gtime(), e, game_class_name(ent_idc(e)->cls),
+					ev.event, ev.options ? ev.options : "-", (unsigned long)us,
+					(unsigned long)(c1.traces - c0.traces),
+					(unsigned long)(c1.sync_loads - c0.sync_loads));
+				pz_print(z0);
+				log_printf("\n");
+			}
 		}
 #else
 		Mon_HandleAnimEvent(e, &ev);
@@ -659,6 +689,15 @@ static float ent_health(int e)
 	return b ? b->health : 0;
 }
 
+static int look_visible(int e, int s)
+{
+	uint64_t	t0 = Mon_PzBegin();
+	int		r = FVisible(e, s);
+
+	Mon_PzEnd(MPZ_LVIS, t0);
+	return r;
+}
+
 void CBaseMonster_Look(int e, int iDistance)
 {
 	CBaseMonster	*m = MON(e);
@@ -667,6 +706,7 @@ void CBaseMonster_Look(int e, int iDistance)
 	float		mn[3], mx[3];
 	const float	*o = ent_cv(e)->origin;
 	int		enemy = EHGet(m->m_hEnemy);
+	uint64_t	t0;
 
 	Mon_ClearConditions(m, bits_COND_SEE_HATE | bits_COND_SEE_DISLIKE | bits_COND_SEE_ENEMY |
 		bits_COND_SEE_FEAR | bits_COND_SEE_NEMESIS | bits_COND_SEE_CLIENT);
@@ -679,7 +719,9 @@ void CBaseMonster_Look(int e, int iDistance)
 		mn[i] = o[i] - iDistance;
 		mx[i] = o[i] + iDistance;
 	}
+	t0 = Mon_PzBegin();
 	count = UTIL_EntitiesInBox(list, SIGHT_MAX, mn, mx, FL_CLIENT | FL_MONSTER);
+	Mon_PzEnd(MPZ_LBOX, t0);
 	for (i = 0; i < count; i++)
 	{
 		s = list[i];
@@ -687,7 +729,7 @@ void CBaseMonster_Look(int e, int iDistance)
 			ent_health(s) <= 0)
 			continue;
 		if (Mon_IRelationshipOf(e, s) != R_NO && Mon_FInViewCone(e, s) &&
-			!(ent_cv(s)->flags & FL_NOTARGET) && FVisible(e, s))
+			!(ent_cv(s)->flags & FL_NOTARGET) && look_visible(e, s))
 		{
 			if (IsPlayer(s))
 			{
@@ -2658,11 +2700,20 @@ void CBaseMonster_RunAI(int e)
 	{
 		if (ent_client_in_pvs(e) > 0 || m->m_MonsterState == MONSTERSTATE_COMBAT)
 		{
+			uint64_t t0;
+
+			mon_aiw.looks++;
 			Mon_Look(e, (int)m->m_flDistLook);
+			t0 = Mon_PzBegin();
 			Mon_Listen(e);
+			Mon_PzEnd(MPZ_LISTEN, t0);
 			Mon_ClearConditions(m, Mon_IgnoreConditions(e));
+			t0 = Mon_PzBegin();
 			Mon_GetEnemy(e);
+			Mon_PzEnd(MPZ_ENEMY, t0);
 		}
+		else
+			mon_aiw.nopvs++;
 		en = EHGet(m->m_hEnemy);
 		if (en >= 0)
 			Mon_CheckEnemy(e, en);

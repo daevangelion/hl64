@@ -712,6 +712,7 @@ void FireBullets(int e, int cShots, const float src[3], const float dirShooting[
 	col_trace_t	tr;
 	float		right[3], up[3], dir[3], end[3], x, y, z;
 	int		shot, tracer, hit;
+	uint64_t	t0;
 
 	VecCopy(gpGlobals.v_right, right);
 	VecCopy(gpGlobals.v_up, up);
@@ -728,13 +729,17 @@ void FireBullets(int e, int cShots, const float src[3], const float dirShooting[
 		VecMA(dirShooting, x * spread[0], right, dir);
 		VecMA(dir, y * spread[1], up, dir);
 		VecMA(src, flDistance, dir, end);
+		t0 = Mon_PzBegin();
 		UTIL_TraceLine(src, end, dont_ignore_monsters, e, &tr);
+		Mon_PzEnd(MPZ_FBTR, t0);
 		tracer = 0;
 		if (iTracerFreq != 0 && (tracerCount++ % iTracerFreq) == 0)
 		{
 			if (iTracerFreq != 1)
 				tracer = 1;
+			t0 = Mon_PzBegin();
 			fx_tracer(src, tr.end);
+			Mon_PzEnd(MPZ_FBFX, t0);
 		}
 		if (tr.frac != 1.0f)
 		{
@@ -759,17 +764,25 @@ void FireBullets(int e, int cShots, const float src[3], const float dirShooting[
 				case BULLET_MONSTER_MP5: dmg = mon_skill(sk_monDmgMP5); break;
 				case BULLET_MONSTER_12MM: dmg = mon_skill(sk_monDmg12MM); break;
 				}
+				t0 = Mon_PzBegin();
 				TraceAttack(hit, attacker, dmg, dir, &tr, DMG_BULLET);
+				Mon_PzEnd(MPZ_FBATT, t0);
 				if (iBulletType != BULLET_MONSTER_12MM || !tracer)
 				{
+					t0 = Mon_PzBegin();
 					if (TEXTURETYPE_PlaySound)
 						TEXTURETYPE_PlaySound(&tr, src, end, iBulletType);
+					Mon_PzEnd(MPZ_FBTEX, t0);
+					t0 = Mon_PzBegin();
 					if (DecalGunshot)
 						DecalGunshot(&tr, iBulletType);
+					Mon_PzEnd(MPZ_FBDEC, t0);
 				}
 			}
 		}
 		/* UTIL_BubbleTrail: no underwater bubbles in the effects API */
 	}
+	t0 = Mon_PzBegin();
 	ApplyMultiDamage(e, attacker);
+	Mon_PzEnd(MPZ_FBATT, t0);
 }
