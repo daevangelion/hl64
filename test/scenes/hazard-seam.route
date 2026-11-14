@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT
+# Scene hazard-seam (test/README.md): Hazard Course t0a0c -> t0a0d touch
+# switch and back: test/routes/hazard.route lines 538-552 (the last t0a0c
+# waypoints, the setpos into the changelevel, the t0a0d arrival), then the
+# player is put into t0a0d's changelevel back to t0a0c.
+startmap t0a0c
+waitmap t0a0c 60
+god 1
+setpos -140 -418 5 0 0
+wait 1.5
+stats begin
+-duck
+setpos -140 -1298 5 0 0
+wait 0.4
+-duck
+setpos -844 -1864 -39 0 0
+wait 0.4
+-duck
+stats t0a0c-walked
+-duck
+setpos -840 -1508 111 0 0
+# ---- t0a0d (visit 8/8)
+waitmap t0a0d 300
+-duck
+god 1
+stats t0a0d
+wait 3
+shot t0a0d-arrival
+# t0a0d's changelevel back (changetoc1a1e, landmark a1a2: x -872..-869,
+# y -1532..-1485, z 147..148), the player's eye in it as for the way in
+setpos -870 -1508 111 0 180
+waitmap t0a0c 10
+wait 3
+shot t0a0c-return
+stats end
+wait 0.2
+pass

@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: MIT
+# Scene addglow (test/README.md): the additive-glow poses of m5-addblend's
+# test/routes/addblend.route (render-fx.md 2a, 3): hldemo1 env_glows over lit
+# walls looked at from 120 / 220 u (labels g<glow>_d<distance>_k<pose>, the
+# last a red-tinted glow02), the TransTexture strips *76 / *87, then an MP5
+# grenade's explosion and its TE_SMOKE puffs (steam1). Shots are the check;
+# the window is the whole pose set. A `wait 0.1` after each shot: on a tree
+# without m5-addblend's b7db047 a SHOT captured the next op's pose.
+startmap hldemo1
+wait 3
+god 1
+stats begin
+setpos -2457 -654 201 0 -45
+wait 0.5
+shot g0_d120_k3
+wait 0.1
+setpos -2528 -583 201 0 -45
+wait 0.5
+shot g0_d220_k3
+wait 0.1
+setpos -1901 -709 201 0 45
+wait 0.5
+shot g1_d120_k5
+wait 0.1
+setpos -1661 -469 201 0 -135
+wait 0.5
+shot g1_d220_k1
+wait 0.1
+setpos -489 -295 41 0 0
+wait 0.5
+shot g5_d120_k4
+wait 0.1
+setpos 1303 316 41 0 0
+wait 0.5
+shot g11_d120_k4
+wait 0.1
+setpos 1768 32 250 0 0
+wait 0.5
+shot g13_d220_k4_red
+wait 0.1
+# *76 (x 513-616, y -32..-24, z 49-66) and *87 (x 536-599, y 152-160)
+setpos 565 64 41 10 -90
+wait 0.5
+shot brush76
+wait 0.1
+look 10 90
+wait 0.5
+shot brush87
+wait 0.1
+# MP5 + grenades (impulse 101, test builds), slot 3 = the MP5, one grenade
+# level into the wall under glow 5, 120 u ahead (pitched down, it burst at
+# the muzzle): the explosion, then the smoke rising in view
+setpos -489 -295 41 0 0
+impulse 101
+wait 0.5
+impulse 3
+wait 1.5
+look 0 0
+wait 0.3
++attack2
+wait 0.1
+-attack2
+wait 0.2
+shot smoke_a
+wait 0.4
+shot smoke_b
+wait 0.4
+shot smoke_c
+wait 0.6
+shot smoke_d
+wait 0.1
+stats end
+wait 0.2
+pass

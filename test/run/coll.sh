@@ -13,7 +13,7 @@
 #
 # Usage: test/run/coll.sh [--ares]
 # Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content), HL64_FIXTURES
-#        (default /scratch/hl64/fixtures), ARES_BIN, ARES_TIMEOUT,
+#        (default /scratch/hl64/fixtures), HL64_ARES_HOST / ARES_BIN (test/run/ares.sh), ARES_TIMEOUT,
 #        DISPLAY_NUM.
 # Exit:  0 pass, 1 gate failure, 2 prerequisite missing.
 set -euo pipefail
@@ -60,8 +60,6 @@ for i in range(n):
 EOF
 )"
 [[ -n "$MAP" ]] || fail "hldemo1 not in $CWG"
-ARES_BIN="${ARES_BIN:-$HOME/src/products/ares/build/desktop-ui/ares}"
-[[ -x "$ARES_BIN" ]] || { echo "patched ares not found at $ARES_BIN (set ARES_BIN)" >&2; exit 2; }
 
 # content + coll/bench.bin, hard-linked (no copy of the player's data)
 BC="$OUT/content"
@@ -73,10 +71,9 @@ CMDS=(--cmd "@10 colbench $MAP" --cmd "@12 quit 0")
 "$BUILD_DIR/host/hl64-host" --root "$BC" "${CMDS[@]}" >"$OUT/host-bench.log" 2>&1 \
 	|| { tail -20 "$OUT/host-bench.log" >&2; fail "host colbench"; }
 
-# shellcheck source=xvfb.sh
-. "$ROOT/test/run/xvfb.sh"
-xvfb_start || exit 2
-trap '[[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null || true' EXIT
+# shellcheck source=ares.sh
+. "$ROOT/test/run/ares.sh"
+ares_setup || exit 2
 
 ROMDIR="$BUILD_DIR/coll-rom"
 mkdir -p "$ROMDIR"
@@ -86,11 +83,7 @@ make -C "$ROOT" --no-print-directory BUILD_DIR="$ROMDIR" HL64_TEST=1 PROFILE=1 \
 	|| { tail -40 "$OUT/rom-build.log" >&2; fail "PROFILE rom build"; }
 grep -E 'warning:' "$OUT/rom-build.log" && fail "rom build has warnings"
 set +e
-(cd "$ROMDIR" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 \
-	timeout "${ARES_TIMEOUT:-600}" "$ARES_BIN" --system "Nintendo 64" \
-	--setting Video/Driver=Vulkan --setting Audio/Driver=None \
-	--setting Input/Driver=SDL --setting General/HomebrewMode=true \
-	hl64.z64 >ares.log 2>&1)
+ares_run "$ROMDIR" hl64.z64 ares.log "${ARES_TIMEOUT:-600}"
 CODE=$?
 set -e
 tr -d '\r' <"$ROMDIR/ares.log" >"$OUT/ares.log"

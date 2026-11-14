@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+# Scene hl3-arrival (test/README.md): hldemo3 from its arrival spot (the
+# hldemo2_3 landmark switch's), west along the arrival corridor (hellbox
+# trigger_once #307), hellbox_grunt_script, the detonator plunger ->
+# hellbox_exp_1 (env_explosion, magnitude 150) and the dome door:
+# uplink.route lines 316-351 unchanged (route ops 203-225). New Game on hldemo3: hldemo2 is not open behind the player.
+# scene-window: uplink 203 226
+startmap hldemo3
+waitmap hldemo3 60
+# the route's player has the suit here (hldemo1's item_suit): drop it on
+# him (HLSDK CBaseEntity::Create, touch pickup)
+setpos -438 -576 -476 0 177
+wait 0.3
+drop item_suit -438 -576 -476
+wait 1.5
+stats begin
+look 0 177
+wait 0.5
+shot hldemo3-arrival
+stats hldemo3
+# west along the arrival corridor: hellbox trigger_once #307
+setpos -600 -568 -470 0 180
+wait 0.3
+setpos -696 -400 -470 0 90
+wait 0.3
+# From here on grunts shoot and a zombie claws the route, which does not
+# fight (old host without god: 66 hp lost here; with hldemo2-return's 30 and
+# hldemo1-return's 10 the carried health runs out): god, combat is not under
+# test.
+god 1
+# hellbox_grunt_script walks hellbox_grunt to the hellbox; the detonator
+# plunger (func_door, use only -> hellbox_detonate_mm_rl -> hellbox_detonate_mm)
+# blows it (env_explosion hellbox_exp_1, magnitude 150) with him and the grunt
+# guarding the dome door beside it, as the level is played. Left alive they
+# chase the route into the antechamber and stand where the welder grunts
+# spawn and run (welder_grunt_spawner_*, welder_grunt_ss_*).
+waitclass monster_human_grunt -672 -64 -512 16 20
+setpos -764 -420 -470 40 180
+wait 0.3
++use
+wait 0.2
+-use
+waitgone hellbox_exp_1 5
+wait 1
+# intro dome door button #42 -> intro_domedoor_mm -> intro_domedoor_1 (4 s)
+setpos -672 -64 -470 0 0
+wait 0.5
++use
+wait 0.2
+-use
+waitmoved intro_domedoor_1 15
+stats end
+wait 0.2
+pass

@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# Scene seam-2to1 (test/README.md): the hldemo2 -> hldemo1 elevator switch
+# (landmark hldemo1to2, USEONLY: button #92 closes the doors, door #89 fires
+# eledoordelaymm -> changetohldemo1) and the hldemo1 return arrival up to
+# the car doors opening (changetarget elestartmm, 8.5 s): uplink.route lines
+# 649-671 (route ops 463-478). New Game on hldemo2: the car's doors
+# (startele1) are shut: the outside button opens them first.
+# scene-window: uplink elevator-return 479
+startmap hldemo2
+waitmap hldemo2 60
+# the route's player has the suit here (hldemo1's item_suit): drop it on
+# him (HLSDK CBaseEntity::Create, touch pickup)
+setpos -416 210 196 0 90
+wait 0.3
+drop item_suit -416 210 196
+wait 1
+# the car's doors (startele1, wait -1) open as the first visit's elestartmm
+# left them: the outside button #93 (model *25, x -368..-366, y -256..-240);
+# the open door fires its target button_lock, the master of the car's
+# button #92
+setpos -330 -248 196 10 180
+wait 0.3
++use
+wait 0.3
+-use
+waitmoved startele1 5
+wait 1.5
+setpos -470 -130 196 0 180
+wait 1
+stats begin
+shot elevator-return
+# button #92 (master button_lock): doors close, door #89 at the bottom fires
+# eledoordelaymm -> changetohldemo1 (USEONLY trigger_changelevel)
+setpos -440 -100 196 10 20
+wait 0.3
++use
+wait 0.3
+-use
+waitmap hldemo1 30
+shot seam4-at
+
+# ---- E: hldemo1 return → garg finale → end section (derived on the old tree's host build) ----
+# --- Segment E: hldemo1 return visit -> end of demo ---------------------
+# Arrive in the start elevator: seam switch (landmark hldemo1to2).
+# changetarget elestartmm opens the car doors (startele1) after 8.5 s.
+waitnear -2488 -100 196 1 0
+look 0 0
+shot hldemo1-return
+stats hldemo1-return
+waitmoved startele1 20
+stats end
+wait 0.2
+pass
