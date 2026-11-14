@@ -151,6 +151,12 @@ typedef struct {
 	uint8_t		pad[2];
 } game_pose_t;
 int	game_studio_pose(const game_pose_t *p, float (*out)[3][4], int max);
+/* An upper bound on the distance from the pose origin of any point of
+ * model's hitboxes in any pose game_studio_pose gives for sequence
+ * `sequence` (any frame, blend, controller; the bone chains' longest
+ * translations plus the hitbox corners); -1 when unknown (no animation,
+ * a pose that fails). Memoised per (model, sequence). */
+float	game_studio_hitbox_reach(res_t model, int sequence);
 /* Chrome texture coordinates (HLSDK mdlviewer StudioModel::Chrome): per
  * bone of a pose (bone-to-view-space matrices, viewer at the origin) the
  * chrome up / right vectors in the bone frame for the view's right axis,

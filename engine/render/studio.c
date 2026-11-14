@@ -1938,13 +1938,40 @@ static void draw_view(const float eye[3])
 
 static col_hitbox_t	hb[255];
 
-int studio_hitboxes(const col_ent_t *e, const col_hitbox_t **out)
+/* 1 when the segment a -> b passes farther than r from c */
+static int seg_beyond(const float a[3], const float b[3], const float c[3], float r)
+{
+	float ab[3], ac[3], p[3], t, l2, d2 = 0;
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		ab[k] = b[k] - a[k];
+		ac[k] = c[k] - a[k];
+	}
+	l2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+	t = l2 > 0 ? (ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / l2 : 0;
+	if (!(t > 0))
+		t = 0;
+	else if (t > 1)
+		t = 1;
+	for (k = 0; k < 3; k++)
+	{
+		p[k] = a[k] + t * ab[k] - c[k];
+		d2 += p[k] * p[k];
+	}
+	return d2 > r * r;
+}
+
+int studio_hitboxes(const col_ent_t *e, const float start[3], const float end[3],
+	const col_hitbox_t **out)
 {
 	const ent_rnd_t *r;
 	const sfmt_hitbox_t *x;
 	smodel_t *m;
 	game_pose_t p;
-	int i, n;
+	float reach;
+	int i, n, ready;
 
 	*out = hb;
 	if (!ent_is_live(e->index))
@@ -1954,9 +1981,14 @@ int studio_hitboxes(const col_ent_t *e, const col_hitbox_t **out)
 	 * current sequence's animation (or the info) is still landing (a
 	 * sequence change a frame or two ago; requested here), the box stands
 	 * for the hitboxes; load I/O (boot, tools, map loads) reads it */
-	if ((!anim_ready(r->model, r->sequence) && !io_loading()) || !(m = info_of(r->model))
-		|| !m->info->numhitboxes)
+	ready = anim_ready(r->model, r->sequence);
+	if ((!ready && !io_loading()) || !(m = info_of(r->model)) || !m->info->numhitboxes)
 		return 0;
+	/* a line beyond every hitbox of every pose of the sequence: no pose
+	 * (a long trace's box meets many entities' boxes) */
+	if (start && ready && (reach = game_studio_hitbox_reach(r->model, r->sequence)) >= 0
+		&& seg_beyond(start, end, e->origin, reach))
+		return -1;
 	memset(&p, 0, sizeof(p));
 	p.model = r->model;
 	p.sequence = r->sequence;

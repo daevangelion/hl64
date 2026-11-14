@@ -117,10 +117,14 @@ int		col_ents_box(const float mins[3], const float maxs[3], const col_ent_t **ou
 
 /* Studio pose (M3, game_studio_setup_bones): the entity's hitboxes at its
  * current pose, in the entity's own map-local frame; returns the count
- * (0: no hitboxes, the bounding box stands). Set to NULL (the default)
+ * (0: no hitboxes, the bounding box stands). With a line start -> end (the
+ * entity's frame; NULL: none) it may return -1 instead of posing: the
+ * line passes farther from the entity's origin than any hitbox point of
+ * any pose of its sequence can lie (no hit). Set to NULL (the default)
  * until a studio module exists: line traces then stop at the bounding
  * box. */
-typedef int	(*col_hitbox_fn)(const col_ent_t *e, const col_hitbox_t **out);
+typedef int	(*col_hitbox_fn)(const col_ent_t *e, const float start[3], const float end[3],
+			const col_hitbox_t **out);
 void		col_set_hitbox_source(col_hitbox_fn fn);
 
 /* ---- contents ------------------------------------------------------------- */
