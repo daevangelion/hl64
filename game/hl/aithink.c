@@ -36,13 +36,15 @@
  *     are outside FindNearestNode and the Dijkstra searches.
  *   - A paused think ends (dropped; a live monster's half-built route is
  *     cleared) when its monster is freed or changes layer, is killed, its
- *     think function, schedule, task or monster state is changed by
- *     something else, or at a map open / close, a dehydrate or twin copy,
- *     New Game.
- *   - Age: entity slots are not reused within 0.5 s of their free
- *     (engine/ent/ent.c), so an entity index a paused think holds stays
- *     valid while the think is younger than AI_MAX_AGE; an older think
- *     stops pausing and runs to its end. Thinks before AI_MIN_START (the
+ *     think function, schedule, task, monster state, enemy or target
+ *     entity is changed by something else or its enemy / target entity is
+ *     freed, or at a map open / close, a dehydrate or twin copy, New Game.
+ *   - Entity indices a paused think holds come from its enemy / target
+ *     handles (above: still the same live entities) or are read fresh
+ *     after the pause point (the check's blocker); entity slots are not
+ *     reused within 0.5 s of their free (engine/ent/ent.c). A think older
+ *     than AI_MAX_AGE stops pausing and runs to its end (a bound on how
+ *     old its picture of the world gets). Thinks before AI_MIN_START (the
  *     boot window where freed slots are reused at once) run whole.
  *   - More paused thinks than contexts: a new think waits a frame.
  *   - ai_spread 2 (test): pause at every point after the slice's first and
@@ -59,7 +61,7 @@
 #include "hl64/settings.h"
 #include "game/hl/monster.h"
 
-#define AI_MAX_AGE	0.45f
+#define AI_MAX_AGE	2.0f
 #define AI_MIN_START	2.5f
 
 enum { AC_FREE, AC_RUN, AC_PAUSED, AC_DONE };
@@ -76,6 +78,7 @@ typedef struct {
 	/* the monster at the pause: anything else changing these ends it */
 	const Schedule_t *sched;
 	int		sidx, tstat, mstate, dead;
+	ent_h		enemy, target;
 	mon_shared_t	sh;
 	mon_think_acc_t	acc;
 } ai_ctx_t;
@@ -108,6 +111,13 @@ float *Ai_CoverTables(void)
 	return cur ? (float *)co_scratch(ai_index(cur)) : NULL;
 }
 
+/* a handle the pause kept: still the same handle and, unless none, a live
+ * entity */
+static int ai_handle_ok(ent_h now, ent_h then)
+{
+	return now == then && (now == EH_NONE || ent_of(now) >= 0);
+}
+
 /* 1 while nothing but the think itself changed the monster since its
  * pause; 0 when its think must end (freed: also !*live) */
 static int ai_valid(const ai_ctx_t *c, int *live)
@@ -122,7 +132,8 @@ static int ai_valid(const ai_ctx_t *c, int *live)
 	return ent_idc(e)->layer == c->layer && ent_tm(e)->think == c->think &&
 		m->m_pSchedule == c->sched && m->m_iScheduleIndex == c->sidx &&
 		m->m_iTaskStatus == c->tstat && m->m_MonsterState == c->mstate &&
-		m->deadflag == c->dead;
+		m->deadflag == c->dead && ai_handle_ok(m->m_hEnemy, c->enemy) &&
+		ai_handle_ok(m->m_hTargetEnt, c->target);
 }
 
 static void ai_free(ai_ctx_t *c)
@@ -153,6 +164,8 @@ static void ai_snapshot(ai_ctx_t *c)
 	c->tstat = m->m_iTaskStatus;
 	c->mstate = m->m_MonsterState;
 	c->dead = m->deadflag;
+	c->enemy = m->m_hEnemy;
+	c->target = m->m_hTargetEnt;
 }
 
 /* One slice of c's think: from its start or pause to its next pause or
