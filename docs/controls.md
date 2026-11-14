@@ -45,7 +45,7 @@ boot) the pad drives the debug camera instead (`engine/render/cam.c`).
   also a suite of `test/run/m5.sh`): every held binding, one impulse per
   press with no repeat while held, same-frame presses queued, route
   impulse first.
-- ares (by hand): `BUILD_DIR=… test/m5/controls_ares.sh` runs
+- ares (by hand): `BUILD_DIR=… [HL64_ARES_HOST=ares-host] test/m5/controls_ares.sh` runs
   `test/m5/controls.route` on an HL64_TEST ROM and presses the pad through
   the patched ares' `ARES_TEST_INPUT` file; it checks the cart logs
   `flashlight: on` / `off`, next / previous / last weapon deploys and

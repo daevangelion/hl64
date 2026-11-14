@@ -15,11 +15,13 @@
 #
 # Usage: test/m5/controls_ares.sh
 # Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c13
-#        cook /scratch/hl64/tmp/M5Lead/c13), ARES_BIN, READY_TIMEOUT (s
-#        of real time until padready, default 900), EVENT_TIMEOUT (s a
-#        button is held at most waiting for its event, default 300), GAP
-#        (s released after each press, default 8), ARES_LOCK (default
-#        /tmp/hl64-ares.lock, held while ares runs).
+#        cook /scratch/hl64/tmp/M5Lead/c13), READY_TIMEOUT (s of real
+#        time from ares' first log line until padready, default 900),
+#        EVENT_TIMEOUT (s a button is held at most waiting for its event,
+#        default 300), GAP (s released after each press, default 8), and
+#        test/run/ares.sh's (HL64_ARES_HOST=ares-host: ares runs there, the
+#        log streamed back and the pad file forwarded live; ARES_BIN,
+#        ARES_SLOTS).
 # Exit:  0 pass, 1 failure, 2 prerequisite missing.
 set -euo pipefail
 
@@ -27,15 +29,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-build}"
 case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$ROOT/$BUILD_DIR" ;; esac
 CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/M5Lead/c13}"
-ARES_BIN="${ARES_BIN:-$HOME/src/products/ares/build/desktop-ui/ares}"
 READY_TIMEOUT="${READY_TIMEOUT:-900}"
-ARES_LOCK="${ARES_LOCK:-/tmp/hl64-ares.lock}"
 EVENT_TIMEOUT="${EVENT_TIMEOUT:-300}"
 GAP="${GAP:-8}"
 ROMDIR="$BUILD_DIR/controls-rom"
 fail() { echo "CONTROLS-ARES FAIL: $*" >&2; exit 1; }
 [[ -f "$CONTENT/campaign.rtb" ]] || { echo "no $CONTENT/campaign.rtb" >&2; exit 2; }
-[[ -x "$ARES_BIN" ]] || { echo "patched ares not found at $ARES_BIN" >&2; exit 2; }
 
 cd "$ROOT"
 rm -rf "$ROMDIR" && mkdir -p "$ROMDIR"
@@ -54,21 +53,23 @@ PAD="$ROMDIR/pad.in"
 echo "0 0 0" >"$PAD"
 pad() { echo "$1 0 0" >"$PAD.tmp" && mv "$PAD.tmp" "$PAD"; }
 LOG="$ROMDIR/ares.log"
-# shellcheck source=../run/xvfb.sh
-. "$ROOT/test/run/xvfb.sh"
-xvfb_start || exit 2
-APID=
-trap '[[ -n "$APID" ]] && kill "$APID" 2>/dev/null; [[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null || true' EXIT
-# one ares at a time on this machine (the other ares scripts' lock), held
-# for the run and the pad input
-exec 9>"$ARES_LOCK"
-flock 9
-(cd "$ROMDIR" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 ARES_TEST_INPUT="$PAD" \
-	exec timeout -k 5 $((READY_TIMEOUT + 7 * (EVENT_TIMEOUT + GAP) + 60)) "$ARES_BIN" --system "Nintendo 64" \
-	--setting Video/Driver=Vulkan --setting Audio/Driver=None \
-	--setting Input/Driver=SDL --setting General/HomebrewMode=true \
-	hl64.z64 >"$LOG" 2>&1) &
+: >"$LOG"
+# shellcheck source=../run/ares.sh
+. "$ROOT/test/run/ares.sh"
+ares_setup || exit 2
+(
+	export ARES_TEST_INPUT="$PAD"
+	ares_run "$ROMDIR" hl64.z64 ares.log $((READY_TIMEOUT + 7 * (EVENT_TIMEOUT + GAP) + 600))
+) &
 APID=$!
+XVFB_KILL='[[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null || true'
+# shellcheck disable=SC2064
+trap "kill \"\$APID\" 2>/dev/null; $XVFB_KILL" EXIT
+# padready: counted from ares' first log line (not the slot wait)
+until [[ -s "$LOG" ]]; do
+	kill -0 "$APID" 2>/dev/null || fail "ares_run ended before ares logged ($(ares_host))"
+	sleep 1
+done
 t0=$SECONDS
 until grep -q 'padready' "$LOG" 2>/dev/null; do
 	kill -0 "$APID" 2>/dev/null || { tail -20 "$LOG" >&2; fail "ares exited before padready"; }
@@ -105,9 +106,10 @@ press 10000000 '^weapon: deploy ' "Start (last weapon)"
 press 10000000 '^weapon: deploy ' "Start (last weapon)"
 press 04000000 '^weapon: reload ' "D-down (reload)"
 echo "t=$((SECONDS - t0)) done" >>"$ROMDIR/input.log"
-kill "$APID" 2>/dev/null || true
+kill "$APID" 2>/dev/null || true	# ares_run stops ares (remote: on the host), copies back
 wait "$APID" 2>/dev/null || true
-APID=
+# shellcheck disable=SC2064
+trap "$XVFB_KILL" EXIT
 tr -d '\r' <"$LOG" >"$ROMDIR/ares-clean.log"
 
 # the cart's events after padready, in order
