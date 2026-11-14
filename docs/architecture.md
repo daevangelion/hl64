@@ -209,7 +209,7 @@ information only.
 | sentence table (cooked) | 24 | not reported | parsed text | [EST] |
 | lightstyle patterns + state | 4 | not reported | strings + 96 × value | lightstyles.md |
 | think heap, active bitsets, grid tables | 12 | 6.3 KB (52%) | area tree + leaf lists | **measured** |
-| sound (16 voice buffers, 10 wav64, loops) | 100 | 76.1 KB (79% of 96) | M5 hazard route 78.4 KB (80272 B) × 1.25 > 96 KB → 100 | **measured** (route; the earlier `snd_ares.sh` peak was 78144 B) |
+| sound (16 voice buffers, 10 wav64, loops) | 104 | 76.1 KB (79% of 96) | M5 hazard route 80.9 KB (82832 B) × 1.25 > 100 KB → 104 | **measured** (route, m5-int2 `eb47299`; uplink 82080 B; the earlier `snd_ares.sh` peak was 78144 B) |
 | sprite cache / decals / particles | 64 / 106 / 12 | — / 51.7 KB (92% of the old 56 KB, m3-a) / — | 64 / 8 / 512 | decals: global sheet + 2 per-map placed-decal sheets (`DECL`, one per open layer) + piece vertices, cook-proved (`tools/cook/decals.py`): Uplink 76672 B (29856 + 2 × 11888 t0a0b + 23040), retail 86528 B; carve = retail × 1.25 → **106 KB** (`HL64_DECAL_TEXELS_KB`) |
 | dlight scratch + flashlight pool | 48 | not reported | same | |
 | HUD sheets + font (ui8) | 128 | 63.5 KB (50%; 65024 B, font creditsfont) | similar | **measured** |
