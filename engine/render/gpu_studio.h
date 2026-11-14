@@ -64,7 +64,8 @@ int		gpu_studio_draw(void *state, const sfmt_mesh_t *mesh, const gpu_studio_ent_
 /* CPU-skinned draw (view model): ready vertex pairs (camera-relative, at
  * 2^-pos_shift scale under `model`) replace the mesh's packed vertices;
  * meshlets of the listed runs are loaded and drawn without bone
- * matrices. */
+ * matrices, in the view model's depth range: the front of the depth
+ * buffer's range, before every world surface not right at the eye. */
 int		gpu_studio_draw_cpu(void *state, const sfmt_mesh_t *mesh, const w64_vert_t *verts,
 			const gpu_studio_ent_t *ent);
 

@@ -117,7 +117,13 @@ static float V_CalcRoll(const float *angles, const float *velocity, float rollan
 }
 
 /* The view model (V_CalcNormalRefdef's view entity): at the eye with
- * 40% of the bob forward, the bob up and a little tilt, shaken at 90%. */
+ * 40% of the bob forward, the bob up and a little tilt, shaken at 90%.
+ * Its angles are a model's (V_CalcGunAngle, crosshair angle and
+ * v_idlescale 0): yaw the view's, pitch the view's negated, as the studio
+ * transform negates a model's pitch back (StudioSetUpTransform; here
+ * game_studio_pose_draw), so the model turns with the view. The view's
+ * angles there carry the whole shake (V_ApplyShake at 1.0 on viewangles);
+ * the roll is the player's own (the view's is the movement roll). */
 static void view_model(const ent_player_t *pl, float wofs, float bob,
 	const float so[3], const float sa[3])
 {
@@ -140,9 +146,12 @@ static void view_model(const ent_player_t *pl, float wofs, float bob,
 		vm.controller[i] = 0;
 	vm.pad[0] = vm.pad[1] = 0;
 	angle_vectors(pl->view_angles, fwd, right, up);
+	vm.ang[0] = -(pl->view_angles[0] + sa[0]);
+	vm.ang[1] = pl->view_angles[1] + sa[1];
+	vm.ang[2] = pl->view_angles[2];
 	for (i = 0; i < 3; i++)
 	{
-		vm.ang[i] = pl->view_angles[i] + sa[i] * 0.9f;
+		vm.ang[i] += sa[i] * 0.9f;
 		vm.org[i] = pl->origin[i] + pl->view_ofs[i] + so[i] * 0.9f + bob * 0.4f * fwd[i];
 	}
 	vm.org[2] += wofs + bob;

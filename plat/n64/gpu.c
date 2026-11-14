@@ -32,6 +32,15 @@ _Static_assert(sizeof(w64_vert_t) == sizeof(T3DVertPacked), "w64_vert_t is T3DVe
 /* the world matrix + its translated movers, per open layer */
 #define MATS_PER_FRAME	(HL64_WORLD_LAYERS * (HL64_REN_MOVERS_MAX + 1))
 
+/* The view model's share of the depth range, from its front: the gun
+ * drawn after the world never goes into a wall it stands against
+ * (GoldSrc's view model depth range 0..0.3, provenance-audit.md
+ * r64_alias.c 1304-1413 behaviour facts). With the projection's NDC depth
+ * d mapped to d' = VIEW_DEPTH (d + 1) - 1, world surfaces cover it only
+ * nearer than ZNEAR / (1 - VIEW_DEPTH) = 5.7 u of eye depth: inside the
+ * ducked hull's 6 u above the eye. */
+#define VIEW_DEPTH	0.3f
+
 /* per-page raw RDP bind list, kept in the layer's page state */
 #define RDL_CMDS	11
 #define RDL_TLUT_TMEM	0x800	/* rdpq_tex.c TMEM_PALETTE_ADDR */
@@ -45,6 +54,7 @@ _Static_assert(sizeof(page_rdl_t) <= WLD_PAGE_STATE, "page state");
 static T3DViewport	vp;
 static int		vp_ready;
 static T3DMat4FP	*mats;		/* 2 x MATS_PER_FRAME, uncached */
+static T3DMat4FP	*proj;		/* 2 x (world, view model), uncached */
 static int		mat_frame, mat_n;
 static int		fence = -1;
 static gpu_stats_t	cur, done;
@@ -84,12 +94,15 @@ void gpu_begin(const gpu_view_t *v)
 	T3DVec3 eye = {{ 0, 0, 0 }};
 	T3DVec3 tgt = {{ v->fwd[0], v->fwd[1], v->fwd[2] }};
 	T3DVec3 up = {{ v->up[0], v->up[1], v->up[2] }};
+	T3DMat4 pv;
+	int c;
 
 	if (!vp_ready)
 	{
 		vp = t3d_viewport_create_buffered(2);
 		mats = malloc_uncached(2 * MATS_PER_FRAME * sizeof(T3DMat4FP));
-		if (!mats)
+		proj = malloc_uncached(2 * 2 * sizeof(T3DMat4FP));
+		if (!mats || !proj)
 			sys_error("gpu: no uncached memory for matrices");
 		vp_ready = 1;
 	}
@@ -101,6 +114,13 @@ void gpu_begin(const gpu_view_t *v)
 	t3d_viewport_set_projection(&vp, T3D_DEG_TO_RAD(v->fov_y), v->znear, v->zfar);
 	t3d_viewport_look_at(&vp, &eye, &tgt, &up);
 	t3d_viewport_attach(&vp);
+	/* the view model's projection: clip z' = k z + (k - 1) w (rows of the
+	 * column-major matrix), the same w, x, y and near plane */
+	pv = vp.matProj;
+	for (c = 0; c < 4; c++)
+		pv.m[c][2] = VIEW_DEPTH * pv.m[c][2] + (VIEW_DEPTH - 1) * pv.m[c][3];
+	t3d_mat4_to_fixed(&proj[2 * mat_frame], &vp.matProj);
+	t3d_mat4_to_fixed(&proj[2 * mat_frame + 1], &pv);
 	rdpq_set_mode_standard();
 	rdpq_mode_dithering(N64_DITHER_MODE());
 	rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
@@ -111,6 +131,11 @@ void gpu_begin(const gpu_view_t *v)
 	fence = -1;
 	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
 		| T3D_FLAG_NO_LIGHT | N64_CULL);
+}
+
+void gpu_view_proj(int view)
+{
+	t3d_matrix_set_proj(&proj[2 * mat_frame + (view != 0)]);
 }
 
 void gpu_end(void)

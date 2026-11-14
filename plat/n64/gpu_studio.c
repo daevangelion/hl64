@@ -255,6 +255,8 @@ int gpu_studio_draw_cpu(void *state, const sfmt_mesh_t *mesh, const w64_vert_t *
 	mats = &pool[frame_flip * pool_half + pool_used++];
 	t3d_mat4_to_fixed_3x4(mats, (const T3DMat4 *)&e->model);
 	set_mode(e);
+	/* the view model's depth range (the MVP is formed at the push) */
+	gpu_view_proj(1);
 	t3d_matrix_push(mats);
 	for (k = 0; k < e->nruns; k++)
 	{
@@ -278,6 +280,7 @@ int gpu_studio_draw_cpu(void *state, const sfmt_mesh_t *mesh, const w64_vert_t *
 			t3d_tri_sync();
 		}
 	}
+	gpu_view_proj(0);
 	t3d_matrix_pop(1);
 	cur.ents++;
 	cur.runs += (uint32_t)e->nruns;
