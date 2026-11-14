@@ -844,7 +844,8 @@ builds per-frame lists straight from components (no client entity copies).
    (physics-movetypes.md 7), as GoldSrc's client does.
 5. **Particles**: one pool, TinyPX ucode, one call, s16 view-relative.
 6. **Translucent**: render modes/fx per render-fx.md; back to front; depth
-   test without write; additive through the RDP adder with the wrap guard.
+   test without write; additive as unit colour × brightness through the
+   alpha blender (render-fx.md 2a: the RDP adder wraps; ramp TLUTs).
 7. **Decals**: on cooked faces of resident sectors/movers, decal Z, I4
    texels from the cooked decal sheet (render-fx.md 4).
 8. **HUD/2D**: ui8 sheets, numbers, crosshair, damage indicators, text

@@ -17,7 +17,8 @@
  * (studio_draw hands them over) go into one list per frame; the nearest
  * HL64_FX_TRANS_MAX are kept, drawn back to front with depth test and no
  * depth write. Cutout sprites (Normal / TransAlpha) draw first, unsorted.
- * Additive items cap their blend at HL64_FX_ADD_CAP (the RDP adder wraps).
+ * Additive items draw through the alpha blender as a screen-like blend
+ * (render-fx.md 2a, addblend.h): the RDP adder wraps.
  */
 #include <math.h>
 #include <string.h>
@@ -28,6 +29,7 @@
 #include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
+#include "engine/render/addblend.h"
 #include "engine/render/fx_int.h"
 #include "engine/render/gpu_studio.h"
 #include "engine/render/ren.h"
@@ -39,18 +41,18 @@
 
 /* The RDP state per effects mode (X1); both platforms apply this table. */
 const gpu_fx_rdp_t gpu_fx_rdp[GPU_FX_MODES] = {
-	/* blender            combiner              zt zw zd ac tex */
-	[GPU_FX_CUTOUT]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_TEX_SHADE,  1, 1, 0, 1, 1, 0 },
-	[GPU_FX_BLEND]       = { GPU_FX_BL_ALPHA, GPU_FX_CC_TEX_SHADE,  1, 0, 0, 0, 1, 0 },
-	[GPU_FX_ADD]         = { GPU_FX_BL_ADD,   GPU_FX_CC_TEX_SHADE,  1, 0, 0, 0, 1, 0 },
-	[GPU_FX_GLOW]        = { GPU_FX_BL_ADD,   GPU_FX_CC_TEX_SHADE,  0, 0, 0, 0, 1, 0 },
-	[GPU_FX_DECAL]       = { GPU_FX_BL_ALPHA, GPU_FX_CC_SHADE_TEXA, 1, 0, 1, 0, 2, 0 },
-	[GPU_FX_POINT]       = { GPU_FX_BL_NONE,  GPU_FX_CC_PRIM,       1, 1, 0, 0, 0, 0 },
-	[GPU_FX_STREAK]      = { GPU_FX_BL_ADD,   GPU_FX_CC_SHADE,      1, 0, 0, 0, 0, 0 },
-	[GPU_FX_BRUSH_BLEND] = { GPU_FX_BL_ALPHA, GPU_FX_CC_TEX_PRIM,   1, 0, 0, 0, 3, 0 },
-	[GPU_FX_BRUSH_ADD]   = { GPU_FX_BL_ADD,   GPU_FX_CC_TEX_PRIM,   1, 0, 0, 0, 3, 0 },
-	[GPU_FX_BRUSH_COLOR] = { GPU_FX_BL_ALPHA, GPU_FX_CC_PRIM_A,     1, 0, 0, 0, 0, 0 },
-	[GPU_FX_SCREEN]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_SHADE,      0, 0, 0, 0, 0, 0 },
+	/* blender            combiner              zt zw zd ac tex tlut */
+	[GPU_FX_CUTOUT]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_TEX_SHADE,  1, 1, 0, 1, 1, GPU_FX_TLUT_RGBA16 },
+	[GPU_FX_BLEND]       = { GPU_FX_BL_ALPHA, GPU_FX_CC_TEX_SHADE,  1, 0, 0, 0, 1, GPU_FX_TLUT_RGBA16 },
+	[GPU_FX_ADD]         = { GPU_FX_BL_ALPHA, GPU_FX_CC_RAMP,       1, 0, 0, 0, 1, GPU_FX_TLUT_IA16 },
+	[GPU_FX_GLOW]        = { GPU_FX_BL_ALPHA, GPU_FX_CC_RAMP,       0, 0, 0, 0, 1, GPU_FX_TLUT_IA16 },
+	[GPU_FX_DECAL]       = { GPU_FX_BL_ALPHA, GPU_FX_CC_SHADE_TEXA, 1, 0, 1, 0, 2, GPU_FX_TLUT_NONE },
+	[GPU_FX_POINT]       = { GPU_FX_BL_NONE,  GPU_FX_CC_PRIM,       1, 1, 0, 0, 0, GPU_FX_TLUT_NONE },
+	[GPU_FX_STREAK]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_SHADE,      1, 0, 0, 0, 0, GPU_FX_TLUT_NONE },
+	[GPU_FX_BRUSH_BLEND] = { GPU_FX_BL_ALPHA, GPU_FX_CC_TEX_PRIM,   1, 0, 0, 0, 3, GPU_FX_TLUT_RGBA16 },
+	[GPU_FX_BRUSH_ADD]   = { GPU_FX_BL_ALPHA, GPU_FX_CC_RAMP,       1, 0, 0, 0, 3, GPU_FX_TLUT_IA16 },
+	[GPU_FX_BRUSH_COLOR] = { GPU_FX_BL_ALPHA, GPU_FX_CC_PRIM_A,     1, 0, 0, 0, 0, GPU_FX_TLUT_NONE },
+	[GPU_FX_SCREEN]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_SHADE,      0, 0, 0, 0, 0, GPU_FX_TLUT_NONE },
 };
 
 const char *const gpu_fx_mode_name[GPU_FX_MODES] = {
@@ -205,8 +207,6 @@ void trans_frame(double dt)
 
 int trans_gpu_mode(int rendermode, int kind, uint8_t *blend)
 {
-	int mode;
-
 	if (kind == 1)		/* studio */
 	{
 		switch (rendermode)
@@ -216,8 +216,6 @@ int trans_gpu_mode(int rendermode, int kind, uint8_t *blend)
 			return GPU_STUDIO_BLEND;
 		case FX_RM_GLOW:
 		case FX_RM_TRANSADD:
-			if (*blend > HL64_FX_ADD_CAP)
-				*blend = HL64_FX_ADD_CAP;
 			return GPU_STUDIO_ADD;
 		default:
 			return -1;	/* opaque studio pass */
@@ -233,8 +231,6 @@ int trans_gpu_mode(int rendermode, int kind, uint8_t *blend)
 			return GPU_FX_BRUSH_BLEND;
 		case FX_RM_GLOW:
 		case FX_RM_TRANSADD:
-			if (*blend > HL64_FX_ADD_CAP)
-				*blend = HL64_FX_ADD_CAP;
 			return GPU_FX_BRUSH_ADD;
 		default:
 			return -1;	/* opaque world pass (TransAlpha: alpha compare) */
@@ -244,22 +240,16 @@ int trans_gpu_mode(int rendermode, int kind, uint8_t *blend)
 	{
 	case FX_RM_TRANSCOLOR:
 	case FX_RM_TRANSTEXTURE:
-		mode = GPU_FX_BLEND;
-		break;
+		return GPU_FX_BLEND;
 	case FX_RM_GLOW:
-		mode = GPU_FX_GLOW;
-		break;
+		return GPU_FX_GLOW;
 	case FX_RM_TRANSADD:
-		mode = GPU_FX_ADD;
-		break;
+		return GPU_FX_ADD;
 	default:		/* Normal (blend forced 255), TransAlpha */
 		if (rendermode == FX_RM_NORMAL)
 			*blend = 255;
 		return GPU_FX_CUTOUT;
 	}
-	if ((mode == GPU_FX_ADD || mode == GPU_FX_GLOW) && *blend > HL64_FX_ADD_CAP)
-		*blend = HL64_FX_ADD_CAP;
-	return mode;
 }
 
 /* ---- list ---------------------------------------------------------------------------- */
@@ -469,6 +459,7 @@ void fx_draw_begin(void)
 		a[k] = ren_cam.ang[k];
 	ren_angle_axes(a, fx_s.fwd, fx_s.right, fx_s.up);
 	fx_s.map = ren_cam.map;
+	add_frame();
 	gpu_fx_begin();
 }
 

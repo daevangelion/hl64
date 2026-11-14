@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * fx.c -- host harness for docs/specs/render-fx.md (X1, X2, X3 exact-rate
- * part, X4 synthetic part, X5, X6), dlights.md (D1, D2, D4 and the model
- * term of 4) and lightstyles.md (L1, L2, the model term of 4) on the real
+ * part, X4 synthetic part, X5, X6, ADD: 2a over the cooked sprites),
+ * dlights.md (D1, D2, D4 and the model term of 4) and lightstyles.md (L1,
+ * L2, the model term of 4) on the real
  * engine/render effects modules, the draw-list recorder and a cooked map
  * (the player start of the campaign's start map); test/m3/fx.py runs it.
  *
@@ -176,14 +177,15 @@ static int sprite_ent(const float g[3], int rm, int amt)
 static void test_x1(void)
 {
 	static const char *kinds[3] = { "sprite", "studio", "brush" };
-	/* expected (render-fx.md 2): blender (0 none, 1 alpha, 2 add, -1 opaque
-	 * pass), Z test, Z write, alpha compare, flat colour */
+	/* expected (render-fx.md 2, 2a): blender (0 none, 1 alpha, -1 opaque
+	 * pass; studio: the GPU_STUDIO mode), Z test, Z write, alpha compare,
+	 * flat colour; additive rows go through the alpha blender */
 	static const int want[3][6][5] = {
-		{ { 1, 1, 1, 1, 0 }, { 1, 1, 0, 0, 0 }, { 1, 1, 0, 0, 0 }, { 2, 0, 0, 0, 0 },
-		  { 1, 1, 1, 1, 0 }, { 2, 1, 0, 0, 0 } },
+		{ { 1, 1, 1, 1, 0 }, { 1, 1, 0, 0, 0 }, { 1, 1, 0, 0, 0 }, { 1, 0, 0, 0, 0 },
+		  { 1, 1, 1, 1, 0 }, { 1, 1, 0, 0, 0 } },
 		{ { -1 }, { 1 }, { 1 }, { 2 }, { -1 }, { 2 } },
-		{ { -1 }, { 1, 1, 0, 0, 1 }, { 1, 1, 0, 0, 0 }, { 2, 1, 0, 0, 0 }, { -1 },
-		  { 2, 1, 0, 0, 0 } },
+		{ { -1 }, { 1, 1, 0, 0, 1 }, { 1, 1, 0, 0, 0 }, { 1, 1, 0, 0, 0 }, { -1 },
+		  { 1, 1, 0, 0, 0 } },
 	};
 	float g[3];
 	gpu_fx_stats_t gs;
@@ -218,8 +220,16 @@ static void test_x1(void)
 					&& (r->combiner == GPU_FX_CC_PRIM_A) == want[k][rm][4],
 					"%s rm %d state", kinds[k], rm);
 			}
+			/* additive (Glow 3, TransAdd 5): full blend, the ramp combiner
+			 * over the IA16 ramp TLUT (studio: GPU_STUDIO_ADD, checked above) */
 			if (rm == 3 || rm == 5)
-				CHECK(b == HL64_FX_ADD_CAP, "%s rm %d additive cap %d", kinds[k], rm, b);
+			{
+				CHECK(b == 255, "%s rm %d blend %d (no cap)", kinds[k], rm, b);
+				if (k != 1 && m >= 0)
+					CHECK(gpu_fx_rdp[m].combiner == GPU_FX_CC_RAMP
+						&& gpu_fx_rdp[m].tlut == GPU_FX_TLUT_IA16,
+						"%s rm %d not the ramp", kinds[k], rm);
+			}
 		}
 	/* recorder: one sprite per render mode, drawn in the pass */
 	make_sprite(FX_SPR_PARALLEL);
@@ -253,7 +263,7 @@ static void test_x1(void)
 	finish("X1", "render mode table + recorder");
 }
 
-/* ---- X2 ordering, cap, blend 0 ------------------------------------------------- */
+/* ---- X2 ordering, full additive blend, blend 0 ---------------------------------- */
 
 static void test_x2(void)
 {
@@ -302,7 +312,7 @@ static void test_x2(void)
 				CHECK(dist[e] >= dist[id[maxkept]], "dropped %d nearer than kept", e);
 		}
 	for (i = 0; i < n; i++)
-		CHECK(kind[i] == TK_SPRITE_ENT && bl[i] == HL64_FX_ADD_CAP, "item %d", i);
+		CHECK(kind[i] == TK_SPRITE_ENT && bl[i] == 255, "item %d", i);
 	kill_all();
 
 	/* blend 0: not drawn, still solid */
@@ -1420,6 +1430,201 @@ static void test_styles(void)
 		"(lightstyles.md 4)");
 }
 
+/* ---- ADD: additive without the RDP adder's wrap (render-fx.md 2a) ---------------- */
+
+static const char *root;
+
+/* The RDP's 1-cycle integer path (angrylion's model, which ares'
+ * parallel-RDP reproduces): combiner (a - b) c + d, rounded, clamped. */
+static int rdp_cc(int a, int b, int c, int d)
+{
+	int v = ((a - b) * c + (d << 8) + 0x80) >> 8;
+
+	return v < 0 ? 0 : v > 255 ? 255 : v;
+}
+
+/* Blender of an effects mode, one channel: P (combined), a (combined
+ * alpha), M (memory, 16-bit framebuffer: 5 bits << 3). The 8-bit sum the
+ * RDP keeps (u8: a sum past 255 wraps); -1 for a blender this model does
+ * not know. */
+static int rdp_blend(int bl, int p, int a, int m)
+{
+	int q = a >> 3;
+
+	if (bl == GPU_FX_BL_NONE)
+		return p;
+	if (bl == GPU_FX_BL_ALPHA)
+		return (p * q + m * (32 - q)) >> 5;
+	return -1;
+}
+
+static int c8(unsigned v)
+{
+	return (int)((v << 3) | (v >> 2));
+}
+
+static void test_add(void)
+{
+	static const char *spr[] = { "glow01", "glow02", "glow03", "flare1", "zerogxplode", "fexplo",
+		"muzzleflash1", "muzzleflash3", "xffloor", "laserbeam" };
+	static const uint8_t tints[3][3] = { { 255, 255, 255 }, { 238, 30, 46 }, { 254, 248, 203 } };
+	static const int modes[3] = { GPU_FX_ADD, GPU_FX_GLOW, GPU_FX_BRUSH_ADD };
+	static uint8_t buf[1 << 16];
+	unsigned long cases = 0, oldwrap = 0;
+	double dev = 0, devold = 0;
+	int s, k, i, j;
+
+	begin();
+	/* every additive effects mode: alpha blender, ramp combiner + IA16
+	 * TLUT; streaks: alpha blender (unit shade colour) */
+	for (k = 0; k < 3; k++)
+		CHECK(gpu_fx_rdp[modes[k]].blender == GPU_FX_BL_ALPHA
+			&& gpu_fx_rdp[modes[k]].combiner == GPU_FX_CC_RAMP
+			&& gpu_fx_rdp[modes[k]].tlut == GPU_FX_TLUT_IA16, "mode %s", gpu_fx_mode_name[modes[k]]);
+	CHECK(gpu_fx_rdp[GPU_FX_STREAK].blender == GPU_FX_BL_ALPHA, "streak blender");
+	for (s = 0; s < (int)(sizeof(spr) / sizeof(spr[0])); s++)
+	{
+		char path[512];
+		FILE *f;
+		size_t n;
+		uint16_t tl[16];
+		add_ramp_t r;
+		double use[16] = { 0 }, err = 0, wsum = 0;
+		unsigned ni, im;
+
+		snprintf(path, sizeof(path), "%s/sprites/%s.sc4", root, spr[s]);
+		f = fopen(path, "rb");
+		n = f ? fread(buf, 1, sizeof(buf), f) : 0;
+		if (f)
+			fclose(f);
+		CHECK(n > 80, "%s: no sprite", path);
+		if (n <= 80)
+			continue;
+		for (i = 0; i < 16; i++)
+			tl[i] = (uint16_t)(buf[16 + 2 * i] << 8 | buf[17 + 2 * i]);
+		/* texel use of every entry over every image (the error's weights) */
+		ni = (unsigned)(buf[14] << 8 | buf[15]);
+		for (im = 0; im < ni; im++)
+		{
+			const uint8_t *fr = buf + 80 + 16 * im;
+			uint32_t ofs = (uint32_t)fr[12] << 24 | (uint32_t)fr[13] << 16 | fr[14] << 8 | fr[15];
+			uint32_t b, nb = (uint32_t)fr[8] * fr[9] / 2;
+
+			for (b = 0; b < nb && ofs + b < n; b++)
+			{
+				use[buf[ofs + b] >> 4]++;
+				use[buf[ofs + b] & 15]++;
+			}
+		}
+		add_ramp_fit(&r, tl);
+		for (i = 0; i < 16; i++)
+		{
+			int c[3] = { c8((tl[i] >> 11) & 31), c8((tl[i] >> 6) & 31), c8((tl[i] >> 1) & 31) };
+			int A = r.ia[i] & 255, I = r.ia[i] >> 8;
+
+			if (!(tl[i] & 1))
+				CHECK(A == 0, "%s entry %d: transparent, A %d", spr[s], i, A);
+			for (k = 0; k < 3; k++)
+			{
+				/* the ramp's term at full blend and tint, against the colour */
+				double v = ((double)r.lo[k] + (r.hi[k] - r.lo[k]) * I / 255.0) * A / 255.0;
+
+				err += use[i] * (v - c[k]) * (v - c[k]);
+			}
+			wsum += 3 * use[i];
+			/* the RDP over every framebuffer colour, tint and blend */
+			for (j = 0; j < 3; j++)
+			{
+				uint8_t prim[4], env[4];
+				int bl;
+
+				for (bl = 32; bl <= 256; bl += 32)
+				{
+					int blend = bl > 255 ? 255 : bl, old = blend > 128 ? 128 : blend, a, m;
+
+					add_ramp_ends(&r, tints[j], (uint8_t)blend, prim, env);
+					a = rdp_cc(A, 0, prim[3], 0);
+					for (k = 0; k < 3; k++)
+					{
+						int p = rdp_cc(prim[k], env[k], I, env[k]);
+						int ideal = c[k] * tints[j][k] / 255 * blend / 255;
+						int cold = c[k] * tints[j][k] / 255;
+
+						for (m = 0; m < 256; m += 8)
+						{
+							int o = rdp_blend(gpu_fx_rdp[GPU_FX_ADD].blender, p, a, m);
+							int sum = ideal + m > 255 ? 255 : ideal + m;
+							/* the old path: the adder at blend capped to 128, u8 */
+							int ob = (cold * (old >> 3) + m * 32) >> 5;
+
+							CHECK(o >= 0 && o <= 255, "%s entry %d: out %d", spr[s], i, o);
+							oldwrap += ob > 255;
+							dev += fabs((double)o - sum);
+							devold += fabs((double)(ob & 255) - sum);
+							cases++;
+						}
+					}
+				}
+			}
+		}
+		err = wsum > 0 ? sqrt(err / wsum) : 0;
+		printf("add %s ramp lo %d,%d,%d hi %d,%d,%d rms %.1f\n", spr[s], r.lo[0], r.lo[1],
+			r.lo[2], r.hi[0], r.hi[1], r.hi[2], err);
+		/* greys exact (8-bit rounding), the rest within two RGBA5551 steps */
+		CHECK(err <= (s < 3 ? 2.0 : 16.0), "%s ramp rms %.1f", spr[s], err);
+	}
+	printf("add rdp model: %lu cases, 0 wrapped (old capped adder: %lu wrapped, %.1f%%), mean "
+		"|out - saturating add| %.1f (old %.1f)\n", cases, oldwrap, cases ? 100.0
+		* (double)oldwrap / (double)cases : 0.0, cases ? dev / (double)cases : 0.0,
+		cases ? devold / (double)cases : 0.0);
+	CHECK(oldwrap > 0, "the model's old adder never wrapped: the model is blind");
+	/* untextured / I4 colours: unit colour x brightness, the same term */
+	for (i = 0; i < 64; i++)
+	{
+		uint8_t c[3] = { (uint8_t)(i * 37), (uint8_t)(255 - i * 3), (uint8_t)(i * 11) }, o[4];
+		int a = (i * 53) & 255;
+
+		add_split(c, (uint8_t)a, o);
+		CHECK(o[0] == 255 || o[1] == 255 || o[2] == 255, "split %d: no unit colour", i);
+		for (k = 0; k < 3; k++)
+			CHECK(fabs(o[k] * o[3] / 255.0 - c[k] * a / 255.0) <= 2.0, "split %d ch %d", i, k);
+	}
+	/* page ramps: cached by content, never replaced within the fence */
+	{
+		uint16_t tl[16];
+		add_stats_t a0, a1;
+		const add_ramp_t *first;
+
+		for (i = 0; i < 3; i++)
+			add_frame();
+		add_stats(&a0);
+		for (i = 0; i <= HL64_FX_ADD_PAGES; i++)
+		{
+			for (k = 0; k < 16; k++)
+				tl[k] = (uint16_t)(((i + k) & 31) << 11 | (k & 31) << 6 | 1);
+			if (i < HL64_FX_ADD_PAGES)
+				CHECK(add_ramp_page(tl) != NULL, "page %d refused", i);
+			else
+				CHECK(add_ramp_page(tl) == NULL, "page %d: a fenced entry was replaced", i);
+		}
+		for (k = 0; k < 16; k++)
+			tl[k] = (uint16_t)((k & 31) << 11 | (k & 31) << 6 | 1);
+		first = add_ramp_page(tl);
+		add_stats(&a1);
+		CHECK(first != NULL && a1.hits == a0.hits + 1 && a1.full == a0.full + 1
+			&& a1.fits == a0.fits + HL64_FX_ADD_PAGES, "cache counts fits %lu hits %lu full %lu",
+			(unsigned long)(a1.fits - a0.fits), (unsigned long)(a1.hits - a0.hits),
+			(unsigned long)(a1.full - a0.full));
+		for (i = 0; i < 3; i++)
+			add_frame();
+		for (k = 0; k < 16; k++)
+			tl[k] = (uint16_t)(31 << 11 | (k & 31) << 1 | 1);
+		CHECK(add_ramp_page(tl) != NULL, "no slot after the fence");
+	}
+	finish("ADD", "additive ramp fit on cooked sprites, RDP blender model: no wrap, split, page "
+		"cache (render-fx.md 2a)");
+}
+
 /* ---- PLACED: infodecal and env_glow of one map (w64-format.md "DECL") ---- */
 
 /* A New Game on map (logic records and those near the start spawn as in a
@@ -1566,6 +1771,7 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	host_io_init(argv[2]);
+	root = argv[2];
 	mem_boot_carve();
 	settings_reset();
 	io_init();
@@ -1616,6 +1822,7 @@ int main(int argc, char **argv)
 	test_screen();
 	test_dlights();
 	test_styles();
+	test_add();
 	printf(fails ? "fx FAIL (%d)\n" : "fx ok\n", fails);
 	return fails ? 1 : 0;
 }

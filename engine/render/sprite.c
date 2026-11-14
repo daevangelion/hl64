@@ -11,7 +11,8 @@
  * a sprite whose data has not landed is skipped that frame. A model
  * unused for 90 frames, or the least recently used one when a new file
  * does not fit, is freed behind a two-frame fence (the RDP may still read
- * its texels).
+ * its texels). Each model's TLUT gets its additive ramp (addblend.h)
+ * when the file lands.
  */
 #include <math.h>
 #include <string.h>
@@ -47,6 +48,9 @@ typedef struct {
 } sent_t;
 
 static sent_t		ent[HL64_FX_SPRITE_MODELS];
+/* slot i's ramp; replaced only when the slot reloads, after its model went
+ * unused for the two-frame fence */
+static add_ramp_t	ramps[HL64_FX_SPRITE_MODELS] __attribute__((aligned(8)));
 static mem_pool_t	pool;
 static mem_blk_t	desc[2 * HL64_FX_SPRITE_MODELS + 4];
 static sprite_stats_t	st;
@@ -154,6 +158,8 @@ static int parse(sent_t *e)
 	e->s.type = b[8];
 	e->s.texformat = b[9];
 	memcpy(e->s.tint, b + 10, 3);
+	add_ramp_make(&ramps[e - ent], e->s.tlut);
+	e->s.ramp = &ramps[e - ent];
 	return 0;
 }
 
@@ -447,7 +453,22 @@ void sprite_draw(const fx_sprite_t *s, int f, const float org[3], const float an
 		v[i].st[1] = (int16_t)((i < 2 ? 0 : fr->th) * 32);
 		memcpy(v[i].rgba, rgba, 4);
 	}
-	gpu_fx_mode(gpu_mode, NULL);
-	gpu_fx_tex_ci4(s->tlut, s->base + fr->ci4, fr->tw, fr->th);
+	sprite_bind(s, fr, gpu_mode, rgba);
 	gpu_fx_tris(v, 4, idx, 2);
+}
+
+void sprite_bind(const fx_sprite_t *s, const fx_sprframe_t *fr, int gpu_mode,
+	const uint8_t rgba[4])
+{
+	uint8_t prim[4], env[4];
+
+	gpu_fx_mode(gpu_mode, NULL);
+	if (gpu_fx_rdp[gpu_mode].combiner != GPU_FX_CC_RAMP)
+	{
+		gpu_fx_tex_ci4(s->tlut, s->base + fr->ci4, fr->tw, fr->th);
+		return;
+	}
+	add_ramp_ends(s->ramp, rgba, rgba[3], prim, env);
+	gpu_fx_ramp(prim, env);
+	gpu_fx_tex_ci4(s->ramp->ia, s->base + fr->ci4, fr->tw, fr->th);
 }

@@ -63,9 +63,37 @@ Translucent items (everything except Normal and TransAlpha) draw after the
 opaque world, movers, studio models and particles, sorted back to front by
 the distance of their origin (brushes: their box centre), with depth test
 and without depth write; at most 64 per frame (nearest kept, overflow
-counted). The RDP additive blender wraps instead of saturating: additive
-items cap their blend at 128 and the colour sum is kept below wrap by
-the CI4 TLUT range (old tree finding).
+counted). Additive items follow 2a.
+
+### 2a. Additive on the RDP
+
+The RDP blender keeps the low 8 bits of in × a + mem × b (no saturation):
+an additive item over a framebuffer already brighter than 255 − c wraps to
+black or a false colour (measured on ares, whose parallel-RDP blender is
+the angrylion integer model (P a₀ + M (b₀ + 1)) >> 5 truncated to u8;
+hldemo2 shots: glow01 over a lit wall, the orange HUD digits turning
+green over a grey wall). A blend cap does not help (the framebuffer can
+be at 255 already). No additive item uses the adder:
+
+- every additive term c (GoldSrc's texture × tint × blend) is drawn as
+  c = n × a, n a unit colour (max channel 255), a its brightness, through
+  the alpha blender: out = c + mem × (1 − a) ≤ 255 for every framebuffer
+  value and any number of stacked items. The background dims by (1 − a)
+  instead of saturating (a screen-like blend): dim sources over dark
+  surfaces look additive, bright cores keep their own colour instead of
+  burning to white;
+- textures (CI4 + 16-entry RGBA5551 TLUT: sprites, beams, brush and studio
+  pages) draw through an IA16 ramp TLUT: A = the entry's brightness, I =
+  its place between two unit colours lo, hi of the palette (the best pair:
+  every pair of the palette's unit colours scored by brightness-weighted
+  squared error of the non-negative fit); combiner rgb = ENV + (PRIM − ENV)
+  × I, a = A × PRIM alpha; PRIM = hi × tint with alpha = blend, ENV = lo ×
+  tint. Sprites fit their ramp when the file lands; pages on first
+  additive use, cached by TLUT content (`HL64_FX_ADD_PAGES`, never
+  replaced within two frames of use);
+- untextured and I4 colours (tracer streaks, HUD additive pictures, text
+  and fills) are split per vertex / per draw the same way;
+- the full blend applies (no cap).
 
 ## 3. Sprites (SPR v2, cooked to CI4 frames)
 

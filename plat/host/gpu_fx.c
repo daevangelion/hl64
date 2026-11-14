@@ -54,6 +54,12 @@ void gpu_fx_mode(int m, const uint8_t prim[4])
 		mix(prim, 4);
 }
 
+void gpu_fx_ramp(const uint8_t prim[4], const uint8_t env[4])
+{
+	mix(prim, 4);
+	mix(env, 4);
+}
+
 /* as on the cart: a draw needs a gpu_fx_mode after this */
 void gpu_fx_state_lost(void)
 {

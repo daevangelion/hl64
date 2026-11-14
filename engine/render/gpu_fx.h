@@ -38,22 +38,21 @@
 enum {
 	GPU_FX_CUTOUT,		/* sprite Normal / TransAlpha: TLUT alpha compare, Z test + write */
 	GPU_FX_BLEND,		/* sprite TransTexture / TransColor / TransAlpha x blend */
-	GPU_FX_ADD,		/* sprite / beam TransAdd: in x a + mem, Z test */
-	GPU_FX_GLOW,		/* sprite Glow: additive, no Z test */
+	GPU_FX_ADD,		/* sprite / beam TransAdd: ramp TLUT, screen blend (2a), Z test */
+	GPU_FX_GLOW,		/* sprite Glow: as ADD, no Z test */
 	GPU_FX_DECAL,		/* I4 decal: rgb = tint, a = texel x a, decal Z */
 	GPU_FX_POINT,		/* particles: colour, opaque, Z test + write */
-	GPU_FX_STREAK,		/* tracer streaks: shade colour, additive, Z test */
+	GPU_FX_STREAK,		/* tracer streaks: unit shade colour, a = brightness (2a), Z test */
 	GPU_FX_BRUSH_BLEND,	/* brush TransTexture: texture fullbright x blend */
-	GPU_FX_BRUSH_ADD,	/* brush TransAdd / Glow: texture x blend, additive */
+	GPU_FX_BRUSH_ADD,	/* brush TransAdd / Glow: page ramp TLUTs (2a), Z test */
 	GPU_FX_BRUSH_COLOR,	/* brush TransColor: flat rendercolor, alpha = blend */
 	GPU_FX_SCREEN,		/* screen fade: flat colour, no Z */
 	GPU_FX_MODES
 };
 
-/* blender */
+/* blender (no additive mode: the RDP adder wraps, render-fx.md 2a) */
 #define GPU_FX_BL_NONE		0	/* opaque */
 #define GPU_FX_BL_ALPHA		1	/* in x a + mem x (1 - a) */
-#define GPU_FX_BL_ADD		2	/* in x a + mem (RDP adder: wraps, blend capped) */
 /* colour combiner */
 #define GPU_FX_CC_TEX_SHADE	0	/* rgb = tex x shade, a = tex a x shade a */
 #define GPU_FX_CC_SHADE		1	/* rgb = shade, a = shade a */
@@ -61,13 +60,18 @@ enum {
 #define GPU_FX_CC_PRIM		3	/* rgb = prim, a = 1 */
 #define GPU_FX_CC_TEX_PRIM	4	/* rgb = tex x prim, a = prim a */
 #define GPU_FX_CC_PRIM_A	5	/* rgb = prim, a = prim a */
+#define GPU_FX_CC_RAMP		6	/* rgb = env + (prim - env) x tex I, a = tex A x prim a */
+/* TLUT */
+#define GPU_FX_TLUT_NONE	0
+#define GPU_FX_TLUT_RGBA16	1
+#define GPU_FX_TLUT_IA16	2	/* the additive ramp TLUT (addblend.h) */
 
 typedef struct {
 	uint8_t		blender, combiner;
 	uint8_t		ztest, zwrite, zdecal;
 	uint8_t		acompare;	/* alpha compare (TLUT alpha bit / threshold) */
 	uint8_t		textured;	/* 0 none, 1 CI4 + TLUT, 2 I4, 3 world page */
-	uint8_t		pad;
+	uint8_t		tlut;		/* GPU_FX_TLUT_* */
 } gpu_fx_rdp_t;
 
 /* The one table both platforms apply (engine/render/trans.c). */
@@ -93,14 +97,18 @@ void	gpu_fx_end(void);
 /* Mode for the following draws; prim colour for the PRIM combiners. The
  * cart applies a mode's state only when the mode changes. */
 void	gpu_fx_mode(int mode, const uint8_t prim[4]);
+/* Ramp ends of the following GPU_FX_CC_RAMP draws: PRIM (hi, alpha =
+ * blend) and ENV (lo); addblend.h add_ramp_ends. */
+void	gpu_fx_ramp(const uint8_t prim[4], const uint8_t env[4]);
 /* Another renderer drew inside the effects pass (studio entities and
  * temp models through gpu_studio) and left its own RDP / tiny3d state:
  * the next gpu_fx_mode applies its whole state, whatever the previous
  * mode was. */
 void	gpu_fx_state_lost(void);
-/* Texture for the following draws: CI4 w x h with its 16-entry RGBA5551
- * TLUT (sprites), or I4 w x h (decals); sides are powers of two <= 64.
- * The bytes stay valid until the GPU has read them (two frames). */
+/* Texture for the following draws: CI4 w x h with its 16-entry TLUT
+ * (sprites: RGBA5551, or the IA16 ramp TLUT in the ramp modes), or I4
+ * w x h (decals); sides are powers of two <= 64. The bytes stay valid
+ * until the GPU has read them (two frames). */
 void	gpu_fx_tex_ci4(const uint16_t *tlut, const uint8_t *ci4, int w, int h);
 void	gpu_fx_tex_i4(const uint8_t *i4, int w, int h);
 /* Frame of the following gpu_fx_tris (until the next call): positions are

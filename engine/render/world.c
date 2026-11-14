@@ -587,8 +587,12 @@ void ren_mover_draw(int e, int gpu_mode, const uint8_t prim[4])
 	if (!ent_is_live(e) || !(L = wld_layer(ent_idc(e)->layer)) || mover_sub(L, e) < 0)
 		return;
 	gpu_fx_mode(gpu_mode, prim);
+	/* additive: each page binds its ramp TLUT (render-fx.md 2a) */
+	if (gpu_fx_rdp[gpu_mode].combiner == GPU_FX_CC_RAMP)
+		gpu_page_ramp(prim);
 	last_bind = NULL;
 	draw_mover(L, e, 0);
+	gpu_page_ramp(NULL);
 	last_bind = NULL;
 }
 

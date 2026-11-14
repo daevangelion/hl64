@@ -45,6 +45,7 @@
 #include "engine/render/gpu_studio.h"
 #include "hl64/studio.h"
 #include "hl64/fx.h"
+#include "engine/render/addblend.h"
 #include "engine/render/gpu_fx.h"
 #include "engine/render/trans.h"
 #include "engine/render/ren.h"
@@ -203,6 +204,14 @@ static void log_draw(const char *what, uint32_t label)
 			(unsigned long)fd.decals, (unsigned long)fd.decal_verts, calls,
 			(unsigned long)gf.tris, (unsigned long)gf.points, (unsigned long)gf.texloads,
 			(unsigned long)gf.pairs, (unsigned long)gf.drops, (unsigned long)gf.hash);
+	}
+	{
+		add_stats_t as;
+
+		add_stats(&as);
+		log_printf("%s %lu add: fits=%lu fit_us=%lu fit_us_max=%lu hits=%lu full=%lu\n", what,
+			(unsigned long)label, (unsigned long)as.fits, (unsigned long)as.fit_us_sum,
+			(unsigned long)as.fit_us_max, (unsigned long)as.hits, (unsigned long)as.full);
 	}
 }
 

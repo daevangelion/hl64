@@ -1451,8 +1451,8 @@ static int blend_mode(int e, uint8_t *alpha)
 		*alpha = ent_rnd(e)->renderamt;
 		return GPU_STUDIO_BLEND;
 	case 3:		/* Glow: as TransAdd */
-	case 5:		/* TransAdd; the RDP adder wraps: cap at 128 */
-		*alpha = ent_rnd(e)->renderamt > 128 ? 128 : ent_rnd(e)->renderamt;
+	case 5:		/* TransAdd (render-fx.md 2a: the screen-like blend, no cap) */
+		*alpha = ent_rnd(e)->renderamt;
 		return GPU_STUDIO_ADD;
 	default:	/* Normal, TransAlpha */
 		return GPU_STUDIO_OPAQUE;
