@@ -189,15 +189,16 @@
 #define HL64_AI_SCRATCH_BYTES		8192
 #define HL64_AI_THINK_KB		((HL64_AI_CONTEXTS * (HL64_AI_STACK_BYTES + HL64_AI_SCRATCH_BYTES) + 1023) / 1024)
 /* The frame's monster-think work budget (settings ai_budget default), in
- * work units (game/hl/monsters.c aiw_units: think starts, traces, BSP
- * nodes, walk steps; 1 unit ~ 5 us of cart CPU): ~20 ms of AI a frame. */
-#define HL64_AI_BUDGET			4000
-/* A held (queued) monster think's lateness bounds, seconds of game time
- * (settings ai_hold / ai_hold_max defaults): queued ai_hold, it may start
- * over the frame's budget, at most HL64_AI_AGED_PER_FRAME such starts a
- * frame, oldest first; queued ai_hold_max, it starts regardless. */
+ * work units (game/hl/monsters.c aiw_units, 1 unit ~ 1 us of cart CPU):
+ * 18 ms of AI a frame, so that with the units' fit error (cart us / units
+ * <= 1.15 in 99 % of frames) and one pause point's item past the budget
+ * a frame's monster thinks stay under ~24 ms. */
+#define HL64_AI_BUDGET			18000
+/* A held (queued) monster think's lateness (settings ai_hold default,
+ * seconds of game time): queued ai_hold, it may start over the frame's
+ * budget, at most HL64_AI_AGED_PER_FRAME such starts a frame, oldest
+ * first. */
 #define HL64_AI_HOLD			0.2f
-#define HL64_AI_HOLD_MAX		0.6f
 #define HL64_AI_AGED_PER_FRAME		2
 
 #endif

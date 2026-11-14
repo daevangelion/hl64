@@ -462,6 +462,10 @@ static void Ga_FlameUpdate(int e)
 
 	for (i = 0; i < 2; i++)
 	{
+		/* a spread think may pause before each flame: its attachment
+		 * pose, hitbox trace, decal and burn (~5-15 ms on the cart) */
+		if (Ai_PauseDue(e, AI_EVENT_RESERVE))
+			Ai_Pause(e, 0);
 		if (!g->m_flameOn)
 			continue;
 		VecCopy(ent_cv(e)->angles, aim);

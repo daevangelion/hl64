@@ -261,6 +261,9 @@ static void aiw_now(mon_ai_work_t *w)
 	col_counts(&c);
 	mon_aiw.traces = c.traces;
 	mon_aiw.bsp = c.nodes;
+	mon_aiw.cands = c.cands;
+	mon_aiw.bones = game_studio_pose_bones;
+	mon_aiw.sounds = snd_emit_count();
 	*w = mon_aiw;
 }
 
@@ -285,27 +288,46 @@ static void aiw_add(mon_ai_work_t *s, const mon_ai_work_t *d)
 		ps[i] += pd[i];
 }
 
-/* Budget units of think work (Mon_FrameUnits, ai_budget), 1 unit ~ 5 us
- * of cart CPU: a think begun (its fixed part: schedule, conditions,
- * StudioFrameAdvance, anim events), a collision trace, a BSP node a trace
- * visited, a walk step (its hull trace counts among the traces). Fitted
- * to the `ai: frame` lines of an ares PROFILE m4 run (main e06aa4b, 1380
- * frames: us ~ 916 x thinks + 50 x traces + 5.4 x bsp + 28 x steps,
- * r2 0.93). */
-#define AI_UNIT_START	180
-#define AI_UNIT_TRACE	10
-#define AI_UNIT_BSP	1
-#define AI_UNIT_STEP	5
+/* Budget units of think work (Mon_FrameUnits, ai_budget), 1 unit ~ 1 us
+ * of cart CPU: a think begun (schedule, conditions, StudioFrameAdvance),
+ * RunAI's sensing (Look / Listen / GetEnemy), a Look box candidate, an
+ * FVisible test, a collision trace, a BSP node a trace visited, an entity
+ * candidate of a move's box, a CheckLocalMove and each of its walk steps
+ * (their hull traces count among the traces), a FindNearestNode search,
+ * a Dijkstra node expanded, an anim event, a sound start, a decal, a bone
+ * of a server pose (hitboxes, attachments). Fitted to the `ai: frame`
+ * lines of the ares PROFILE runs of main fd85c01 (routes m4 + uplink,
+ * 9375 frames joined to the host's counts of the same frames:
+ * least squares, r2 0.98, rms 1.2 ms; docs/specs/think-and-time.md 2.1). */
+#define AI_UNIT_START	340
+#define AI_UNIT_SENSE	680
+#define AI_UNIT_LCAND	3
+#define AI_UNIT_FVIS	75
+#define AI_UNIT_TRACE	55
+#define AI_UNIT_BSP	2
+#define AI_UNIT_CAND	25
+#define AI_UNIT_LM	200
+#define AI_UNIT_STEP	110
+#define AI_UNIT_NN	850
+#define AI_UNIT_DJPOP	20
+#define AI_UNIT_EVENT	1230
+#define AI_UNIT_SOUND	1000
+#define AI_UNIT_DECAL	600
+#define AI_UNIT_BONE	100
 
 static uint32_t aiw_units(const mon_ai_work_t *w)
 {
-	return w->starts * AI_UNIT_START + w->traces * AI_UNIT_TRACE + w->bsp * AI_UNIT_BSP +
-		w->steps * AI_UNIT_STEP;
+	return w->starts * AI_UNIT_START + w->looks * AI_UNIT_SENSE + w->lcand * AI_UNIT_LCAND +
+		w->fvis * AI_UNIT_FVIS + w->traces * AI_UNIT_TRACE + w->bsp * AI_UNIT_BSP +
+		w->cands * AI_UNIT_CAND + w->lm * AI_UNIT_LM + w->steps * AI_UNIT_STEP +
+		w->nn * AI_UNIT_NN + w->djpop * AI_UNIT_DJPOP + w->events * AI_UNIT_EVENT +
+		w->sounds * AI_UNIT_SOUND + w->decals * AI_UNIT_DECAL + w->bones * AI_UNIT_BONE;
 }
 
 static void aiw_print(const char *tag, const mon_ai_work_t *w);
 
-/* PROFILE builds log a frame whose monster thinks took this long, or
+/* PROFILE builds log a frame whose monster thinks took this long or as
+ * many work units (the host's lines: the cart's frames by units), or
  * whose period (game frame start to the next) passed AI_LOG_PERIOD_US
  * (the budget's calibration: its work units beside the machine's us, the
  * think cost zones, the frame period) */
@@ -336,10 +358,12 @@ static void pz_print(const uint32_t *base)
 }
 #endif
 
+/* zone clocks run on the think's own time: a pause inside a zone (a
+ * spread think's pause point) is not its cost */
 uint64_t Mon_PzBegin(void)
 {
 #ifdef HL64_PROFILE
-	return sys_time_us();
+	return sys_time_us() - Ai_PausedUs();
 #else
 	return 0;
 #endif
@@ -348,7 +372,7 @@ uint64_t Mon_PzBegin(void)
 void Mon_PzEnd(int z, uint64_t t0)
 {
 #ifdef HL64_PROFILE
-	pz_us[z] += (uint32_t)(sys_time_us() - t0);
+	pz_us[z] += (uint32_t)(sys_time_us() - Ai_PausedUs() - t0);
 #else
 	(void)z;
 	(void)t0;
@@ -400,7 +424,8 @@ void mon_stats_frame(void)
 		aip.wf = aip.frame;
 	}
 #ifdef HL64_PROFILE
-	if (mstat_frame_us >= AI_LOG_FRAME_US || period >= AI_LOG_PERIOD_US)
+	if (mstat_frame_us >= AI_LOG_FRAME_US || aiw_units(&aip.frame) >= AI_LOG_FRAME_US ||
+		period >= AI_LOG_PERIOD_US)
 	{
 		log_printf("ai: frame t=%.3f us=%lu thinks=%lu units=%lu fr=%lu look=%lu anim=%lu nn=%lu "
 			"lm=%lu", (double)gtime(), (unsigned long)mstat_frame_us,
@@ -429,12 +454,16 @@ void mon_stats_route(void) { mstat.routes++; }
 static void aiw_print(const char *tag, const mon_ai_work_t *w)
 {
 	log_printf(" %s=lm:%lu,steps:%lu,traces:%lu,bsp:%lu,routes:%lu,tri:%lu,cover:%lu,nn:%lu,"
-		"nnt:%lu,dj:%lu,djpop:%lu,lmhit:%lu,starts:%lu,looks:%lu,nopvs:%lu", tag,
+		"nnt:%lu,dj:%lu,djpop:%lu,lmhit:%lu,starts:%lu,looks:%lu,nopvs:%lu,lcand:%lu,fvis:%lu,"
+		"events:%lu,cands:%lu,bones:%lu,sounds:%lu,decals:%lu", tag,
 		(unsigned long)w->lm, (unsigned long)w->steps, (unsigned long)w->traces,
 		(unsigned long)w->bsp, (unsigned long)w->routes, (unsigned long)w->tri,
 		(unsigned long)w->cover, (unsigned long)w->nn, (unsigned long)w->nnt,
 		(unsigned long)w->dj, (unsigned long)w->djpop, (unsigned long)w->lmhit,
-		(unsigned long)w->starts, (unsigned long)w->looks, (unsigned long)w->nopvs);
+		(unsigned long)w->starts, (unsigned long)w->looks, (unsigned long)w->nopvs,
+		(unsigned long)w->lcand, (unsigned long)w->fvis, (unsigned long)w->events,
+		(unsigned long)w->cands, (unsigned long)w->bones, (unsigned long)w->sounds,
+		(unsigned long)w->decals);
 }
 
 /* `prof ai` (after `prof mon_us`): the window's AI work per frame (avg),
@@ -523,16 +552,32 @@ void Mon_DispatchAnimEvents(int e, float interval)
 	MonsterEvent_t	ev;
 	ent_rnd_t	*r = ent_rnd(e);
 	int		seq;
+	res_t		model;
 
 	(void)interval;
 	if (!r->model)
 		return;
 	gs_event_window(e, &MON(e)->anim, &start, &end);
 	seq = r->sequence;
+	model = r->model;
 	while ((next = gs_anim_event(r->model, seq, start, end, index, &ev.event, &ev.options)) != 0)
 	{
+		/* a spread think may pause before each event (the execution
+		 * half: only the monster's freeing, death, layer or think
+		 * function change end it there); the sequence it played must
+		 * still be on, and the event is read afresh (its options live
+		 * in the model's data) */
+		if (Ai_PauseDue(e, AI_EVENT_RESERVE))
+		{
+			Ai_Pause(e, 1);
+			if (r->sequence != seq || r->model != model ||
+				!(next = gs_anim_event(r->model, seq, start, end, index, &ev.event,
+				&ev.options)))
+				break;
+		}
 		ev.res = gs_anim_event_res(r->model, seq, next);
 		index = next;
+		mon_aiw.events++;
 #ifdef HL64_PROFILE
 		{
 			uint64_t	t0 = Mon_PzBegin();
@@ -542,7 +587,7 @@ void Mon_DispatchAnimEvents(int e, float interval)
 			memcpy(z0, pz_us, sizeof(z0));
 			col_counts(&c0);
 			Mon_HandleAnimEvent(e, &ev);
-			us = (uint32_t)(sys_time_us() - t0);
+			us = (uint32_t)(sys_time_us() - Ai_PausedUs() - t0);
 			pz_us[MPZ_EV] += us;
 			col_counts(&c1);
 			if (us >= AI_LOG_EVENT_US)
@@ -689,11 +734,24 @@ static float ent_health(int e)
 	return b ? b->health : 0;
 }
 
+/* Look's FVisible of candidate s: a spread think may pause before it;
+ * a candidate freed or killed meanwhile is not seen (HLSDK skips the
+ * dead before its tests) */
 static int look_visible(int e, int s)
 {
-	uint64_t	t0 = Mon_PzBegin();
-	int		r = FVisible(e, s);
+	ent_h		h = ent_handle_of(s);
+	uint64_t	t0;
+	int		r;
 
+	if (Ai_PauseDue(e, 0))
+	{
+		Ai_Pause(e, 0);
+		if (ent_of(h) != s || !ent_priv(s) || ent_health(s) <= 0)
+			return 0;
+	}
+	mon_aiw.fvis++;
+	t0 = Mon_PzBegin();
+	r = FVisible(e, s);
 	Mon_PzEnd(MPZ_LVIS, t0);
 	return r;
 }
@@ -721,6 +779,7 @@ void CBaseMonster_Look(int e, int iDistance)
 	}
 	t0 = Mon_PzBegin();
 	count = UTIL_EntitiesInBox(list, SIGHT_MAX, mn, mx, FL_CLIENT | FL_MONSTER);
+	mon_aiw.lcand += (uint32_t)count;
 	Mon_PzEnd(MPZ_LBOX, t0);
 	for (i = 0; i < count; i++)
 	{
@@ -1589,6 +1648,32 @@ static lm_memo_t *lm_find(int e, const float start[3], const float end[3], int t
 	return 0;
 }
 
+/* A spread think's pause between two walk steps of CheckLocalMove: while
+ * it is paused the monster stands as it stood before the check (origin
+ * linked, flags, ground entity); on continuing the walk resumes from
+ * where it was, unlinked as WALKMOVE_CHECKONLY leaves it. Something else
+ * moving the monster meanwhile becomes the place the check puts it back. */
+static void lm_step_pause(int e, float startPos[3], int *flags, int *ground)
+{
+	col_ent_t	*cv = ent_cv(e);
+	float		mid[3];
+	int		wf = cv->flags, wg = ent_phys(e)->groundentity;
+
+	VecCopy(cv->origin, mid);
+	cv->flags = *flags;
+	ent_phys(e)->groundentity = (uint16_t)*ground;
+	ent_set_origin(e, startPos);
+	ent_motion_changed(e);
+	Ai_Pause(e, 0);
+	VecCopy(cv->origin, startPos);
+	*flags = cv->flags;
+	*ground = ent_phys(e)->groundentity;
+	VecCopy(mid, cv->origin);
+	cv->flags = wf;
+	ent_phys(e)->groundentity = (uint16_t)wg;
+	ent_motion_changed(e);
+}
+
 int CBaseMonster_CheckLocalMove(int e, const float start[3], const float end[3], int target,
 	float *pflDist)
 {
@@ -1596,6 +1681,7 @@ int CBaseMonster_CheckLocalMove(int e, const float start[3], const float end[3],
 	float		startPos[3], dir[3], yaw, dist, step, stepSize, s0[3], e0[3];
 	double		wdir[2];
 	int		ret = LOCALMOVE_VALID, flags0 = cv->flags, dropped = 0, distset = 0;
+	int		oflags = cv->flags, oground = ent_phys(e)->groundentity;
 	lm_memo_t	*c;
 
 	mstat.local_moves++;
@@ -1623,6 +1709,8 @@ int CBaseMonster_CheckLocalMove(int e, const float start[3], const float end[3],
 	phy_walk_dir(yaw, wdir);
 	for (step = 0; step < dist; step += LOCAL_STEP_SIZE)
 	{
+		if (step > 0 && Ai_PauseDue(e, 0))
+			lm_step_pause(e, startPos, &oflags, &oground);
 		stepSize = LOCAL_STEP_SIZE;
 		if (step + LOCAL_STEP_SIZE >= dist - 1)
 			stepSize = (dist - step) - 1;
@@ -1642,7 +1730,7 @@ int CBaseMonster_CheckLocalMove(int e, const float start[3], const float end[3],
 	if (ret == LOCALMOVE_VALID && !(cv->flags & (FL_FLY | FL_SWIM)) &&
 		(target < 0 || (ent_cv(target)->flags & FL_ONGROUND)))
 	{
-		if (fabsf(end[2] - cv->origin[2]) > 64)
+		if (fabsf(e0[2] - cv->origin[2]) > 64)
 			ret = LOCALMOVE_INVALID_DONT_TRIANGULATE;
 	}
 	ent_set_origin(e, startPos);

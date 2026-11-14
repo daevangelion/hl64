@@ -198,10 +198,13 @@ int Graph_LinkPassable(int e, int slot, int src, int linkidx, int afCapMask)
 
 /* FindNearestNode's candidate heap: (distance, node) pairs, nearest first,
  * the lower node on equal distances. It uses the Dijkstra queue's scratch:
- * neither search runs inside the other. */
+ * neither search runs inside the other. nn_gen counts the fills of that
+ * scratch (either search, ai_spread 2's scribble), so a search a spread
+ * think paused in knows whether its heap is still there. */
 #define nn_d	heapk
 #define nn_i	heap
 static int	nn_n;
+static uint32_t	nn_gen;
 
 static int nn_less(int a, int b)
 {
@@ -249,22 +252,21 @@ static uint32_t cache_slot(const float org[3])
 	return rtb_crc32(0, b, sizeof(b)) & (CACHE_SIZE - 1);
 }
 
-/* the search: candidates nearest first (ties: the lower node); the first
- * one a line trace reaches. A heap of every candidate's distance gives
- * the order of repeated nearest-untried scans in O(n log n). */
-static int nn_search(const graph_t *g, const float org[3], int afNodeTypes)
+/* the heap of the candidates after (d0, i0) in the search order (all of
+ * them: d0 < 0) */
+static void nn_fill(const graph_t *g, const float org[3], int afNodeTypes, float d0, int i0)
 {
-	int		i, k;
-	float		d;
-	col_trace_t	tr;
+	int	k;
+	float	d;
 
 	nn_n = 0;
+	nn_gen++;
 	for (k = 0; k < g->n; k++)
 	{
 		if (!(g->nodes[k].info & afNodeTypes))
 			continue;
 		d = mv_dist(org, g->nodes[k].origin);
-		if (!(d < 999999.0f))
+		if (!(d < 999999.0f) || d < d0 || (d == d0 && k <= i0))
 			continue;
 		nn_d[nn_n] = d;
 		nn_i[nn_n] = (uint16_t)k;
@@ -272,13 +274,40 @@ static int nn_search(const graph_t *g, const float org[3], int afNodeTypes)
 	}
 	for (k = nn_n / 2 - 1; k >= 0; k--)
 		nn_down(k);
+}
+
+/* the search: candidates nearest first (ties: the lower node); the first
+ * one a line trace reaches. A heap of every candidate's distance gives
+ * the order of repeated nearest-untried scans in O(n log n). A spread
+ * think of e may pause before each trace; another search having used the
+ * heap meanwhile, it is rebuilt from the candidates after the one about
+ * to be traced (the same order). */
+static int nn_search(int e, const graph_t *g, const float org[3], int afNodeTypes)
+{
+	int		i;
+	float		d;
+	uint32_t	gen;
+	col_trace_t	tr;
+
+	nn_fill(g, org, afNodeTypes, -1.0f, -1);
+	gen = nn_gen;
 	while (nn_n > 0)
 	{
 		i = nn_i[0];
+		d = nn_d[0];
 		nn_n--;
 		nn_d[0] = nn_d[nn_n];
 		nn_i[0] = nn_i[nn_n];
 		nn_down(0);
+		if (Ai_PauseDue(e, 0))
+		{
+			Ai_Pause(e, 0);
+			if (nn_gen != gen)
+			{
+				nn_fill(g, org, afNodeTypes, d, i);
+				gen = nn_gen;
+			}
+		}
 		mon_aiw.nnt++;
 		UTIL_TraceLine(org, g->nodes[i].origin, ignore_monsters, -1, &tr);
 		if (tr.frac == 1.0f)
@@ -287,25 +316,29 @@ static int nn_search(const graph_t *g, const float org[3], int afNodeTypes)
 	return NO_NODE;
 }
 
-int Graph_FindNearestNode(int e, const float org[3], int afNodeTypes)
+int Graph_FindNearestNode(int e, const float org_in[3], int afNodeTypes)
 {
 	int		slot = ent_idc(e)->layer, best;
 	graph_t		*g = graph(slot);
 	uint32_t	hsh;
 	uint64_t	t0;
+	float		org[3];
 
 	if (!g)
 		return NO_NODE;
 	if (afNodeTypes < 0)
 		afNodeTypes = Graph_NodeType(e);
 	/* HLSDK's cache: keyed by the origin alone (whatever node types the
-	 * hit was searched for), never invalidated while the graph stays */
+	 * hit was searched for), never invalidated while the graph stays;
+	 * the origin by value (it may be the monster's, moving while the
+	 * search is paused) */
+	VecCopy(org_in, org);
 	hsh = cache_slot(org);
 	if (VecEq(g->cache[hsh].v, org))
 		return g->cache[hsh].n;
 	t0 = Mon_PzBegin();
 	mon_aiw.nn++;
-	best = nn_search(g, org, afNodeTypes);
+	best = nn_search(e, g, org, afNodeTypes);
 	VecCopy(org, g->cache[hsh].v);
 	g->cache[hsh].n = (int16_t)best;
 	Mon_PzEnd(MPZ_NN, t0);
@@ -370,6 +403,7 @@ static void dijkstra(int slot, graph_t *g, int start, int dest, int iHull, int a
 	dist[start] = 0;
 	prev[start] = (int16_t)start;
 	hn = 0;
+	nn_gen++;
 	mon_aiw.dj++;
 	heap_push(start, 0);
 	while (hn > 0)
@@ -621,4 +655,5 @@ void Graph_ScribbleScratch(void)
 		heapk[i] = -1.0f;
 	}
 	hn = nn_n = 0;
+	nn_gen++;
 }

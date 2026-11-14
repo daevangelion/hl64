@@ -706,9 +706,20 @@ static void start_sample(int e, int chan, res_t r, float vol, float attn, int pi
 
 /* ---- API --------------------------------------------------------------------- */
 
+/* calls of snd_emit / snd_sentence since boot, counted before anything
+ * the backend decides (host and cart count the same) */
+static uint32_t emit_calls;
+
+uint32_t snd_emit_count(void)
+{
+	return emit_calls;
+}
+
 void snd_emit(int e, int chan, res_t sound, float vol, float attn, int flags, int pitch)
 {
 	float org[3];
+
+	emit_calls++;
 
 	if (!S)
 		return;
@@ -764,6 +775,7 @@ void snd_sentence(int e, int chan, uint16_t sentence, float vol, float attn, int
 	float org[3], l, r;
 	int first, n, v;
 
+	emit_calls++;
 	if (!S)
 		return;
 	S->st.emits++;
