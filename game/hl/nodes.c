@@ -430,7 +430,34 @@ int Graph_RouteDoor(int e, const float from[3], const float to[3])
 
 /* ---- cover and nearest routes (monsters.cpp FindCover / BuildNearestRoute) ---------- */
 
+static int find_cover(int e, const float threat[3], const float viewofs[3], float mn, float mx,
+	float out[3]);
+static int nearest_route(int e, const float threat[3], const float viewofs[3], float mn, float mx);
+
+/* Both searches are pure queries until the route they take: one
+ * CheckLocalMove memo scope (monsters.c) each. */
 int Graph_FindCover(int e, const float threat[3], const float viewofs[3], float mn, float mx,
+	float out[3])
+{
+	int ok;
+
+	Mon_LocalMoveScope(1);
+	ok = find_cover(e, threat, viewofs, mn, mx, out);
+	Mon_LocalMoveScope(0);
+	return ok;
+}
+
+int Graph_BuildNearestRoute(int e, const float threat[3], const float viewofs[3], float mn, float mx)
+{
+	int ok;
+
+	Mon_LocalMoveScope(1);
+	ok = nearest_route(e, threat, viewofs, mn, mx);
+	Mon_LocalMoveScope(0);
+	return ok;
+}
+
+static int find_cover(int e, const float threat[3], const float viewofs[3], float mn, float mx,
 	float out[3])
 {
 	int		slot = ent_idc(e)->layer, my, th, hull, i, node;
@@ -483,7 +510,7 @@ int Graph_FindCover(int e, const float threat[3], const float viewofs[3], float 
 	return 0;
 }
 
-int Graph_BuildNearestRoute(int e, const float threat[3], const float viewofs[3], float mn, float mx)
+static int nearest_route(int e, const float threat[3], const float viewofs[3], float mn, float mx)
 {
 	int		slot = ent_idc(e)->layer, my, hull, i, node;
 	graph_t		*g = graph(slot);

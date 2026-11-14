@@ -273,6 +273,11 @@ void		ent_mem_log(void);
 #define WALKMOVE_WORLDONLY	1
 #define WALKMOVE_CHECKONLY	2	/* moves origin, no link / touches / ground */
 int		phy_walk_move(int e, float yaw, float dist, int mode);
+/* phy_walk_move split for repeated steps along one yaw (CheckLocalMove):
+ * phy_walk_dir computes the yaw's cos / sin once, phy_walk_step takes one
+ * step of dist with them; the same results as phy_walk_move(e, yaw, dist). */
+void		phy_walk_dir(float yaw, double dir[2]);
+int		phy_walk_step(int e, const double dir[2], float dist, int mode);
 /* Blocking entity of the last walk_move / move_to_origin / step trace
  * (HLSDK gpGlobals->trace_ent), -1 none. */
 int		phy_trace_ent(void);
