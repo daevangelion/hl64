@@ -114,7 +114,7 @@ test/run/scene.sh [--ares|--host] [--profile] [--psamp] [--before TREE]
   same window of a whole-route PROFILE log (`# scene-window`), to see that
   the scene reproduces the route.
 - Env: `BUILD_DIR`, `HL64_CONTENT` (default the main cook
-  `/scratch/hl64/tmp/M5Lead/c13`), `BEFORE_CONTENT`, `HL64_ARES_HOST`,
+  `/scratch/hl64/tmp/M5Lead2/c16`), `BEFORE_CONTENT`, `HL64_ARES_HOST`,
   `ARES_TIMEOUT` (per scene, 1800 s), `ARES_BIN` / `ARES_SLOTS` (local),
   `MAKE_JOBS`.
 - Out: `$BUILD_DIR/scenes/<host|ares>/<scene>/` (`ares.log` / `host.log`,

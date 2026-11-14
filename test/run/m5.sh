@@ -48,8 +48,8 @@
 # Usage: test/run/m5.sh [--ares] [--no-earlier] [--route uplink|hazard|m4 ...]
 #        --no-earlier skips test/run/m4.sh, --route runs only the named
 #        routes (iteration only: neither is a gate run)
-# Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c13
-#        cook /scratch/hl64/tmp/M5Lead/c13), HL64_FIXTURES, HL64_DATA,
+# Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c16
+#        cook /scratch/hl64/tmp/M5Lead2/c16), HL64_FIXTURES, HL64_DATA,
 #        W1_FIXTURES (passed to m4.sh), HL64_ARES_HOST / ARES_BIN (test/run/ares.sh), ARES_TIMEOUT (s, per
 #        route, default 14400), DISPLAY_NUM, OLD_TREE (the old tree, for
 #        the oracles' verify suites; absent: skipped), OLD_UPLINK_LOG,
@@ -82,7 +82,7 @@ if [[ ${#ROUTES[@]} -eq 0 ]]; then ROUTES=(uplink hazard m4); else SUBSET=1; fi
 # routes the AI acceptance gates on ares (test/m5/ai_check.py); the others
 # are reported
 AI_GATED=" uplink m4 "
-CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/M5Lead/c13}"
+CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/M5Lead2/c16}"
 FIX="${HL64_FIXTURES:-/scratch/hl64/fixtures}"
 DATA="${HL64_DATA:-/scratch/hl1/valve}"
 OLD_TREE="${OLD_TREE:-$HOME/src/ports/quakegeneric}"
