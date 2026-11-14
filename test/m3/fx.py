@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """fx.py -- run the effects host tests (test/m3/fx.c: render-fx.md X1-X6,
-dlights.md D1/D2/D4 + model term, lightstyles.md L1/L2 + model term, and
+dlights.md D1/D2/D4 + model term, lightstyles.md L1/L2 + model term, ADD
+(render-fx.md 2a: the additive ramp and the RDP blender model), and
 PLACED: the infodecal / env_glow records of hldemo1 and hldemo2 placed
 from their DECL sheets) and check that every test reported PASS.
 
@@ -13,7 +14,7 @@ cooked content root (`make cook`). Exit 0 when every test passed.
 import subprocess
 import sys
 
-TESTS = ("X1", "X2", "X3", "X4", "X5", "X6", "SCREEN", "DLIGHT", "LSTYLE")
+TESTS = ("X1", "X2", "X3", "X4", "X5", "X6", "SCREEN", "DLIGHT", "LSTYLE", "ADD")
 PLACED_MAPS = ("hldemo1", "hldemo2")
 
 

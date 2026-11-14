@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.cook import bake_hlhud, bake_ui, bake_world_tex, hl_classes
+from tools.cook import addramp, bake_hlhud, bake_ui, bake_world_tex, hl_classes
 from tools.cook import hl_sound_classes, hl_sprite_cook
 from tools.cook.data import Data, DataError
 
@@ -189,8 +189,8 @@ class TestWorldTex(unittest.TestCase):
 class TestSprite(unittest.TestCase):
     def test_cook(self):
         out = hl_sprite_cook.cook(spr([(8, 8, bytes(range(64)))]))
-        self.assertEqual(struct.unpack_from(">IHH", out, 0), (hl_sprite_cook.MAGIC, 2, 1))
-        self.assertEqual(struct.unpack_from(">H", out, 14)[0], 1)
+        self.assertEqual(struct.unpack_from(">IHH", out, 0), (hl_sprite_cook.MAGIC, 3, 1))
+        self.assertEqual(struct.unpack_from(">H", out, 10)[0], 1)
         self.assertEqual(len(out) % 8, 0)
 
     def test_group(self):
@@ -202,14 +202,34 @@ class TestSprite(unittest.TestCase):
         for k in range(3):
             blob += struct.pack("<4i", 0, 0, 8, 8) + bytes([k]) * 64
         out = hl_sprite_cook.cook(blob)
-        nframes, nimages = struct.unpack_from(">H", out, 6)[0], struct.unpack_from(">H", out, 14)[0]
+        nframes, nimages = struct.unpack_from(">H", out, 6)[0], struct.unpack_from(">H", out, 10)[0]
         self.assertEqual((nframes, nimages), (2, 4))
-        fo = 80 + 16 * nimages
+        fo = 88 + 16 * nimages
         self.assertEqual(struct.unpack_from(">4H", out, fo), (0, 1, 1, 3))
         self.assertEqual(struct.unpack_from(">4H", out, fo + 8), (0, 100, 300, 600))
         bad = blob.replace(struct.pack("<3f", 0.1, 0.3, 0.6), struct.pack("<3f", 0.3, 0.1, 0.6))
         with self.assertRaises(ValueError):
             hl_sprite_cook.cook(bad)
+
+    def test_indexalpha(self):
+        # INDEXALPHA (texformat 2): alpha = index, colour = the last colour
+        pal = bytearray(768)
+        pal[765:768] = bytes((200, 100, 50))
+        head = b"IDSP" + struct.pack("<iiifiiiii", 2, 0, 2, 1.0, 16, 16, 1, 0, 0)
+        blob = head + struct.pack("<h", 256) + bytes(pal)
+        blob += struct.pack("<i4i", 0, 0, 0, 16, 16) + bytes(range(256))
+        out = hl_sprite_cook.cook(blob)
+        ia, lo, hi = addramp.unpack(out[48:88])
+        self.assertEqual(ia, [0xFF00 | 17 * k for k in range(16)])
+        self.assertEqual((lo, hi), ((200, 100, 50), (200, 100, 50)))
+        self.assertEqual(struct.unpack_from(">H", out, 16)[0], 0)      # level 0 transparent
+        ofs = struct.unpack_from(">I", out, 88 + 12)[0]
+        texels = [v for b in out[ofs:ofs + 128] for v in (b >> 4, b & 15)]
+        self.assertEqual(texels, [(i * 15 + 127) // 255 for i in range(256)])
+
+    def test_ramp_in_file(self):
+        out = hl_sprite_cook.cook(spr([(8, 8, bytes(range(64)))]))
+        self.assertEqual(out[48:88], addramp.ramp(struct.unpack_from(">16H", out, 16)))
 
     def test_hostile(self):
         good = spr([(8, 8, bytes(64))])
@@ -223,6 +243,38 @@ class TestSprite(unittest.TestCase):
             with self.subTest(what):
                 with self.assertRaises(ValueError):
                     hl_sprite_cook.cook(blob)
+
+
+class TestAddRamp(unittest.TestCase):
+    @staticmethod
+    def rgba(r, g, b, a=1):
+        return (r >> 3) << 11 | (g >> 3) << 6 | (b >> 3) << 1 | a
+
+    def test_greys_exact(self):
+        tl = [self.rgba(17 * k, 17 * k, 17 * k) for k in range(16)]
+        ia, lo, hi = addramp.unpack(addramp.ramp(tl))
+        self.assertEqual((lo, hi), ((255, 255, 255), (255, 255, 255)))
+        for k, t in enumerate(tl):
+            self.assertEqual(ia[k] & 255, addramp.c8((t >> 11) & 31), k)
+
+    def test_transparent_and_black(self):
+        tl = [self.rgba(255, 0, 0, 0), 0] + [self.rgba(255, 8 * k, 0) for k in range(14)]
+        ia, lo, hi = addramp.unpack(addramp.ramp(tl))
+        self.assertEqual(ia[:2], [0, 0])
+        self.assertEqual(addramp.unpack(addramp.ramp([0] * 16))[0], [0] * 16)
+
+    def test_two_colour_ramp(self):
+        # red .. yellow entries at full brightness: the ends are the
+        # palette's own red and most yellow colour (RGBA5551-expanded),
+        # every entry rebuilt within one RGBA5551 step
+        tl = [self.rgba(255, 16 * k, 0) for k in range(16)]
+        ia, lo, hi = addramp.unpack(addramp.ramp(tl))
+        self.assertEqual({lo, hi}, {(255, 0, 0), (255, addramp.c8(240 >> 3), 0)})
+        for k, t in enumerate(tl):
+            c = [addramp.c8((t >> s) & 31) for s in (11, 6, 1)]
+            a, i = (ia[k] & 255) / 255, (ia[k] >> 8) / 255
+            v = [(lo[j] + (hi[j] - lo[j]) * i) * a for j in range(3)]
+            self.assertTrue(all(abs(v[j] - c[j]) <= 8 for j in range(3)), (k, v, c))
 
 
 class TestHud(unittest.TestCase):

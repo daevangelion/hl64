@@ -11,9 +11,12 @@
 #include <string.h>
 
 #include "engine/core/sys.h"
+#include "engine/render/addblend.h"
 #include "engine/render/gpu.h"
 
 static gpu_stats_t	cur, done;
+static uint8_t		ramp_tb[4];	/* gpu_page_ramp tint + blend */
+static int		ramp_on;
 
 static void mix(const void *p, uint32_t n)
 {
@@ -61,10 +64,33 @@ void gpu_matrix_pop(void)
 
 void gpu_bind_page(const w64_texp_t *p, uint8_t *state)
 {
+	const uint16_t *tlut = (const uint16_t *)((const uint8_t *)p + sizeof(*p));
+
 	(void)state;
 	mix(&p->w, 4);
-	mix((const uint8_t *)p + sizeof(*p), 32);	/* TLUT */
+	mix(tlut, 32);
+	if (ramp_on)
+	{
+		/* as the cart: the page's cooked ramp TLUT and ends (render-fx.md 2a) */
+		const add_ramp_t *r = add_page_ramp(p);
+		uint8_t prim[4] = { 0, 0, 0, 0 }, env[4] = { 0, 0, 0, 0 };
+
+		if (r)
+		{
+			add_ramp_ends(r, ramp_tb, ramp_tb[3], prim, env);
+			mix(r->ia, sizeof(r->ia));
+		}
+		mix(prim, 4);
+		mix(env, 4);
+	}
 	cur.binds++;
+}
+
+void gpu_page_ramp(const uint8_t tint_blend[4])
+{
+	ramp_on = tint_blend != NULL;
+	if (ramp_on)
+		memcpy(ramp_tb, tint_blend, 4);
 }
 
 /* the recorder keeps no RDP state */

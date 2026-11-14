@@ -858,7 +858,9 @@ builds per-frame lists straight from components (no client entity copies).
    flashlight as a decal-Z pool pass. OPEN-seam cross-layer draw per 5.4.
    Texture animation from the cooked sequence fields (world-surfaces.md).
 3. **Movers**: visible brush entities with their MOVR meshlets under the
-   entity matrix; static submodels are baked into sectors.
+   entity matrix; static opaque submodels are baked into sectors (a
+   `func_wall` / `func_illusionary` with a non-normal rendermode stays a
+   mover in the translucent pass, w64-format.md).
 4. **Studio**: STB2 v4 bone-local meshlets recorded once per model into an
    rspq block (packing budget 2 ms/frame); per entity per frame the bone
    matrices from `game_studio_setup_bones` (D3) into a double-buffered
@@ -868,7 +870,9 @@ builds per-frame lists straight from components (no client entity copies).
    (physics-movetypes.md 7), as GoldSrc's client does.
 5. **Particles**: one pool, TinyPX ucode, one call, s16 view-relative.
 6. **Translucent**: render modes/fx per render-fx.md; back to front; depth
-   test without write; additive through the RDP adder with the wrap guard.
+   test without write; additive as unit colour × brightness through the
+   alpha blender (render-fx.md 2a: the RDP adder wraps; ramp TLUTs fitted
+   by the cook, bound by the cart).
 7. **Decals**: on cooked faces of resident sectors/movers, decal Z, I4
    texels from the cooked decal sheet (render-fx.md 4).
 8. **HUD/2D**: ui8 sheets, numbers, crosshair, damage indicators, text

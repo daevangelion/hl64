@@ -16,7 +16,7 @@
 #define SFMT_INFO_MAGIC		0x53494E46u	/* SINF */
 #define SFMT_MESH_MAGIC		0x534D5348u	/* SMSH */
 #define SFMT_ANIM_MAGIC		0x41363441u	/* A64A */
-#define SFMT_VERSION		1
+#define SFMT_VERSION		2	/* 2: textures may carry the additive ramp (W64_TEXF_RAMP) */
 #define SFMT_F_CHROME		1
 #define SFMT_F_VIEW		2
 

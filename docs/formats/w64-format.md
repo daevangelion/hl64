@@ -1,4 +1,4 @@
-# `.w64` layer package, version 2
+# `.w64` layer package, version 3
 
 Imported from the quakegeneric tree (`n64/docs/w64-format.md`, audit entry
 CLEAN, docs/provenance-audit.md). Lines that pointed at old-engine functions
@@ -11,9 +11,11 @@ One file per map, `maps/<map>.w64`, cooked from the map's BSP30 by
 `n64/docs/stream-arch-v2.md` §3. Version 1 held the directory + `REND` +
 `MOVR` + `TEXP`; version 2 adds streamed collision (`COLL` + model table +
 leaf contents + collision grid), the entity blob (`ENTS`), the PVS rows
-(`VISR`) and per-sector light probes. Struct definitions: the world format
-header (`include/hl64/` / `engine/world`, retargeted from the old
-`w64_format.h`).
+(`VISR`) and per-sector light probes; version 3 adds the additive ramp of
+the `TEXP` pages additive movers bind (`TEXF_RAMP`) and stops folding
+brushes with a non-Normal render mode (below). Struct definitions:
+the world format header (`include/hl64/` / `engine/world`, retargeted from
+the old `w64_format.h`).
 
 - Big-endian (N64 native). Every chunk starts 16-aligned, every table 8-aligned.
 - Offsets in the directory are from the directory start; chunk offsets are
@@ -39,7 +41,7 @@ header (`include/hl64/` / `engine/world`, retargeted from the old
 | off | field | meaning |
 |---:|---|---|
 | 0 | `magic` u32 | `'W64L'` |
-| 4 | `version` u16 | 2 |
+| 4 | `version` u16 | 3 |
 | 6 | `flags` u16 | bit 0 `W64_HF_COLL`: COLL chunks, model table, leaf contents and grid present |
 | 8 | `file_size` u32 | must equal the cart file size |
 | 12 | `dir_ofs`, `dir_size` u32 | layer directory |
@@ -164,8 +166,9 @@ Static submodels — `func_wall` / `func_illusionary` with no `targetname`
 mode Normal (`rendermode` 0 or absent) — are cooked into the sectors
 (`FOLDED`); their entities are skipped at draw time. A submodel used by an
 entity with any other render mode is never folded: it draws in the
-translucent pass (render-fx.md 2). (Cook: `tools/w64c/w64c.py`
-`FOLD_CLASSES` test must add the render-mode condition.)
+translucent pass (render-fx.md 2; TransAlpha lit, with its pages' alpha
+compare and Z write). `renderamt`, `rendercolor` and `renderfx` do not
+matter under Normal. Example: hldemo1 `*76` / `*87` (TransTexture).
 Every other submodel used by a non-`trigger_*` entity gets a `MOVR` chunk in
 its local space, drawn with the entity's origin/angles matrix. Submodels used
 only by triggers (or by nothing) are `NONE`.
@@ -173,15 +176,27 @@ only by triggers (or by nothing) are `NONE`.
 ## `TEXP` chunk (one texture page)
 
 ```
-w64_texp_t 16 B   w, h (u16), flags (u8: FENCE = TLUT[0] transparent), ci4_ofs (u32)
+w64_texp_t 16 B   w, h (u16), flags (u8: FENCE 1 = TLUT[0] transparent,
+                  RAMP 16 = the additive ramp follows the TLUT), ci4_ofs (u32)
 16                TLUT: 16 × RGBA5551
-ci4_ofs (48)      CI4 texels, w × h / 2 bytes
+48                (RAMP) the additive ramp, 40 B (sc4-format.md "Ramp")
+ci4_ofs           CI4 texels, w × h / 2 bytes; 48, or 88 with RAMP
 ```
 
 Bound as one texture per page: TLUT upload, CI4 `TILE0`, infinite wrap,
 alpha compare for fence pages. Pages hold a single texture (vertex alpha
 0xFF, `alpha_to_tile` off); only pages some cooked face can bind are
 emitted.
+
+RAMP pages: every page a `MOVR` submodel binds whose entity can draw
+Glow 3 / TransAdd 5 — `rendermode` 3 or 5 in its keys, or its targetname
+the target of an `env_render` with rendermode 3 / 5 and without
+`SF_RENDER_MASKMODE` (4) (`tools/cook/hl_classes.py additive_entities`).
+The ramp is `tools/cook/addramp.py`'s fit of the page's TLUT
+([render-fx.md](../specs/render-fx.md) 2a); the cart binds it instead of
+the TLUT when it draws the mover additive, and draws nothing additive for
+a page without one (counted). Cost: 40 B per such page (Uplink + Hazard:
+2 pages, hldemo1's spinning-light func_rotating `*32` / `*35`).
 
 Texel source is the map's `.wci4` (`tools/cook/bake_world_tex.py`: the
 BSP's embedded miptex and the WAD3 textures its worldspawn `wad` key
