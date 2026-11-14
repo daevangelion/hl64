@@ -29,8 +29,8 @@
 #
 # Usage: test/run/m4.sh [--ares] [--no-earlier]
 #        --no-earlier skips test/run/m3.sh (iteration only: not a gate run)
-# Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c7
-#        cook /scratch/hl64/tmp/M4Lead/c7), HL64_FIXTURES, HL64_DATA,
+# Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c13
+#        cook /scratch/hl64/tmp/M5Lead/c13), HL64_FIXTURES, HL64_DATA,
 #        W1_FIXTURES (passed to m3.sh), ARES_BIN, ARES_TIMEOUT, DISPLAY_NUM.
 # Exit:  0 pass, 1 gate failure, 2 prerequisite missing.
 set -euo pipefail
@@ -48,7 +48,7 @@ for a in "$@"; do
 	*) echo "usage: test/run/m4.sh [--ares] [--no-earlier]" >&2; exit 2 ;;
 	esac
 done
-CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/M4Lead/c7}"
+CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/M5Lead/c13}"
 FIX="${HL64_FIXTURES:-/scratch/hl64/fixtures}"
 DATA="${HL64_DATA:-/scratch/hl1/valve}"
 RTB="$CONTENT/campaign.rtb"

@@ -223,6 +223,7 @@ int		col_models_box(const float lo[3], const float hi[3], uint32_t *out, int max
 typedef struct {
 	uint32_t	traces, nodes;		/* since the last call */
 	uint32_t	sync_loads, sync_us;	/* chunks read mid-trace (blocked I/O) */
+	uint32_t	cands;			/* entity candidates of col_move's boxes */
 } col_stats_t;
 void		col_stats(col_stats_t *s);
 /* The same counters without resetting them (since the last col_stats):

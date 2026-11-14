@@ -62,47 +62,71 @@ is *when* its work runs, so that no frame carries more monster AI than a
 budget. Budgets count work units, never time, so host and cart pause and
 hold at the same points (K9, K10).
 
-- **Work units** (`aiw_units`, ≈ 5 µs of cart CPU each): 180 per think
-  begun, 10 per collision trace, 1 per BSP node a trace visits, 5 per walk
-  step of `CheckLocalMove`. The frame's budget is setting `ai_budget`
-  (default `HL64_AI_BUDGET` 4000 ≈ 20 ms). Fitted to the PROFILE
-  `ai: frame` lines on ares (route m4: us ≈ 916 × thinks + 50 × traces +
-  5.4 × BSP nodes + 28 × steps, r² 0.93).
+- **Work units** (`aiw_units`, ≈ 1 µs of cart CPU each): 340 per think
+  begun, 680 per RunAI sensing run (Look / Listen / GetEnemy), 3 per Look
+  box candidate, 75 per Look FVisible, 55 per collision trace, 2 per BSP
+  node a trace visits, 25 per entity candidate of a move's box, 200 per
+  `CheckLocalMove`, 110 per walk step, 850 per FindNearestNode search, 20
+  per Dijkstra node expanded, 1230 per anim event, 1000 per sound or
+  sentence started, 600 per decal, 100 per bone of a server pose computed
+  (game memo misses; the renderer never fills the game's memo, so the
+  count is the same on every machine). Fitted to the PROFILE `ai: frame`
+  lines of ares runs of routes m4 and uplink (9375 frames joined to the
+  host's counts of the same frames; least squares, r² 0.98, rms 1.2 ms;
+  cart µs / units ≤ 1.15 in 99 % of the frames over 10 ms). The frame's
+  budget is setting `ai_budget` (default `HL64_AI_BUDGET` 18000).
 - **Contexts**: with `ai_spread 1` every monster think runs on one of 6
   cooperative contexts (own stack, own cover-search tables). A think
   nested in a think runs inline; thinks before game time 2.5 s run whole.
-- **Pause points**: the start of each `CheckLocalMove` and each cover
-  candidate (FindCover / BuildNearestRoute), never inside FindNearestNode
-  or the Dijkstra search. At a pause point a think yields once the
-  frame's units reach the budget, except at its slice's first point.
-  Paused thinks continue at the next frame start, oldest first, each with
-  at least one check per frame; the CheckLocalMove memo scope, sight list
-  and `gpGlobals` vectors are saved per think. A think older than 2 s
-  stops pausing.
+- **Pause points**: the start of each `CheckLocalMove` and each of its
+  walk steps after the first (paused, the monster stands where it stood
+  before the check: origin linked, flags, ground entity; the walk
+  continues from its step), each cover candidate (FindCover /
+  BuildNearestRoute), each FindNearestNode trace (a search whose heap
+  another search used meanwhile rebuilds it from the candidates after
+  the one about to be traced: the same order), each Look FVisible (a
+  candidate freed or dead meanwhile is not seen) and each anim event
+  (the event read afresh; the sequence must still be on). Never inside
+  the Dijkstra search or an event's handler. At a pause point a think
+  yields once the frame's units plus the point's reserve (an anim event:
+  `AI_EVENT_RESERVE` 8000; else 0) reach the budget, except at its
+  slice's first point. The CheckLocalMove memo scope, sight list and
+  `gpGlobals` vectors are saved per think.
+- **Per-frame bound**: paused thinks continue at the next frame start,
+  oldest first; the oldest always runs (every frame it progresses at
+  least one item), each later one only while the frame's units plus its
+  point's reserve are under the budget. So a frame's think work is the
+  budget plus one item per slice that ran past it: one walk step, trace,
+  FVisible or cover candidate (≤ ~1 ms), or one anim event started under
+  budget − reserve (a firing event: ~2–12 ms on the cart, up to ~24 ms
+  when its traces pose 3–4 studio entities' hitboxes); plus the start
+  of each think begun over the budget (below), up to its second pause
+  point. A think still paused 2 s after it began is counted (`overruns`:
+  demand over the budget for that long), not forced.
 - **Held thinks**: a monster think dispatched once the frame's units have
   reached the budget, or while older thinks are queued, does not start:
   it joins a FIFO queue (≤ 64) and its nextthink stays due (its due time),
   so a dehydrate, twin copy or New Game sees an ordinary due think. At
   the next frame start, after the paused thinks' slices, queued thinks
   start oldest first, as the engine dispatches a think (nextthink := 0,
-  the frame's time), while the frame's units are under the budget.
-  **Lateness bounds**: over the budget, a think queued for `ai_hold`
-  (`HL64_AI_HOLD` 0.2 s) of game time still starts, but at most
-  `HL64_AI_AGED_PER_FRAME` (2) such starts a frame, oldest first: thinks
-  queued in one busy frame age together and would otherwise all start in
-  one frame. A think queued for `ai_hold_max` (`HL64_AI_HOLD_MAX` 0.6 s)
-  starts regardless (on a free context at the frame start, else whole
-  at its next dispatch), so a think runs at most `ai_hold_max` + one
-  frame after it came due. The engine's dispatch of a queued think is
-  absorbed.
+  the frame's time), while the frame's units are under the budget and a
+  context is free. **Lateness bound**: over the budget, a think queued
+  for `ai_hold` (`HL64_AI_HOLD` 0.2 s) of game time still starts, at most
+  `HL64_AI_AGED_PER_FRAME` (2) such starts a frame, oldest first, so a
+  think k-th in the queue starts at most `ai_hold` + ⌈k / 2⌉ frames
+  (≤ 0.2 s + 32 frames) after it came due while a context is free; with
+  all 6 contexts holding paused thinks it waits for one. The engine's
+  dispatch of a queued think is absorbed.
 - **Drops**: a paused think ends (its half-built route cleared) when its
   monster is freed, killed or changes layer, or its think function,
   schedule, task, monster state, enemy or target is changed by something
-  else, at a map open / close, dehydrate, twin copy and New Game. A
-  queued think leaves the queue unstarted when its entity is freed, its
-  think function or nextthink is changed by something else, at a
-  dehydrate / twin copy, map open / close, New Game or with
-  `ai_spread` ≠ 1; the queue full: it runs at once.
+  else, at a map open / close, dehydrate, twin copy and New Game; paused
+  at an anim event (MonsterThink's execution half, which reads the
+  monster afresh) only the freeing, death, layer or think function
+  change end it. A queued think leaves the queue unstarted when its
+  entity is freed, its think function or nextthink is changed by
+  something else, at a dehydrate / twin copy, map open / close, New Game
+  or with `ai_spread` ≠ 1; the queue full: it starts at once.
 - **Equivalence**: `ai_spread 2` (test) pauses at every point and
   continues at once after scribbling the shared scratch; its decision
   trace equals whole thinks (`ai_spread 0`) on routes m4, uplink and
