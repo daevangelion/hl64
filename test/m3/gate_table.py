@@ -16,7 +16,10 @@ route's PASS runs with its last stats record), the roll-ups' pool / region peaks
 sound). The world pools render / texture / collision are LRU caches that
 fill to their size: their peak is the run's WANT peak (`mem world:
 <pool>_want_peak=`: the open + pin class chunks wanted at once); the
-stats records' resident high-water is printed beside it as information. A
+stats records' resident high-water is printed beside it as information.
+The studio pool is such a cache too (engine/render/studio.c alloc() evicts
+any block not used this frame, soft-resident ones included, before it
+fails): ruled on `prof studio_us want_peak=`, its pool_peak information. A
 region nothing reports is listed as such.
 
 Region rule (docs/architecture.md 4.1): a reported region whose peak is
@@ -128,8 +131,13 @@ def main():
         m = re.match(r"mem: hud (\d+) of (\d+) B", l)
         if m:
             note("hud", int(m.group(1)), "mem: hud")
+        # the studio pool is an LRU cache (studio.c alloc() evicts any block
+        # not used this frame before it fails): ruled on its want peak, the
+        # pool's resident peak is information
         if l.startswith("prof studio_us "):
-            note("studio", kv(l)["pool_peak"], "prof studio_us pool_peak")
+            d = kv(l)
+            note("studio", d.get("want_peak", d["pool_peak"]), "prof studio_us want_peak")
+            resident["studio"] = max(resident.get("studio", 0), d["pool_peak"])
         if l.startswith("prof snd_us "):
             note("sound", kv(l)["mem_peak"], "prof snd_us mem_peak")
         m = re.search(r"^stats \d+ world: .*render=\d+/(\d+)KB texture=\d+/(\d+)KB coll=\d+/(\d+)KB", l)

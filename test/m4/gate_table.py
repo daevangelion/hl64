@@ -86,6 +86,13 @@ def main():
             d = {k: int(v) for k, v in re.findall(r"(\w+)=(\d+)", l)}
             for r in LRU:
                 want_run[r] = max(want_run.get(r, 0), d.get(r + "_want_peak", 0))
+        # the studio pool is an LRU cache too: alloc() evicts any block not
+        # used this frame (soft-resident meshes / animations / infos) before
+        # it fails; its need is the want peak (live users' models + the view
+        # model + reads in flight, engine/render/studio.c soft_residency)
+        if l.startswith("prof studio_us ") and "want_peak=" in l:
+            want_run["studio"] = max(want_run.get("studio", 0),
+                                     int(re.search(r"want_peak=(\d+)", l).group(1)))
     out += ["", "### M4 gate: memory per region at each crossing (peak in the +-2 s window vs the "
             "carved size; rule: use <= %d%% and peak x %.2f <= size, %s exempt)" % (
                 USE_MAX * 100, HEADROOM, ", ".join(sorted(EXEMPT))), ""]
