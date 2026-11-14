@@ -317,10 +317,11 @@ void mon_stats_route(void) { mstat.routes++; }
 static void aiw_print(const char *tag, const mon_ai_work_t *w)
 {
 	log_printf(" %s=lm:%lu,steps:%lu,traces:%lu,bsp:%lu,routes:%lu,tri:%lu,cover:%lu,nn:%lu,"
-		"nnt:%lu,dj:%lu,djpop:%lu", tag, (unsigned long)w->lm, (unsigned long)w->steps,
-		(unsigned long)w->traces, (unsigned long)w->bsp, (unsigned long)w->routes,
-		(unsigned long)w->tri, (unsigned long)w->cover, (unsigned long)w->nn,
-		(unsigned long)w->nnt, (unsigned long)w->dj, (unsigned long)w->djpop);
+		"nnt:%lu,dj:%lu,djpop:%lu,lmhit:%lu", tag, (unsigned long)w->lm,
+		(unsigned long)w->steps, (unsigned long)w->traces, (unsigned long)w->bsp,
+		(unsigned long)w->routes, (unsigned long)w->tri, (unsigned long)w->cover,
+		(unsigned long)w->nn, (unsigned long)w->nnt, (unsigned long)w->dj,
+		(unsigned long)w->djpop, (unsigned long)w->lmhit);
 }
 
 /* `prof ai` (after `prof mon_us`): the window's AI work per frame (avg),
@@ -332,12 +333,13 @@ static void ai_prof_line(uint32_t frames)
 	uint32_t n = frames ? frames : 1;
 
 	log_printf("prof ai lm=%lu steps=%lu traces=%lu bsp=%lu routes=%lu tri=%lu cover=%lu nn=%lu "
-		"nnt=%lu dj=%lu djpop=%lu worst_frame_us=%lu worst_frame_thinks=%lu worst_think_us=%lu "
-		"worst_think=%d:%s:%s/%d->%s/%d", (unsigned long)(w->lm / n),
+		"nnt=%lu dj=%lu djpop=%lu lmhit=%lu worst_frame_us=%lu worst_frame_thinks=%lu "
+		"worst_think_us=%lu worst_think=%d:%s:%s/%d->%s/%d", (unsigned long)(w->lm / n),
 		(unsigned long)(w->steps / n), (unsigned long)(w->traces / n),
 		(unsigned long)(w->bsp / n), (unsigned long)(w->routes / n), (unsigned long)(w->tri / n),
 		(unsigned long)(w->cover / n), (unsigned long)(w->nn / n), (unsigned long)(w->nnt / n),
-		(unsigned long)(w->dj / n), (unsigned long)(w->djpop / n), (unsigned long)aip.wf_us,
+		(unsigned long)(w->dj / n), (unsigned long)(w->djpop / n), (unsigned long)(w->lmhit / n),
+		(unsigned long)aip.wf_us,
 		(unsigned long)aip.wf_thinks, (unsigned long)aip.wt_us, aip.wt_e,
 		aip.wt_us ? game_class_name(aip.wt_cls) : "-", aip.wt_s0 ? aip.wt_s0 : "-",
 		aip.wt_t0, aip.wt_s1 ? aip.wt_s1 : "-", aip.wt_t1);
@@ -1275,30 +1277,91 @@ void Mon_SetSequenceIndex(int e, int seq)
 		r->sequence = 0;
 }
 
+/* CheckLocalMove memo: inside a query scope (Mon_LocalMoveScope: BuildRoute,
+ * the cover searches, Move's triangulation) nothing moves but the checks'
+ * own monster, which every check puts back, so a check repeated with the
+ * same monster, start, end, target and flags has the same result. The memo
+ * returns it and replays the check's lasting effects: the flags and the
+ * ground entity its DROP_TO_FLOOR left. */
+#define LM_MEMO		32
+
+typedef struct {
+	int16_t		e, target, ground;
+	int8_t		ret, distset, dropped;
+	int		flags, flags_after;
+	float		start[3], end[3], dist;
+} lm_memo_t;
+
+static lm_memo_t	lm_memo[LM_MEMO];
+static int		lm_memo_n, lm_memo_next, lm_scope_depth;
+
+void Mon_LocalMoveScope(int open)
+{
+	if (open)
+	{
+		if (!lm_scope_depth++)
+			lm_memo_n = lm_memo_next = 0;
+	}
+	else
+		lm_scope_depth--;
+}
+
+static lm_memo_t *lm_find(int e, const float start[3], const float end[3], int target, int flags)
+{
+	int i;
+
+	for (i = 0; i < lm_memo_n; i++)
+	{
+		lm_memo_t *c = &lm_memo[i];
+
+		if (c->e == e && c->target == target && c->flags == flags &&
+			!memcmp(c->start, start, sizeof(c->start)) && !memcmp(c->end, end, sizeof(c->end)))
+			return c;
+	}
+	return 0;
+}
+
 int CBaseMonster_CheckLocalMove(int e, const float start[3], const float end[3], int target,
 	float *pflDist)
 {
 	col_ent_t	*cv = ent_cv(e);
-	float		startPos[3], dir[3], yaw, dist, step, stepSize;
-	int		ret = LOCALMOVE_VALID;
+	float		startPos[3], dir[3], yaw, dist, step, stepSize, s0[3], e0[3];
+	double		wdir[2];
+	int		ret = LOCALMOVE_VALID, flags0 = cv->flags, dropped = 0, distset = 0;
+	lm_memo_t	*c;
 
 	mstat.local_moves++;
 	mon_aiw.lm++;
+	if (lm_scope_depth && (c = lm_find(e, start, end, target, flags0)) != 0)
+	{
+		mon_aiw.lmhit++;
+		if (c->distset && pflDist)
+			*pflDist = c->dist;
+		cv->flags = c->flags_after;
+		if (c->dropped)
+			ent_phys(e)->groundentity = (uint16_t)c->ground;
+		ent_motion_changed(e);
+		return c->ret;
+	}
+	VecCopy(start, s0);	/* start may be the origin itself */
+	VecCopy(end, e0);
 	VecCopy(cv->origin, startPos);
 	VecSub(end, start, dir);
 	yaw = UTIL_VecToYaw(dir);
 	dist = VecLen2D(dir);
 	ent_set_origin(e, start);
 	if (!(cv->flags & (FL_FLY | FL_SWIM)))
-		phy_drop_to_floor(e);
+		dropped = phy_drop_to_floor(e) == 1;
+	phy_walk_dir(yaw, wdir);
 	for (step = 0; step < dist; step += LOCAL_STEP_SIZE)
 	{
 		stepSize = LOCAL_STEP_SIZE;
 		if (step + LOCAL_STEP_SIZE >= dist - 1)
 			stepSize = (dist - step) - 1;
 		mon_aiw.steps++;
-		if (!phy_walk_move(e, yaw, stepSize, WALKMOVE_CHECKONLY))
+		if (!phy_walk_step(e, wdir, stepSize, WALKMOVE_CHECKONLY))
 		{
+			distset = 1;
 			if (pflDist)
 				*pflDist = step;
 			if (target >= 0 && target == phy_trace_ent())
@@ -1315,6 +1378,24 @@ int CBaseMonster_CheckLocalMove(int e, const float start[3], const float end[3],
 			ret = LOCALMOVE_INVALID_DONT_TRIANGULATE;
 	}
 	ent_set_origin(e, startPos);
+	if (lm_scope_depth)
+	{
+		c = &lm_memo[lm_memo_next];
+		lm_memo_next = (lm_memo_next + 1) % LM_MEMO;
+		if (lm_memo_n < LM_MEMO)
+			lm_memo_n++;
+		c->e = (int16_t)e;
+		c->target = (int16_t)target;
+		c->flags = flags0;
+		c->flags_after = cv->flags;
+		c->ground = (int16_t)ent_phys(e)->groundentity;
+		c->dropped = (int8_t)dropped;
+		c->ret = (int8_t)ret;
+		c->distset = (int8_t)distset;
+		c->dist = step;
+		VecCopy(s0, c->start);
+		VecCopy(e0, c->end);
+	}
 	return ret;
 }
 
@@ -1389,7 +1470,19 @@ int Mon_RouteClassify(int e, int f)
 	return MOVEGOAL_NONE;
 }
 
+static int build_route(int e, const float goal[3], int flag, int target);
+
 int Mon_BuildRoute(int e, const float goal[3], int flag, int target)
+{
+	int ok;
+
+	Mon_LocalMoveScope(1);
+	ok = build_route(e, goal, flag, target);
+	Mon_LocalMoveScope(0);
+	return ok;
+}
+
+static int build_route(int e, const float goal[3], int flag, int target)
 {
 	CBaseMonster	*m = MON(e);
 	float		dist = 0, apex[3], g[3];
@@ -1519,7 +1612,7 @@ void CBaseMonster_Move(int e, float flInterval)
 	CBaseMonster	*m = MON(e);
 	col_ent_t	*cv = ent_cv(e);
 	float		wpDist, checkDist, dist, dir[3], d[3], apex[3], to[3];
-	int		target = -1, blocker;
+	int		target = -1, blocker, tri;
 	WayPoint_t	*w;
 
 	if (Mon_FRouteClear(e))
@@ -1564,12 +1657,15 @@ void CBaseMonster_Move(int e, float flInterval)
 		}
 		else
 		{
-			if (Mon_FTriangulate(e, cv->origin, w->vecLocation, dist, target, apex))
+			Mon_LocalMoveScope(1);
+			tri = Mon_FTriangulate(e, cv->origin, w->vecLocation, dist, target, apex);
+			if (tri)
 			{
 				Mon_InsertWaypoint(e, apex, bits_MF_TO_DETOUR);
 				Mon_RouteSimplify(e, target);
 			}
-			else
+			Mon_LocalMoveScope(0);
+			if (!tri)
 			{
 				Mon_Stop(e);
 				if (m->m_moveWaitTime > 0 && !Mon_HasMemory(m, bits_MEMORY_MOVE_FAILED))
@@ -2139,7 +2235,19 @@ int CBaseMonster_CanPlaySequence(int e, int fDisregard, int interruptLevel)
 #define COVER_CHECKS	5
 #define COVER_DELTA	48
 
+static int lateral_cover(int e, const float threat[3], const float viewofs[3]);
+
 int Mon_FindLateralCover(int e, const float threat[3], const float viewofs[3])
+{
+	int ok;
+
+	Mon_LocalMoveScope(1);
+	ok = lateral_cover(e, threat, viewofs);
+	Mon_LocalMoveScope(0);
+	return ok;
+}
+
+static int lateral_cover(int e, const float threat[3], const float viewofs[3])
 {
 	col_trace_t	tr;
 	float		stepR[3], lt[3], rt[3], a[3], b[3];

@@ -191,17 +191,34 @@ static int move_step(int e, const float d[3], int mode)
 	return 1;
 }
 
-int phy_walk_move(int e, float yaw, float dist, int mode)
+void phy_walk_dir(float yaw, double dir[2])
+{
+	double a = yaw * DEG2RAD;
+
+	dir[0] = hl_cos(a);
+	dir[1] = hl_sin(a);
+}
+
+int phy_walk_step(int e, const double dir[2], float dist, int mode)
 {
 	float d[3];
-	double a = yaw * DEG2RAD;
 
 	if (!(ent_c.cv[e].flags & (FL_ONGROUND | FL_FLY | FL_SWIM)))
 		return 0;
-	d[0] = (float)(hl_cos(a) * dist);
-	d[1] = (float)(hl_sin(a) * dist);
+	d[0] = (float)(dir[0] * dist);
+	d[1] = (float)(dir[1] * dist);
 	d[2] = 0;
 	return move_step(e, d, mode);
+}
+
+int phy_walk_move(int e, float yaw, float dist, int mode)
+{
+	double dir[2];
+
+	if (!(ent_c.cv[e].flags & (FL_ONGROUND | FL_FLY | FL_SWIM)))
+		return 0;
+	phy_walk_dir(yaw, dir);
+	return phy_walk_step(e, dir, dist, mode);
 }
 
 /*

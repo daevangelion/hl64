@@ -1108,6 +1108,9 @@ typedef struct {
 void	mon_stats(mon_stats_t *s, int reset);
 void	mon_stats_frame(void);
 void	mon_stats_route(void);
+/* CheckLocalMove's memo scope (monsters.c): open around a pure route /
+ * cover query (BuildRoute, FindCover, ...); scopes nest. */
+void	Mon_LocalMoveScope(int open);
 /* AI work counters (cumulative; the think / frame / window deltas go to
  * the `prof mon_us` / `prof ai` roll-up lines and the PROFILE `ai: think`
  * lines). Work units, never time: identical on host and cart. */
@@ -1118,6 +1121,7 @@ typedef struct {
 	uint32_t	cover;		/* FindCover / BuildNearestRoute candidate nodes traced */
 	uint32_t	nn, nnt;	/* FindNearestNode searches (cache misses), their traces */
 	uint32_t	dj, djpop;	/* Dijkstra runs, nodes expanded */
+	uint32_t	lmhit;		/* CheckLocalMoves answered by the scope memo */
 } mon_ai_work_t;
 extern mon_ai_work_t	mon_aiw;
 void	mon_stats_script(void);
