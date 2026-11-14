@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: MIT
+# Scene seam-2to3 (test/README.md): hldemo2's yard -> east yard (sci_execution
+# monstermakers, burnpile, the dome road; the AI-heavy hldemo2-exit span) and
+# the hldemo2 -> hldemo3 touch switch (landmark hldemo2_3) with the hldemo3
+# arrival: uplink.route lines 231-319; the crane drop into the yard
+# (trigger_once #319: init_trailer_mortars_mm, fallback_grunts_mm) and the
+# trailer yard run first, the window is SHOT grunts-fight .. SHOT
+# hldemo3-arrival.
+# scene-window: uplink grunts-fight hldemo3-arrival
+startmap hldemo2
+waitmap hldemo2 60
+# the route's player has the suit here (hldemo1's item_suit): drop it on
+# him (HLSDK CBaseEntity::Create, touch pickup)
+setpos -416 210 196 0 90
+wait 0.3
+drop item_suit -416 210 196
+drop weapon_crowbar -416 210 196
+wait 1
+god 1
+setpos 1830 1020 156 0 90
+wait 0.5
+setpos 1830 1072 156 0 90
+waitnear 1830 1072 -60 100 4
+wait 4
+# trigger_once #242 unlocks gate_lock_1; button #235 reopens warehouse_gate_1 (return path)
+setpos 2013 1080 -60 30 270
+wait 0.5
++use
+wait 0.2
+-use
+wait 2
+# ladder #315 from the yard up to the catwalk (z 160)
+setpos 2352 1124 -60 -60 90
+wait 0.3
++forward
+waitnear 2352 1170 196 40 5
+-forward
+# catwalk south to trailer_door_2 (trigger_multiple #310), through the door and down into the trailer yard
+# (the drop slides down the trailer deck's east face: at 72 fps the player reaches the
+# yard floor (z -60), at 17 fps it landed on the z 60 ledge beside the deck;
+# either is off the catwalk, the next waypoint is on the yard floor)
+setpos 2466 1000 196 0 270
+wait 0.3
+setpos 2466 915 196 0 270
+wait 1.5
++forward
+wait 0.6
+-forward
+# widened: 90 -> 120: GoldSrc runs at sv_maxspeed 320 (cl_forwardspeed 400
+# clamped, pm_shared PM_PlayerMove) and keeps that speed in the air (PM_AirMove):
+# the player clears the deck's east face (hull x 2464) and lands against the
+# yard's south wall at 2466 680 -60, 117 u from the old landing spot's centre
+waitnear 2466 780 0 120 4
+# MP5 + clip on the radio table under the trailer deck
+setpos 2246 716 -60 0 270
+wait 0.5
+# under the trailer deck: fallback squad (fallback_grunt_2 + squad 2) engages the player
+setpos 2440 706 -58 0 180
+wait 2.5
+shot grunts-fight
+stats begin
+# east yard: trigger_once #456 -> sci_execution monstermakers
+setpos 2800 560 -60 0 270
+wait 0.3
+setpos 2800 522 -60 0 0
+wait 3
+# north along the east yard: burnpile trigger #667, autosave #604
+setpos 3000 760 -60 0 90
+wait 0.3
+setpos 3000 840 -60 0 90
+wait 1
+setpos 2888 1046 -60 0 90
+wait 0.5
+setpos 3028 1282 -60 0 90
+wait 0.3
+setpos 3012 1506 -60 0 90
+wait 0.3
+# over the rubble pile onto the dome road
+setpos 2980 1714 -49 0 90
+wait 0.3
+setpos 2884 1826 33 0 90
+wait 0.5
+setpos 2916 2034 -60 0 90
+wait 0.5
+setpos 2724 2082 -60 0 180
+wait 0.3
+setpos 2580 2178 -60 0 180
+wait 0.3
+stats hldemo2
+# the approach to the exit: a walking player spends ~2 s in the seam's
+# approach box, which prefetches hldemo3's seam set before the switch
+setpos 2404 2242 -60 0 180
+wait 2
+shot hldemo2-exit
+# trigger_changelevel #45 (landmark hldemo2_3) -> hldemo3: the eye is in
+# the seam's switch box
+setpos 2298 2256 -60 0 180
+waitmap hldemo3 30
+shot seam2-at
+
+# ---- C: hldemo3: dish → global → hldemo2 (derived on the old tree's host build) ----
+# ---- Segment C: hldemo3 (dish dome) -> back to hldemo2 (landmark hldemo2_3b)
+waitmap hldemo3 30
+god 0
+# arrival: seam switch beside landmark hldemo2_3
+waitnear -438 -576 -476 1 0
+look 0 177
+wait 0.5
+shot hldemo3-arrival
+stats end
+wait 0.2
+pass

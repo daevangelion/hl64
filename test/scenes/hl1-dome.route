@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Scene hl1-dome (test/README.md): hldemo1 dome entrance trigger
+# (start_script_trigger -> startdometalk_mm / dometalk_mm): the dome scientists
+# and barney's scripted talk seen from the dome view: uplink.route lines 27-31
+# (SHOT start .. SHOT dome-scene). The intro room is skipped: the player is put
+# where its teleport drops him.
+# scene-window: uplink start dome-scene
+startmap hldemo1
+waitmap hldemo1 60
+setpos -2048 744 36
+wait 2
+stats begin
+setpos -2048 -496 70 0 270
+wait 4
+setpos -2000 -620 196 0 270
+wait 26
+shot dome-scene
+stats end
+wait 0.2
+pass

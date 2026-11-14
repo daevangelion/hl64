@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+# Scene fx-tripmine (test/README.md): hldemo2's zombie crates and tripmine
+# corridor: the crowbar breaks barrier #201, the beams of mines #206 / #207
+# are broken and the chain reaction (explosions, tripmine_explosion_mm, the
+# far barrier #205 with mines #202 / #203) runs, then down to the warehouse:
+# uplink.route lines 185-207 unchanged (route ops 105-123).
+# scene-window: uplink 105 124
+startmap hldemo2
+waitmap hldemo2 60
+# the route's player has the suit here (hldemo1's item_suit): drop it on
+# him (HLSDK CBaseEntity::Create, touch pickup)
+setpos -416 210 196 0 90
+wait 0.3
+drop item_suit -416 210 196
+drop weapon_crowbar -416 210 196
+wait 1
+god 1
+setpos 840 -300 196 0 270
+wait 1
+stats begin
+setpos 840 -372 196 0 270
+waitgone zombie_crates 2
+wait 2
+# tripmine corridor: low wooden barrier #201 (health 20) - crowbar it
+setpos 908 -440 196 45 0
+impulse 1
+wait 0.6
++attack
+wait 2
+-attack
+# break the high beams of mines #206/#207: chain reaction takes out #204 (its floor breakable #208
+# fires tripmine_explosion_mm) and the far barrier #205 with mines #202/#203
+setpos 958 -440 196 0 0
+wait 1
+setpos 1113 -440 196 0 0
+wait 2.5
+# west ledge, down the stairs to the warehouse floor
+setpos 1340 -440 196 0 270
+wait 0.3
+setpos 1378 -600 196 0 0
+wait 0.3
+setpos 1800 -600 100 0 0
+wait 0.5
+stats end
+wait 0.2
+pass

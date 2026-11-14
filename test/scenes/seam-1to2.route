@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# Scene seam-1to2 (test/README.md): the hldemo1 -> hldemo2 elevator switch
+# (landmark hldemo1to2, USEONLY) and the hldemo2 arrival (doors opened by
+# elestartmm): uplink.route lines 27-65; the dome scene runs first (the
+# elevator's master start_ele_lock_1 opens ~40 s after the dome trigger), the
+# window is SHOT elevator .. SHOT hldemo2-arrival (button, doors, switch,
+# arrival). It is also the hl2-arrival scene.
+# scene-window: uplink elevator hldemo2-arrival
+startmap hldemo1
+waitmap hldemo1 60
+setpos -2048 744 36
+wait 1
+setpos -2048 -496 70 0 270
+wait 4
+setpos -2000 -620 196 0 270
+wait 26
+shot dome-scene
+# domesci_script_3 'lean' → domesci_script_4 → start_ele_unlock_mm opens the
+# multisource start_ele_lock_1 (~40 s after the dome trigger)
+wait 12
+# trigger_once #151 (master start_ele_lock_1) → start_ele_open_mm → startele1
+setpos -2327 -230 196 0 180
+# runtime-item persistence: a monster-style drop (CBaseEntity::Create) above
+# the dome-view spot, away from the route; it lands at z 112. hldemo1 must
+# still close when hldemo3 opens (a dropped item once kept its map open: the
+# next seam waited forever) and the item must be back on hldemo1-return.
+drop weapon_9mmAR -2000 -620 196
+waitmoved startele1 15
+waitclass weapon_9mmAR -2000 -620 112 32 5
+setpos -2500 -100 196 0 0
+wait 1
+shot elevator
+stats begin
++use
+wait 0.3
+-use
+waitmap hldemo2 600
+shot seam1-at
+
+# ---- B: hldemo2, first visit → hldemo3 (derived on the old tree's host build) ----
+# ---- Segment B: hldemo2 first visit (start elevator -> trigger_changelevel hldemo2_3 -> hldemo3)
+# Crawl spaces (pipe duct behind the soda machine, ceiling vent) are crossed
+# ducked (+duck).
+waitmap hldemo2 60
+# arrival: seam switch into the start elevator (landmark hldemo1to2)
+waitnear -452 -100 196 1 0
+look 0 8
+# changetarget elestartmm (fired by the hldemo1 changelevel) opens the elevator doors
+waitmoved startele1 20
+shot hldemo2-arrival
+stats end
+wait 0.2
+pass
