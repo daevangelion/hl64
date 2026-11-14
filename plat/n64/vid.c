@@ -151,5 +151,8 @@ int sys_shot(void)
 		return -1;
 	rspq_wait();
 	th_screenshot(last->buffer, last->width, last->height, 2);
+#ifdef HL64_PSAMP
+	psamp_dump();
+#endif
 	return 0;
 }

@@ -126,8 +126,9 @@ static acc_t f_sin = { "sinf", 0, 0, 0, 0 }, f_cos = { "cosf", 0, 0, 0, 0 },
  * reference itself is ill-conditioned) */
 static void trig(double x)
 {
-	float xf = (float)x;
+	float xf = (float)x, sf, cf, sf1, cf1;
 	long double cl = cosl(x), cfl = cosl(xf);
+	double s, c, s1, c1;
 
 	acc(&a_sin, hl_sin(x), sinl(x), x, 0, 0);
 	acc(&a_cos, hl_cos(x), cl, x, 0, 0);
@@ -137,6 +138,19 @@ static void trig(double x)
 		acc(&a_tan, hl_tan(x), tanl(x), x, 0, 0);
 	if (fabsl(cfl) > 1e-3L)
 		acc(&f_tan, hl_tanf(xf), tanl(xf), xf, 0, 1);
+	/* sincos: bit for bit the two calls */
+	s1 = hl_sin(x);
+	c1 = hl_cos(x);
+	hl_sincos(x, &s, &c);
+	sf1 = hl_sinf(xf);
+	cf1 = hl_cosf(xf);
+	hl_sincosf(xf, &sf, &cf);
+	if (memcmp(&s, &s1, sizeof s) || memcmp(&c, &c1, sizeof c) || memcmp(&sf, &sf1, sizeof sf)
+		|| memcmp(&cf, &cf1, sizeof cf))
+	{
+		if (fails++ < 10)
+			printf("FAIL sincos(%.17g) differs from sin / cos\n", x);
+	}
 }
 
 static void at2(double y, double x)

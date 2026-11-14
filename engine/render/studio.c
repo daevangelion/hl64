@@ -1028,6 +1028,8 @@ static smodel_t *mesh_of(res_t r)
 /* ---- boot, frame ------------------------------------------------------------------------- */
 
 
+static void unpack_init(void);
+
 void studio_init(void)
 {
 	uint8_t *sc = mem_region(MEM_STUDIO_SCRATCH);
@@ -1047,6 +1049,7 @@ void studio_init(void)
 	mem_pool_init(&spool, "studiogpu", sc + (MAT_KB + VIEW_KB) * 1024u,
 		scb - (MAT_KB + VIEW_KB) * 1024u, sdesc, 256);
 	col_set_hitbox_source(studio_hitboxes);
+	unpack_init();
 }
 
 static int is_studio(int e)
@@ -1500,7 +1503,10 @@ static void draw_entity(int e, double time, wld_layer_t *L, const uint16_t *list
 		ge.mode = (uint8_t)mode;
 		ge.rgba[3] = alpha;
 	}
-	if (gpu_studio_draw(m->gstate, m->mesh, &ge))
+	t0 = sys_time_us();
+	n = gpu_studio_draw(m->gstate, m->mesh, &ge);
+	st.gpu_us += (uint32_t)(sys_time_us() - t0);
+	if (n)
 	{
 		st.dropped++;
 		return;
@@ -1755,6 +1761,7 @@ void studio_draw_view(void)
 	draw_view(ren_cam.org);
 	gpu_studio_end();
 	timed(t0);
+	st.view_us += (uint32_t)(sys_time_us() - t0);
 }
 
 /* ---- view model ------------------------------------------------------------------------------ */
@@ -1774,26 +1781,31 @@ void studio_view_model(const studio_view_t *v)
 }
 
 static float	chrome_up[MAXBONES][3], chrome_right[MAXBONES][3];
+/* the packed normal components: x / 15.5 (5 bits), x / 31.5 (6 bits), the
+ * same divisions done once (studio_init) instead of per vertex */
+static float	nrm5[32], nrm6[64];
 
-static float unpack_n(uint32_t v, int bits, int shift, float k)
+static void unpack_init(void)
 {
-	int x = (int)((v >> shift) & ((1u << bits) - 1));
+	int x;
 
-	if (x >= 1 << (bits - 1))
-		x -= 1 << bits;
-	return (float)x / k;
+	for (x = 0; x < 32; x++)
+		nrm5[x] = (float)(x >= 16 ? x - 32 : x) / 15.5f;
+	for (x = 0; x < 64; x++)
+		nrm6[x] = (float)(x >= 32 ? x - 64 : x) / 31.5f;
 }
 
 /* One CPU-skinned vertex: bone b's matrix on the bone-local position,
- * chrome texture coordinates from the normal's bone when chrome. */
-static void skin_vert(const sfmt_mesh_t *ms, int16_t pos[3], uint16_t nrm, int16_t st[2],
+ * chrome texture coordinates from the normal's bone when chrome. k is
+ * 2^pos_shift and ik its reciprocal (exact: x * ik = x / k). */
+static void skin_vert(float k, float ik, int16_t pos[3], uint16_t nrm, int16_t st[2],
 	int b, int nb, int chrome, const w64_texp_t *tex)
 {
-	float k = (float)(1 << ms->pos_shift), p[3], q;
+	float p[3], q;
 	int r;
 
 	for (r = 0; r < 3; r++)
-		p[r] = pos[r] / k;
+		p[r] = pos[r] * ik;
 	for (r = 0; r < 3; r++)
 	{
 		q = (bones[b][r][0] * p[0] + bones[b][r][1] * p[1] + bones[b][r][2] * p[2]
@@ -1804,9 +1816,9 @@ static void skin_vert(const sfmt_mesh_t *ms, int16_t pos[3], uint16_t nrm, int16
 	{
 		float n[3], c[2];
 
-		n[0] = unpack_n(nrm, 5, 11, 15.5f);
-		n[1] = unpack_n(nrm, 6, 5, 31.5f);
-		n[2] = unpack_n(nrm, 5, 0, 15.5f);
+		n[0] = nrm5[(nrm >> 11) & 31];
+		n[1] = nrm6[(nrm >> 5) & 63];
+		n[2] = nrm5[nrm & 31];
 		game_studio_chrome_st(chrome_up[nb], chrome_right[nb], n, c);
 		/* chrome coordinates span 64 source texels */
 		st[0] = (int16_t)(c[0] * tex->w / 64.0f * 32.0f);
@@ -1828,7 +1840,7 @@ static void draw_view(const float eye[3])
 	w64_vert_t *dst;
 	gpu_studio_ent_t ge;
 	game_pose_t p;
-	float f[3], rt[3], u[3];
+	float f[3], rt[3], u[3], pk, ipk;
 	const float *gm;
 	int n, ri, i, l, k, slot = 0, layer, skin;
 
@@ -1868,6 +1880,8 @@ static void draw_view(const float eye[3])
 	dst = view_verts[view_flip];
 	view_flip ^= 1;
 	skin = view.skin < ms->nfamilies ? view.skin : 0;
+	pk = (float)(1 << ms->pos_shift);
+	ipk = 1.0f / pk;
 	if (nbone)
 	{
 		ren_angle_axes(ren_cam.ang, f, rt, u);
@@ -1891,9 +1905,9 @@ static void draw_view(const float eye[3])
 					int nb = nbone ? nbone[slot] : bone;
 
 					if (slot & 1)
-						skin_vert(ms, v->posB, v->normB, v->stB, bone, nb, chrome, tex);
+						skin_vert(pk, ipk, v->posB, v->normB, v->stB, bone, nb, chrome, tex);
 					else
-						skin_vert(ms, v->posA, v->normA, v->stA, bone, nb, chrome, tex);
+						skin_vert(pk, ipk, v->posA, v->normA, v->stA, bone, nb, chrome, tex);
 				}
 			}
 	}

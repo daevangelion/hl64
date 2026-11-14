@@ -89,6 +89,7 @@ void		studio_view_model(const studio_view_t *v);
 typedef struct {
 	uint32_t	models, pool_used, pool_peak, anims, sync_loads;
 	uint32_t	drawn, bones_us, draw_us, us_max;
+	uint32_t	gpu_us, view_us;	/* draw_us parts: the GPU submit of the entities, the view model */
 	uint32_t	frames, us_sum, culled, pending, nofit, dropped;
 	uint32_t	sync_play;	/* since boot: sync reads outside load I/O */
 	uint32_t	want_peak;	/* since boot: pinned + in-use bytes (live entities' and the

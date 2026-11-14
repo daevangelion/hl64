@@ -48,5 +48,8 @@ void		cart_mount(void);
 
 /* iostat.c (PROFILE=1) */
 void		iostat_note_dma(unsigned bytes, uint32_t ticks);
+/* psamp.c (PSAMP=1) */
+void		psamp_init(void);
+void		psamp_dump(void);
 
 #endif

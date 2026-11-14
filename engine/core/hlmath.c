@@ -174,6 +174,31 @@ double hl_cos(double x)
 	}
 }
 
+/* hl_sin and hl_cos of one argument from one reduction: the same
+ * operations, so the same results as the two calls */
+void hl_sincos(double x, double *s, double *c)
+{
+	double r, cc, ks, kc;
+	int n;
+
+	if (!finite_d(x))
+	{
+		*s = *c = nan_d();
+		return;
+	}
+	if (fabs(x) < TINY)
+	{
+		*s = x;
+		*c = 1.0;
+		return;
+	}
+	n = reduce(x, &r, &cc);
+	ks = ksin(r, cc);
+	kc = kcos(r, cc);
+	*s = n == 0 ? ks : n == 1 ? kc : n == 2 ? -ks : -kc;
+	*c = n == 0 ? kc : n == 1 ? -ks : n == 2 ? -kc : ks;
+}
+
 double hl_tan(double x)
 {
 	double r, c;
@@ -259,6 +284,15 @@ float hl_sinf(float x)
 float hl_cosf(float x)
 {
 	return (float)hl_cos(x);
+}
+
+void hl_sincosf(float x, float *s, float *c)
+{
+	double sd, cd;
+
+	hl_sincos(x, &sd, &cd);
+	*s = (float)sd;
+	*c = (float)cd;
 }
 
 float hl_tanf(float x)

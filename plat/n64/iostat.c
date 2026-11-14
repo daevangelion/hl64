@@ -76,6 +76,21 @@ static unsigned us_of(uint64_t t, unsigned n)
 	return (unsigned)(t * 1000000ull / TICKS_PER_SECOND / n);
 }
 
+/* libdragon's time accounting (accounting.c): ticks spent in its
+ * spin-waits (RSP, display, rspq buffers / syncs, VI); its IRQ bucket is
+ * not fed by this libdragon */
+uint64_t acct_get_ticks(int cat);
+enum { ACCT_RSP = 2, ACCT_DISP = 3, ACCT_RSPQ = 4, ACCT_VI = 5, ACCT_N = 6 };
+static uint64_t acct_mark[ACCT_N];
+
+static unsigned acct_us(int cat, unsigned n)
+{
+	uint64_t t = acct_get_ticks(cat), d = t - acct_mark[cat];
+
+	acct_mark[cat] = t;
+	return us_of(d, n);
+}
+
 void sys_prof_dump(unsigned nframes)
 {
 	unsigned nf = nframes ? nframes : 1;
@@ -86,6 +101,9 @@ void sys_prof_dump(unsigned nframes)
 		io_sk_calls / nf, us_of(io_sk_ticks, nf),
 		io_dma_calls / nf, (unsigned)(io_dma_bytes / nf), us_of(io_dma_ticks, nf),
 		us_of(io_frame_max, 1), io_frames_over4ms);
+	log_printf("acct rsp=%uus/f disp=%uus/f rspq=%uus/f vi=%uus/f\n",
+		acct_us(ACCT_RSP, nf), acct_us(ACCT_DISP, nf),
+		acct_us(ACCT_RSPQ, nf), acct_us(ACCT_VI, nf));
 	io_rd_calls = io_sk_calls = io_dma_calls = 0;
 	io_rd_bytes = io_dma_bytes = 0;
 	io_rd_ticks = io_sk_ticks = io_dma_ticks = 0;

@@ -82,14 +82,11 @@ static void AngleMatrix(const float *angles, float (*matrix)[4])
 	float sr, sp, sy, cr, cp, cy;
 
 	angle = angles[YAW] * (float)(M_PI * 2 / 360);
-	sy = hl_sinf(angle);
-	cy = hl_cosf(angle);
+	hl_sincosf(angle, &sy, &cy);
 	angle = angles[PITCH] * (float)(M_PI * 2 / 360);
-	sp = hl_sinf(angle);
-	cp = hl_cosf(angle);
+	hl_sincosf(angle, &sp, &cp);
 	angle = angles[ROLL] * (float)(M_PI * 2 / 360);
-	sr = hl_sinf(angle);
-	cr = hl_cosf(angle);
+	hl_sincosf(angle, &sr, &cr);
 
 	// matrix = (YAW * PITCH) * ROLL
 	matrix[0][0] = cp * cy;
@@ -136,21 +133,22 @@ static void ConcatTransforms(const float in1[3][4], const float in2[3][4], float
 }
 
 // angles index are not the same as ROLL, PITCH, YAW
-static void AngleQuaternion(const float *angles, vec4_t quaternion)
+/* AngleQuaternion in two steps: the sines and cosines of the half angles
+ * (hl_sincosf: bit for bit hl_sinf / hl_cosf), then the products, so a
+ * caller whose two angle sets share a component evaluates it once */
+static void AngleHalfSinCos(const float *angles, float sc[3][2])
 {
-	float angle;
-	float sr, sp, sy, cr, cp, cy;
+	int i;
 
 	// FIXME: rescale the inputs to 1/2 angle
-	angle = angles[2] * 0.5f;
-	sy = hl_sinf(angle);
-	cy = hl_cosf(angle);
-	angle = angles[1] * 0.5f;
-	sp = hl_sinf(angle);
-	cp = hl_cosf(angle);
-	angle = angles[0] * 0.5f;
-	sr = hl_sinf(angle);
-	cr = hl_cosf(angle);
+	for (i = 0; i < 3; i++)
+		hl_sincosf(angles[i] * 0.5f, &sc[i][0], &sc[i][1]);
+}
+
+static void QuaternionOfHalf(const float sc[3][2], vec4_t quaternion)
+{
+	float sr = sc[0][0], cr = sc[0][1], sp = sc[1][0], cp = sc[1][1];
+	float sy = sc[2][0], cy = sc[2][1];
 
 	quaternion[0] = sr * cp * cy - cr * sp * sy; // X
 	quaternion[1] = cr * sp * cy + sr * cp * sy; // Y
@@ -309,7 +307,7 @@ static void StudioCalcBoneQuaterion(int frame, float s, const sfmt_bone_t *pbone
 {
 	int j, k;
 	vec4_t q1, q2;
-	float angle1[3], angle2[3];
+	float angle1[3], angle2[3], sc1[3][2], sc2[3][2];
 	const int16_t *panimvalue;
 
 	for (j = 0; j < 3; j++)
@@ -369,15 +367,23 @@ static void StudioCalcBoneQuaterion(int frame, float s, const sfmt_bone_t *pbone
 		}
 	}
 
+	AngleHalfSinCos(angle1, sc1);
 	if (!VectorCompare(angle1, angle2))
 	{
-		AngleQuaternion(angle1, q1);
-		AngleQuaternion(angle2, q2);
+		/* angle2's components equal (bit for bit) to angle1's have
+		 * angle1's half-angle sines and cosines */
+		for (j = 0; j < 3; j++)
+			if (memcmp(&angle1[j], &angle2[j], sizeof(float)))
+				hl_sincosf(angle2[j] * 0.5f, &sc2[j][0], &sc2[j][1]);
+			else
+				memcpy(sc2[j], sc1[j], sizeof(sc2[j]));
+		QuaternionOfHalf((const float (*)[2])sc1, q1);
+		QuaternionOfHalf((const float (*)[2])sc2, q2);
 		QuaternionSlerp(q1, q2, s, q);
 	}
 	else
 	{
-		AngleQuaternion(angle1, q);
+		QuaternionOfHalf((const float (*)[2])sc1, q);
 	}
 }
 

@@ -85,6 +85,8 @@ typedef struct {
 	uint8_t		npieces, pad;
 	uint8_t		piece[PIECES];	/* vertices per piece (fans) */
 	uint16_t	map;
+	int16_t		cen[3];		/* bounding sphere, model frame, quarter units */
+	uint16_t	rad;
 } fxdecal_t;
 
 typedef struct {
@@ -611,6 +613,39 @@ static int alloc_slot(void)
 	return old;
 }
 
+/* The decal's bounding sphere in its model frame (quarter units): the
+ * centre of its vertices' box and the distance of the farthest vertex
+ * from it, plus two units of slack */
+static void bound(fxdecal_t *d, const dvert_t *v, int n)
+{
+	int lo[3], hi[3], i, k;
+	float r2 = 0, r;
+
+	for (k = 0; k < 3; k++)
+		lo[k] = hi[k] = v[0].pos[k];
+	for (i = 1; i < n; i++)
+		for (k = 0; k < 3; k++)
+		{
+			if (v[i].pos[k] < lo[k])
+				lo[k] = v[i].pos[k];
+			if (v[i].pos[k] > hi[k])
+				hi[k] = v[i].pos[k];
+		}
+	for (k = 0; k < 3; k++)
+		d->cen[k] = (int16_t)((lo[k] + hi[k]) / 2);
+	for (i = 0; i < n; i++)
+	{
+		float q = 0;
+
+		for (k = 0; k < 3; k++)
+			q += (float)(v[i].pos[k] - d->cen[k]) * (float)(v[i].pos[k] - d->cen[k]);
+		if (q > r2)
+			r2 = q;
+	}
+	r = sqrtf(r2) + 2.0f;
+	d->rad = (uint16_t)(r < 65535.0f ? r : 65535.0f);
+}
+
 /* Store the chunk's pieces as one decal. */
 static int commit(place_t *P, int layer, int map, int chunk, ent_h owner)
 {
@@ -633,6 +668,7 @@ static int commit(place_t *P, int layer, int map, int chunk, ent_h owner)
 	d->npieces = (uint8_t)P->np;
 	memcpy(d->piece, P->piece, sizeof(d->piece));
 	memcpy(&verts[i * HL64_FX_DECAL_VERTS], P->v, sizeof(dvert_t) * (size_t)P->nv);
+	bound(d, P->v, P->nv);
 	if (P->nv > st.verts_max)
 		st.verts_max = (uint16_t)P->nv;
 	st.pieces = (uint16_t)(st.pieces + P->np);
@@ -1108,6 +1144,24 @@ static void world_of(const dvert_t *v, const float org[3], float ax[3][3], float
 		out[k] = org[k] + x * ax[0][k] + y * ax[1][k] + z * ax[2][k];
 }
 
+/* Outside the view: the bounding sphere wholly behind a side plane of the
+ * view frustum (ren_frustum: inward normals through the eye), so the
+ * decal would cover no pixel */
+static int culled(const fxdecal_t *d, const float org[3], float ax[3][3])
+{
+	const float (*fr)[3] = ren_frustum();
+	float c[3], r = (float)d->rad / GPU_FX_POS_SCALE;
+	int i, k;
+
+	for (k = 0; k < 3; k++)
+		c[k] = org[k] + (d->cen[0] * ax[0][k] + d->cen[1] * ax[1][k] + d->cen[2] * ax[2][k])
+			/ GPU_FX_POS_SCALE - fx_s.eye[k];
+	for (i = 0; i < 4; i++)
+		if (fr[i][0] * c[0] + fr[i][1] * c[1] + fr[i][2] * c[2] < -r)
+			return 1;
+	return 0;
+}
+
 /* Drawn in the surface's frame like the world (push_translation) and the
  * movers (mover_matrix), anchored at the decal's first vertex: rows 0-2
  * the axes / GPU_FX_POS_SCALE, row 3 the anchor - eye; the vertices are
@@ -1138,7 +1192,7 @@ void decal_draw(uint32_t *ndecals, uint32_t *nverts)
 				d->live = 0;
 			continue;
 		}
-		if (d->map != fx_s.map)
+		if (d->map != fx_s.map || culled(d, org, ax))
 			continue;
 		world_of(&dv[0], org, ax, a);
 		memset(&mt, 0, sizeof(mt));

@@ -115,9 +115,11 @@ void ren_init(void)
 void ren_angle_axes(const float ang[3], float f[3], float r[3], float u[3])
 {
 	const float k = 3.14159265358979f / 180.0f;
-	float sp = hl_sinf(ang[0] * k), cp = hl_cosf(ang[0] * k);
-	float sy = hl_sinf(ang[1] * k), cy = hl_cosf(ang[1] * k);
-	float sr = hl_sinf(ang[2] * k), cr = hl_cosf(ang[2] * k);
+	float sp, cp, sy, cy, sr, cr;
+
+	hl_sincosf(ang[0] * k, &sp, &cp);
+	hl_sincosf(ang[1] * k, &sy, &cy);
+	hl_sincosf(ang[2] * k, &sr, &cr);
 
 	f[0] = cp * cy;
 	f[1] = cp * sy;
