@@ -22,7 +22,8 @@
  *    between their think steps; render modes by col_ent_t.rendermode;
  *  - the view model: CPU-skinned with chrome (game_studio_chrome_*);
  *  - the hitbox source of engine/coll: the server pose
- *    (game_studio_pose) of the entity, its cooked hitboxes on their bones.
+ *    (game_studio_hitbox_pose) of the entity, its cooked hitboxes on their
+ *    bones (those the line can meet).
  *
  * Residency follows the old tree's studio pool (source/mod_studio.c,
  * provenance-audit.md entry QUAKE-INTERFACE: retargeted; its units are the
@@ -944,7 +945,7 @@ static void anim_prefetch(void)
 	}
 }
 
-/* 1 when sequence seq of model (as game_studio_pose picks it: 0 when out
+/* 1 when sequence seq of model (as the server pose picks it: 0 when out
  * of range) can be posed without a read: info and animation resident, or
  * a sequence without animation data. Otherwise what is missing is
  * requested (an info through residency interest, studio_frame's async
@@ -2031,9 +2032,11 @@ int studio_hitboxes(const col_ent_t *e, const float start[3], const float end[3]
 {
 	const ent_rnd_t *r;
 	const sfmt_hitbox_t *x;
+	const float (*pb)[3][4];
 	smodel_t *m;
 	game_pose_t p;
 	float reach;
+	uint8_t keep[255];
 	int i, n, ready;
 
 	*out = hb;
@@ -2060,18 +2063,22 @@ int studio_hitboxes(const col_ent_t *e, const float start[3], const float end[3]
 	memcpy(p.angles, e->angles, sizeof(p.angles));
 	memcpy(p.controller, r->controller, sizeof(p.controller));
 	memcpy(p.blending, r->blending, sizeof(p.blending));
-	n = game_studio_pose(&p, bones, MAXBONES);
+	/* only the hitboxes the line can meet (their bones' chains posed) */
+	n = game_studio_hitbox_pose(&p, ready ? start : NULL, end, &pb, keep);
+	if (n <= 0)
+		return n;
 	x = SFMT_HITBOXES(m->info);
-	for (i = 0; i < m->info->numhitboxes; i++)
+	for (i = n = 0; i < m->info->numhitboxes; i++)
 	{
-		if (x[i].bone >= n)
-			return 0;
-		memcpy(hb[i].bone, bones[x[i].bone], sizeof(hb[i].bone));
-		memcpy(hb[i].mins, x[i].bbmin, sizeof(hb[i].mins));
-		memcpy(hb[i].maxs, x[i].bbmax, sizeof(hb[i].maxs));
-		hb[i].group = x[i].group;
+		if (!keep[i])
+			continue;
+		memcpy(hb[n].bone, pb[x[i].bone], sizeof(hb[n].bone));
+		memcpy(hb[n].mins, x[i].bbmin, sizeof(hb[n].mins));
+		memcpy(hb[n].maxs, x[i].bbmax, sizeof(hb[n].maxs));
+		hb[n].group = x[i].group;
+		n++;
 	}
-	return m->info->numhitboxes;
+	return n;
 }
 
 /* ---- queries, stats --------------------------------------------------------------------------- */

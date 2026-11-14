@@ -68,9 +68,16 @@ hold at the same points (K9, K10).
   node a trace visits, 25 per entity candidate of a move's box, 200 per
   `CheckLocalMove`, 110 per walk step, 850 per FindNearestNode search, 20
   per Dijkstra node expanded, 1230 per anim event, 1000 per sound or
-  sentence started, 600 per decal, 100 per bone of a server pose computed
-  (game memo misses; the renderer never fills the game's memo, so the
-  count is the same on every machine). Fitted to the PROFILE `ai: frame`
+  sentence started, 600 per decal, 100 per bone of a server pose computed,
+  20 per server pose begun (its frame, controllers, root transform), 2
+  per hitbox cull test. A server pose computes only the bones asked for:
+  a hitbox trace the chains of the hitboxes its line can meet (a bone's
+  subtree is skipped when the line passes beyond the subtree's bound
+  from the bone's parent; trace-and-hulls.md 4.5), an attachment or bone
+  position its bone's chain; the game's memo keeps each pose's computed
+  bones (4 poses), so a bone is computed once per pose (memo misses; the
+  renderer never fills the game's memo, so the count is the same on
+  every machine). Fitted to the PROFILE `ai: frame`
   lines of ares runs of routes m4 and uplink (9375 frames joined to the
   host's counts of the same frames; least squares, r² 0.98, rms 1.2 ms;
   cart µs / units ≤ 1.15 in 99 % of the frames over 10 ms). The frame's

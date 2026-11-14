@@ -263,6 +263,8 @@ static void aiw_now(mon_ai_work_t *w)
 	mon_aiw.bsp = c.nodes;
 	mon_aiw.cands = c.cands;
 	mon_aiw.bones = game_studio_pose_bones;
+	mon_aiw.poses = game_studio_poses;
+	mon_aiw.btests = game_studio_cull_tests;
 	mon_aiw.sounds = snd_emit_count();
 	*w = mon_aiw;
 }
@@ -295,10 +297,12 @@ static void aiw_add(mon_ai_work_t *s, const mon_ai_work_t *d)
  * candidate of a move's box, a CheckLocalMove and each of its walk steps
  * (their hull traces count among the traces), a FindNearestNode search,
  * a Dijkstra node expanded, an anim event, a sound start, a decal, a bone
- * of a server pose (hitboxes, attachments). Fitted to the `ai: frame`
- * lines of the ares PROFILE runs of main fd85c01 (routes m4 + uplink,
- * 9375 frames joined to the host's counts of the same frames:
- * least squares, r2 0.98, rms 1.2 ms; docs/specs/think-and-time.md 2.1). */
+ * of a server pose (hitboxes, attachments), a server pose begun (its
+ * frame, controllers and root transform), a hitbox pose cull test.
+ * Fitted to the `ai: frame` lines of the ares PROFILE runs of main fd85c01
+ * (routes m4 + uplink, 9375 frames joined to the host's counts of the
+ * same frames: least squares, r2 0.98, rms 1.2 ms; docs/specs/think-and-
+ * time.md 2.1). */
 #define AI_UNIT_START	340
 #define AI_UNIT_SENSE	680
 #define AI_UNIT_LCAND	3
@@ -314,6 +318,8 @@ static void aiw_add(mon_ai_work_t *s, const mon_ai_work_t *d)
 #define AI_UNIT_SOUND	1000
 #define AI_UNIT_DECAL	600
 #define AI_UNIT_BONE	100
+#define AI_UNIT_POSE	20
+#define AI_UNIT_BTEST	2
 
 static uint32_t aiw_units(const mon_ai_work_t *w)
 {
@@ -321,7 +327,8 @@ static uint32_t aiw_units(const mon_ai_work_t *w)
 		w->fvis * AI_UNIT_FVIS + w->traces * AI_UNIT_TRACE + w->bsp * AI_UNIT_BSP +
 		w->cands * AI_UNIT_CAND + w->lm * AI_UNIT_LM + w->steps * AI_UNIT_STEP +
 		w->nn * AI_UNIT_NN + w->djpop * AI_UNIT_DJPOP + w->events * AI_UNIT_EVENT +
-		w->sounds * AI_UNIT_SOUND + w->decals * AI_UNIT_DECAL + w->bones * AI_UNIT_BONE;
+		w->sounds * AI_UNIT_SOUND + w->decals * AI_UNIT_DECAL + w->bones * AI_UNIT_BONE +
+		w->poses * AI_UNIT_POSE + w->btests * AI_UNIT_BTEST;
 }
 
 static void aiw_print(const char *tag, const mon_ai_work_t *w);
@@ -455,7 +462,7 @@ static void aiw_print(const char *tag, const mon_ai_work_t *w)
 {
 	log_printf(" %s=lm:%lu,steps:%lu,traces:%lu,bsp:%lu,routes:%lu,tri:%lu,cover:%lu,nn:%lu,"
 		"nnt:%lu,dj:%lu,djpop:%lu,lmhit:%lu,starts:%lu,looks:%lu,nopvs:%lu,lcand:%lu,fvis:%lu,"
-		"events:%lu,cands:%lu,bones:%lu,sounds:%lu,decals:%lu", tag,
+		"events:%lu,cands:%lu,bones:%lu,sounds:%lu,decals:%lu,poses:%lu,btests:%lu", tag,
 		(unsigned long)w->lm, (unsigned long)w->steps, (unsigned long)w->traces,
 		(unsigned long)w->bsp, (unsigned long)w->routes, (unsigned long)w->tri,
 		(unsigned long)w->cover, (unsigned long)w->nn, (unsigned long)w->nnt,
@@ -463,7 +470,7 @@ static void aiw_print(const char *tag, const mon_ai_work_t *w)
 		(unsigned long)w->starts, (unsigned long)w->looks, (unsigned long)w->nopvs,
 		(unsigned long)w->lcand, (unsigned long)w->fvis, (unsigned long)w->events,
 		(unsigned long)w->cands, (unsigned long)w->bones, (unsigned long)w->sounds,
-		(unsigned long)w->decals);
+		(unsigned long)w->decals, (unsigned long)w->poses, (unsigned long)w->btests);
 }
 
 /* `prof ai` (after `prof mon_us`): the window's AI work per frame (avg),

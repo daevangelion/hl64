@@ -66,18 +66,20 @@ void		studio_draw_temp(res_t model, int body, int skin, const float org_g[3],
 /* The view model (studio_view_model) after the translucent pass. */
 void		studio_draw_view(void);
 /* The hitbox source studio_init installs (coll.h col_hitbox_fn): the
- * entity's cooked hitboxes on the bones of its server pose
- * (game_studio_pose), in its own map-local frame; -1 without posing when
- * the line start -> end (NULL: none) passes beyond
- * game_studio_hitbox_reach of the entity's origin. */
+ * entity's cooked hitboxes the line start -> end (NULL: none) can meet,
+ * on the bones of its server pose (game_studio_hitbox_pose), in its own
+ * map-local frame; -1 without posing when the line passes beyond
+ * game_studio_hitbox_reach of the entity's origin (or beyond every
+ * hitbox's bone chain bound). */
 int		studio_hitboxes(const col_ent_t *e, const float start[3], const float end[3],
 			const col_hitbox_t **out);
 
 /* View model (HUD / weapons slice; architecture.md 9.4): this frame's
  * first-person model, CPU-skinned with chrome, drawn after the entities.
  * org / ang: the view (game_calc_view) in the player's frame; the pose
- * is game_studio_pose of (model, sequence, frame, controller) placed at
- * the eye. Call once per frame before the draw; model RES_NONE = none. */
+ * is the server pose (game_studio_pose_draw) of (model, sequence, frame,
+ * controller) placed at the eye. Call once per frame before the draw;
+ * model RES_NONE = none. */
 typedef struct {
 	res_t		model;
 	uint16_t	sequence;

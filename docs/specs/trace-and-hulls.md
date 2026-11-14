@@ -210,8 +210,13 @@ oriented box on its bone; the nearest hitbox entry is the impact and sets
 `iHitgroup` to its group (head, chest, stomach, arms, legs per the model);
 a segment that meets the linked box but misses every hitbox does not hit
 the entity. Hull traces (non-zero boxes) use the bounding box only.
-Mechanism: pose computed on demand through `game_studio_setup_bones`
-(engine hook `col_set_hitbox_source`) and cached for the frame (D6 ii).
+Mechanism: the server pose (`game_studio_hitbox_pose`, engine hook
+`col_set_hitbox_source`), memoised per pose and bone (D6 ii). Only the
+hitboxes the segment can meet are posed and walked: none when it passes
+beyond the sequence's hitbox reach of the origin, and per bone its
+subtree only when it passes within the subtree's bound (bone translation
+bounds plus hitbox corners, + 3 % + 2 u) of the bone's parent; a skipped
+hitbox cannot be met, so the impact and `iHitgroup` are those of all.
 
 ### 4.6 Position test
 An entity is stuck when `move(origin, mins, maxs, origin, 0, self)` is
