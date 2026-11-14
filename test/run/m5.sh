@@ -48,7 +48,7 @@
 #        routes (iteration only: neither is a gate run)
 # Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c13
 #        cook /scratch/hl64/tmp/M5Lead/c13), HL64_FIXTURES, HL64_DATA,
-#        W1_FIXTURES (passed to m4.sh), ARES_BIN, ARES_TIMEOUT (s, per
+#        W1_FIXTURES (passed to m4.sh), HL64_ARES_HOST / ARES_BIN (test/run/ares.sh), ARES_TIMEOUT (s, per
 #        route, default 14400), DISPLAY_NUM, OLD_TREE (the old tree, for
 #        the oracles' verify suites; absent: skipped), OLD_UPLINK_LOG,
 #        OLD_CART_LOG (the old runs the oracles were made from).
@@ -243,18 +243,15 @@ if [[ $ARES -eq 0 ]]; then
 fi
 
 # ---- ares ----
-ARES_BIN="${ARES_BIN:-$HOME/src/products/ares/build/desktop-ui/ares}"
-[[ -x "$ARES_BIN" ]] || { echo "patched ares not found at $ARES_BIN (set ARES_BIN)" >&2; exit 2; }
 ROMDIR="$BUILD_DIR/m5-rom"
 BC="$ROMDIR/content"
 mkdir -p "$ROMDIR"
 # the PROFILE route's PASS runs `mem` with the last stats record (the
 # cart's frame numbers need not be the host's: async opens)
 "$B/hl64-host" --write-cmds "$ROMDIR/m5.cmd" "${CMDS[@]}"
-# shellcheck source=xvfb.sh
-. "$ROOT/test/run/xvfb.sh"
-xvfb_start || exit 2
-trap '[[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null || true' EXIT
+# shellcheck source=ares.sh
+. "$ROOT/test/run/ares.sh"
+ares_setup || exit 2
 HEAP_DONE=0
 for r in "${ROUTES[@]}"; do
 	[[ -f "$OUT/$r.rbc" ]] || continue
@@ -276,11 +273,7 @@ for r in "${ROUTES[@]}"; do
 			|| { tail -20 "$OUT/host-profile-boot.log" >&2; die "PROFILE host boot"; }
 	fi
 	CODE=0
-	(cd "$ROMDIR" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 \
-		timeout "${ARES_TIMEOUT:-14400}" "$ARES_BIN" --system "Nintendo 64" \
-		--setting Video/Driver=Vulkan --setting Audio/Driver=None \
-		--setting Input/Driver=SDL --setting General/HomebrewMode=true \
-		hl64.z64 >ares.log 2>&1) || CODE=$?
+	ares_run "$ROMDIR" hl64.z64 ares.log "${ARES_TIMEOUT:-14400}" || CODE=$?
 	tr -d '\r' <"$ROMDIR/ares.log" >"$OUT/ares-$r.log"
 	grep '^route FAIL' "$OUT/ares-$r.log" | tee -a "$GATE_LOG" || true
 	nf=${#FAILS[@]}

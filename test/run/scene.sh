@@ -12,8 +12,9 @@
 #          cart's)
 #   --ares: one HL64_TEST PROFILE ROM per scene (the ELF is built once; a
 #          scene only re-packs the DFS with its route.rbc), each ares run
-#          under flock $ARES_LOCK (one ares at a time across agents), with
-#          its wall time; shots as shots/NN-<label>.png
+#          through test/run/ares.sh ares_run (a local slot lock, or on
+#          HL64_ARES_HOST), up to -j N runs at a time, with its wall time;
+#          shots as shots/NN-<label>.png
 #
 # Options:
 #   --profile          host: PROFILE build (ares runs are always PROFILE)
@@ -32,12 +33,13 @@
 #                      labels the scene shares with route R) likewise
 #   --keep-rom         keep each scene's hl64.z64 (default: removed after
 #                      its run)
-#   -j N               host scenes in parallel (default 4)
+#   -j N               scenes in parallel (default 4; ares runs also wait
+#                      for a slot, test/run/ares.sh)
 #   SCENE ... | all    names under test/scenes (without .route)
 # Env:   BUILD_DIR (scratch, default build), HL64_CONTENT (cooked content,
-#        default /scratch/hl64/tmp/M5Lead/c13), BEFORE_CONTENT, ARES_BIN,
-#        ARES_TIMEOUT (s per scene, default 1800), ARES_LOCK (default
-#        /tmp/hl64-ares.lock), DISPLAY_NUM, MAKE_JOBS (default 4)
+#        default /scratch/hl64/tmp/M5Lead/c13), BEFORE_CONTENT,
+#        ARES_TIMEOUT (s per scene, default 1800), HL64_ARES_HOST / ARES_BIN /
+#        ARES_SLOTS (test/run/ares.sh), DISPLAY_NUM, MAKE_JOBS (default 4)
 # Out:   $BUILD_DIR/scenes/<host|ares>/<scene>/{route.rbc,route.dump,
 #        scene.cmd,host.log|ares.log,table.md,wall.txt,shots/,psamp.md}
 #        (before: $BUILD_DIR/before/scenes/...), summary.md beside them.
@@ -48,7 +50,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-build}"
 case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$ROOT/$BUILD_DIR" ;; esac
 CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/M5Lead/c13}"
-ARES_LOCK="${ARES_LOCK:-/tmp/hl64-ares.lock}"
 usage() {
 	echo "usage: test/run/scene.sh [--ares|--host] [--profile] [--psamp] [--before TREE]" \
 		"[--route-log R=LOG ...] [--keep-rom] [-j N] SCENE... | all" >&2
@@ -179,9 +180,8 @@ for i, f in enumerate(ppm):
 EOF
 }
 
-ARES_UP=0
-ares_run() {	# ares_run <tree id> <scene>
-	local t=$1 s=$2 b="${BDIR[$1]}" d="${BDIR[$1]}/scenes/ares/$2" code=0
+scene_ares() {	# scene_ares <tree id> <scene>: the ROM here, the ares run in the background
+	local t=$1 s=$2 b="${BDIR[$1]}" d="${BDIR[$1]}/scenes/ares/$2"
 	local rd="$b/$ROMSUB" flags=(HL64_TEST=1 PROFILE=1)
 	[[ $PSAMP -eq 1 ]] && flags+=(PSAMP=1)
 	rm -f "$rd/content/route.rbc"	# a hard link into the content after cp -al: never write through it
@@ -190,41 +190,33 @@ ares_run() {	# ares_run <tree id> <scene>
 		HL64_CONTENT="$rd/content" HL64_CMDS="$d/scene.cmd" rom >"$d/rom-build.log" 2>&1 \
 		|| { tail -20 "$d/rom-build.log" >&2; echo 2 >"$d/exit"; return 0; }
 	mv "$rd/hl64.z64" "$d/hl64.z64"
-	if [[ $ARES_UP -eq 0 ]]; then
-		ARES_BIN="${ARES_BIN:-$HOME/src/products/ares/build/desktop-ui/ares}"
-		[[ -x "$ARES_BIN" ]] || { echo "patched ares not found at $ARES_BIN (set ARES_BIN)" >&2; exit 2; }
-		# shellcheck source=xvfb.sh
-		. "$ROOT/test/run/xvfb.sh"
-		xvfb_start || exit 2
-		trap '[[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null || true' EXIT
-		ARES_UP=1
-	fi
-	echo "scene: $s ($t): waiting for $ARES_LOCK"
+	while [[ $(jobs -rp | wc -l) -ge $JOBS ]]; do wait -n || true; done
 	(
-		flock 9
-		t0=$(date +%s.%N)
-		c=0
-		cd "$d" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 timeout "${ARES_TIMEOUT:-1800}" "$ARES_BIN" \
-			--system "Nintendo 64" --setting Video/Driver=Vulkan --setting Audio/Driver=None \
-			--setting Input/Driver=SDL --setting General/HomebrewMode=true hl64.z64 >ares.raw.log 2>&1 || c=$?
-		echo "$(date +%s.%N) $t0 $(cut -d' ' -f1 /proc/loadavg)" | awk '{printf "%.0f s (load %s)\n", $1 - $2, $3}' >"$d/wall.txt"
-		exit "$c"
-	) 9>>"$ARES_LOCK" || code=$?
-	tr -d '\r' <"$d/ares.raw.log" >"$d/ares.log"
-	rm -f "$d/ares.raw.log"
-	[[ $KEEP -eq 1 ]] || rm -f "$d/hl64.z64"
-	shots "$d" || echo "scene: $s ($t): shot conversion failed" >&2
-	echo "$code" >"$d/exit"
-	if [[ $PSAMP -eq 1 && -f "${TREE[$t]}/test/m6/psamp.py" ]]; then
-		python3 "${TREE[$t]}/test/m6/psamp.py" "$d/ares.log" "$rd/hl64.elf" --by-seg --top 15 >"$d/psamp.md" 2>&1 || true
-	fi
-	echo "scene: $s ($t): exit $code, $(cat "$d/wall.txt")"
+		code=0
+		ares_run "$d" hl64.z64 ares.raw.log || code=$?
+		echo "$ARES_WALL s (load $ARES_LOAD, $ARES_RAN_ON)" >"$d/wall.txt"
+		tr -d '\r' <"$d/ares.raw.log" >"$d/ares.log"
+		rm -f "$d/ares.raw.log"
+		[[ $KEEP -eq 1 ]] || rm -f "$d/hl64.z64"
+		shots "$d" || echo "scene: $s ($t): shot conversion failed" >&2
+		echo "$code" >"$d/exit"
+		if [[ $PSAMP -eq 1 && -f "${TREE[$t]}/test/m6/psamp.py" ]]; then
+			python3 "${TREE[$t]}/test/m6/psamp.py" "$d/ares.log" "$rd/hl64.elf" --by-seg --top 15 >"$d/psamp.md" 2>&1 || true
+		fi
+		echo "scene: $s ($t): exit $code, $(cat "$d/wall.txt")"
+	) &
 }
+
+if [[ $MODE == ares ]]; then
+	# shellcheck source=ares.sh
+	. "$ROOT/test/run/ares.sh"
+	ares_setup || exit 2
+fi
 
 for s in "${SCENES[@]}"; do
 	for t in "${TREES[@]}"; do
 		if [[ $MODE == ares ]]; then
-			ares_run "$t" "$s"
+			scene_ares "$t" "$s"
 		else
 			while [[ $(jobs -rp | wc -l) -ge $JOBS ]]; do wait -n || true; done
 			host_run "$t" "$s" &
