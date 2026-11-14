@@ -118,10 +118,11 @@ int		sys_pi_busy(void);
 uint32_t	sys_pi_wait(int audio);
 uint32_t	sys_pi_read(void *dst, uint32_t rom, uint32_t len);
 uint32_t	sys_pi_cost_us(uint32_t len);
-/* The PI completion interrupt's handler (cart: called in interrupt
- * context after every PI DMA, the chain's or not; host: no interrupt,
- * never called). Interrupts off / on around state a handler shares with
- * the main thread (nest; host: nothing). */
+/* The PI completion handler (cart: called after every PI DMA, the chain's
+ * or not, with interrupts off: from the interrupt, or nested in a libdragon
+ * DMA call (sys_pi_*, the mixer's, DFS) whose queue poll took the
+ * completion; host: no interrupt, never called). Interrupts off / on
+ * around state a handler shares with the main thread (nest; host: nothing). */
 void		sys_pi_set_isr(void (*isr)(void));
 void		sys_irq_off(void);
 void		sys_irq_on(void);

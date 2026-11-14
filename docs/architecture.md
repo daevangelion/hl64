@@ -331,8 +331,11 @@ stronger class needs a queued request; pieces ≤ 2 KB (0.4 ms of PI),
 planned into an array and chained by the PI completion interrupt (the
 handler only lands the piece and launches the plan's next one: no queue
 work, no callbacks, no allocation; the main thread shares the plan with
-interrupts off); a sync / audio read pauses the chain until the next
-`io_pump` (so one frame step's reads wait for one piece at most) and
+interrupts off; on the cart a piece goes through libdragon's DMA queue,
+which may hold it behind the mixer's or DFS's transfers, so it lands by
+its queue ticket, not by the PI's status); a sync / audio read pauses the
+chain until the next `io_pump` (so one frame step's reads wait for one
+piece at most) and
 cart file lookups hold it;
 per-frame budget 64 KB (128 KB while a seam is approached); synchronous
 reads only at boot/New Game and for a collision chunk missing mid-trace
@@ -1162,8 +1165,12 @@ uses them (specs/README.md).
 = `~/sdks/n64-sdk-hl64-<rev12>`: libdragon from our fork
 (`~/src/libdragon-hl64`, branch `hl64`: DragonMinded `preview` plus the
 banked RDRAM overlay — `surface.c` / `display.c` / `rba_ld` /
-`rdram_bank`, FB / Z / stream in separate banks — and the debugcpp
-debloat) at the Makefile's `LIBDRAGON_REV`, its tools, and tiny3d at
+`rdram_bank`, FB / Z / stream in separate banks — the debugcpp debloat,
+and the PI dispatch fix: preview's DMA queue accounts a completion before
+the `register_PI_handler` handlers run, and hands them the completions it
+polls itself, so engine/io's chain, launched from that handler, keeps
+one piece in the queue, landed by its ticket) at the Makefile's
+`LIBDRAGON_REV`, its tools, and tiny3d at
 `TINY3D_REV`, built by `plat/n64/build_sdk.sh`; `make sdk-check` compares
 the prefix's `MANIFEST.json` with both pins. Toolchain
 `~/sdks/mips64-toolchain`, out-of-tree `BUILD_DIR` (scratch on

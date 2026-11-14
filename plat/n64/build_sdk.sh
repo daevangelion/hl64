@@ -4,7 +4,8 @@
 # Build the N64 SDK prefix hl64 links (Makefile N64_INST, docs/architecture.md
 # 18.1): libdragon from our fork at the Makefile's LIBDRAGON_REV (branch hl64
 # of ~/src/libdragon-hl64: DragonMinded preview + the banked RDRAM overlay +
-# the debugcpp debloat), its host tools, and tiny3d at TINY3D_REV, installed
+# the debugcpp debloat + the PI dispatch fix), its host tools, and tiny3d at
+# TINY3D_REV, installed
 # into ~/sdks/n64-sdk-hl64-<rev12> with the MANIFEST.json `make sdk-check`
 # reads. Clean `git archive` trees in WORK: neither checkout is modified.
 #

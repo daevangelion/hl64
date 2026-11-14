@@ -17,9 +17,9 @@
 BUILD_DIR ?= build
 # The N64 SDK (docs/architecture.md 18.1): libdragon from our fork
 # (~/src/libdragon-hl64 branch hl64: DragonMinded preview + the banked RDRAM
-# overlay + the debugcpp debloat) and tiny3d, installed together by
-# plat/n64/build_sdk.sh into a prefix named after the fork commit.
-LIBDRAGON_REV := 0ddf7b6ad02d1e633169280ab624993bec338503
+# overlay + the debugcpp debloat + the PI dispatch fix) and tiny3d, installed
+# together by plat/n64/build_sdk.sh into a prefix named after the fork commit.
+LIBDRAGON_REV := ef4435505a57b25de7fbc41753a9a08dbf29d8bc
 TINY3D_REV := e84172f29f719680ac3213a7f408c2f721ef7b24
 N64_INST ?= $(HOME)/sdks/n64-sdk-hl64-$(shell printf %.12s $(LIBDRAGON_REV))
 N64_GCCPREFIX ?= $(HOME)/sdks/mips64-toolchain
