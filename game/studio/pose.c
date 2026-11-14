@@ -765,6 +765,7 @@ typedef struct {
 static pose_memo_t	sv_cache[SV_CACHE], sv_scratch;
 static int		sv_next;
 uint32_t		game_studio_pose_bones, game_studio_poses, game_studio_cull_tests;
+uint32_t		game_studio_hitboxes_kept;
 
 /* one server pose in the making */
 typedef struct {
@@ -931,6 +932,7 @@ int game_studio_hitbox_pose(const game_pose_t *p, const float start[3], const fl
 			keep[i] = 1;
 		}
 		*bones = (const float (*)[3][4])m;
+		game_studio_hitboxes_kept += hdr->numhitboxes;
 		return hdr->numhitboxes;
 	}
 	/* a bone's subtree is posed only where the line passes within its
@@ -962,6 +964,7 @@ int game_studio_hitbox_pose(const game_pose_t *p, const float start[3], const fl
 	for (i = 0; i < hdr->numhitboxes; i++)
 		kept += keep[i] = live[x[i].bone];
 	*bones = (const float (*)[3][4])m;
+	game_studio_hitboxes_kept += (uint32_t)kept;
 	return kept ? kept : -1;
 }
 

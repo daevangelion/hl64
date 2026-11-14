@@ -173,8 +173,10 @@ int	game_studio_hitbox_pose(const game_pose_t *p, const float start[3], const fl
 int	game_studio_pose_draw(const game_pose_t *p, float (*out)[3][4], int max);
 /* Server pose work since boot, the game's AI work counters take deltas
  * around a think: bones computed (memo misses), poses begun (their shared
- * preamble), hitbox cull tests (a point-to-line distance each). */
+ * preamble), hitbox cull tests (a point-to-line distance each), hitboxes
+ * kept for the trace's walk (game_studio_hitbox_pose). */
 extern uint32_t	game_studio_pose_bones, game_studio_poses, game_studio_cull_tests;
+extern uint32_t	game_studio_hitboxes_kept;
 /* An upper bound on the distance from the pose origin of any point of
  * model's hitboxes in any server pose of sequence
  * `sequence` (any frame, blend, controller; the bone chains' longest
