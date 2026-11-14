@@ -41,9 +41,11 @@ void		sys_stack_paint(void);
 void		vid_init(void);
 /* Detach and show a frame left attached (error screen path). */
 void		vid_abort_frame(void);
+/* The last submitted frame's RDP work is not finished yet. */
+int		vid_gpu_busy(void);
 
 /* gpu.c: this frame's projection (gpu_begin) for the following matrix
- * pushes: view 0 the world's, 1 the view model's (gpu_studio_draw_cpu),
+ * pushes: view 0 the world's, 1 the view model's (gpu_studio_ent_t.view),
  * whose depth fills only the front of the depth range (gpu.c VIEW_DEPTH). */
 void		gpu_view_proj(int view);
 
@@ -53,5 +55,12 @@ void		cart_mount(void);
 
 /* iostat.c (PROFILE=1) */
 void		iostat_note_dma(unsigned bytes, uint32_t ticks);
+/* audio.c (PROFILE=1): mixer pumps since the last call, split by whether
+ * the last frame's RDP work was still running (vid_gpu_busy): calls,
+ * ticks, audio buffers mixed; then zeroed */
+void		audio_pump_take(unsigned n[2], uint64_t ticks[2], unsigned mixes[2]);
+/* psamp.c (PSAMP=1) */
+void		psamp_init(void);
+void		psamp_dump(void);
 
 #endif

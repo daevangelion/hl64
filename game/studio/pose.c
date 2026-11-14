@@ -34,7 +34,9 @@
  *    inputs.
  * A sequence whose chunk is not resident (studio_anim NULL: requested)
  * holds the entity's last resident sequence and frame, else the bones'
- * default values. The pose is computed in float (hl_sinf / hl_cosf).
+ * default values. The pose is computed in float: the server pose with
+ * hl_sinf / hl_cosf / hl_acosf, the client pose with the render
+ * approximations (hl_rsincosf / hl_racosf, rpose).
  */
 #include <math.h>
 #include <stdlib.h>
@@ -134,10 +136,17 @@ static void ConcatTransforms(const float in1[3][4], const float in2[3][4], float
 		+ in1[2][3];
 }
 
+/* Computing the client (draw) pose: nothing but the picture reads it, so
+ * its sines, cosines and acos are the render approximations
+ * (hl_rsincosf / hl_racosf); the server pose (hitboxes, attachments,
+ * bone positions) keeps the exact functions, bit for bit on host and
+ * cart. */
+static int	rpose;
+
 /* AngleQuaternion's sin / cos of the half angles: sc[j] = sin, cos of
- * angles[j] * 0.5 (one reduction each: hl_sincosf); a half angle with
- * the bits of the same component of `same` (NULL: none) takes its
- * values (scs) instead */
+ * angles[j] * 0.5 (one reduction each: hl_sincosf; rpose: hl_rsincosf);
+ * a half angle with the bits of the same component of `same` (NULL:
+ * none) takes its values (scs) instead */
 static void half_sincos(const float *angles, const float *same, float (*scs)[2],
 	float (*sc)[2])
 {
@@ -157,7 +166,10 @@ static void half_sincos(const float *angles, const float *same, float (*scs)[2],
 				continue;
 			}
 		}
-		hl_sincosf(h, &sc[j][0], &sc[j][1]);
+		if (rpose)
+			hl_rsincosf(h, &sc[j][0], &sc[j][1]);
+		else
+			hl_sincosf(h, &sc[j][0], &sc[j][1]);
 	}
 }
 
@@ -226,10 +238,20 @@ static void QuaternionSlerp(const vec4_t p, vec4_t q, float t, vec4_t qt)
 	{
 		if ((1.0f - cosom) > 0.000001f)
 		{
-			omega = hl_acosf(cosom);
-			sinom = hl_sinf(omega);
-			sclp = hl_sinf((1.0f - t) * omega) / sinom;
-			sclq = hl_sinf(t * omega) / sinom;
+			if (rpose)
+			{
+				omega = hl_racosf(cosom);
+				sinom = hl_rsinf(omega);
+				sclp = hl_rsinf((1.0f - t) * omega) / sinom;
+				sclq = hl_rsinf(t * omega) / sinom;
+			}
+			else
+			{
+				omega = hl_acosf(cosom);
+				sinom = hl_sinf(omega);
+				sclp = hl_sinf((1.0f - t) * omega) / sinom;
+				sclq = hl_sinf(t * omega) / sinom;
+			}
 		}
 		else
 		{
@@ -1328,7 +1350,9 @@ int game_studio_setup_bones(int e, float (*out)[3][4], int max)
 		f = gs_estimate_frame(pseqdesc, &cl, time, 1);
 		s[0] = (L->blend[0] * dadt + L->prevblend[0] * (1.0f - dadt)) / 255.0f;
 		s[1] = (L->blend[1] * dadt + L->prevblend[1] * (1.0f - dadt)) / 255.0f;
+		rpose = 1;
 		seq_pose(hdr, pseqdesc, chunk, f, adj, s, pos1, q1);
+		rpose = 0;
 		L->heldseq = (uint16_t)seq;
 		L->heldframe = f;
 		L->held_ok = 1;
@@ -1344,7 +1368,9 @@ int game_studio_setup_bones(int e, float (*out)[3][4], int max)
 		s[0] = L->blend[0] / 255.0f;
 		s[1] = L->blend[1] / 255.0f;
 		pseqdesc = &seqs[hc ? L->heldseq : seq];
+		rpose = 1;
 		seq_pose(hdr, pseqdesc, hc, hc ? L->heldframe : 0, adj, s, pos1, q1);
+		rpose = 0;
 		build_matrices(hdr, out);
 		return hdr->numbones;
 	}
@@ -1360,9 +1386,11 @@ int game_studio_setup_bones(int e, float (*out)[3][4], int max)
 		{
 			sb[0] = L->prevseqblend[0] / 255.0f;
 			sb[1] = L->prevseqblend[1] / 255.0f;
+			rpose = 1;
 			seq_pose(hdr, pprev, pc, L->prevframe, adj, sb, pos1b, q1b);
 			sw = 1.0f - (float)((time - L->sequencetime) / 0.2);
 			StudioSlerpBones(hdr->numbones, q1, pos1, q1b, pos1b, sw);
+			rpose = 0;
 		}
 	}
 	else

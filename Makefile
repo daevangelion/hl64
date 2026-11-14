@@ -129,6 +129,9 @@ HL64_DEFS :=
 ifdef PROFILE
 HL64_DEFS += -DHL64_PROFILE=1
 endif
+ifdef PSAMP
+HL64_DEFS += -DHL64_PSAMP=1
+endif
 ifdef HL64_TEST
 HL64_DEFS += -DHL64_TEST=1
 endif
@@ -188,6 +191,9 @@ N64_LDFLAGS += --wrap=malloc --wrap=free --wrap=calloc --wrap=realloc \
 ifdef PROFILE
 N64_SRC += plat/n64/iostat.c
 N64_LDFLAGS += --wrap=fread --wrap=fseek
+endif
+ifdef PSAMP
+N64_SRC += plat/n64/psamp.c
 endif
 
 ROM_OBJS := $(addprefix $(BUILD_DIR)/,$(ENGINE_SRC:.c=.o) $(N64_SRC:.c=.o))

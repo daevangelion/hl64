@@ -75,8 +75,9 @@ int		studio_hitboxes(const col_ent_t *e, const float start[3], const float end[3
 			const col_hitbox_t **out);
 
 /* View model (HUD / weapons slice; architecture.md 9.4): this frame's
- * first-person model, CPU-skinned with chrome, drawn after the entities
- * in the front of the depth range (gpu_studio_draw_cpu). org: the view
+ * first-person model, drawn after the entities in the front of the depth
+ * range (gpu_studio_ent_t.view): its chrome runs CPU-skinned, the others
+ * from their blocks with the pose's bone matrices. org: the view
  * (game_calc_view) in the player's frame; ang: the model's angles there
  * (an entity's: the pose negates the pitch, so a view model at the view
  * angles has the pitch negated, HLSDK V_CalcGunAngle); the pose is the
@@ -103,6 +104,7 @@ int		studio_view_bone_cam(int bone, float out[3][4]);
 typedef struct {
 	uint32_t	models, pool_used, pool_peak, anims, sync_loads;
 	uint32_t	drawn, bones_us, draw_us, us_max;
+	uint32_t	gpu_us, view_us;	/* draw_us parts: the GPU submit of the entities, the view model */
 	uint32_t	frames, us_sum, culled, pending, nofit, dropped;
 	uint32_t	sync_play;	/* since boot: sync reads outside load I/O */
 	uint32_t	want_peak;	/* since boot: pinned + in-use bytes (live entities' and the

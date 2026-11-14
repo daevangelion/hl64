@@ -223,6 +223,9 @@ int gpu_studio_draw(void *state, const sfmt_mesh_t *mesh, const gpu_studio_ent_t
 		t3d_mat4_to_fixed_3x4(&mats[1 + k], &m);
 	}
 	set_mode(e);
+	/* the view model's depth range (each MVP is formed at its push) */
+	if (e->view)
+		gpu_view_proj(1);
 	t3d_matrix_push(&mats[0]);
 	t3d_segment_set(SEG_BONES, &mats[1]);
 	t3d_matrix_push_pos(1);
@@ -231,6 +234,8 @@ int gpu_studio_draw(void *state, const sfmt_mesh_t *mesh, const gpu_studio_ent_t
 		bind(s, mesh, e->tex[k]);
 		rspq_block_run(s->blocks[e->runs[k]]);
 	}
+	if (e->view)
+		gpu_view_proj(0);
 	t3d_matrix_pop(2);
 	cur.ents++;
 	cur.runs += (uint32_t)e->nruns;
@@ -256,7 +261,8 @@ int gpu_studio_draw_cpu(void *state, const sfmt_mesh_t *mesh, const w64_vert_t *
 	t3d_mat4_to_fixed_3x4(mats, (const T3DMat4 *)&e->model);
 	set_mode(e);
 	/* the view model's depth range (the MVP is formed at the push) */
-	gpu_view_proj(1);
+	if (e->view)
+		gpu_view_proj(1);
 	t3d_matrix_push(mats);
 	for (k = 0; k < e->nruns; k++)
 	{
@@ -280,7 +286,8 @@ int gpu_studio_draw_cpu(void *state, const sfmt_mesh_t *mesh, const w64_vert_t *
 			t3d_tri_sync();
 		}
 	}
-	gpu_view_proj(0);
+	if (e->view)
+		gpu_view_proj(0);
 	t3d_matrix_pop(1);
 	cur.ents++;
 	cur.runs += (uint32_t)e->nruns;

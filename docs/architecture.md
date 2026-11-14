@@ -870,8 +870,9 @@ builds per-frame lists straight from components (no client entity copies).
    rspq block (packing budget 2 ms/frame); per entity per frame the bone
    matrices from `game_studio_setup_bones` (D3) into a double-buffered
    pool and one block replay. Lighting: probe (base + one style term,
-   lightstyles.md 4) + dlights. View model CPU-skinned (chrome needs
-   bone-space normals), posed at the eye with the view's angles (pitch
+   lightstyles.md 4) + dlights. View model: chrome runs CPU-skinned (chrome
+   needs bone-space normals), the other runs replayed from their blocks with
+   the pose's bone matrices; posed at the eye with the view's angles (pitch
    negated as a model's, HLSDK V_CalcGunAngle) and drawn last in the
    front 3/10 of the depth range (GoldSrc's view model depth range): it
    turns with the view and never goes into a wall. STEP entities

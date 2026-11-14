@@ -302,6 +302,41 @@ int main(void)
 		printf("FAIL sin/cos beyond 2^19: abs err %.3g\n", big_err);
 		fails++;
 	}
+	/* render approximations: absolute error, sin / cos over the pose's
+	 * half angles and slerp arguments (and the fallback range), acos
+	 * over [-1, 1] */
+	{
+		double es = 0, ea = 0, xs = 0, xa = 0;
+
+		for (i = 0; i < 2000000; i++)
+		{
+			float x = (float)(i < 1000000 ? uni(-4 * M_PI, 4 * M_PI) : uni(-9000, 9000)), s, c;
+			double e;
+
+			hl_rsincosf(x, &s, &c);
+			e = fabs((double)(s - sinl(x)));
+			if (fabs((double)(c - cosl(x))) > e)
+				e = fabs((double)(c - cosl(x)));
+			if (hl_rsinf(x) != s)
+				e = 1;
+			if (e > es)
+				es = e, xs = x;
+		}
+		for (i = 0; i <= 2000000; i++)
+		{
+			float x = (float)(i < 1000000 ? uni(-1, 1) : (i - 1500000) * 2e-6);
+			double e = fabs((double)(hl_racosf(x) - acosl(x)));
+
+			if (e > ea)
+				ea = e, xa = x;
+		}
+		printf("max rsincosf abs err %.3g at %a, racosf %.3g at %a\n", es, xs, ea, xa);
+		if (!(es < 1e-6) || !(ea < 1e-6))
+		{
+			printf("FAIL render approximations: abs err %.3g / %.3g > 1e-6\n", es, ea);
+			fails++;
+		}
+	}
 	if (fails)
 	{
 		printf("hlmath FAIL (%d)\n", fails);
