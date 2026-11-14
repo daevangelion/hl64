@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <ucontext.h>
 
 #include "hl64/limits.h"
 #include "engine/core/log.h"
@@ -141,4 +142,38 @@ void sys_cache_writeback(const void *p, uint32_t n)
 {
 	(void)p;
 	(void)n;
+}
+
+/* ---- cooperative contexts ------------------------------------------------------ */
+
+typedef struct {
+	ucontext_t	ctx;
+} host_co_t;
+
+typedef char host_co_fits[sizeof(host_co_t) <= sizeof(sys_co_t) ? 1 : -1];
+
+static ucontext_t co_main;
+
+void sys_co_init(sys_co_t *co, void *stack, uint32_t bytes, void (*entry)(void))
+{
+	host_co_t *h = (host_co_t *)(void *)co;
+
+	if (getcontext(&h->ctx))
+		sys_error("sys_co_init: getcontext failed");
+	h->ctx.uc_stack.ss_sp = stack;
+	h->ctx.uc_stack.ss_size = bytes;
+	h->ctx.uc_link = NULL;
+	makecontext(&h->ctx, entry, 0);
+}
+
+void sys_co_resume(sys_co_t *co)
+{
+	if (swapcontext(&co_main, &((host_co_t *)(void *)co)->ctx))
+		sys_error("sys_co_resume: swapcontext failed");
+}
+
+void sys_co_yield(sys_co_t *co)
+{
+	if (swapcontext(&((host_co_t *)(void *)co)->ctx, &co_main))
+		sys_error("sys_co_yield: swapcontext failed");
 }

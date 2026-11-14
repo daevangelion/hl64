@@ -34,7 +34,8 @@
 	X(DECAL_TEXELS, "decals", HL64_DECAL_TEXELS_KB, 0) \
 	X(PARTICLES, "particles", HL64_PARTICLES_KB, 0) \
 	X(DLIGHT, "dlight", HL64_DLIGHT_KB, 0) \
-	X(HUD, "hud", HL64_HUD_KB, 1)
+	X(HUD, "hud", HL64_HUD_KB, 1) \
+	X(AI_THINK, "aithink", HL64_AI_THINK_KB, 1)
 
 enum {
 #define MEM_REGION_ENUM(id, name, kb, est) MEM_##id,

@@ -47,6 +47,8 @@ ENGINE_SRC += engine/core/rng.c engine/in/in.c engine/phys/pmove.c engine/test/r
 	engine/view/view.c
 # the transcendentals every engine/ and game/ call site uses (host = cart)
 ENGINE_SRC += engine/core/hlmath.c
+# M5 GruntAI: cooperative contexts for spread monster thinks (aithink region)
+ENGINE_SRC += engine/core/co.c
 # game/ (HLSDK licence, game/LICENSE-HLSDK) links into the same images:
 # pm_shared and its adapter (D2), the player's pre-move think, the view
 GAME_SRC := game/pm/pm_shared.c game/pm/pm_math.c game/pm/pm_host.c game/hl/player.c \
@@ -72,6 +74,8 @@ GAME_SRC_MON := game/hl/monsters.c game/hl/schedule.c game/hl/defaultai.c game/h
 	game/hl/aisquad.c game/hl/houndeye.c game/hl/barnacle.c \
 	game/hl/roach.c game/hl/grunt.c game/hl/garg.c \
 	game/hl/islave.c game/hl/rat.c game/hl/turret.c
+# M5 GruntAI: monster thinks spread over frames on the AI work budget
+GAME_SRC_MON += game/hl/aithink.c
 GAME_SRC_ITEMS := game/hl/weapons.c game/hl/weapon_crowbar.c game/hl/weapon_glock.c \
 	game/hl/weapon_python.c game/hl/weapon_mp5.c game/hl/weapon_shotgun.c \
 	game/hl/weapon_handgrenade.c game/hl/items.c game/hl/chargers.c game/hl/grenade.c \

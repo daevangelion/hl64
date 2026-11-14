@@ -437,26 +437,46 @@ static int find_cover(int e, const float threat[3], const float viewofs[3], floa
 static int nearest_route(int e, const float threat[3], const float viewofs[3], float mn, float mx);
 
 /* Both searches are pure queries until the route they take: one
- * CheckLocalMove memo scope (monsters.c) each. */
+ * CheckLocalMove memo scope (monsters.c) each. The threat and view offset
+ * are HLSDK by-value Vectors (a spread think's search may pause while the
+ * entity they came from moves). */
 int Graph_FindCover(int e, const float threat[3], const float viewofs[3], float mn, float mx,
 	float out[3])
 {
-	int ok;
+	float	t[3], v[3];
+	int	ok;
 
+	VecCopy(threat, t);
+	VecCopy(viewofs, v);
 	Mon_LocalMoveScope(1);
-	ok = find_cover(e, threat, viewofs, mn, mx, out);
+	ok = find_cover(e, t, v, mn, mx, out);
 	Mon_LocalMoveScope(0);
 	return ok;
 }
 
 int Graph_BuildNearestRoute(int e, const float threat[3], const float viewofs[3], float mn, float mx)
 {
-	int ok;
+	float	t[3], v[3];
+	int	ok;
 
+	VecCopy(threat, t);
+	VecCopy(viewofs, v);
 	Mon_LocalMoveScope(1);
-	ok = nearest_route(e, threat, viewofs, mn, mx);
+	ok = nearest_route(e, t, v, mn, mx);
 	Mon_LocalMoveScope(0);
 	return ok;
+}
+
+/* the path-length tables of a cover search: a spread think's own
+ * (aithink.c: it may pause inside the search), else the shared ones */
+typedef char cover_tables_fit[HL64_AI_SCRATCH_BYTES >= 2 * HLN_MAX_NODES * (int)sizeof(float) ? 1 : -1];
+
+static void cover_tables(float **da, float **db)
+{
+	float *t = Ai_CoverTables();
+
+	*da = t ? t : dist_a;
+	*db = t ? t + HLN_MAX_NODES : dist_b;
 }
 
 static int find_cover(int e, const float threat[3], const float viewofs[3], float mn, float mx,
@@ -465,11 +485,12 @@ static int find_cover(int e, const float threat[3], const float viewofs[3], floa
 	int		slot = ent_idc(e)->layer, my, th, hull, i, node;
 	graph_t		*g = graph(slot);
 	CBaseMonster	*m = MON(e);
-	float		look[3], a[3], d, pm, pt;
+	float		look[3], a[3], d, pm, pt, *da, *db;
 	col_trace_t	tr;
 
 	if (!g)
 		return 0;
+	cover_tables(&da, &db);
 	my = Graph_FindNearestNode(e, ent_cv(e)->origin, -1);
 	th = Graph_FindNearestNode(e, threat, -1);
 	hull = Graph_HullIndex(e);
@@ -478,9 +499,9 @@ static int find_cover(int e, const float threat[3], const float viewofs[3], floa
 	if (th == NO_NODE)
 		th = my;
 	VecAdd(threat, viewofs, look);
-	dijkstra(slot, g, my, -1, hull, m->m_afCapability, dist_a);
+	dijkstra(slot, g, my, -1, hull, m->m_afCapability, da);
 	if (th != my)
-		dijkstra(slot, g, th, -1, hull, m->m_afCapability, dist_b);
+		dijkstra(slot, g, th, -1, hull, m->m_afCapability, db);
 	for (i = 0; i < g->n; i++)
 	{
 		node = (i + g->lastCoverSearch) % g->n;
@@ -488,14 +509,15 @@ static int find_cover(int e, const float threat[3], const float viewofs[3], floa
 		d = mv_dist(ent_cv(e)->origin, g->nodes[node].origin);
 		if (d >= mn && d < mx)
 		{
+			Ai_PausePoint(e);
 			VecAdd(g->nodes[node].origin, viewofs, a);
 			mon_aiw.cover++;
 			UTIL_TraceLineGlass(a, look, ignore_monsters, ignore_glass, e, &tr);
 			if (tr.frac != 1.0f)
 			{
 				/* PathLength: 0 when there is no route */
-				pm = dist_a[node] < 0 ? 0 : dist_a[node];
-				pt = th == my ? pm : (dist_b[node] < 0 ? 0 : dist_b[node]);
+				pm = da[node] < 0 ? 0 : da[node];
+				pt = th == my ? pm : (db[node] < 0 ? 0 : db[node]);
 				if (my == th || pm <= pt)
 				{
 					if (Mon_FValidateCover(e, g->nodes[node].origin) &&
@@ -517,27 +539,29 @@ static int nearest_route(int e, const float threat[3], const float viewofs[3], f
 	int		slot = ent_idc(e)->layer, my, hull, i, node;
 	graph_t		*g = graph(slot);
 	CBaseMonster	*m = MON(e);
-	float		look[3], a[3], d;
+	float		look[3], a[3], d, *da, *db;
 	col_trace_t	tr;
 
 	if (!g)
 		return 0;
+	cover_tables(&da, &db);
 	my = Graph_FindNearestNode(e, ent_cv(e)->origin, -1);
 	hull = Graph_HullIndex(e);
 	if (my == NO_NODE)
 		return 0;
 	VecAdd(threat, viewofs, look);
 	/* NextNodeInRoute(my, node, hull, 0) != my: reachable without doors */
-	dijkstra(slot, g, my, -1, hull, 0, dist_a);
+	dijkstra(slot, g, my, -1, hull, 0, da);
 	for (i = 0; i < g->n; i++)
 	{
 		node = (i + g->lastCoverSearch) % g->n;
 		g->lastCoverSearch = node + 1;
-		if (node == my || dist_a[node] < 0)
+		if (node == my || da[node] < 0)
 			continue;
 		d = mv_dist(threat, g->nodes[node].origin);
 		if (d > mn && d < mx)
 		{
+			Ai_PausePoint(e);
 			VecAdd(g->nodes[node].origin, m->view_ofs, a);
 			mon_aiw.cover++;
 			UTIL_TraceLine(a, look, ignore_monsters, e, &tr);
@@ -549,4 +573,23 @@ static int nearest_route(int e, const float threat[3], const float viewofs[3], f
 		}
 	}
 	return 0;
+}
+
+/* ai_spread 2 (aithink.c): what other thinks' searches would leave in the
+ * shared scratch */
+void Graph_ScribbleScratch(void)
+{
+	int i;
+
+	for (i = 0; i < HLN_MAX_NODES; i++)
+	{
+		dist_a[i] = dist_b[i] = dist_r[i] = (float)(i * 7 % 13) - 1.5f;
+		prev[i] = (int16_t)((i * 31) % HLN_MAX_NODES);
+	}
+	for (i = 0; i < HLN_MAX_NODES * 4; i++)
+	{
+		heap[i] = (uint16_t)i;
+		heapk[i] = -1.0f;
+	}
+	hn = nn_n = 0;
 }

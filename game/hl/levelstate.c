@@ -1003,6 +1003,9 @@ uint32_t game_dehydrate(int e, void *buf, uint32_t max)
 
 	if (e <= ENT_PLAYER || !ent_is_live(e))
 		return 0;
+	/* a think paused over frames (aithink.c) ends here: the saved state
+	 * is the one between thinks */
+	Ai_Drop(e);
 	s = &st[ent_idc(e)->cls < CLS__COUNT ? ent_idc(e)->cls : 0];
 	t = sv_table_of(e);
 	if (!t)
@@ -1352,6 +1355,7 @@ void game_twin_copy(int from, int to)
 
 	if (!ent_is_live(from) || !ent_is_live(to))
 		return;
+	Ai_Drop(from);
 	t = sv_table_of(from);
 	if (!t || ent_idc(from)->cls != ent_idc(to)->cls)
 	{

@@ -1128,6 +1128,56 @@ void	mon_stats_script(void);
 /* monster think us since boot (dispatch.c, game_prof_us) */
 extern uint32_t	game_mon_us_sum;
 
+/* ---- spread thinks (aithink.c; monsters.c's think halves) ---------------------------------------- */
+
+/* The scratch a think shares with other thinks across a pause: the
+ * CheckLocalMove memo scope depth, the last Look's sight list,
+ * UTIL_MakeVectors' gpGlobals vectors. */
+#define SIGHT_MAX	100
+typedef struct {
+	int		lm_depth, sight_owner, sight_count;
+	uint16_t	sight_list[SIGHT_MAX];
+	float		v[9];
+} mon_shared_t;
+void	Mon_SharedSave(mon_shared_t *s);
+/* clear_memo: the memo's checks are stale once other thinks ran */
+void	Mon_SharedLoad(const mon_shared_t *s, int clear_memo);
+/* ai_spread 2: scribble what other thinks would overwrite */
+void	Mon_SharedScribble(void);
+void	Graph_ScribbleScratch(void);
+/* One think's accounting over its slices (a slice: one run until it
+ * pauses or ends). */
+typedef struct {
+	mon_ai_work_t	w, w0;		/* the think's work; work at the slice start */
+	uint64_t	t0;		/* slice start us */
+	uint32_t	us, slices, frames;
+	CBaseMonster	*m;
+	cls_t		cls;
+	const char	*s_start;
+	int		t_start;
+} mon_think_acc_t;
+void	Mon_ThinkBegin(int e, mon_think_acc_t *a);
+/* HLSDK CBaseMonster::MonsterThink's body */
+void	Mon_ThinkRun(int e);
+void	Mon_SliceBegin(mon_think_acc_t *a);
+void	Mon_SliceEnd(mon_think_acc_t *a);
+void	Mon_ThinkEnd(int e, const mon_think_acc_t *a);
+/* The frame's think work in budget units, with the open slice of a. */
+uint32_t Mon_FrameUnits(const mon_think_acc_t *a);
+/* aithink.c: MonsterThink's scheduler (1: it ran, continued or deferred
+ * the think), the pause point (CheckLocalMove, cover candidates), the
+ * frame start's FIFO of paused thinks, drops (level state, twins, map
+ * close, New Game), the cover search's path-length tables (NULL: the
+ * caller's own), the `stats ai:` / `prof ai` counters. */
+int	Ai_Think(int e);
+void	Ai_PausePoint(int e);
+void	Ai_FrameStart(void);
+void	Ai_Drop(int e);
+void	Ai_DropAll(void);
+float	*Ai_CoverTables(void);
+void	Ai_PrintCounts(void);
+void	Ai_ProfLine(void);
+
 /* misc */
 #define g_flMeleeRange	64.0f
 #define g_flMediumRange	512.0f

@@ -176,4 +176,17 @@
 #define HL64_DLIGHT_KB			48	/* dlight scratch + flashlight pool */
 #define HL64_HUD_KB			128	/* [EST] HUD sheets + font */
 
+/* Spread monster thinks (game/hl/aithink.c, engine/core/co.c): a think
+ * that runs out of the frame's AI work budget pauses on its own context
+ * and continues next frame. Each context: a stack + the cover search's
+ * scratch (FindCover's two path-length tables, 2 x HLN_MAX_NODES 1024
+ * x f32). More paused thinks than contexts defer a new think a frame. */
+#define HL64_AI_CONTEXTS		6
+#define HL64_AI_STACK_BYTES		16384
+#define HL64_AI_SCRATCH_BYTES		8192
+#define HL64_AI_THINK_KB		((HL64_AI_CONTEXTS * (HL64_AI_STACK_BYTES + HL64_AI_SCRATCH_BYTES) + 1023) / 1024)
+/* The frame's monster-think work budget (settings ai_budget default), in
+ * work units (game/hl/monsters.c aiw_units: walk steps and traces). */
+#define HL64_AI_BUDGET			400
+
 #endif

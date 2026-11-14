@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "hl64/limits.h"
 #include "hl64/settings.h"
 
 settings_t settings;
@@ -47,6 +48,8 @@ void settings_reset(void)
 	settings.stick_deadzone = 8;
 	settings.r_openseam = 1;
 	settings.r_dither = 1;
+	settings.ai_spread = 1;
+	settings.ai_budget = HL64_AI_BUDGET;
 }
 
 int settings_set(int id, float v)

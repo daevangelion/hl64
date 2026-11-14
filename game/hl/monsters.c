@@ -81,7 +81,10 @@ int Mon_FInViewCone(int e, int other) { DISPATCH(FInViewCone, base_FInViewCone, 
 void Mon_HandleAnimEvent(int e, const MonsterEvent_t *ev)
 { DISPATCHV(HandleAnimEvent, CBaseMonster_HandleAnimEvent, e, ev); }
 int Mon_CheckLocalMove(int e, const float s[3], const float t[3], int target, float *d)
-{ DISPATCH(CheckLocalMove, CBaseMonster_CheckLocalMove, e, s, t, target, d); }
+{
+	Ai_PausePoint(e);
+	DISPATCH(CheckLocalMove, CBaseMonster_CheckLocalMove, e, s, t, target, d);
+}
 void Mon_Move(int e, float i) { DISPATCHV(Move, CBaseMonster_Move, e, i); }
 void Mon_MoveExecute(int e, int target, const float dir[3], float i)
 { DISPATCHV(MoveExecute, CBaseMonster_MoveExecute, e, target, dir, i); }
@@ -269,6 +272,22 @@ static void aiw_add(mon_ai_work_t *s, const mon_ai_work_t *d)
 		ps[i] += pd[i];
 }
 
+/* Budget units of think work (Mon_FrameUnits, ai_budget): a walk step
+ * (its hull trace counts among the traces) and a collision trace. */
+#define AI_UNIT_STEP	1
+#define AI_UNIT_TRACE	4
+
+static uint32_t aiw_units(const mon_ai_work_t *w)
+{
+	return w->steps * AI_UNIT_STEP + w->traces * AI_UNIT_TRACE;
+}
+
+static void aiw_print(const char *tag, const mon_ai_work_t *w);
+
+/* PROFILE builds log a frame whose monster thinks took this long (the
+ * budget's calibration: its work units beside the machine's us) */
+#define AI_LOG_FRAME_US	10000
+
 static const char *sched_name(const CBaseMonster *m)
 {
 	return m->m_pSchedule && m->m_pSchedule->pName ? m->m_pSchedule->pName : "-";
@@ -306,6 +325,16 @@ void mon_stats_frame(void)
 		aip.wf_thinks = aip.frame_thinks;
 		aip.wf = aip.frame;
 	}
+#ifdef HL64_PROFILE
+	if (mstat_frame_us >= AI_LOG_FRAME_US)
+	{
+		log_printf("ai: frame t=%.3f us=%lu thinks=%lu units=%lu", (double)gtime(),
+			(unsigned long)mstat_frame_us, (unsigned long)aip.frame_thinks,
+			(unsigned long)aiw_units(&aip.frame));
+		aiw_print("w", &aip.frame);
+		log_printf("\n");
+	}
+#endif
 	aiw_add(&aip.win, &aip.frame);
 	memset(&aip.frame, 0, sizeof(aip.frame));
 	aip.frame_thinks = 0;
@@ -382,6 +411,7 @@ void game_mon_prof(void)
 		(unsigned long)s.local_moves, (unsigned long)live, (unsigned long)s.scripts,
 		(unsigned long)mem, (unsigned long)mon_mem_peak);
 	ai_prof_line(s.frames);
+	Ai_ProfLine();
 }
 
 /* `stats N ai:` record (route `stats`): the think work since boot, exact
@@ -390,6 +420,7 @@ void game_ai_stats(uint32_t id)
 {
 	log_printf("stats %lu ai: thinks=%lu", (unsigned long)id, (unsigned long)aip.life_thinks);
 	aiw_print("w", &aip.life);
+	Ai_PrintCounts();
 	log_printf("\n");
 }
 
@@ -512,8 +543,8 @@ float Mon_FLSoundVolume(int e, const CSound *s)
 /* ---- sight ---------------------------------------------------------------- */
 
 /* m_pLink chain of the last Look (HLSDK keeps it in every entity's
- * m_pLink; one looker at a time uses it, as here). */
-#define SIGHT_MAX	100
+ * m_pLink; one looker at a time uses it, as here; a paused think keeps
+ * its own: Mon_SharedSave). */
 static uint16_t	sight_list[SIGHT_MAX];
 static int	sight_count, sight_owner = -1;
 
@@ -754,25 +785,63 @@ static void ai_trace_line(int e, const CBaseMonster *m)
 	log_printf("\n");
 }
 
-void CBaseMonster_MonsterThink(int e)
+uint32_t Mon_FrameUnits(const mon_think_acc_t *a)
+{
+	uint32_t u = aiw_units(&aip.frame);
+	mon_ai_work_t w, d;
+
+	if (a)
+	{
+		aiw_now(&w);
+		aiw_delta(&a->w0, &w, &d);
+		u += aiw_units(&d);
+	}
+	return u;
+}
+
+void Mon_ThinkBegin(int e, mon_think_acc_t *a)
+{
+	memset(a, 0, sizeof(*a));
+	a->m = MON(e);
+	a->cls = ent_idc(e)->cls;
+	a->s_start = sched_name(a->m);
+	a->t_start = sched_task(a->m);
+}
+
+void Mon_SliceBegin(mon_think_acc_t *a)
+{
+	a->t0 = sys_time_us();
+	aiw_now(&a->w0);
+}
+
+void Mon_SliceEnd(mon_think_acc_t *a)
+{
+	uint32_t	us = (uint32_t)(sys_time_us() - a->t0);
+	mon_ai_work_t	w1, d;
+
+	a->us += us;
+	a->slices++;
+	mstat_frame_us += us;
+	game_mon_us_sum += us;
+	aiw_now(&w1);
+	aiw_delta(&a->w0, &w1, &d);
+	aiw_add(&a->w, &d);
+	aiw_add(&aip.frame, &d);
+	aiw_add(&aip.life, &d);
+}
+
+void Mon_ThinkRun(int e)
 {
 	CBaseMonster	*m = MON(e);
-	uint64_t	t0 = sys_time_us();
 	float		flInterval;
-	int		seq, t_start = sched_task(m);
-	uint32_t	us;
-	mon_ai_work_t	w0, w1, d;
-	cls_t		cls = ent_idc(e)->cls;
-	const char	*s_start = sched_name(m), *s_end = "-";
-	int		t_end = -1;
+	int		seq;
 
-	aiw_now(&w0);
 	ThinkIn(e, 0.1f);
 	if (m->m_MonsterState != MONSTERSTATE_DEAD)
 		mon_want_attacks(e);
 	Mon_RunAI(e);
 	if (!ent_is_live(e) || MON(e) != m)
-		goto out;
+		return;
 	flInterval = Mon_StudioFrameAdvance(e, 0);
 	if (m->m_MonsterState != MONSTERSTATE_SCRIPT && m->m_MonsterState != MONSTERSTATE_DEAD &&
 		m->m_Activity == ACT_IDLE && m->anim.m_fSequenceFinished)
@@ -789,47 +858,64 @@ void CBaseMonster_MonsterThink(int e)
 	}
 	Mon_DispatchAnimEvents(e, flInterval);
 	if (!ent_is_live(e) || MON(e) != m)
-		goto out;
+		return;
 	if (!Mon_MovementIsComplete(m))
 		Mon_Move(e, flInterval);
-out:
-	us = (uint32_t)(sys_time_us() - t0);
+}
+
+void Mon_ThinkEnd(int e, const mon_think_acc_t *a)
+{
+	const CBaseMonster	*m = a->m;
+	const char		*s_end = "-";
+	int			t_end = -1, live = ent_is_live(e) && MON(e) == m;
+
 	mstat.thinks++;
-	mstat_frame_us += us;
-	game_mon_us_sum += us;
-	aiw_now(&w1);
-	aiw_delta(&w0, &w1, &d);
-	aiw_add(&aip.frame, &d);
-	aiw_add(&aip.life, &d);
 	aip.frame_thinks++;
 	aip.life_thinks++;
-	if (ent_is_live(e) && MON(e) == m)
+	if (live)
 	{
 		s_end = sched_name(m);
 		t_end = sched_task(m);
 	}
-	if (us > aip.wt_us)
+	if (a->us > aip.wt_us)
 	{
-		aip.wt_us = us;
+		aip.wt_us = a->us;
 		aip.wt_e = e;
-		aip.wt_cls = cls;
-		aip.wt_s0 = s_start;
-		aip.wt_t0 = t_start;
+		aip.wt_cls = a->cls;
+		aip.wt_s0 = a->s_start;
+		aip.wt_t0 = a->t_start;
 		aip.wt_s1 = s_end;
 		aip.wt_t1 = t_end;
-		aip.wt = d;
+		aip.wt = a->w;
 	}
 #ifdef HL64_PROFILE
-	if (d.steps >= AI_LOG_STEPS || d.traces >= AI_LOG_TRACES)
+	if (a->w.steps >= AI_LOG_STEPS || a->w.traces >= AI_LOG_TRACES)
 	{
-		log_printf("ai: think t=%.3f e=%d %s %s/%d->%s/%d us=%lu", (double)gtime(), e,
-			game_class_name(cls), s_start, t_start, s_end, t_end, (unsigned long)us);
-		aiw_print("w", &d);
+		log_printf("ai: think t=%.3f e=%d %s %s/%d->%s/%d us=%lu slices=%lu frames=%lu",
+			(double)gtime(), e, game_class_name(a->cls), a->s_start, a->t_start, s_end, t_end,
+			(unsigned long)a->us, (unsigned long)a->slices, (unsigned long)a->frames);
+		aiw_print("w", &a->w);
 		log_printf("\n");
 	}
 #endif
-	if (dbg_trace() && ent_is_live(e) && MON(e) == m)
+	if (dbg_trace() && live)
 		ai_trace_line(e, m);
+}
+
+/* HLSDK CBaseMonster::MonsterThink: whole here, or spread over frames by
+ * aithink.c (settings ai_spread). */
+void CBaseMonster_MonsterThink(int e)
+{
+	mon_think_acc_t a;
+
+	if (Ai_Think(e))
+		return;
+	Mon_ThinkBegin(e, &a);
+	Mon_SliceBegin(&a);
+	Mon_ThinkRun(e);
+	Mon_SliceEnd(&a);
+	a.frames = 1;
+	Mon_ThinkEnd(e, &a);
 }
 
 void CBaseMonster_CallMonsterThink(int e) { CBaseMonster_MonsterThink(e); }
@@ -1315,6 +1401,52 @@ void Mon_LocalMoveScope(int open)
 	}
 	else
 		lm_scope_depth--;
+}
+
+/* A paused think's shared scratch (aithink.c) */
+void Mon_SharedSave(mon_shared_t *s)
+{
+	s->lm_depth = lm_scope_depth;
+	s->sight_owner = sight_owner;
+	s->sight_count = sight_count;
+	memcpy(s->sight_list, sight_list, (size_t)sight_count * sizeof(sight_list[0]));
+	memcpy(s->v, gpGlobals.v_forward, sizeof(gpGlobals.v_forward));
+	memcpy(s->v + 3, gpGlobals.v_right, sizeof(gpGlobals.v_right));
+	memcpy(s->v + 6, gpGlobals.v_up, sizeof(gpGlobals.v_up));
+}
+
+void Mon_SharedLoad(const mon_shared_t *s, int clear_memo)
+{
+	lm_scope_depth = s->lm_depth;
+	if (clear_memo)
+		lm_memo_n = lm_memo_next = 0;
+	sight_owner = s->sight_owner;
+	sight_count = s->sight_count;
+	memcpy(sight_list, s->sight_list, (size_t)sight_count * sizeof(sight_list[0]));
+	memcpy(gpGlobals.v_forward, s->v, sizeof(gpGlobals.v_forward));
+	memcpy(gpGlobals.v_right, s->v + 3, sizeof(gpGlobals.v_right));
+	memcpy(gpGlobals.v_up, s->v + 6, sizeof(gpGlobals.v_up));
+}
+
+void Mon_SharedScribble(void)
+{
+	int i;
+
+	lm_scope_depth = 0;
+	for (i = 0; i < LM_MEMO; i++)
+		memset(&lm_memo[i], 0x5a, sizeof(lm_memo[i]));
+	lm_memo_n = LM_MEMO;
+	lm_memo_next = 7;
+	sight_owner = 0;
+	sight_count = SIGHT_MAX;
+	for (i = 0; i < SIGHT_MAX; i++)
+		sight_list[i] = (uint16_t)(ENT_PLAYER + i);
+	for (i = 0; i < 3; i++)
+	{
+		gpGlobals.v_forward[i] = 1e9f;
+		gpGlobals.v_right[i] = -1e9f;
+		gpGlobals.v_up[i] = 3.5f;
+	}
 }
 
 static lm_memo_t *lm_find(int e, const float start[3], const float end[3], int target, int flags)
@@ -2582,16 +2714,30 @@ void game_mon_new_campaign(void)
 	for (i = 0; i < 4; i++)
 		Graph_SlotChanged(i);
 	memset(&mstat, 0, sizeof(mstat));
+	Ai_DropAll();
 	mon_mem_peak = 0;
 }
 
-void game_mon_map_opened(int slot) { Graph_SlotChanged(slot); }
-void game_mon_map_closing(int slot) { Graph_SlotChanged(slot); }
+/* a map opening or closing changes the graph slots and (closing) frees
+ * entities: no paused think keeps references across it (aithink.c drops
+ * them all; crossings are rare) */
+void game_mon_map_opened(int slot)
+{
+	Ai_DropAll();
+	Graph_SlotChanged(slot);
+}
+
+void game_mon_map_closing(int slot)
+{
+	Ai_DropAll();
+	Graph_SlotChanged(slot);
+}
 
 void game_mon_start_frame(void)
 {
 	mon_stats_frame();
 	CSoundEnt_Think();
+	Ai_FrameStart();
 }
 
 const float VEC_VIEW[3] = { 0, 0, 28 };

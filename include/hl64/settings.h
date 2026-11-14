@@ -56,6 +56,12 @@ typedef struct {
 	 * 1 on, 0 off (truncated 16-bit output; the M1 gate's old-cart
 	 * comparison renders that way) */
 	uint8_t		r_dither;
+	/* monster thinks over the frame's AI work budget (game/hl/aithink.c):
+	 * 0 run whole (HLSDK), 1 pause and continue next frame, 2 test: pause
+	 * at every check and continue at once after scribbling the shared
+	 * scratch (decides as 0); ai_budget in work units per frame */
+	uint8_t		ai_spread;
+	float		ai_budget;
 } settings_t;
 
 extern settings_t settings;
@@ -92,7 +98,9 @@ extern settings_t settings;
 	X(SHOW_FPS, show_fps, U8, 0, 1, 1) \
 	X(DEBUG_OVERLAY, debug_overlay, U8, 0, 1, 0) \
 	X(R_OPENSEAM, r_openseam, U8, 0, 2, 0) \
-	X(R_DITHER, r_dither, U8, 0, 1, 0)
+	X(R_DITHER, r_dither, U8, 0, 1, 0) \
+	X(AI_SPREAD, ai_spread, U8, 0, 2, 0) \
+	X(AI_BUDGET, ai_budget, F32, 0, 1000000, 0)
 
 enum {
 #define SETTINGS_ENUM(id, field, type, lo, hi, persist) SET_##id,
