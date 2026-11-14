@@ -3,8 +3,9 @@
  * gpu_2d.c -- the cart's 2D blits (engine/render/gpu_2d.h) through rdpq:
  * each sheet is an I4 surface over the HUD region; a sub-rectangle is
  * drawn with the primitive colour as its colour and texel x primitive
- * alpha as its coverage, blended (D2_NORMAL / HOLES / ALPHA) or added
- * (D2_ADD: GoldSrc's SPR_DrawAdditive). The mode is set once for a run of
+ * alpha as its coverage, alpha-blended; D2_ADD (GoldSrc's
+ * SPR_DrawAdditive) arrives as unit colour x brightness from draw2d.c
+ * (render-fx.md 2a: the RDP adder wraps). The mode is set once for a run of
  * blits with the same blend and colour. From the old tree's r64_draw.c
  * HUD sheet blits (provenance-audit.md: lines 246-375 CLEAN), retargeted
  * from CI8 + TLUT to I4.
@@ -57,7 +58,7 @@ static void set_mode(int mode, int tex, const uint8_t rgba[4])
 			rdpq_mode_combiner(RDPQ_COMBINER1((0, 0, 0, PRIM), (TEX0, 0, PRIM, 0)));
 		else
 			rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-		rdpq_mode_blender(mode == D2_ADD ? RDPQ_BLENDER_ADDITIVE : RDPQ_BLENDER_MULTIPLY);
+		rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 		cur_mode = m;
 		cur_prim = ~prim;
 	}

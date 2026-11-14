@@ -2608,6 +2608,65 @@ static void deliver_deferred(uint64_t t0, uint32_t *done)
 
 #define CAND		16
 #define CAND_RT		0x8000	/* candidate is runtime entry (index | CAND_RT) */
+#define REC_SPAWNERS	4	/* pending spawner thinks a slot's spawn windows name */
+#define REC_SPAWN_LEAD	1.0	/* s before its think a spawner's box is named */
+
+/* the spawner set pump last scanned with, per slot (spawners); the
+ * player's home slot of this rec_frame (-1 none) */
+static uint32_t	spawn_sig[REC_SLOTS];
+static int	spawn_home = -1;
+
+/* A neighbour slot's logic records with a think due within
+ * REC_SPAWN_LEAD that will create an entity (game_spawner_box: a
+ * monstermaker), soonest first, at most REC_SPAWNERS: their children's
+ * boxes, and a signature of the set. A child spawns, falls and moves in
+ * its box the frame its maker thinks; a map opened beside the player runs
+ * its makers 3000 u away, where no window named the collision (a sync
+ * COLL read the frame the child fell). Prefetch only: no game state
+ * changes. None in the home slot (its windows fill the collision pool
+ * around the player; standing spawner boxes of the hldemo2 fight timed
+ * out hldemo3's open gate on the m4 route) and none while a map's open
+ * gate waits (precache_held): its candidates' windows come first. */
+static int spawners(const rmap_t *m, float (*box)[6], uint32_t *sig)
+{
+	const rtimer_t *at[REC_SPAWNERS];
+	const double due = eng_time() + REC_SPAWN_LEAD;
+	float b[6];
+	uint32_t h = 2166136261u;
+	int n = 0, i, j, k;
+
+	for (i = 0; i < REC_SLOTS && !R.map[i].pre_wait; i++)
+		;
+	for (i = i < REC_SLOTS || m->slot == spawn_home ? REC_TIMERS : 0; i < REC_TIMERS && R.ntm; i++)
+	{
+		const rtimer_t *tm = &R.tm[i];
+
+		if (tm->kind != TM_REC || (int)GID_SLOT(tm->gid) != m->slot || (double)tm->t > due)
+			continue;
+		for (j = n; j > 0 && (at[j - 1]->t > tm->t
+			|| (at[j - 1]->t == tm->t && at[j - 1]->seq > tm->seq)); j--)
+			;
+		if (j == REC_SPAWNERS || !game_spawner_box(tm->gid, b))
+			continue;
+		if (n == REC_SPAWNERS)
+			n--;
+		memmove(&at[j + 1], &at[j], (size_t)(n - j) * sizeof(at[0]));
+		memmove(&box[j + 1], &box[j], (size_t)(n - j) * sizeof(box[0]));
+		at[j] = tm;
+		memcpy(box[j], b, sizeof(b));
+		n++;
+	}
+	for (i = 0; i < n; i++)
+		for (k = 0; k < 6; k++)
+		{
+			union { float f; uint32_t u; } v;
+
+			v.f = box[i][k];
+			h = (h ^ v.u) * 16777619u;
+		}
+	*sig = h ^ (uint32_t)n;
+	return n;
+}
 
 static void cand_add(uint16_t *c, float *cd, int *nc, int max, uint16_t v, float d)
 {
@@ -2659,15 +2718,16 @@ static int spawn_box(const rmap_t *m, uint16_t c, float b[6])
 
 /* The slot's hydration candidates within the spawn radius of an anchor
  * (nearest first; runtime entries | CAND_RT) and its prefetch ring; their
- * spawn boxes go to the stream, which prefetches their collision cells
- * (a Spawn traces: drop_to_floor, a monster's first step). */
+ * spawn boxes, and the pending spawners' (sp), go to the stream, which
+ * prefetches their collision cells (a Spawn traces: drop_to_floor, a
+ * monster's first step). */
 static void scan(rmap_t *m, const float (*loc)[3], int n, uint16_t *cand, float *cd, int *nc,
-	uint16_t *ring, float *rd, int *nr)
+	uint16_t *ring, float *rd, int *nr, const float (*sp)[6], int nsp)
 {
 	const float r2 = REC_SPAWN_R * REC_SPAWN_R;
 	const float o2 = (REC_SPAWN_R + REC_PREFETCH_R) * (REC_SPAWN_R + REC_PREFETCH_R);
-	float box[CAND + REC_RING][6];
-	int sub[CAND + REC_RING], a, i, nb = 0;
+	float box[CAND + REC_RING + REC_SPAWNERS][6];
+	int sub[CAND + REC_RING + REC_SPAWNERS], a, i, nb = 0;
 
 	*nc = *nr = 0;
 	for (i = 0; i < m->npend; i++)
@@ -2711,22 +2771,29 @@ static void scan(rmap_t *m, const float (*loc)[3], int n, uint16_t *cand, float 
 		sub[nb] = spawn_box(m, cand[i], box[nb]);
 	for (i = 0; i < *nr; i++, nb++)
 		sub[nb] = spawn_box(m, ring[i], box[nb]);
+	for (i = 0; i < nsp; i++, nb++)
+	{
+		memcpy(box[nb], sp[i], sizeof(box[nb]));
+		sub[nb] = -1;
+	}
 	wld_stream_spawns(m->slot, (const float (*)[6])box, sub, nb);
 }
 
 static void pump(rmap_t *m, const float (*loc)[3], int n, uint64_t t0, uint32_t *done)
 {
 	uint16_t cand[CAND], ring[REC_RING];
-	float cd[CAND], rd[REC_RING];
-	int nc, nr, i;
+	float cd[CAND], rd[REC_RING], sp[REC_SPAWNERS][6];
+	uint32_t sig;
+	int nc, nr, i, nsp = spawners(m, sp, &sig);
 
-	/* nothing changed and the anchor stayed put since a scan that found
-	 * nothing to spawn: skip the scan */
-	if (m->idle && m->idle_gen == m->pgen
+	/* nothing changed (pending records, spawners) and the anchor stayed
+	 * put since a scan that found nothing to spawn: skip the scan */
+	if (m->idle && m->idle_gen == m->pgen && spawn_sig[m->slot] == sig
 		&& fabsf(loc[0][0] - m->idle_at[0]) < 16 && fabsf(loc[0][1] - m->idle_at[1]) < 16
 		&& fabsf(loc[0][2] - m->idle_at[2]) < 16)
 		return;
-	scan(m, loc, n, cand, cd, &nc, ring, rd, &nr);
+	spawn_sig[m->slot] = sig;
+	scan(m, loc, n, cand, cd, &nc, ring, rd, &nr, (const float (*)[6])sp, nsp);
 	/* prefetch ring: the nearest pending records' models */
 	for (i = 0; i < nr; i++)
 	{
@@ -2908,7 +2975,7 @@ static int precache_held(rmap_t *m, const float (*loc)[3], int n)
 	ni = studio_infos_pending();
 	if (n > 0)
 	{
-		scan(m, loc, n, cand, cd, &nc, ring, rd, &nr);
+		scan(m, loc, n, cand, cd, &nc, ring, rd, &nr, NULL, 0);
 		for (i = 0; i < nc; i++)
 		{
 			int sub = spawn_box(m, cand[i], b);
@@ -2919,8 +2986,10 @@ static int precache_held(rmap_t *m, const float (*loc)[3], int n)
 	if ((ni || nw) && m->pre_wait < REC_PRECACHE_FRAMES)
 	{
 		m->pre_wait++;
+		wld_stream_spawn_gate(m->slot, nw != 0);
 		return 1;
 	}
+	wld_stream_spawn_gate(m->slot, 0);
 	if (ni || nw)
 		R.st.open_expired++;
 	log_printf("rec: %s precache %s after %u frames (%d infos, %d spawn windows pending)\n",
@@ -2972,6 +3041,7 @@ void rec_frame(const float (*anchors)[3], int nanchors)
 	if (n > 0)
 	{
 		home = home_slot(anchors[0]);
+		spawn_home = home;
 		/* 6.4 budget order: neighbour release, arrival pump, home pump,
 		 * then the home map's own far entities (lowest) */
 		for (s = 0; s < REC_SLOTS; s++)

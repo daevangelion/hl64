@@ -19,7 +19,9 @@
 #          per-subsystem CPU / memory table from the 1 s `prof <zone>_us`
 #          roll-ups and the `mem` lines (test/m3/gate_table.py) into the
 #          gate log; a carve region above 90% use or with peak x 1.25 over
-#          its size fails (architecture 4.1; components exempt).
+#          its size fails (architecture 4.1; components exempt); the ares
+#          suites snd_ares.sh and add_ares.sh (additive: glow cores free of
+#          the RDP adder's wrap, every additive page with its cooked ramp).
 #
 # Usage: test/run/m3.sh [--ares]
 # Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content: campaign.rtb,
@@ -110,8 +112,8 @@ fi
 suite gate_ops.sh - test/m3/gate_ops.sh
 # every entry point of test/m3 runs here (ares ones in the ares part;
 # rec.py is rec.sh's, mon_sweep.py and mon-dome.route are mon.sh's,
-# gate_table.py the table below)
-RAN+="snd_ares.sh rec.py mon_sweep.py mon-dome.route gate_table.py "
+# add_shot.py add_ares.sh's, gate_table.py the table below)
+RAN+="snd_ares.sh add_ares.sh add_shot.py rec.py mon_sweep.py mon-dome.route gate_table.py "
 for f in "$ROOT"/test/m3/*.py "$ROOT"/test/m3/*.sh; do
 	[[ "$RAN" == *" $(basename "$f") "* ]] || fail "test/m3/$(basename "$f") is not wired into test/run/m3.sh"
 done
@@ -201,6 +203,9 @@ if [[ -e "$ROOT/test/m3/snd_ares.sh" ]]; then
 		>"$OUT/suite-snd_ares.log" 2>&1 || { tail -20 "$OUT/suite-snd_ares.log" >&2; fail "suite snd_ares.sh"; }
 	say "suite snd_ares.sh: PASS ($(tail -1 "$OUT/suite-snd_ares.log"))"
 fi
+BUILD_DIR="$BUILD_DIR" HL64_CONTENT="$CONTENT" ARES_BIN="$ARES_BIN" "$ROOT/test/m3/add_ares.sh" \
+	>"$OUT/suite-add_ares.log" 2>&1 || { tail -20 "$OUT/suite-add_ares.log" >&2; fail "suite add_ares.sh"; }
+say "suite add_ares.sh: PASS ($(tail -1 "$OUT/suite-add_ares.log"))"
 
 set +e
 python3 "$ROOT/test/m3/gate_table.py" "$OUT/ares-a.log" >"$OUT/table.md"

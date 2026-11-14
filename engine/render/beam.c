@@ -265,8 +265,7 @@ void beam_draw(int id, uint8_t blend)
 	fr = &spr->frames[0];
 	memcpy(rgba, b->rgb, 3);
 	rgba[3] = blend;
-	gpu_fx_mode(GPU_FX_ADD, NULL);
-	gpu_fx_tex_ci4(spr->tlut, spr->base + fr->ci4, fr->tw, fr->th);
+	sprite_bind(spr, fr, GPU_FX_ADD, rgba);
 	scroll = (float)fmod(fx_s.now * b->speed, 1.0) * (float)fr->tw;
 	if (b->ring)
 	{

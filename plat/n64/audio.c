@@ -37,6 +37,15 @@
 #define FILES		16
 #define HDR_BYTES	28
 #define BLK_HDR		16u
+/* rsp_mixer.S VADPCM_Decompress DMAs a fixed VADPCM_CODEBOOK_SIZE * 16 * 2
+ * bytes from the codebook pointer, whatever the wave's own codebook size,
+ * and its decode loop's look-ahead loads a predictor row for the frame
+ * after the last (unused). The window runs past the wav64 block's
+ * extended header into the next arena block: a stale RSP read where that
+ * block's CPU lines are dirty (ares: a wave state just opened by
+ * internal_open). A VADPCM wave's block ends in this much padding,
+ * written back at allocation and never written again. */
+#define CB_WINDOW	256u
 
 /* ---- arena ----------------------------------------------------------------- */
 
@@ -48,6 +57,8 @@ typedef struct {
 
 static uint8_t		*a_lo, *a_hi;	/* KSEG0 */
 static uint32_t		a_used, a_peak;
+static uint32_t		pad_next;	/* the next allocation's CB_WINDOW tail */
+static uint8_t		*pad_block;	/* the block it went to (KSEG0) */
 
 static uint8_t *kseg0(const void *p)
 {
@@ -63,7 +74,8 @@ static int arena_owns(const void *p)
 
 static void *arena_alloc(size_t align, size_t size)
 {
-	uint32_t need = BLK_HDR + (((uint32_t)size + 15u) & ~15u);
+	uint32_t body = ((uint32_t)size + 15u) & ~15u, pad = pad_next;
+	uint32_t need = BLK_HDR + body + pad;
 	uint8_t *q;
 
 	if (align > 16)
@@ -86,6 +98,14 @@ static void *arena_alloc(size_t align, size_t size)
 		a_used += b->size;
 		if (a_used > a_peak)
 			a_peak = a_used;
+		if (pad)
+		{
+			/* RDRAM = cache for the tail, its lines dropped: an
+			 * earlier owner's dirty lines cannot land on it later */
+			data_cache_hit_writeback_invalidate(q + BLK_HDR + body, pad);
+			pad_next = 0;
+			pad_block = q + BLK_HDR;
+		}
 		return q + BLK_HDR;
 	}
 	return NULL;
@@ -321,20 +341,28 @@ int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
 	for (i = 0; i < SND_WAVES && waves[i].wav; i++)
 		;
 	/* wav64 state + waveform + name + extended header (+ VADPCM Huffman
-	 * tables 3 x 256) in one block, then the file handle */
+	 * tables 3 x 256, + the codebook window's padding) in one block,
+	 * then the file handle */
 	ext = be32(h + 20) - HDR_BYTES;
-	need = 256 + ((ext + 15u) & ~15u) + 3 * 256 + 64;
+	need = 256 + ((ext + 15u) & ~15u) + 3 * 256 + 64 + (h[5] == 1 ? CB_WINDOW : 0);
 	if (i == SND_WAVES || arena_largest() < need)
 		return -2;
 	/* wav64 opens (and closes) the file through snd_fs */
 	snprintf(path, sizeof(path), "snd:/%lx/%lx", (unsigned long)rom, (unsigned long)size);
 	memset(&parms, 0, sizeof(parms));
 	parms.streaming_mode = WAV64_STREAMING_FULL;
+	/* wav64's first allocation is its block (internal_open's memalign) */
+	pad_next = h[5] == 1 ? CB_WINDOW : 0;
+	pad_block = NULL;
 	redirect.active = 1;
 	waves[i].wav = wav64_load(path, &parms);
 	redirect.active = 0;
+	pad_next = 0;
 	if (!waves[i].wav)
 		return -2;
+	if (h[5] == 1 && pad_block != kseg0(waves[i].wav->st))
+		sys_error("snd: wav64 block %p is not the padded allocation %p",
+			(void *)waves[i].wav->st, (void *)pad_block);
 	memset(info, 0, sizeof(*info));
 	info->format = h[5];
 	info->channels = h[6];

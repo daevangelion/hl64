@@ -318,6 +318,34 @@ int ent_sets_linked(int e)
 	return bit_get(H.linked, e);
 }
 
+/* The next linked slot >= from, -1 when none (the searches' walk). */
+int ent_sets_next_linked(int from)
+{
+	int w;
+
+	if (from < 0)
+		from = 0;
+	for (w = from >> 5; w < ENT_WORDS; w++)
+	{
+		uint32_t b = H.linked[w];
+
+		if (w == from >> 5)
+			b &= ~0u << (from & 31);
+		if (b)
+		{
+			int i = w << 5;
+
+			while (!(b & 1))
+			{
+				b >>= 1;
+				i++;
+			}
+			return i < HL64_MAX_ENTITIES ? i : -1;
+		}
+	}
+	return -1;
+}
+
 int ent_sets_next(int from, int all)
 {
 	int w;

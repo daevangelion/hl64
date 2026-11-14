@@ -8,7 +8,9 @@
 #   2. selftest: approach / switch box / forced rules on synthetic eye
 #      paths, late switch, settle window, leave rule, open_fail, USEONLY
 #      hldemo1 -> hldemo2 crossing with twins, carried entities, the player
-#      re-base (arrival hldemo2-local -452 -100 196) and continuity;
+#      re-base (arrival hldemo2-local -452 -100 196) and continuity, approach
+#      ghosts (a B entity in B's carry box before the switch: drawn in A's
+#      view, extra=0 after; one new after the switch: extra=1);
 #   3. validation: a cook whose seam T or delta was changed fails at boot
 #      (sys_error naming the rule); a changed B directory CRC rejects the
 #      seam at B open (open_fail, no switch);

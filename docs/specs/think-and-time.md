@@ -86,10 +86,15 @@ hold at the same points (K9, K10).
   the next frame start, after the paused thinks' slices, queued thinks
   start oldest first, as the engine dispatches a think (nextthink := 0,
   the frame's time), while the frame's units are under the budget.
-  **Lateness bound**: a think queued for 0.2 s of game time starts
-  regardless (on a free context, else whole at its next dispatch), so a
-  think runs at most 0.2 s + one frame after it came due (measured 233 ms
-  at dt 1/30). The engine's dispatch of a queued think is absorbed.
+  **Lateness bounds**: over the budget, a think queued for `ai_hold`
+  (`HL64_AI_HOLD` 0.2 s) of game time still starts, but at most
+  `HL64_AI_AGED_PER_FRAME` (2) such starts a frame, oldest first: thinks
+  queued in one busy frame age together and would otherwise all start in
+  one frame. A think queued for `ai_hold_max` (`HL64_AI_HOLD_MAX` 0.6 s)
+  starts regardless (on a free context at the frame start, else whole
+  at its next dispatch), so a think runs at most `ai_hold_max` + one
+  frame after it came due. The engine's dispatch of a queued think is
+  absorbed.
 - **Drops**: a paused think ends (its half-built route cleared) when its
   monster is freed, killed or changes layer, or its think function,
   schedule, task, monster state, enemy or target is changed by something

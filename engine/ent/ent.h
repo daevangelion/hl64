@@ -91,6 +91,8 @@ uint32_t ent_sets_region_bytes(void);
 /* Linked (ent_link .. ent_unlink, any solid type: the searches). */
 void	ent_sets_set_linked(int e, int on);
 int	ent_sets_linked(int e);
+/* The next linked slot >= from, -1 when none. */
+int	ent_sets_next_linked(int from);
 /* Re-evaluate e's heap entry (tm.nextthink) and movers / kill membership
  * from its components. */
 void	ent_sets_update(int e);

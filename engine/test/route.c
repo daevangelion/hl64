@@ -778,6 +778,12 @@ void rt_new_game(double old_time, double time)
 
 void rt_frame(double time)
 {
+	/* a SHOT / STATS queued this frame runs at the next frame boundary,
+	 * after the next frame is simulated and drawn: an op that changes
+	 * that frame (LOOK, SETPOS, BUTTONS, DROP, ...) would land in the
+	 * capture, so it starts in the next frame, after the capture */
+	int captured = 0;
+
 	while (rt_active())
 	{
 		const uint8_t *p = rt.buf + rt.pc;
@@ -785,6 +791,8 @@ void rt_frame(double time)
 		float w[5];
 		int k, home = phy_player_active() && phy_player_map() == (int)b;
 
+		if (captured && code != OP_SHOT && code != OP_STATS && code != OP_PASS)
+			return;
 		for (k = 0; k < 5 && k < (int)strlen(ops[code].kinds); k++)
 			w[k] = rdf(p + 4 + 4 * k);
 		if (!rt.started)
@@ -892,9 +900,11 @@ void rt_frame(double time)
 			break;
 		case OP_SHOT:
 			push(DBG_SHOT, rt.op);
+			captured = 1;
 			break;
 		case OP_STATS:
 			push(DBG_STATS, rt.op);
+			captured = 1;
 			break;
 		case OP_START:	/* boot used it (eng_boot: New Game on that map) */
 			break;

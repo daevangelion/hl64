@@ -45,6 +45,7 @@
 #include "engine/render/gpu_studio.h"
 #include "hl64/studio.h"
 #include "hl64/fx.h"
+#include "engine/render/addblend.h"
 #include "engine/render/gpu_fx.h"
 #include "engine/render/trans.h"
 #include "engine/render/ren.h"
@@ -203,6 +204,15 @@ static void log_draw(const char *what, uint32_t label)
 			(unsigned long)fd.decals, (unsigned long)fd.decal_verts, calls,
 			(unsigned long)gf.tris, (unsigned long)gf.points, (unsigned long)gf.texloads,
 			(unsigned long)gf.pairs, (unsigned long)gf.drops, (unsigned long)gf.hash);
+	}
+	{
+		add_stats_t as;
+
+		/* render-fx.md 2a: cooked page ramps bound, pages drawn additive
+		 * without one (the cook missed them: not drawn) */
+		add_stats(&as);
+		log_printf("%s %lu add: pages=%lu miss=%lu\n", what, (unsigned long)label,
+			(unsigned long)as.pages, (unsigned long)as.miss);
 	}
 }
 

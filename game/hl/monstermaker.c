@@ -188,6 +188,31 @@ int game_spawner_done(gid_t16 gid)
 	return !(l->flags & (MM_THINK | MM_USE));
 }
 
+/* The box MakeMonster's child takes: CMonsterMaker::MakeMonster's
+ * blocking box (origin +-34 u, m_flGround up to the origin; before the
+ * ground is measured the 256 u a drop to the floor reaches) up to a
+ * human hull's top (VEC_HUMAN_HULL_MAX z 72) */
+int game_spawner_box(gid_t16 gid, float box[6])
+{
+	const rec_logic_t *l;
+	float org[3];
+	int maxLive;
+
+	if (rec_class(gid) != CLS_MONSTERMAKER || !(l = rec_logic(gid)) || !(l->flags & MM_THINK))
+		return 0;
+	maxLive = (int)KeyF(gid, K_M_IMAXLIVECHILDREN, 0);
+	if (maxLive > 0 && l->b >= maxLive)
+		return 0;
+	rec_origin(gid, org);
+	box[0] = org[0] - 34;
+	box[1] = org[1] - 34;
+	box[2] = (l->flags & MM_GROUND) ? l->f : org[2] - 256;
+	box[3] = org[0] + 34;
+	box[4] = org[1] + 34;
+	box[5] = org[2] + 72;
+	return 1;
+}
+
 const game_class_t gc_MONSTERMAKER = {
 	.LogicSpawn = CMonsterMaker_LogicSpawn,
 	.LogicUse = CMonsterMaker_LogicUse,

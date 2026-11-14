@@ -228,6 +228,8 @@ void part_draw(void)
 			if (!ok)
 				continue;
 			colour(p, c);
+			/* additive head-to-tail fade as unit colour x brightness (render-fx.md 2a) */
+			add_split(c, 255, c);
 			if (!mode_set)
 			{
 				gpu_fx_mode(GPU_FX_STREAK, NULL);
@@ -240,7 +242,7 @@ void part_draw(void)
 				memcpy(o->pos, q[k], sizeof(o->pos));
 				o->st[0] = o->st[1] = 0;
 				memcpy(o->rgba, c, 3);
-				o->rgba[3] = k < 2 ? 255 : 0;	/* bright head, dark tail */
+				o->rgba[3] = k < 2 ? c[3] : 0;	/* bright head, dark tail */
 			}
 			nv += 4;
 			if (nv == 64)

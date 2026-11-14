@@ -14,16 +14,21 @@ with one PI DMA into one heap block and no conversion on the cart:
     index maps to the nearest picked colour (green-weighted);
   * ALPHTEST sprites (blood): index 255 owns the first entry, alpha bit
     clear; no other index maps to it;
-  * tlut_ia: the TLUT as IA16 (I = 255, A = entry brightness) and tint, the
-    brightness-weighted mean colour, for the screen-blended additive / glow /
-    index-alpha draws.
+  * INDEXALPHA sprites (smoke): the index is the texel's alpha and the
+    colour is the palette's last colour (GoldSrc); the 16 entries are 16
+    alpha levels (index i -> entry round(i * 15 / 255), level 17 k), the
+    TLUT holds the colour x level (entry 0 transparent);
+  * the additive ramp (tools/cook/addramp.py, render-fx.md 2a): the IA16
+    TLUT + ends the cart binds for additive / glow draws (and every
+    draw of an index-alpha sprite), fitted here so the cart never fits.
 
-Layout v2 (big-endian; offsets absolute, 8-aligned data):
-  0  u32 magic 'SC41'   4 u16 version (2)   6 u16 nframes (entity frames: a
+Layout v3 (big-endian; offsets absolute, 8-aligned data; the spec is
+docs/formats/sc4-format.md):
+  0  u32 magic 'SC41'   4 u16 version (3)   6 u16 nframes (entity frames: a
      group counts once, GoldSrc ModelFrames)
-  8  u8 type  9 u8 texformat  10 u8 tint[3]  13 u8 pad  14 u16 nimages
-  16 u16 tlut[16]   48 u16 tlut_ia[16]
-  80 images[nimages] (16 bytes): s16 left, s16 up, u16 src w, u16 src h,
+  8  u8 type  9 u8 texformat  10 u16 nimages  12 u32 pad
+  16 u16 tlut[16]   48 ramp (40 bytes, addramp.py)
+  88 images[nimages] (16 bytes): s16 left, s16 up, u16 src w, u16 src h,
      u8 w, u8 h (CI4 sides), u16 pad, u32 ci4 offset
   then frames[nframes] (4 bytes): u16 first image, u16 images (1, or the
      group's member count)
@@ -41,11 +46,14 @@ import sys
 from pathlib import Path
 from typing import List
 
+from tools.cook import addramp
+
 MAGIC = 0x53433431  # 'SC41'
-VERSION = 2
-HEADER = 80
+VERSION = 3
+HEADER = 88
 FRAME = 16
 EDGE = 64
+SPR_INDEXALPHA = 2
 SPR_ALPHTEST = 3
 
 
@@ -78,6 +86,7 @@ def _parse(spr: bytes):
     if o + palcount * 3 > len(spr):
         raise ValueError("truncated palette")
     pal = list(spr[o:o + palcount * 3]) + [0] * (768 - palcount * 3)
+    last = tuple(pal[3 * palcount - 3:3 * palcount]) if palcount else (0, 0, 0)
     o += palcount * 3
     # images: (left, up, w, h, px, end_ms); groups: (first image, count)
     images, groups = [], []
@@ -110,7 +119,7 @@ def _parse(spr: bytes):
             o += w * h
     if len(images) > 4096:
         raise ValueError(f"{len(images)} images")
-    return typ, texformat, pal, images, groups
+    return typ, texformat, pal, last, images, groups
 
 
 def _pick16(usage: List[int], pal: List[int]) -> List[int]:
@@ -143,13 +152,24 @@ def _pick16(usage: List[int], pal: List[int]) -> List[int]:
     return top
 
 
-def cook(spr: bytes) -> bytes:
-    typ, texformat, pal, frames, groups = _frames(spr)
+def _indexalpha(colour):
+    """INDEXALPHA: 16 alpha levels of the one colour; (tlut, remap, ramp)."""
+    remap = [(i * 15 + 127) // 255 for i in range(256)]
+    levels = [17 * k for k in range(16)]
+    tlut = [0]
+    for v in levels[1:]:
+        r, g, b = (c * v // 255 >> 3 for c in colour)
+        tlut.append(r << 11 | g << 6 | b << 1 | 1)
+    return tlut, remap, addramp.indexalpha(levels, colour)
+
+
+def _palette(typ_texformat, pal, frames):
+    """Normal / additive / alphatest: 16 picked colours; (tlut, remap, ramp)."""
     usage = [0] * 256
     for _l, _u, _w, _h, px, _e in frames:
         for p in px:
             usage[p] += 1
-    alpha = texformat == SPR_ALPHTEST and usage[255] > 0
+    alpha = typ_texformat == SPR_ALPHTEST and usage[255] > 0
     if alpha:
         usage[255] = 0x3fffffff  # the first pick: an entry of its own
     top = _pick16(usage, pal)
@@ -172,18 +192,15 @@ def cook(spr: bytes) -> bytes:
             if bestdist is None or d < bestdist:
                 bestdist, bestslot = d, s
         remap.append(bestslot)
-    # tlut_ia + brightness-weighted tint (screen-blended draws)
-    ia, s = [], [0, 0, 0]
-    for t in tlut:
-        r, g, b = (t >> 11) & 31, (t >> 6) & 31, (t >> 1) & 31
-        lv = max(r, g, b)
-        ia.append(0xFF00 | (lv * 255 // 31))
-        s[0] += r * lv
-        s[1] += g * lv
-        s[2] += b * lv
-    m = max(s)
-    tint = [s[i] * 255 // m if m > 0 else 255 for i in range(3)]
+    return tlut, remap, addramp.ramp(tlut)
 
+
+def cook(spr: bytes) -> bytes:
+    typ, texformat, pal, last, frames, groups = _frames(spr)
+    if texformat == SPR_INDEXALPHA:
+        tlut, remap, ramp = _indexalpha(last)
+    else:
+        tlut, remap, ramp = _palette(texformat, pal, frames)
     table, blobs = [], []
     ofs = HEADER + FRAME * len(frames) + 4 * len(groups) + 2 * len(frames)
     ofs = (ofs + 7) & ~7
@@ -201,9 +218,9 @@ def cook(spr: bytes) -> bytes:
         blob = data.ljust((len(data) + 7) & ~7, b"\0")
         blobs.append(blob)
         ofs += len(blob)
-    head = struct.pack(">IHHBB3BxH", MAGIC, VERSION, len(groups), typ & 255,
-                       texformat & 255, *tint, len(frames))
-    head += struct.pack(">16H", *tlut) + struct.pack(">16H", *ia)
+    head = struct.pack(">IHHBBH4x", MAGIC, VERSION, len(groups), typ & 255,
+                       texformat & 255, len(frames))
+    head += struct.pack(">16H", *tlut) + ramp
     assert len(head) == HEADER
     out = head + b"".join(table)
     out += b"".join(struct.pack(">HH", first, n) for first, n in groups)

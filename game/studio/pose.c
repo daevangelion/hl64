@@ -703,6 +703,160 @@ int game_studio_pose(const game_pose_t *p, float (*out)[3][4], int max)
 	return hdr->numbones;
 }
 
+/* ---- hitbox reach (the hitbox source's line cull) ----------------------------- */
+
+/* How far game_studio_pose can put a hitbox point from the pose origin:
+ * every bone matrix is a rotation (a slerped or nearly-equal-lerped unit
+ * quaternion: norm <= 1) with the bone's translation, so a bone's origin
+ * lies within the sum of its chain's translation lengths and a hitbox
+ * point within its corner's length of that. A translation is the bone's
+ * default plus a stored animation value times its scale (frame
+ * interpolation and blends mix stored values convexly; the -0.01 frame
+ * clamp extrapolates by 1 %) plus a controller's adjustment (at most
+ * max(|start|, |end|), + 360 for a wrapping one). The result carries 3 %
+ * + 2 units for the float rounding of the pose and the hitbox walk's
+ * plane epsilon. */
+#define REACH_CACHE	32
+
+static struct {
+	res_t		model;
+	uint16_t	seq;
+	float		reach;
+} reach_c[REACH_CACHE];
+static int	reach_n, reach_next;
+
+/* The largest |stored value| of the channel whose run list starts at word
+ * w (the runs covering frames 0 .. numframes - 1; a lookup's read into the
+ * next run past them has weight 0); -1 on a run list the walk can't bound
+ * (a run without values, more values than frames, past the chunk). */
+static int channel_max(const uint16_t *chunk, uint32_t words, uint32_t w, int numframes)
+{
+	const int16_t *p = (const int16_t *)chunk + w, *end = (const int16_t *)chunk + words;
+	int cum = 0, k, valid, total, m = 0, v;
+
+	while (cum < numframes)
+	{
+		if (p >= end)
+			return -1;
+		valid = SFMT_VALID(p[0]);
+		total = SFMT_TOTAL(p[0]);
+		if (!valid || total < valid || p + valid >= end)
+			return -1;
+		for (k = 1; k <= valid; k++)
+		{
+			v = p[k] < 0 ? -p[k] : p[k];
+			if (v > m)
+				m = v;
+		}
+		cum += total;
+		p += valid + 1;
+	}
+	return m;
+}
+
+static float hitbox_reach(const sfmt_info_t *hdr, int seq, const uint16_t *chunk, uint32_t size)
+{
+	const sfmt_seq_t *pseqdesc = &SFMT_SEQS(hdr)[seq];
+	const sfmt_bone_t *pbone = SFMT_BONES(hdr);
+	const sfmt_ctl_t *pctl = SFMT_CTLS(hdr);
+	const sfmt_hitbox_t *x = SFMT_HITBOXES(hdr);
+	float chain[GS_MAXBONES], reach = 0;
+	uint32_t words = size / 2;
+	int nb = hdr->numbones, blends = pseqdesc->numblends, i, j, b, c, m;
+
+	if (blends < 1)
+		blends = 1;
+	if (blends > 4)
+		blends = 4;
+	if (chunk && (uint32_t)blends * (uint32_t)nb * 6u > words)
+		return -1;
+	for (i = 0; i < nb; i++, pbone++)
+	{
+		float len2 = 0;
+
+		if (pbone->parent >= i)
+			return -1;
+		for (j = 0; j < 3; j++)
+		{
+			float mj = 0, a;
+
+			for (b = 0; b < blends; b++)
+			{
+				uint16_t w = chunk ? chunk[(b * nb + i) * 6 + j] : 0;
+
+				a = fabsf(pbone->value[j]);
+				if (w)
+				{
+					if ((m = channel_max(chunk, words, w, pseqdesc->numframes)) < 0)
+						return -1;
+					a += (float)m * fabsf(pbone->scale[j]) * 1.02f;
+				}
+				if (a > mj)
+					mj = a;
+			}
+			if ((c = pbone->ctl[j]) != -1)
+			{
+				int t;
+
+				if (c < 0 || c >= hdr->numctl || c >= 8)
+					return -1;
+				t = pctl[c].type & STUDIO_TYPES;
+				if (t != STUDIO_X && t != STUDIO_Y && t != STUDIO_Z && t != STUDIO_XR
+					&& t != STUDIO_YR && t != STUDIO_ZR)
+					return -1;
+				a = fabsf(pctl[c].start) > fabsf(pctl[c].end) ? fabsf(pctl[c].start)
+					: fabsf(pctl[c].end);
+				mj += a + ((pctl[c].type & STUDIO_RLOOP) ? 360.0f : 0.0f);
+			}
+			len2 += mj * mj;
+		}
+		chain[i] = sqrtf(len2) + (pbone->parent >= 0 ? chain[pbone->parent] : 0);
+	}
+	for (i = 0; i < hdr->numhitboxes; i++)
+	{
+		float c2 = 0, r;
+
+		if (x[i].bone >= nb)
+			return -1;
+		for (j = 0; j < 3; j++)
+		{
+			float a = fabsf(x[i].bbmin[j]) > fabsf(x[i].bbmax[j]) ? fabsf(x[i].bbmin[j])
+				: fabsf(x[i].bbmax[j]);
+
+			c2 += a * a;
+		}
+		r = chain[x[i].bone] + sqrtf(c2);
+		if (r > reach)
+			reach = r;
+	}
+	return reach * 1.03f + 2.0f;
+}
+
+float game_studio_hitbox_reach(res_t model, int sequence)
+{
+	const sfmt_info_t *hdr = gs_info(model);
+	const uint16_t *chunk;
+	uint32_t size = 0;
+	float r;
+	int seq, i;
+
+	if (!hdr || !hdr->numbones || hdr->numbones > GS_MAXBONES || !hdr->numseq)
+		return -1;
+	seq = sequence < hdr->numseq ? sequence : 0;
+	for (i = 0; i < reach_n; i++)
+		if (reach_c[i].model == model && reach_c[i].seq == seq)
+			return reach_c[i].reach;
+	chunk = studio_anim_now(model, seq, &size);
+	if (!chunk && SFMT_SEQS(hdr)[seq].anim_size)
+		return -1;	/* not resident: no bound (not memoised) */
+	r = hitbox_reach(hdr, seq, chunk, chunk ? size : 0);
+	i = reach_n < REACH_CACHE ? reach_n++ : reach_next++ % REACH_CACHE;
+	reach_c[i].model = model;
+	reach_c[i].seq = (uint16_t)seq;
+	reach_c[i].reach = r;
+	return r;
+}
+
 static float	ent_bones[GS_MAXBONES][3][4];
 
 int gs_entity_pose(int e, const float (**bones)[3][4])

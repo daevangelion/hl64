@@ -22,6 +22,7 @@
 #include "hl64/limits.h"
 #include "hl64/settings.h"
 #include "engine/core/sys.h"
+#include "engine/render/addblend.h"
 #include "engine/render/gpu.h"
 #include "engine/world/wld.h"
 #include "plat/n64/n64.h"
@@ -47,6 +48,8 @@ static T3DMat4FP	*mats;		/* 2 x MATS_PER_FRAME, uncached */
 static int		mat_frame, mat_n;
 static int		fence = -1;
 static gpu_stats_t	cur, done;
+static uint8_t		ramp_tb[4];	/* gpu_page_ramp tint + blend */
+static int		ramp_on;
 
 /* ---- strip index encoding ------------------------------------------------- */
 
@@ -196,7 +199,28 @@ void gpu_bind_page(const w64_texp_t *p, uint8_t *state)
 		fence = f;
 		rdpq_mode_alphacompare(f);
 	}
+	if (ramp_on)
+	{
+		/* additive page: its cooked ramp TLUT over the RGBA16 one, its ends */
+		const add_ramp_t *r = add_page_ramp(p);
+		uint8_t prim[4] = { 0, 0, 0, 0 }, env[4] = { 0, 0, 0, 0 };
+
+		if (r)
+		{
+			rdpq_tex_upload_tlut((uint16_t *)r->ia, 0, 16);
+			add_ramp_ends(r, ramp_tb, ramp_tb[3], prim, env);
+		}
+		rdpq_set_prim_color(RGBA32(prim[0], prim[1], prim[2], prim[3]));
+		rdpq_set_env_color(RGBA32(env[0], env[1], env[2], env[3]));
+	}
 	cur.binds++;
+}
+
+void gpu_page_ramp(const uint8_t tint_blend[4])
+{
+	ramp_on = tint_blend != NULL;
+	if (ramp_on)
+		memcpy(ramp_tb, tint_blend, 4);
 }
 
 void gpu_state_lost(void)

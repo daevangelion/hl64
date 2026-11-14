@@ -180,6 +180,48 @@ def offcart_models(ents: List[Dict[str, str]]) -> Set[str]:
     return out
 
 
+# render modes the additive ramp serves (render-fx.md 2a): kRenderGlow,
+# kRenderTransAdd (HLSDK common/const.h)
+ADDITIVE_MODES = (3, 5)
+SF_RENDER_MASKMODE = 4  # HLSDK triggers.cpp: env_render leaves rendermode alone
+
+
+def _key_int(e: Dict[str, str], k: str) -> int:
+    m = re.match(r"\s*[-+]?\d+", e.get(k, ""))
+    return int(m.group(0)) if m else 0
+
+
+def additive_entities(ents: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """The entities that can draw additive: rendermode Glow / TransAdd in
+    their keys, or named by the target of an env_render that sets one
+    (HLSDK CRenderFxManager::Use copies its rendermode to every entity of
+    that targetname unless SF_RENDER_MASKMODE). The HLSDK game sets an
+    additive mode at run time only on sprites, which carry their ramp."""
+    tg = {e.get("target", "") for e in ents
+          if e.get("classname", "").lower() == "env_render"
+          and _key_int(e, "rendermode") in ADDITIVE_MODES
+          and not _key_int(e, "spawnflags") & SF_RENDER_MASKMODE}
+    tg.discard("")
+    return [e for e in ents if _key_int(e, "rendermode") in ADDITIVE_MODES
+            or e.get("targetname", "") in tg]
+
+
+def additive_models(ents: List[Dict[str, str]]) -> Set[str]:
+    """models/<x>.mdl (lower-case) an additive entity draws: its model key,
+    its class's model, an env_shooter's shootmodel (its gibs take its
+    rendermode, HLSDK effects.cpp)."""
+    cm = _lc(CLASS_MODEL)
+    out: Set[str] = set()
+    for e in additive_entities(ents):
+        cn = e.get("classname", "").lower()
+        for m in (e.get("model", ""), e.get("shootmodel", "") if cn == "env_shooter" else "",
+                  f"models/{cm[cn]}.mdl" if cn in cm else ""):
+            m = m.replace("\\", "/").lower().lstrip("/")
+            if m.startswith("models/") and m.endswith(".mdl"):
+                out.add(m)
+    return out
+
+
 def _lc(table: Dict[str, str]) -> Dict[str, str]:
     return {k.lower(): v for k, v in table.items()}
 

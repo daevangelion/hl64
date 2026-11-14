@@ -51,7 +51,7 @@ def mini_bsp(over=None):
 def mini_w64(**mut):
     """A package the checker accepts: one COLL chunk, nothing else. `mut` maps
     names of the knobs below to replacement values."""
-    k = dict(version=2, flags=1, ncoll=1, pinned=1, coll_first=0, nn=2, nx=2, nex=0,
+    k = dict(version=3, flags=1, ncoll=1, pinned=1, coll_first=0, nn=2, nx=2, nex=0,
              c0=(-2, -1), c1=(-1, -2), dims=(1, 1, 1), cell=256, nstart=1, start=0,
              visr=0xFFFF, ents=0xFFFF, stride=36, extra_dir=0)
     k.update(mut)
@@ -143,7 +143,7 @@ class Minimal(unittest.TestCase):
 
     def test_w64_header(self):
         good = mini_w64()
-        for off, fmt, val, msg in ((0, ">4s", b"W64X", "bad magic"), (4, ">H", 3, "version"),
+        for off, fmt, val, msg in ((0, ">4s", b"W64X", "bad magic"), (4, ">H", 2, "version"),
                                    (6, ">H", 0, "W64_HF_COLL"), (8, ">I", 99999, "file_size"),
                                    (12, ">I", 10**9, "directory"), (12, ">I", 8, "directory"),
                                    (16, ">I", 50, "directory"), (16, ">I", 10**9, "directory"),

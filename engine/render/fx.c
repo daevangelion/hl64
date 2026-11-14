@@ -302,13 +302,13 @@ void fx_smoke(const float org[3], res_t sprite, int scale, int framerate)
 	fx_tent_t *t;
 
 	fx_global(org, g);
-	/* HLSDK: "alphablend sprite, move vertically 30 pps" */
+	/* HLSDK: "alphablend sprite, move vertically 30 pps"; grey tint
+	 * (TransTexture tints, render-fx.md 2) */
 	t = anim_sprite(g, sprite, FX_RM_TRANSTEXTURE, 200, (float)scale * 0.1f, (float)framerate);
 	if (t)
 	{
 		t->vel[2] = 30;
 		t->color[0] = t->color[1] = t->color[2] = (uint8_t)fx_randi(80, 120);
-		t->rendermode = FX_RM_TRANSCOLOR;
 	}
 }
 
@@ -368,8 +368,9 @@ void fx_blood_sprite(const float org[3], res_t spray, res_t drop, int color, int
 
 	fx_global(org, g);
 	palette_rgb(color, rgb);
-	/* the spray animates over 0.25 s (render-fx.md 5) */
-	t = anim_sprite(g, spray, FX_RM_TRANSCOLOR, 255, (float)scale * 0.1f,
+	/* the spray animates over 0.25 s (render-fx.md 5); the blood colour
+	 * is a tint, so TransTexture (TransColor sprites ignore rendercolor) */
+	t = anim_sprite(g, spray, FX_RM_TRANSTEXTURE, 255, (float)scale * 0.1f,
 		(float)res_model_frames(spray) / 0.25f);
 	if (t)
 	{
@@ -382,7 +383,7 @@ void fx_blood_sprite(const float org[3], res_t spray, res_t drop, int color, int
 		n = 5;
 	for (i = 0; i < n; i++)
 	{
-		t = temp_sprite(g, drop, FX_RM_TRANSCOLOR, 255, (float)scale * 0.05f + 0.2f,
+		t = temp_sprite(g, drop, FX_RM_TRANSTEXTURE, 255, (float)scale * 0.05f + 0.2f,
 			fx_randf(1.0f, 2.0f));
 		if (!t)
 			break;

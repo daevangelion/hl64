@@ -67,8 +67,11 @@ void		studio_draw_temp(res_t model, int body, int skin, const float org_g[3],
 void		studio_draw_view(void);
 /* The hitbox source studio_init installs (coll.h col_hitbox_fn): the
  * entity's cooked hitboxes on the bones of its server pose
- * (game_studio_pose), in its own map-local frame. */
-int		studio_hitboxes(const col_ent_t *e, const col_hitbox_t **out);
+ * (game_studio_pose), in its own map-local frame; -1 without posing when
+ * the line start -> end (NULL: none) passes beyond
+ * game_studio_hitbox_reach of the entity's origin. */
+int		studio_hitboxes(const col_ent_t *e, const float start[3], const float end[3],
+			const col_hitbox_t **out);
 
 /* View model (HUD / weapons slice; architecture.md 9.4): this frame's
  * first-person model, CPU-skinned with chrome, drawn after the entities.
