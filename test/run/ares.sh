@@ -17,6 +17,13 @@
 #                            average on the machine that ran it at its end)
 #                            and ARES_RAN_ON (local or the host).
 #
+# Live runs: LOG grows while ares runs (remote: streamed back) and
+# ARES_TEST_INPUT may be rewritten during the run (remote: every change is
+# sent over one ssh stream, ~0.1 s polling), so a script can start
+# `ares_run ... &`, wait for log lines and press pad buttons as on a local
+# run. SIGTERM / SIGINT to that background ares_run stops ares (remote: on
+# the host) and still copies the results back.
+#
 # Where: HL64_ARES_HOST unset / empty / local: on this machine, holding one
 # of ARES_SLOTS (default 2) slot locks /tmp/hl64-ares.slot<i> while ares
 # runs (every ares user on the machine takes one). HL64_ARES_HOST=<host>
@@ -26,7 +33,7 @@
 # ARES_SLOTS, ARES_TIMEOUT, DISPLAY_NUM (xvfb.sh), and the harness variables
 # ares reads (ARES_TEST_INPUT, ARES_HOST_SCREENSHOT, ARES_HOST_SHOT_EVERY_MS,
 # ARES_HOST_SHOT_MAX, ARES_HOST_SHOT_DIR, ARES_HOST_PRINTF, ARES_TRACE_CPU),
-# passed through (remote: forwarded, the input file copied once at start).
+# passed through (remote: forwarded).
 
 ARES_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=xvfb.sh
@@ -54,12 +61,31 @@ ares_setup() {
 	fi
 }
 
+# ares_wait PID: wait for the child PID, passing SIGTERM / SIGINT on to it
+# (ARES_STOP=1 once one came; one that came before also stops it); returns
+# its status. The caller's TERM / INT traps are restored after.
+ares_wait() {
+	local pid=$1 c=0 old
+	old="$(trap -p TERM INT)"
+	# shellcheck disable=SC2064
+	trap "ARES_STOP=1; kill -TERM $pid 2>/dev/null" TERM INT
+	[[ ${ARES_STOP:-0} -eq 0 ]] || kill -TERM "$pid" 2>/dev/null || true
+	while :; do
+		c=0
+		wait "$pid" || c=$?
+		kill -0 "$pid" 2>/dev/null || break
+	done
+	trap - TERM INT
+	eval "$old"
+	return "$c"
+}
+
 # ares_slot_take PREFIX N: hold one of the N lock files PREFIX0..PREFIX<N-1>
-# (flock on fd ARES_SLOT_FD), waiting until one is free; ares_slot_drop
-# releases it.
+# (flock on fd ARES_SLOT_FD), waiting until one is free (or ARES_STOP: then
+# returns 1); ares_slot_drop releases it.
 ares_slot_take() {
 	local prefix=$1 n=$2 i said=0
-	while :; do
+	while [[ ${ARES_STOP:-0} -eq 0 ]]; do
 		for ((i = 0; i < n; i++)); do
 			exec {ARES_SLOT_FD}>>"$prefix$i"
 			if flock -n "$ARES_SLOT_FD"; then
@@ -72,18 +98,31 @@ ares_slot_take() {
 		said=1
 		sleep 2
 	done
+	return 1
 }
 ares_slot_drop() {
 	exec {ARES_SLOT_FD}>&-
 }
 
 # ares_exec DIR ROM LOG TIMEOUT: ares itself, on DISPLAY_NUM (no slot, no
-# copies); sets ARES_WALL / ARES_LOAD; returns ares' status.
+# copies); its pid to ARES_PID_FILE when set; with ARES_TAIL=1 LOG is also
+# copied to stdout while ares runs. Sets ARES_WALL / ARES_LOAD; returns
+# ares' status.
 ares_exec() {
-	local dir=$1 rom=$2 log=$3 to=$4 t0 c=0
+	local dir=$1 rom=$2 log=$3 to=$4 t0 c=0 pid tpid=
 	t0=$(date +%s.%N)
 	(cd "$dir" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 \
-		exec timeout -k 10 "$to" "$ARES_BIN" "${ARES_SETTINGS[@]}" "$rom" >"$log" 2>&1) || c=$?
+		exec timeout -k 3 "$to" "$ARES_BIN" "${ARES_SETTINGS[@]}" "$rom" >"$log" 2>&1) &
+	pid=$!
+	[[ -z "${ARES_PID_FILE:-}" ]] || echo "$pid" >"$ARES_PID_FILE"
+	if [[ ${ARES_TAIL:-0} -eq 1 ]]; then
+		local tl=$log
+		[[ $tl == /* ]] || tl="$dir/$tl"
+		tail -n +1 -F --pid="$pid" "$tl" 2>/dev/null &
+		tpid=$!
+	fi
+	ares_wait "$pid" || c=$?
+	[[ -z "$tpid" ]] || wait "$tpid" || true
 	ARES_WALL=$(echo "$(date +%s.%N) $t0" | awk '{printf "%.0f", $1 - $2}')
 	ARES_LOAD=$(cut -d' ' -f1 /proc/loadavg)
 	return "$c"
@@ -91,11 +130,13 @@ ares_exec() {
 
 ares_run() {
 	local dir=$1 rom=$2 log=$3 to=${4:-${ARES_TIMEOUT:-1800}} c=0
+	ARES_STOP=0
 	ARES_RAN_ON=$(ares_host)
 	if [[ $ARES_RAN_ON != local ]]; then
 		local st
 		st=$(mktemp "${TMPDIR:-/tmp}/ares-stat.XXXXXX")
-		ARES_STAT_FILE="$st" "$ARES_SH_DIR/ares-remote.sh" "$dir" "$rom" "$log" "$to" || c=$?
+		ARES_STAT_FILE="$st" "$ARES_SH_DIR/ares-remote.sh" "$dir" "$rom" "$log" "$to" &
+		ares_wait $! || c=$?
 		read -r ARES_WALL ARES_LOAD _ <"$st" || { ARES_WALL=-; ARES_LOAD=-; }
 		rm -f "$st"
 		return "$c"
@@ -104,7 +145,13 @@ ares_run() {
 		echo "ares_run: no display (call ares_setup first)" >&2
 		return 2
 	fi
-	ares_slot_take /tmp/hl64-ares.slot "${ARES_SLOTS:-2}"
+	local old
+	old="$(trap -p TERM INT)"
+	trap 'ARES_STOP=1' TERM INT
+	ares_slot_take /tmp/hl64-ares.slot "${ARES_SLOTS:-2}" || c=143
+	trap - TERM INT
+	eval "$old"
+	[[ $c -eq 0 ]] || { ARES_WALL=0; ARES_LOAD=-; return "$c"; }
 	ares_exec "$dir" "$rom" "$log" "$to" || c=$?
 	ares_slot_drop
 	return "$c"

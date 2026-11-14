@@ -9,17 +9,19 @@
 #   test/run/ares-remote.sh --check                 the host answers, its ares exists
 #
 # A run: ROM (relative paths: to DIR), the ARES_TEST_INPUT file when set
-# (copied once at the start: a static file; a pad file written while ares
-# runs needs a local run) and test/run/{ares,ares-remote,xvfb}.sh go to
-# HOST:~/hl64-runs/<id>/ (the ROM as a delta against the last ROM sent);
-# there ares runs in <id>/run on its own Xvfb with ares.sh's ARES_SETTINGS
-# and the forwarded harness variables, holding one of
-# HL64_ARES_REMOTE_SLOTS (default 8) slot locks ~/hl64-runs/.slot<i>; then
-# every file ares wrote in its working directory (ares-test-*.ppm, host
-# shots without ARES_HOST_SHOT_DIR) comes back into DIR, its output to LOG,
-# ARES_HOST_SHOT_DIR's shots to that directory. The last 50 run
-# directories are kept on the host.
-# Exit: ares' status (124: timeout), 255: the host could not be reached.
+# and test/run/{ares,ares-remote,xvfb}.sh go to HOST:~/hl64-runs/<id>/ (the
+# ROM as a delta against the last ROM sent); there ares runs in <id>/run on
+# its own Xvfb with ares.sh's ARES_SETTINGS and the forwarded harness
+# variables, holding one of HL64_ARES_REMOTE_SLOTS (default 8) slot locks
+# ~/hl64-runs/.slot<i>. While it runs its log streams into LOG and every
+# change of the ARES_TEST_INPUT file is rewritten on the host (live pad
+# input, as test/run/play.sh drives it); SIGTERM / SIGINT stops ares on the
+# host. Then every file ares wrote in its working directory
+# (ares-test-*.ppm, host shots without ARES_HOST_SHOT_DIR) comes back into
+# DIR, its output to LOG (exact copy), ARES_HOST_SHOT_DIR's shots to that
+# directory. The last 50 run directories are kept on the host.
+# Exit: ares' status (124: timeout, 143: stopped), 255: the host could not
+# be reached.
 # Env:  HL64_ARES_HOST (default ares-host), HL64_ARES_SSH (ssh target, default
 #       ares-host for ares-host, else HL64_ARES_HOST), HL64_ARES_REMOTE_SLOTS,
 #       HL64_ARES_REMOTE_ICD (the host's Vulkan ICD file for parallel-RDP,
@@ -46,22 +48,33 @@ if [[ "${1:-}" == --remote-side ]]; then
 	for kv in "$@"; do export "${kv?}"; done
 	# shellcheck source=ares.sh
 	. "$R/bin/ares.sh"
+	# stop (this side's stop_remote): before ares starts, give up; then
+	# ares_wait passes it on to ares
+	ARES_STOP=0
+	trap 'ARES_STOP=1' TERM INT
+	echo "$$" >"$R/side.pid"
 	ARES_BIN="$HOME/hl64-ares/build/desktop-ui/ares"
 	export XDG_DATA_HOME="$HOME/hl64-ares/xdg"
 	export VK_ICD_FILENAMES="${HL64_ARES_REMOTE_ICD:-/usr/share/vulkan/icd.d/nvidia_icd.json}"
 	[[ -n "${ARES_TEST_INPUT:-}" ]] && export ARES_TEST_INPUT="$R/input/$ARES_TEST_INPUT"
 	[[ -n "${ARES_HOST_SHOT_DIR:-}" ]] && { mkdir -p "$R/shots"; export ARES_HOST_SHOT_DIR="$R/shots"; }
 	mkdir -p "$R/run"
-	ares_slot_take "$HOME/hl64-runs/.slot" "${HL64_ARES_REMOTE_SLOTS:-8}"
-	echo "ares-remote: $(hostname -s) run $id on ${ARES_SLOT##*/}" >&2
-	DISPLAY_NUM=
-	xvfb_start || { echo 2 >"$R/exit"; exit 2; }
 	c=0
-	ares_exec "$R/run" "$R/rom/$rom" "$R/ares.log" "$to" || c=$?
-	kill "$XVFB_PID" 2>/dev/null || true
-	ares_slot_drop
+	if ares_slot_take "$HOME/hl64-runs/.slot" "${HL64_ARES_REMOTE_SLOTS:-8}"; then
+		echo "ares-remote: $(hostname -s) run $id on ${ARES_SLOT##*/}" >&2
+		DISPLAY_NUM=
+		xvfb_start || { ares_slot_drop; echo 2 >"$R/exit"; exit 2; }
+		# the log on stdout while ares runs: this side's LOG
+		ARES_TAIL=1 ARES_PID_FILE="$R/pid" ares_exec "$R/run" "$R/rom/$rom" "$R/ares.log" "$to" || c=$?
+		kill "$XVFB_PID" 2>/dev/null || true
+		ares_slot_drop
+	else
+		c=143 ARES_WALL=0 ARES_LOAD=-
+		echo "ares-remote: run $id stopped before it started" >&2
+	fi
 	echo "$ARES_WALL $ARES_LOAD $(hostname -s)" >"$R/wall"
 	echo "$c" >"$R/exit"
+	[[ -f "$R/ares.log" ]] || exit "$c"
 	# the next run's ROM delta basis
 	mkdir -p "$HOME/hl64-runs/.basis/rom"
 	ln -f "$R/rom/$rom" "$HOME/hl64-runs/.basis/rom/.$rom.$$" \
@@ -101,12 +114,13 @@ mkdir -p "$ST/bin" "$ST/rom"
 for f in ares.sh ares-remote.sh xvfb.sh; do ln -s "$HERE/$f" "$ST/bin/$f"; done
 ln -s "$ROM" "$ST/rom/${ROM##*/}"
 FWD=()
+PADIN=
 if [[ -n "${ARES_TEST_INPUT:-}" ]]; then
-	in="$(abs "$ARES_TEST_INPUT")"
-	[[ -f "$in" ]] || { echo "ares-remote: no ARES_TEST_INPUT file $in" >&2; exit 2; }
+	PADIN="$(abs "$ARES_TEST_INPUT")"
+	[[ -f "$PADIN" ]] || { echo "ares-remote: no ARES_TEST_INPUT file $PADIN" >&2; exit 2; }
 	mkdir -p "$ST/input"
-	ln -s "$in" "$ST/input/${in##*/}"
-	FWD+=("ARES_TEST_INPUT=${in##*/}")
+	ln -s "$PADIN" "$ST/input/${PADIN##*/}"
+	FWD+=("ARES_TEST_INPUT=${PADIN##*/}")
 fi
 SHOTS=
 if [[ -n "${ARES_HOST_SHOT_DIR:-}" ]]; then
@@ -125,18 +139,58 @@ done
 rsync -rtLz --mkpath --copy-dest=../.basis "$ST/" "$SSH_TO:$RR/" \
 	|| { echo "ares-remote: copy to $SSH_TO:$RR failed" >&2; exit 255; }
 args=(bash "$RR/bin/ares-remote.sh" --remote-side "$ID" "$TO" "${ROM##*/}" "${FWD[@]}")
-c=0
-"${SSH[@]}" -n "$SSH_TO" "$(printf '%q ' "${args[@]}")" || c=$?
 
-# results: ares' working directory into DIR, its output to LOG, the shots
-mkdir -p "$ST/back"
-rsync -tz "$SSH_TO:$RR/ares.log" ":$RR/wall" ":$RR/exit" "$ST/back/" 2>/dev/null \
-	|| { echo "ares-remote: run $ID on $SSH_TO left no result (ssh status $c)" >&2; exit 255; }
-rsync -rtz "$SSH_TO:$RR/run/" "$DIR/" || { echo "ares-remote: copy back from $SSH_TO:$RR/run failed" >&2; exit 255; }
-if [[ -n "$SHOTS" ]]; then
-	mkdir -p "$SHOTS"
-	rsync -rtz "$SSH_TO:$RR/shots/" "$SHOTS/" || { echo "ares-remote: copy back of the shots failed" >&2; exit 255; }
+# stop: the host side gives up before ares starts, else passes it on to ares
+stop_remote() {
+	"${SSH[@]}" -n "$SSH_TO" "cd $RR && for i in 1 2 3 4 5 6 7 8 9 10; do
+		if [ -s side.pid ]; then kill -TERM \$(cat side.pid) 2>/dev/null; break; fi
+		[ -e exit ] && break; sleep 1; done" || true
+}
+# the pad file: every change (polled every 0.1 s; an empty read is a writer
+# mid-write) rewritten on the host by one ssh stream, until the run ends
+pad_fwd() {
+	local last= cur
+	while kill -0 "$RPID" 2>/dev/null; do
+		cur="$(cat "$PADIN" 2>/dev/null)" || cur=
+		if [[ -n "$cur" && "$cur" != "$last" ]]; then
+			printf '%s\n' "$cur" || break
+			last=$cur
+		fi
+		sleep 0.1
+	done | "${SSH[@]}" "$SSH_TO" "cd $RR/input && while IFS= read -r l; do
+		printf '%s\n' \"\$l\" >.pad.tmp && mv -f .pad.tmp $(printf %q "${PADIN##*/}"); done"
+}
+
+# the run; its log streams into LOG meanwhile (as a local run's grows)
+c=0
+trap 'stop_remote' TERM INT
+"${SSH[@]}" -n "$SSH_TO" "$(printf '%q ' "${args[@]}")" >"$LOG" &
+RPID=$!
+PPID_FWD=
+if [[ -n "$PADIN" ]]; then
+	pad_fwd &
+	PPID_FWD=$!
 fi
-mv -f "$ST/back/ares.log" "$LOG"
-[[ -n "${ARES_STAT_FILE:-}" ]] && cp "$ST/back/wall" "$ARES_STAT_FILE"
+while :; do
+	c=0
+	wait "$RPID" || c=$?
+	kill -0 "$RPID" 2>/dev/null || break
+done
+trap - TERM INT
+[[ -z "$PPID_FWD" ]] || wait "$PPID_FWD" || true
+
+# results: ares' working directory into DIR, its output to LOG (exact copy
+# over the streamed one), the shots
+mkdir -p "$ST/back"
+rsync -tz "$SSH_TO:$RR/wall" ":$RR/exit" "$ST/back/" 2>/dev/null \
+	|| { echo "ares-remote: run $ID on $SSH_TO left no result (ssh status $c)" >&2; exit 255; }
+if [[ "$(cat "$ST/back/exit")" != 143 ]] || "${SSH[@]}" -n "$SSH_TO" "test -f $RR/ares.log"; then
+	rsync -tz "$SSH_TO:$RR/ares.log" "$LOG" || { echo "ares-remote: copy back of the log failed" >&2; exit 255; }
+	rsync -rtz "$SSH_TO:$RR/run/" "$DIR/" || { echo "ares-remote: copy back from $SSH_TO:$RR/run failed" >&2; exit 255; }
+	if [[ -n "$SHOTS" ]]; then
+		mkdir -p "$SHOTS"
+		rsync -rtz "$SSH_TO:$RR/shots/" "$SHOTS/" || { echo "ares-remote: copy back of the shots failed" >&2; exit 255; }
+	fi
+fi
+[[ -z "${ARES_STAT_FILE:-}" ]] || cp "$ST/back/wall" "$ARES_STAT_FILE"
 exit "$(cat "$ST/back/exit")"
