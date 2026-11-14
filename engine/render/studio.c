@@ -22,7 +22,8 @@
  *    between their think steps; render modes by col_ent_t.rendermode;
  *  - the view model: CPU-skinned with chrome (game_studio_chrome_*);
  *  - the hitbox source of engine/coll: the server pose
- *    (game_studio_pose) of the entity, its cooked hitboxes on their bones.
+ *    (game_studio_hitbox_pose) of the entity, its cooked hitboxes on their
+ *    bones (those the line can meet).
  *
  * Residency follows the old tree's studio pool (source/mod_studio.c,
  * provenance-audit.md entry QUAKE-INTERFACE: retargeted; its units are the
@@ -944,7 +945,7 @@ static void anim_prefetch(void)
 	}
 }
 
-/* 1 when sequence seq of model (as game_studio_pose picks it: 0 when out
+/* 1 when sequence seq of model (as the server pose picks it: 0 when out
  * of range) can be posed without a read: info and animation resident, or
  * a sequence without animation data. Otherwise what is missing is
  * requested (an info through residency interest, studio_frame's async
@@ -1031,6 +1032,8 @@ static smodel_t *mesh_of(res_t r)
 /* ---- boot, frame ------------------------------------------------------------------------- */
 
 
+static void unpack_init(void);
+
 void studio_init(void)
 {
 	uint8_t *sc = mem_region(MEM_STUDIO_SCRATCH);
@@ -1050,6 +1053,7 @@ void studio_init(void)
 	mem_pool_init(&spool, "studiogpu", sc + (MAT_KB + VIEW_KB) * 1024u,
 		scb - (MAT_KB + VIEW_KB) * 1024u, sdesc, 256);
 	col_set_hitbox_source(studio_hitboxes);
+	unpack_init();
 }
 
 static int is_studio(int e)
@@ -1509,7 +1513,10 @@ static void draw_entity(int e, double time, wld_layer_t *L, const uint16_t *list
 		ge.mode = (uint8_t)mode;
 		ge.rgba[3] = alpha;
 	}
-	if (gpu_studio_draw(m->gstate, m->mesh, &ge))
+	t0 = sys_time_us();
+	n = gpu_studio_draw(m->gstate, m->mesh, &ge);
+	st.gpu_us += (uint32_t)(sys_time_us() - t0);
+	if (n)
 	{
 		st.dropped++;
 		return;
@@ -1773,7 +1780,7 @@ void studio_draw_temp(res_t model, int body, int skin, const float org_g[3], con
 		return;
 	memset(&p, 0, sizeof(p));
 	p.model = model;
-	if (game_studio_pose(&p, bones, MAXBONES) < m->info->numbones)
+	if (game_studio_pose_draw(&p, bones, MAXBONES) < m->info->numbones)
 		return;
 	slot_matrices(m);
 	memset(&ge, 0, sizeof(ge));
@@ -1818,6 +1825,7 @@ void studio_draw_view(void)
 	draw_view(ren_cam.org);
 	gpu_studio_end();
 	timed(t0);
+	st.view_us += (uint32_t)(sys_time_us() - t0);
 }
 
 /* ---- view model ------------------------------------------------------------------------------ */
@@ -1828,7 +1836,10 @@ void studio_view_model(const studio_view_t *v)
 
 	view_set = v && v->model != RES_NONE;
 	if (!view_set)
+	{
+		view.model = RES_NONE;
 		return;
+	}
 	view = *v;
 	/* the view model's sequences stay resident while it is held (a new
 	 * weapon animation never reads synchronously) */
@@ -1836,27 +1847,69 @@ void studio_view_model(const studio_view_t *v)
 		want_all(i);
 }
 
-static float	chrome_up[MAXBONES][3], chrome_right[MAXBONES][3];
-
-static float unpack_n(uint32_t v, int bits, int shift, float k)
+/* The view model's server pose at the eye (global): bones in world axes
+ * about the eye; the bone count, 0 when not posed. */
+static int view_pose(const float eye[3], float (*out)[3][4])
 {
-	int x = (int)((v >> shift) & ((1u << bits) - 1));
+	game_pose_t p;
+	const float *gm = eng_layer_origin(ent_is_live(1) ? ent_idc(1)->layer : -1);
+	int k;
 
-	if (x >= 1 << (bits - 1))
-		x -= 1 << bits;
-	return (float)x / k;
+	memset(&p, 0, sizeof(p));
+	p.model = view.model;
+	p.sequence = view.sequence;
+	p.frame = view.frame;
+	memcpy(p.angles, view.ang, sizeof(p.angles));
+	memcpy(p.controller, view.controller, sizeof(p.controller));
+	for (k = 0; k < 3; k++)
+		p.origin[k] = view.org[k] + gm[k] - eye[k];
+	return game_studio_pose_draw(&p, out, MAXBONES);
+}
+
+#ifdef HL64_TEST
+int studio_view_bone_cam(int bone, float out[3][4])
+{
+	float ax[3][3];
+	int r, c;
+
+	if (view.model == RES_NONE || !anim_ready(view.model, view.sequence)
+		|| bone < 0 || bone >= view_pose(ren_cam.org, bones))
+		return -1;
+	ren_angle_axes(ren_cam.ang, ax[0], ax[1], ax[2]);
+	for (r = 0; r < 3; r++)
+		for (c = 0; c < 4; c++)
+			out[r][c] = ax[r][0] * bones[bone][0][c] + ax[r][1] * bones[bone][1][c]
+				+ ax[r][2] * bones[bone][2][c];
+	return 0;
+}
+#endif
+
+static float	chrome_up[MAXBONES][3], chrome_right[MAXBONES][3];
+/* the packed normal components: x / 15.5 (5 bits), x / 31.5 (6 bits), the
+ * same divisions done once (studio_init) instead of per vertex */
+static float	nrm5[32], nrm6[64];
+
+static void unpack_init(void)
+{
+	int x;
+
+	for (x = 0; x < 32; x++)
+		nrm5[x] = (float)(x >= 16 ? x - 32 : x) / 15.5f;
+	for (x = 0; x < 64; x++)
+		nrm6[x] = (float)(x >= 32 ? x - 64 : x) / 31.5f;
 }
 
 /* One CPU-skinned vertex: bone b's matrix on the bone-local position,
- * chrome texture coordinates from the normal's bone when chrome. */
-static void skin_vert(const sfmt_mesh_t *ms, int16_t pos[3], uint16_t nrm, int16_t st[2],
+ * chrome texture coordinates from the normal's bone when chrome. k is
+ * 2^pos_shift and ik its reciprocal (exact: x * ik = x / k). */
+static void skin_vert(float k, float ik, int16_t pos[3], uint16_t nrm, int16_t st[2],
 	int b, int nb, int chrome, const w64_texp_t *tex)
 {
-	float k = (float)(1 << ms->pos_shift), p[3], q;
+	float p[3], q;
 	int r;
 
 	for (r = 0; r < 3; r++)
-		p[r] = pos[r] / k;
+		p[r] = pos[r] * ik;
 	for (r = 0; r < 3; r++)
 	{
 		q = (bones[b][r][0] * p[0] + bones[b][r][1] * p[1] + bones[b][r][2] * p[2]
@@ -1867,9 +1920,9 @@ static void skin_vert(const sfmt_mesh_t *ms, int16_t pos[3], uint16_t nrm, int16
 	{
 		float n[3], c[2];
 
-		n[0] = unpack_n(nrm, 5, 11, 15.5f);
-		n[1] = unpack_n(nrm, 6, 5, 31.5f);
-		n[2] = unpack_n(nrm, 5, 0, 15.5f);
+		n[0] = nrm5[(nrm >> 11) & 31];
+		n[1] = nrm6[(nrm >> 5) & 63];
+		n[2] = nrm5[nrm & 31];
 		game_studio_chrome_st(chrome_up[nb], chrome_right[nb], n, c);
 		/* chrome coordinates span 64 source texels */
 		st[0] = (int16_t)(c[0] * tex->w / 64.0f * 32.0f);
@@ -1885,15 +1938,13 @@ static void draw_view(const float eye[3])
 	const sfmt_run_t *runs;
 	const sfmt_meshlet_t *ml;
 	const sfmt_load_t *ld;
-	const uint16_t *skins;
+	static uint16_t view_crun[256], view_ctex[256];
 	const uint32_t *tofs;
 	const w64_vert_t *src;
 	w64_vert_t *dst;
 	gpu_studio_ent_t ge;
-	game_pose_t p;
-	float f[3], rt[3], u[3];
-	const float *gm;
-	int n, ri, i, l, k, slot = 0, layer, skin;
+	float f[3], rt[3], u[3], pk, ipk;
+	int n, ri, i, l, k, layer, nr, np = 0, nc = 0, drop = 0;
 
 	if (!view_set)
 		return;
@@ -1907,16 +1958,7 @@ static void draw_view(const float eye[3])
 		return;
 	}
 	layer = ent_is_live(1) ? ent_idc(1)->layer : -1;
-	gm = eng_layer_origin(layer);
-	memset(&p, 0, sizeof(p));
-	p.model = view.model;
-	p.sequence = view.sequence;
-	p.frame = view.frame;
-	memcpy(p.angles, view.ang, sizeof(p.angles));
-	memcpy(p.controller, view.controller, sizeof(p.controller));
-	for (k = 0; k < 3; k++)
-		p.origin[k] = view.org[k] + gm[k] - eye[k];
-	n = game_studio_pose(&p, bones, MAXBONES);
+	n = view_pose(eye, bones);
 	if (n < m->info->numbones)
 		return;
 	b = (const uint8_t *)ms;
@@ -1925,49 +1967,32 @@ static void draw_view(const float eye[3])
 	runs = (const sfmt_run_t *)(b + ms->run_ofs);
 	ml = (const sfmt_meshlet_t *)(b + ms->meshlet_ofs);
 	ld = (const sfmt_load_t *)(b + ms->load_ofs);
-	skins = (const uint16_t *)(b + ms->skin_ofs);
 	tofs = (const uint32_t *)(b + ms->tex_ofs);
 	src = (const w64_vert_t *)(b + ms->vert_ofs);
-	dst = view_verts[view_flip];
-	view_flip ^= 1;
-	skin = view.skin < ms->nfamilies ? view.skin : 0;
-	if (nbone)
+	/* the drawn runs (body, skin): the chrome ones (texture coordinates
+	 * from each vertex's normal) CPU-skinned, the others drawn from their
+	 * blocks with the pose's bone matrices, as an entity's (the pose is
+	 * already eye-relative: identity model matrix) */
+	nr = pick_runs(m, view.body, view.skin);
+	for (k = 0; k < nr; k++)
 	{
-		ren_angle_axes(ren_cam.ang, f, rt, u);
-		game_studio_chrome_axes((const float (*)[3][4])bones, n, rt, chrome_up, chrome_right);
+		const w64_texp_t *tex = (const w64_texp_t *)(b + tofs[tex_buf[k]]);
+
+		if (nbone && (tex->pad2 & SFMT_NF_CHROME))
+		{
+			view_crun[nc] = runs_buf[k];
+			view_ctex[nc++] = tex_buf[k];
+		}
+		else
+		{
+			runs_buf[np] = runs_buf[k];
+			tex_buf[np++] = tex_buf[k];
+		}
 	}
-	memcpy(dst, src, ms->nslots / 2u * sizeof(w64_vert_t));
-	for (ri = 0; ri < ms->nruns; ri++)
-	{
-		const w64_texp_t *tex = (const w64_texp_t *)(b + tofs[skins[skin * ms->nskinref
-			+ runs[ri].skinref]]);
-		int chrome = nbone && (tex->pad2 & SFMT_NF_CHROME);
-
-		for (i = runs[ri].meshlet_first; i < runs[ri].meshlet_first + runs[ri].meshlet_count; i++)
-			for (l = ml[i].load_first; l < ml[i].load_first + ml[i].nloads; l++)
-			{
-				int bone = bslot[ld[l].bslot], c = ld[l].count + (ld[l].count & 1);
-
-				for (k = 0; k < c; k++, slot++)
-				{
-					w64_vert_t *v = &dst[slot >> 1];
-					int nb = nbone ? nbone[slot] : bone;
-
-					if (slot & 1)
-						skin_vert(ms, v->posB, v->normB, v->stB, bone, nb, chrome, tex);
-					else
-						skin_vert(ms, v->posA, v->normA, v->stA, bone, nb, chrome, tex);
-				}
-			}
-	}
-	gpu_writeback(dst, ms->nslots / 2u * sizeof(w64_vert_t));
 	memset(&ge, 0, sizeof(ge));
-	ge.model.m[0][0] = ge.model.m[1][1] = ge.model.m[2][2] = 1.0f / (float)(1 << ms->pos_shift);
-	ge.model.m[3][3] = 1;
-	ge.nruns = pick_runs(m, view.body, view.skin);
-	ge.runs = runs_buf;
-	ge.tex = tex_buf;
 	ge.rgba[0] = ge.rgba[1] = ge.rgba[2] = ge.rgba[3] = 255;
+	/* both paths in the view model's depth range */
+	ge.view = 1;
 	if (ent_is_live(1))
 	{
 		float org[3];
@@ -1991,7 +2016,74 @@ static void draw_view(const float eye[3])
 			ge.rgba[0] = ge.rgba[1] = ge.rgba[2] = (uint8_t)lv;
 		}
 	}
-	if (gpu_studio_draw_cpu(m->gstate, ms, dst, &ge))
+	ge.model.m[3][3] = 1;
+	if (np)
+	{
+		slot_matrices(m);
+		ge.model.m[0][0] = ge.model.m[1][1] = ge.model.m[2][2] = 1;
+		ge.bones = (const float (*)[3][4])slots;
+		ge.nbones = ms->nbslots;
+		ge.nruns = np;
+		ge.runs = runs_buf;
+		ge.tex = tex_buf;
+		if (gpu_studio_draw(m->gstate, ms, &ge))
+			drop = 1;
+	}
+	if (nc)
+	{
+		uint32_t lo = 0xFFFFFFFFu, hi = 0;
+
+		dst = view_verts[view_flip];
+		view_flip ^= 1;
+		pk = (float)(1 << ms->pos_shift);
+		ipk = 1.0f / pk;
+		ren_angle_axes(ren_cam.ang, f, rt, u);
+		game_studio_chrome_axes((const float (*)[3][4])bones, n, rt, chrome_up, chrome_right);
+		for (ri = 0; ri < nc; ri++)
+		{
+			const sfmt_run_t *ru = &runs[view_crun[ri]];
+			const w64_texp_t *tex = (const w64_texp_t *)(b + tofs[view_ctex[ri]]);
+			int slot = 0, s0;
+
+			/* the run's first slot: every earlier load's padded count */
+			for (i = 0; i < ru->meshlet_first; i++)
+				for (l = ml[i].load_first; l < ml[i].load_first + ml[i].nloads; l++)
+					slot += ld[l].count + (ld[l].count & 1);
+			s0 = slot;
+			for (i = ru->meshlet_first; i < ru->meshlet_first + ru->meshlet_count; i++)
+				for (l = ml[i].load_first; l < ml[i].load_first + ml[i].nloads; l++)
+				{
+					int bone = bslot[ld[l].bslot], c = ld[l].count + (ld[l].count & 1);
+
+					memcpy(&dst[slot >> 1], &src[slot >> 1], (uint32_t)c / 2u * sizeof(w64_vert_t));
+					for (k = 0; k < c; k++, slot++)
+					{
+						w64_vert_t *v = &dst[slot >> 1];
+
+						if (slot & 1)
+							skin_vert(pk, ipk, v->posB, v->normB, v->stB, bone, nbone[slot],
+								1, tex);
+						else
+							skin_vert(pk, ipk, v->posA, v->normA, v->stA, bone, nbone[slot],
+								1, tex);
+					}
+				}
+			if ((uint32_t)s0 < lo)
+				lo = (uint32_t)s0;
+			if ((uint32_t)slot > hi)
+				hi = (uint32_t)slot;
+		}
+		gpu_writeback(&dst[lo >> 1], (hi - lo) / 2u * sizeof(w64_vert_t));
+		ge.model.m[0][0] = ge.model.m[1][1] = ge.model.m[2][2] = ipk;
+		ge.bones = NULL;
+		ge.nbones = 0;
+		ge.nruns = nc;
+		ge.runs = view_crun;
+		ge.tex = view_ctex;
+		if (gpu_studio_draw_cpu(m->gstate, ms, dst, &ge))
+			drop = 1;
+	}
+	if (drop)
 		st.dropped++;
 	else
 		st.drawn++;
@@ -2031,9 +2123,11 @@ int studio_hitboxes(const col_ent_t *e, const float start[3], const float end[3]
 {
 	const ent_rnd_t *r;
 	const sfmt_hitbox_t *x;
+	const float (*pb)[3][4];
 	smodel_t *m;
 	game_pose_t p;
 	float reach;
+	uint8_t keep[255];
 	int i, n, ready;
 
 	*out = hb;
@@ -2060,18 +2154,22 @@ int studio_hitboxes(const col_ent_t *e, const float start[3], const float end[3]
 	memcpy(p.angles, e->angles, sizeof(p.angles));
 	memcpy(p.controller, r->controller, sizeof(p.controller));
 	memcpy(p.blending, r->blending, sizeof(p.blending));
-	n = game_studio_pose(&p, bones, MAXBONES);
+	/* only the hitboxes the line can meet (their bones' chains posed) */
+	n = game_studio_hitbox_pose(&p, ready ? start : NULL, end, &pb, keep);
+	if (n <= 0)
+		return n;
 	x = SFMT_HITBOXES(m->info);
-	for (i = 0; i < m->info->numhitboxes; i++)
+	for (i = n = 0; i < m->info->numhitboxes; i++)
 	{
-		if (x[i].bone >= n)
-			return 0;
-		memcpy(hb[i].bone, bones[x[i].bone], sizeof(hb[i].bone));
-		memcpy(hb[i].mins, x[i].bbmin, sizeof(hb[i].mins));
-		memcpy(hb[i].maxs, x[i].bbmax, sizeof(hb[i].maxs));
-		hb[i].group = x[i].group;
+		if (!keep[i])
+			continue;
+		memcpy(hb[n].bone, pb[x[i].bone], sizeof(hb[n].bone));
+		memcpy(hb[n].mins, x[i].bbmin, sizeof(hb[n].mins));
+		memcpy(hb[n].maxs, x[i].bbmax, sizeof(hb[n].maxs));
+		hb[n].group = x[i].group;
+		n++;
 	}
-	return m->info->numhitboxes;
+	return n;
 }
 
 /* ---- queries, stats --------------------------------------------------------------------------- */

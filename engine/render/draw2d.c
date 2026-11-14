@@ -6,10 +6,11 @@
  * u16 version 1, u16 flags (1 keyed CI8, 2 I8 intensity), u16 w, h, u32
  * pix_ofs, u32 file size, name[48], then w x h bytes) into the HUD region
  * as I4 coverage (keyed: index 255 -> 0, else full; intensity: the top
- * four bits), and FONT lines also read their glyph table (gfx/<name>.fnt:
- * u32 'FNT1', u16 row height, u16 rows, 256 x {u16 offset (y * 256 + x),
- * u16 width}, big-endian). Draw calls go to the platform seam
- * (engine/render/gpu_2d.h): rdpq on the cart, the recorder on the host.
+ * four bits), and FONT lines (intensity sheets) also read their glyph
+ * table (gfx/<name>.fnt: u32 'FNT1', u16 row height, u16 rows, 256 x {u16
+ * offset (y * 256 + x), u16 width}, big-endian). Draw calls go to the
+ * platform seam (engine/render/gpu_2d.h): rdpq on the cart, the recorder
+ * on the host.
  * Cooked files are untrusted: sizes and offsets are checked; a missing or
  * bad sheet is logged and not drawn.
  */
@@ -58,6 +59,7 @@ static const uint8_t sheet_font[D2S_COUNT] = {
 static struct {
 	uint16_t	w[D2S_COUNT], h[D2S_COUNT];
 	uint8_t		ok[D2S_COUNT];
+	uint8_t		inten[D2S_COUNT];	/* I8 intensity sheet (UI8_INTENSITY) */
 	int		font;			/* sheet id of the text font, -1 none */
 	uint16_t	rowh;
 	uint16_t	gofs[256];
@@ -142,6 +144,7 @@ static int load_sheet(int id, uint8_t *dst, uint32_t room)
 	}
 	D.w[id] = w;
 	D.h[id] = hh;
+	D.inten[id] = (flags & UI8_INTENSITY) != 0;
 	gpu_2d_sheet(id, dst, w, hh, (int)stride);
 	return (int)(stride * hh);
 }
@@ -154,6 +157,13 @@ static void load_font(int id)
 
 	if (n < 4 || n + 1 > sizeof(path))
 		return;
+	/* fonts are coverage ramps (tools/cook/bake_ui.py); a keyed sheet
+	 * (an older cook) would draw every glyph cell as a solid block */
+	if (!D.inten[id])
+	{
+		log_printf("d2: %s: font not an intensity sheet (re-cook)\n", sheet_file[id]);
+		return;
+	}
 	memcpy(path, sheet_file[id], n - 4);
 	memcpy(path + n - 4, ".fnt", 5);
 	rom = sys_cart_addr(path, &size);

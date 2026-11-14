@@ -1,0 +1,145 @@
+# SPDX-License-Identifier: MIT
+# Scene hl2-return-battle (test/README.md): hldemo2 second visit from the
+# hldemo3 tunnel: battle_master (trigger_once #520), the second battle
+# (second_battle_mm, vortigaunts and grunts), the warehouse, the tripmine
+# corridor, the crate wall shot down with the MP5: uplink.route lines 539-649
+# (SHOT hldemo2-return .. SHOT elevator-return; the route's AI-heaviest
+# hldemo2 frames). New Game on hldemo2: first-visit triggers unfired (the
+# route's first visit fired them; its monsters are here, as there); the
+# tripmine corridor is skipped by a setpos (its barriers stand).
+# scene-window: uplink hldemo2-return elevator-return
+startmap hldemo2
+waitmap hldemo2 60
+# the route's player has the suit here (hldemo1's item_suit): drop it on
+# him (HLSDK CBaseEntity::Create, touch pickup)
+setpos 2528 -48 -348 0 180
+wait 0.3
+drop item_suit 2528 -48 -348
+drop weapon_9mmAR 2528 -48 -348
+drop ammo_9mmAR 2528 -48 -348
+drop ammo_9mmAR 2528 -48 -348
+drop ammo_9mmAR 2528 -48 -348
+drop weapon_crowbar 2528 -48 -348
+wait 1.5
+god 1
+look 0 180
+wait 0.5
+stats begin
+shot hldemo2-return
+stats hldemo2-return
+# tunnel west, crawl south (crouch-only y -64..-144) into the corridor, stand
+# at its south end and climb ladder #48: passes trigger_once #520
+# (z -96..-60) -> multisource battle_master enabled
+setpos 2228 -20 -348 0 270
+wait 0.3
++duck
+wait 0.5
++forward
+waitnear 2228 -200 -366 24 8
+-duck
+waitnear 2228 -456 -348 10 8
+-forward
+look -70 180
++forward
+waitnear 2208 -456 75 20 8
+-forward
+# over the cage fence, drop into the corridor north of it and walk east
+# into trigger_once #518 (master battle_master): killtarget spaz_door_1,
+# second_battle_mm -> 2nd_pass_broken_door slams shut, dome_gate_1, spawns
+setpos 2228 -336 84 0 90
+wait 0.3
+setpos 2300 -296 -60 0 0
+wait 0.3
++forward
+waitmoved 2nd_pass_broken_door 15
+-forward
+# around the second-battle yard to trigger_once #561 -> teleport_mm1
+setpos 2700 -356 -60 0 0
+wait 0.3
+setpos 2980 -356 -60 0 90
+wait 0.3
+setpos 2980 -40 -60 0 90
+wait 0.3
+setpos 2904 40 -60 0 180
+wait 1
+# north out of the yard past the trailers and the radio table (the MP5 was
+# taken there on the first visit and stays taken); select the MP5
+setpos 2500 300 -60 0 90
+wait 0.3
+setpos 2520 700 -60 0 90
+wait 0.3
+setpos 2246 700 -60 0 90
+wait 0.5
+impulse 5
+setpos 2300 1100 -60 0 180
+wait 0.3
+# trigger_once #563 (master battle_master) -> vort_grunt_battle_2_mm
+setpos 1986 1100 -60 0 180
+wait 0.5
+# south through the (start-open) warehouse gate into the warehouse
+setpos 1700 1100 -60 0 270
++forward
+waitnear 1700 960 -60 40 8
+-forward
+setpos 2050 0 -60 0 270
+wait 0.3
+setpos 2050 -580 -60 0 180
+wait 0.3
+# tripmine corridor west: on the route's return its barriers #201 / #205,
+# the mines and zombie_crates are gone (first visit); here they stand, so
+# the player is put past them (uplink 604-608 walk 1400 -> 890)
+setpos 890 -440 196 0 180
+wait 0.3
+# zombie room north, west to the offices
+setpos 830 -100 196 0 90
+wait 0.3
+setpos 600 -30 196 0 180
+wait 0.3
+setpos 300 -100 196 0 180
+wait 0.3
+setpos 200 -200 196 0 270
+wait 0.3
+# button #575 (master battle_master) raises 2nd_pass_broken_door back to
+# its broken, half-open height (74u gap). The 2nd_vorts_beyond_door slaves
+# (second_battle_mm +17 s) crowd the doorway, so step past them into the
+# room beyond once the door is up (combat is not under test).
+setpos 240 -240 196 0 0
+wait 0.3
++use
+wait 0.3
+-use
+wait 3
+setpos 60 -560 196 0 180
+wait 0.3
+# crates #145-#149 wall off the elevator corridor: walk north into them with
+# the MP5 firing (separate bursts then a walk left the player wedged at
+# y -300 at 30 fps); the open lane through the broken stack is x -290..-274
+# at its north end
+setpos -282 -440 196 10 90
+wait 0.3
++attack
++forward
+waitnear -282 -206 196 24 20
+-forward
+-attack
+# startele1 (wait -1) was left open by elestartmm on the first visit and the
+# level state persists, so walk straight into the car (button #93 outside
+# would toggle it shut and fire eledoordelaymm from outside the
+# hldemo1to2 transition volume)
+# (here New Game left them shut: the outside button #93, model *25, opens
+# them first, as in test/scenes/seam-2to1.route)
+setpos -330 -248 196 10 180
+wait 0.3
++use
+wait 0.3
+-use
+waitmoved startele1 5
+wait 1.5
+setpos -380 -130 196 0 180
++forward
+waitnear -470 -130 196 40 6
+-forward
+shot elevator-return
+stats end
+wait 0.2
+pass

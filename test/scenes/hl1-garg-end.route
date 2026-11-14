@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: MIT
+# Scene hl1-garg-end (test/README.md): hldemo1's garg finale: the garg room
+# (hl1-garg's prelude: glimpse, cave-in, the vent, garg_vent_break, the garg
+# killing garg_sci_1 and kicking the CPU), then the garg chain: barney, the
+# rollcar (anim event -> roll -> flip_cpu_mm), garg_end_ss_1..4 ->
+# init_ending_mm (fade, kill_garg, end_teleport_master), the end section and
+# the restart: uplink.route lines 716-745, window SHOT garg-look .. the end
+# (route ops 525-534). The one scene over 60 s (103 s of game time): the
+# chain alone runs ~60 s after the garg is in view.
+# scene-window: uplink garg-look 534
+startmap hldemo1
+waitmap hldemo1 60
+setpos -2048 744 36
+wait 0.3
+drop item_suit -2048 744 36
+drop weapon_crowbar -2048 744 36
+wait 1
+god 1
+setpos 530 -110 36 0 0
+waitgone glimpse_garg 20
+# cave-in trigger (#319) -> cavein2_mm -> launch_mm: vent pops and falls
+setpos 720 -180 36 0 0
+waitgone pop 5
+waitgone vent_fall_crate_2 10
+# the vent crawl (uplink 707-715) from x 1200 (where the route starts
+# swinging the crowbar) to its east end, ducked (a setpos straight to the
+# east end leaves the player stuck there)
+setpos 280 -232 36 0 0
++duck
+wait 0.5
+impulse 1
+setpos 1200 -232 400 30 0
+wait 0.3
++forward
++attack
+waitnear 2083 -232 518 6 60
+-forward
++moveleft
+waitnear 2072 64 482 16 20
+-moveleft
++back
+waitgone garg_vent_break 30
+-back
+-attack
+wait 2
+-duck
+# garg kicks the CPU after killing garg_sci_1 (debris 3..5 s later)
+waitgone cpu_debris_3 40
+shot garg
+# the garg itself (the shot above frames the vent it came through)
+lookat monster_gargantua
+shot garg-look
+stats begin
+# garg chain: barney, rollcar (anim event -> roll -> flip_cpu_mm),
+# garg_end_ss_1..4 -> init_ending_mm (fade, demo_end_master; kill_garg at
+# 2.2 s; end_teleport_master at 5 s)
+waitgone garg 120
+waitnear -3248 2656 48 80 10
+wait 3
+shot end-fade
+waitend 60
+# the end section ends the demo and the game starts over at its title intro
+# (New Game of the campaign's start map). Let it load before the shot.
+wait 4
+shot end-restart
+# the shot is taken a few frames after the request: keep running
+wait 1
+stats end
+wait 0.2
+pass

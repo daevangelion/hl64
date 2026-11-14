@@ -446,10 +446,10 @@ static int cmd_stats(const dbg_cmd_t *c)
 
 		rec_stats(&r, 0);
 		log_printf("stats %lu rec: live=%lu pending=%lu dry=%lu released=%lu store=%lu/%lu "
-			"expired=%lu\n", (unsigned long)c->arg[0].u, (unsigned long)r.live,
+			"expired=%lu wakeover=%lu\n", (unsigned long)c->arg[0].u, (unsigned long)r.live,
 			(unsigned long)r.pending, (unsigned long)r.dry, (unsigned long)r.released_total,
 			(unsigned long)r.store_used, (unsigned long)r.store_peak,
-			(unsigned long)r.open_expired);
+			(unsigned long)r.open_expired, (unsigned long)r.wake_over);
 	}
 	game_ai_stats(c->arg[0].u);
 	return 0;
@@ -740,18 +740,28 @@ static void rollup(void)
 	eng.rollup_world_max = 0;
 	if (eng.world)
 	{
+		static uint32_t sub_prev[WLD_SS_N];	/* sub_us is cumulative */
 		wld_stream_stats_t ss;
-		unsigned long n;
+		unsigned long n, sub[WLD_SS_N];
+		int z;
 
 		wld_stream_stats(&ss, 1);
 		n = ss.frames ? ss.frames : 1;
+		for (z = 0; z < WLD_SS_N; z++)
+		{
+			sub[z] = (unsigned long)(ss.sub_us[z] - sub_prev[z]) / n;
+			sub_prev[z] = ss.sub_us[z];
+		}
 		log_printf("prof stream_us avg=%lu max=%lu frames=%lu recompute=%lu reassert=%lu "
-			"delta=%lu blk1ms=%lu blk1ms_tele=%lu blkmax=%lu promoted=%lu\n",
+			"delta=%lu blk1ms=%lu blk1ms_tele=%lu blkmax=%lu promoted=%lu open_us=%lu "
+			"scan_us=%lu name_us=%lu movers_us=%lu pins_us=%lu\n",
 			(unsigned long)ss.us_sum / n, (unsigned long)ss.us_max, (unsigned long)ss.frames,
 			(unsigned long)ss.recompute, (unsigned long)ss.reassert, (unsigned long)ss.delta,
 			(unsigned long)io.life_frames_blocked_1ms,
 			(unsigned long)io.life_frames_blocked_1ms_tele,
-			(unsigned long)io.life_blocked_max_us, (unsigned long)ss.promoted);
+			(unsigned long)io.life_blocked_max_us, (unsigned long)ss.promoted,
+			sub[WLD_SS_OPEN], sub[WLD_SS_SCAN], sub[WLD_SS_NAME], sub[WLD_SS_MOVERS],
+			sub[WLD_SS_PINS]);
 	}
 	if (eng.world)
 	{
@@ -759,12 +769,15 @@ static void rollup(void)
 
 		studio_stats(&ss, 1);
 		log_printf("prof studio_us avg=%lu max=%lu drawn=%lu bones_us=%lu draw_us=%lu "
+			"gpu_us=%lu view_us=%lu "
 			"pool=%lu pool_peak=%lu want_peak=%lu soft=%lu sync=%lu models=%lu anims=%lu "
 			"culled=%lu pending=%lu nofit=%lu dropped=%lu\n",
 			(unsigned long)(ss.frames ? ss.us_sum / ss.frames : 0), (unsigned long)ss.us_max,
 			(unsigned long)(ss.frames ? ss.drawn / ss.frames : 0),
 			(unsigned long)(ss.frames ? ss.bones_us / ss.frames : 0),
 			(unsigned long)(ss.frames ? ss.draw_us / ss.frames : 0),
+			(unsigned long)(ss.frames ? ss.gpu_us / ss.frames : 0),
+			(unsigned long)(ss.frames ? ss.view_us / ss.frames : 0),
 			(unsigned long)ss.pool_used, (unsigned long)ss.pool_peak,
 			(unsigned long)ss.want_peak, (unsigned long)ss.soft,
 			(unsigned long)ss.sync_loads, (unsigned long)ss.models, (unsigned long)ss.anims,

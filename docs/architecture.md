@@ -209,10 +209,10 @@ information only.
 | sentence table (cooked) | 24 | not reported | parsed text | [EST] |
 | lightstyle patterns + state | 4 | not reported | strings + 96 × value | lightstyles.md |
 | think heap, active bitsets, grid tables | 12 | 6.3 KB (52%) | area tree + leaf lists | **measured** |
-| sound (16 voice buffers, 10 wav64, loops) | 100 | 76.1 KB (79% of 96) | M5 hazard route 78.4 KB (80272 B) × 1.25 > 96 KB → 100 | **measured** (route; the earlier `snd_ares.sh` peak was 78144 B) |
+| sound (16 voice buffers, 10 wav64, loops) | 104 | 76.1 KB (79% of 96) | M5 hazard route 80.9 KB (82832 B) × 1.25 > 100 KB → 104 | **measured** (route, m5-int2 `eb47299`; uplink 82080 B; the earlier `snd_ares.sh` peak was 78144 B) |
 | sprite cache / decals / particles | 64 / 106 / 12 | — / 51.7 KB (92% of the old 56 KB, m3-a) / — | 64 / 8 / 512 | decals: global sheet + 2 per-map placed-decal sheets (`DECL`, one per open layer) + piece vertices, cook-proved (`tools/cook/decals.py`): Uplink 76672 B (29856 + 2 × 11888 t0a0b + 23040), retail 86528 B; carve = retail × 1.25 → **106 KB** (`HL64_DECAL_TEXELS_KB`) |
 | dlight scratch + flashlight pool | 48 | not reported | same | |
-| HUD sheets + font (ui8) | 128 | 71.5 KB (56%) | similar | **measured** |
+| HUD sheets + font (ui8) | 128 | 63.5 KB (50%; 65024 B, font creditsfont) | similar | **measured** |
 | debug log ring (cart) | 8 | — | 16 KB console text | 12 |
 | per-frame scratch arena | 96 | not reported | — | |
 | aithink (spread monster thinks: 6 contexts × (8 KB stack + 8 KB cover tables)) | 96 | stack peak 4552 B of 8192 (cart, routes uplink + m4); cover tables 2 × 1024 × f32 by construction | — (thinks ran whole) | **measured** stack (`prof ai_ctx stack=`; co.c logs a context past 3/4, overflow into its guard words is fatal); M5 `game/hl/aithink.c`, think-and-time.md 2.1 |
@@ -548,12 +548,17 @@ models; optional hydration only while 48 slots stay free, transient
 effects keep their own 32-slot reserve; named fires and class searches
 wake pending records synchronously (≤ 2 hydrate in the frame, the rest
 queue first); moves and traces wake pending records in their box via the
-pending grid; deferred uses into a closed map as a canonical (map, lump) /
-runtime-id FIFO, never entity pointers; closing a map freezes its timers
+pending grid, a moving pusher also those up to 256 u above its swept box
+(what rests on it: GoldSrc's had fallen there at map start), settled by
+DROP_TO_FLOOR before it moves (physics-movetypes.md 4.2); deferred uses
+into a closed map as a canonical (map, lump) / runtime-id FIFO, never
+entity pointers; closing a map freezes its timers
 (128) by remaining time and cuts cross-boundary references; runtime
 pickups and monstermaker children persist by (map, runtime id), ≤ 64
 pickups; entity budget 2 ms cart / 8 records host, shared in the order
-neighbour release, arrival pump, home pump, closing release.
+box wakes (links, pushers: synchronous, a frame where they alone exceed
+the budget is logged and counted, stats `rec: wakeover=`), neighbour
+release, arrival pump, home pump, closing release.
 
 ### 6.5 Resources
 
@@ -865,9 +870,14 @@ builds per-frame lists straight from components (no client entity copies).
    rspq block (packing budget 2 ms/frame); per entity per frame the bone
    matrices from `game_studio_setup_bones` (D3) into a double-buffered
    pool and one block replay. Lighting: probe (base + one style term,
-   lightstyles.md 4) + dlights. View model CPU-skinned (chrome needs
-   bone-space normals). STEP entities interpolated between think steps
-   (physics-movetypes.md 7), as GoldSrc's client does.
+   lightstyles.md 4) + dlights. View model: chrome runs CPU-skinned (chrome
+   needs bone-space normals), the other runs replayed from their blocks with
+   the pose's bone matrices; posed at the eye with the view's angles (pitch
+   negated as a model's, HLSDK V_CalcGunAngle) and drawn last in the
+   front 3/10 of the depth range (GoldSrc's view model depth range): it
+   turns with the view and never goes into a wall. STEP entities
+   interpolated between think steps (physics-movetypes.md 7), as
+   GoldSrc's client does.
 5. **Particles**: one pool, TinyPX ucode, one call, s16 view-relative.
 6. **Translucent**: render modes/fx per render-fx.md; back to front; depth
    test without write; additive as unit colour × brightness through the
@@ -900,10 +910,12 @@ spatialise without conversion.
 
 ## 11. Input
 
-Pad → `usercmd` (stick move/look per settings, C-buttons strafe/look, Z
-attack, R attack2/jump; table in `engine/core/bind.c`); absolute stick
-turning scales by `dt`. The route VM and `ARES_TEST_INPUT` inject at the
-same point.
+Pad → `usercmd` (stick turn + forward/back, C-buttons strafe/look, Z
+attack, R attack2, A jump, B use, L duck, D-down reload; D-up flashlight,
+D-left/D-right previous/next weapon, Start last weapon as one impulse per
+press; one table in `engine/in/in.c`, documented in `docs/controls.md`);
+absolute stick turning scales by `dt`. The route VM injects held buttons
+and impulses into the same command; `ARES_TEST_INPUT` injects at the pad.
 
 ## 12. Settings and debug commands
 

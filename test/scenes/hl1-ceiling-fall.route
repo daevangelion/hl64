@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT
+# Scene hl1-ceiling-fall: hldemo1's scripted start-corridor collapse, the
+# "black slab" a playable-ROM check reported when looking up there.
+# hldemo_init_mm fires start_ruckus_mm at 30 s (4 s after the intro
+# teleport), which fires start_ceiling_fall: func_door_rotating *31 (origin
+# brush -2128 392 160 on the corridor's west wall, spawnflags 128 = rotate
+# about X: angles (20 0 0)) swings its 160 x 752 x 8 ceiling panel 20
+# degrees down (east edge 55 u lower), and toggles its own lights (style 33)
+# off while start_spinlights_1 (style 32) comes on. The panel's texture is
+# c3a2_ceil (halflife.wad mean RGB 24 31 39), so seen from below it is a
+# dark diagonal slab across the corridor. Shots: under the panel's south
+# half and from the stair-room end, looking up north / east.
+startmap hldemo1
+waitmap hldemo1 600
+waitnear -2048 744 36 48 60
+wait 6
+god 1
+stats begin
+setpos -2048 100 36 -45 90
+wait 0.4
+shot under_north
+wait 0.1
+setpos -2048 100 36 -80 90
+wait 0.4
+shot under_up
+wait 0.1
+setpos -2048 100 36 -45 0
+wait 0.4
+shot under_east
+wait 0.1
+setpos -2048 -100 36 -45 90
+wait 0.4
+shot stairs_north
+wait 0.1
+stats end
+pass

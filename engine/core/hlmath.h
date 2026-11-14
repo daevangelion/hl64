@@ -29,6 +29,8 @@ double	hl_atan(double x);
 double	hl_atan2(double y, double x);
 double	hl_asin(double x);
 double	hl_acos(double x);
+/* sin x and cos x from one reduction: the values hl_sin / hl_cos give */
+void	hl_sincos(double x, double *s, double *c);
 
 float	hl_sinf(float x);
 float	hl_cosf(float x);
@@ -37,5 +39,15 @@ float	hl_atanf(float x);
 float	hl_atan2f(float y, float x);
 float	hl_asinf(float x);
 float	hl_acosf(float x);
+void	hl_sincosf(float x, float *s, float *c);
+
+/* Render approximations: float, from short series, not bit-matched to the
+ * functions above (bounds measured by test/m4/hlmath.c). Only for what
+ * nothing but the picture reads (the client / draw pose); never where
+ * host and cart or the game must agree. |x| >= 8192 / outside [-1, 1]:
+ * the exact functions. */
+void	hl_rsincosf(float x, float *s, float *c);
+float	hl_rsinf(float x);
+float	hl_racosf(float x);
 
 #endif

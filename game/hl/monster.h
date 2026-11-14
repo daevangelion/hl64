@@ -1125,6 +1125,15 @@ typedef struct {
 	uint32_t	starts;		/* thinks begun (Mon_ThinkRun) */
 	uint32_t	looks;		/* RunAI sensing (Look / Listen / GetEnemy) runs */
 	uint32_t	nopvs;		/* RunAI sensing skipped: no client in PVS, not in combat */
+	uint32_t	lcand, fvis;	/* Look's box candidates, its FVisible tests */
+	uint32_t	events;		/* anim events handled */
+	uint32_t	cands;		/* entity candidates of the moves' boxes (col_counts) */
+	uint32_t	bones;		/* server pose bones computed (game_studio_pose_bones) */
+	uint32_t	sounds;		/* sounds and sentences started (snd_emit_count) */
+	uint32_t	decals;		/* decals traced (UTIL_DecalTrace) */
+	uint32_t	poses;		/* server poses begun (game_studio_poses) */
+	uint32_t	btests;		/* hitbox pose cull tests (game_studio_cull_tests) */
+	uint32_t	hboxes;		/* hitboxes walked by line traces (game_studio_hitboxes_kept) */
 } mon_ai_work_t;
 extern mon_ai_work_t	mon_aiw;
 void	mon_stats_script(void);
@@ -1180,12 +1189,32 @@ void	Mon_ThinkEnd(int e, const mon_think_acc_t *a);
 /* The frame's think work in budget units, with the open slice of a. */
 uint32_t Mon_FrameUnits(const mon_think_acc_t *a);
 /* aithink.c: MonsterThink's scheduler (1: it ran, continued or deferred
- * the think), the pause point (CheckLocalMove, cover candidates), the
- * frame start's FIFO of paused thinks, drops (level state, twins, map
- * close, New Game), the cover search's path-length tables (NULL: the
- * caller's own), the `stats ai:` / `prof ai` counters. */
+ * the think), the pause points, the frame start's FIFO of paused thinks,
+ * drops (level state, twins, map close, New Game), the cover search's
+ * path-length tables (NULL: the caller's own), the `stats ai:` / `prof
+ * ai` counters.
+ *
+ * A pause point in two halves, for a caller that must put the world back
+ * before it yields (CheckLocalMove's walk): Ai_PauseDue answers whether
+ * the running think of e pauses here (the frame's units plus `reserve`,
+ * the work the point's next item may take, reach the budget; never at a
+ * slice's first point) and counts the point; Ai_Pause then yields until
+ * a later frame. `tail`: the think pauses in MonsterThink's execution
+ * half (anim events), which reads the monster afresh: only its freeing,
+ * death or a layer / think function change end it there.
+ * Ai_PausePoint(e) = Ai_PauseDue(e, 0) then Ai_Pause(e, 0). */
 int	Ai_Think(int e);
+int	Ai_PauseDue(int e, uint32_t reserve);
+void	Ai_Pause(int e, int tail);
 void	Ai_PausePoint(int e);
+/* the reserve of a heavy pause point (an anim event, a gargantua flame):
+ * a firing event's traces, hitbox poses (~5 ms each on the cart), sounds
+ * and decal: ~4-12 ms, up to ~20 ms with three poses */
+#define AI_EVENT_RESERVE	12000
+/* the reserve of a point before an attachment's pose (gargantua eye) */
+#define AI_POSE_RESERVE		6000
+/* PROFILE: us the running think has spent paused (its zones skip them) */
+uint64_t Ai_PausedUs(void);
 void	Ai_FrameStart(void);
 void	Ai_Drop(int e);
 void	Ai_DropAll(void);

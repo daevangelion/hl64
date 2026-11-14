@@ -63,5 +63,8 @@ typedef struct {
 	uint32_t	mem, mem_peak, mem_region;
 } snd_stats_t;
 void	snd_stats(snd_stats_t *s, int reset);
+/* Sounds and sentences started (snd_emit, snd_sentence calls) since boot:
+ * the game's AI work counters take deltas around a monster think. */
+uint32_t snd_emit_count(void);
 
 #endif

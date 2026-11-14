@@ -10,6 +10,8 @@
 #   host:  the earlier gates' host parts (test/run/m4.sh, which runs m3,
 #          m2, m1, m0 and coll), the test/m5 suites (the table below; a
 #          test/m5 entry point missing from it fails the gate), the
+#          regression scenes test/m5/*.route (each `route PASS`, exit 0,
+#          `rec: wakeover=0`; every route there runs, --route or not), the
 #          widening report per route (test/m5/widening.py: the route's
 #          checkpoints equal the old cfg's; every waitnear radius widened
 #          versus the old cfg carries `# widened: <old> -> <new>: <reason>`,
@@ -46,9 +48,9 @@
 # Usage: test/run/m5.sh [--ares] [--no-earlier] [--route uplink|hazard|m4 ...]
 #        --no-earlier skips test/run/m4.sh, --route runs only the named
 #        routes (iteration only: neither is a gate run)
-# Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c7
-#        cook /scratch/hl64/tmp/M4Lead/c7), HL64_FIXTURES, HL64_DATA,
-#        W1_FIXTURES (passed to m4.sh), ARES_BIN, ARES_TIMEOUT (s, per
+# Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c13
+#        cook /scratch/hl64/tmp/M5Lead/c13), HL64_FIXTURES, HL64_DATA,
+#        W1_FIXTURES (passed to m4.sh), HL64_ARES_HOST / ARES_BIN (test/run/ares.sh), ARES_TIMEOUT (s, per
 #        route, default 14400), DISPLAY_NUM, OLD_TREE (the old tree, for
 #        the oracles' verify suites; absent: skipped), OLD_UPLINK_LOG,
 #        OLD_CART_LOG (the old runs the oracles were made from).
@@ -80,7 +82,7 @@ if [[ ${#ROUTES[@]} -eq 0 ]]; then ROUTES=(uplink hazard m4); else SUBSET=1; fi
 # routes the AI acceptance gates on ares (test/m5/ai_check.py); the others
 # are reported
 AI_GATED=" uplink m4 "
-CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/M4Lead/c7}"
+CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/M5Lead/c13}"
 FIX="${HL64_FIXTURES:-/scratch/hl64/fixtures}"
 DATA="${HL64_DATA:-/scratch/hl1/valve}"
 OLD_TREE="${OLD_TREE:-$HOME/src/ports/quakegeneric}"
@@ -164,9 +166,36 @@ fi
 # every entry point of test/m5 runs here (cpu_table.py: the ares table below)
 suite ai_check.py ai-check-selftest python3 test/m5/ai_check.py --selftest
 RAN+="cpu_table.py "
+# the pad binding (test/m5/in_test.c); its ares check, test/m5/controls_ares.sh,
+# runs by hand (docs/controls.md)
+suite in_test.c pad-binding bash -c 'make --no-print-directory BUILD_DIR="$1" intest >/dev/null \
+	&& "$1/host/hl64-in"' _ "$BUILD_DIR"
+RAN+="controls_ares.sh "
 for f in "$ROOT"/test/m5/*.py "$ROOT"/test/m5/*.sh; do
 	[[ -e "$f" ]] || continue
 	[[ "$RAN" == *" $(basename "$f") "* ]] || die "test/m5/$(basename "$f") is not wired into test/run/m5.sh"
+done
+
+# ---- regression scenes (host): every test/m5/*.route (a short route
+# from New Game on one map: a game behaviour a whole route can miss, e.g.
+# dish-pending: the dish turned from the control room first) at the fixed
+# 1/30 s: `route PASS`, exit 0, no frame whose box wakes went over the
+# entity budget (stats `rec: wakeover=0`) ----
+for f in "$ROOT"/test/m5/*.route; do
+	[[ -e "$f" ]] || continue
+	s="$(basename "$f" .route)"
+	(cd "$ROOT" && python3 -m tools.routec.routec --rtb "$RTB" "test/m5/$s.route" -o "$OUT/scene-$s.rbc") \
+		>"$OUT/routec-scene-$s.log" 2>&1 || { cat "$OUT/routec-scene-$s.log" >&2; fail "routec scene $s"; continue; }
+	CODE=0
+	"$B/hl64-host" --root "$CONTENT" --route "$OUT/scene-$s.rbc" "${CMDS[@]}" >"$OUT/scene-$s.log" 2>&1 || CODE=$?
+	if [[ $CODE -ne 0 ]] || ! grep -q '^route PASS$' "$OUT/scene-$s.log"; then
+		grep '^route FAIL' "$OUT/scene-$s.log" | tee -a "$GATE_LOG" >&2 || true
+		fail "scene $s (host): exit $CODE"
+	elif grep -qE '^stats [0-9]+ rec: .* wakeover=[1-9]' "$OUT/scene-$s.log"; then
+		fail "scene $s (host): $(grep -E '^rec: frame [0-9]+: box wakes' "$OUT/scene-$s.log" | head -1)"
+	else
+		say "scene $s: route PASS (host)"
+	fi
 done
 
 # ---- routes (host) ----
@@ -243,18 +272,15 @@ if [[ $ARES -eq 0 ]]; then
 fi
 
 # ---- ares ----
-ARES_BIN="${ARES_BIN:-$HOME/src/products/ares/build/desktop-ui/ares}"
-[[ -x "$ARES_BIN" ]] || { echo "patched ares not found at $ARES_BIN (set ARES_BIN)" >&2; exit 2; }
 ROMDIR="$BUILD_DIR/m5-rom"
 BC="$ROMDIR/content"
 mkdir -p "$ROMDIR"
 # the PROFILE route's PASS runs `mem` with the last stats record (the
 # cart's frame numbers need not be the host's: async opens)
 "$B/hl64-host" --write-cmds "$ROMDIR/m5.cmd" "${CMDS[@]}"
-# shellcheck source=xvfb.sh
-. "$ROOT/test/run/xvfb.sh"
-xvfb_start || exit 2
-trap '[[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null || true' EXIT
+# shellcheck source=ares.sh
+. "$ROOT/test/run/ares.sh"
+ares_setup || exit 2
 HEAP_DONE=0
 for r in "${ROUTES[@]}"; do
 	[[ -f "$OUT/$r.rbc" ]] || continue
@@ -276,11 +302,7 @@ for r in "${ROUTES[@]}"; do
 			|| { tail -20 "$OUT/host-profile-boot.log" >&2; die "PROFILE host boot"; }
 	fi
 	CODE=0
-	(cd "$ROMDIR" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 \
-		timeout "${ARES_TIMEOUT:-14400}" "$ARES_BIN" --system "Nintendo 64" \
-		--setting Video/Driver=Vulkan --setting Audio/Driver=None \
-		--setting Input/Driver=SDL --setting General/HomebrewMode=true \
-		hl64.z64 >ares.log 2>&1) || CODE=$?
+	ares_run "$ROMDIR" hl64.z64 ares.log "${ARES_TIMEOUT:-14400}" || CODE=$?
 	tr -d '\r' <"$ROMDIR/ares.log" >"$OUT/ares-$r.log"
 	grep '^route FAIL' "$OUT/ares-$r.log" | tee -a "$GATE_LOG" || true
 	nf=${#FAILS[@]}

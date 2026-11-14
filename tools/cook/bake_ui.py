@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""bake_ui: the player's gfx.wad pictures -> gfx/<name>.ui8 (CI8).
+"""bake_ui: the player's gfx.wad pictures -> gfx/<name>.ui8 (CI8; fonts I8).
 
 Imported from the quakegeneric tree (tools/ui_bake/bake_ui.py and
 extract_conchars.py, provenance-audit.md entries CLEAN) and retargeted from
@@ -14,11 +14,16 @@ Lump types: 0x42 picture (u32 w, h, texels, u16 colours, palette) and 0x46
 font (u32 cell width, height, rowcount, rowheight, 256 x {u16 offset, u16
 width}, a 256-texel-wide glyph sheet of `height` rows, u16 colours,
 palette); a font bakes as its 256 x height glyph sheet plus its glyph
-table (<name>.fnt, below).
+table (<name>.fnt, below). Fonts are drawn additively in the text's colour
+(GoldSrc text messages), so a font sheet is an intensity sheet: each texel
+is the brightest channel of its lump palette colour (creditsfont: 17 greys,
+its anti-aliased edges) and the colour key is 0; a keyed sheet would turn
+every non-key texel, the black cell background included, into full
+coverage.
 
 UI8 (big-endian): u32 magic 'UI8 ', u16 version 1, u16 flags (1 = index
-255 transparent), u16 w, h, u32 pix_ofs (68), u32 file_size, char
-name[48], then w x h bytes.
+255 transparent, 2 = I8 intensity), u16 w, h, u32 pix_ofs (68), u32
+file_size, char name[48], then w x h bytes.
 
   python3 -m tools.cook.bake_ui --wad gfx.wad --palette palette.lmp -o DIR [LUMP ...]
 """
@@ -32,6 +37,7 @@ from typing import Dict, List, Optional
 
 UI8_MAGIC = 0x55493820  # 'UI8 '
 UI8_FLAG_KEYED = 1
+UI8_FLAG_INTENSITY = 2
 TRANSPARENT = 255
 TYP_PIC, TYP_FONT = 0x42, 0x46
 FONT_SHEET_W = 256
@@ -118,9 +124,14 @@ def bake(wad: bytes, palette: bytes, names: Optional[List[str]] = None,
         lut = []
         for i in range(256):
             r, g, bl = pal[3 * i], pal[3 * i + 1], pal[3 * i + 2]
-            lut.append(TRANSPARENT if i == 255 or (r, g, bl) == (0, 0, 255)
-                       else nearest(palette, r, g, bl))
-        out[n.lower() + ".ui8"] = ui8_bytes(n.lower(), w, h, bytes(lut[t] for t in texels))
+            key = i == 255 or (r, g, bl) == (0, 0, 255)
+            if typ == TYP_FONT:
+                lut.append(0 if key else max(r, g, bl))
+            else:
+                lut.append(TRANSPARENT if key else nearest(palette, r, g, bl))
+        out[n.lower() + ".ui8"] = ui8_bytes(
+            n.lower(), w, h, bytes(lut[t] for t in texels),
+            UI8_FLAG_INTENSITY if typ == TYP_FONT else UI8_FLAG_KEYED)
         if typ == TYP_FONT:
             out[n.lower() + ".fnt"] = font_table(b, h, f"{what}:{n}")
     return out

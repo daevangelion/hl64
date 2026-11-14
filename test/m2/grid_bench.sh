@@ -8,7 +8,7 @@
 # machine: indicative only).
 #
 # Usage: test/m2/grid_bench.sh [--host]
-# Env:   BUILD_DIR (scratch), ARES_BIN, ARES_TIMEOUT, DISPLAY_NUM
+# Env:   BUILD_DIR (scratch), HL64_ARES_HOST / ARES_BIN (test/run/ares.sh), ARES_TIMEOUT, DISPLAY_NUM
 # Exit:  0 with the bench line, 1 failure, 2 prerequisite missing.
 set -euo pipefail
 
@@ -27,8 +27,6 @@ if [[ "${1:-}" == "--host" ]]; then
 	exit 0
 fi
 
-ARES_BIN="${ARES_BIN:-$HOME/src/products/ares/build/desktop-ui/ares}"
-[[ -x "$ARES_BIN" ]] || { echo "patched ares not found at $ARES_BIN (set ARES_BIN)" >&2; exit 2; }
 # no player content: the ROM boots without a world; dbg.cmd is the only file
 mkdir -p "$OUT/content"
 "$HOST" --cmd "@2 bench 1" --cmd "@4 quit 0" --write-cmds "$OUT/bench.cmd"
@@ -37,19 +35,12 @@ make -C "$ROOT" --no-print-directory BUILD_DIR="$ROMDIR" HL64_TEST=1 HL64_CONTEN
 	HL64_CMDS="$OUT/bench.cmd" rom >"$OUT/rom-build.log" 2>&1 \
 	|| { tail -40 "$OUT/rom-build.log" >&2; fail "rom build"; }
 
-# shellcheck source=../run/xvfb.sh
-. "$ROOT/test/run/xvfb.sh"
-xvfb_start || exit 2
-trap '[[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null || true' EXIT
+# shellcheck source=../run/ares.sh
+. "$ROOT/test/run/ares.sh"
+ares_setup || exit 2
 
 set +e
-(cd "$OUT" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 \
-	timeout "${ARES_TIMEOUT:-300}" "$ARES_BIN" --system "Nintendo 64" \
-	--setting Video/Driver=Vulkan \
-	--setting Audio/Driver=None \
-	--setting Input/Driver=SDL \
-	--setting General/HomebrewMode=true \
-	"$ROMDIR/hl64.z64" >"$OUT/ares.log" 2>&1)
+ares_run "$OUT" "$ROMDIR/hl64.z64" "$OUT/ares.log" "${ARES_TIMEOUT:-300}"
 CODE=$?
 set -e
 tr -d '\r' <"$OUT/ares.log" >"$OUT/ares-clean.log"

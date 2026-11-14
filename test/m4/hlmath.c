@@ -123,16 +123,28 @@ static acc_t f_sin = { "sinf", 0, 0, 0, 0 }, f_cos = { "cosf", 0, 0, 0, 0 },
 	f_acos = { "acosf", 0, 0, 0, 0 };
 
 /* sin / cos at x (both types; tan away from its poles, where the
- * reference itself is ill-conditioned) */
+ * reference itself is ill-conditioned); hl_sincos / hl_sincosf give the
+ * bits of hl_sin, hl_cos / hl_sinf, hl_cosf */
 static void trig(double x)
 {
-	float xf = (float)x;
+	float xf = (float)x, sf, cf;
 	long double cl = cosl(x), cfl = cosl(xf);
+	double s, c, ws = hl_sin(x), wc = hl_cos(x);
+	float wsf = hl_sinf(xf), wcf = hl_cosf(xf);
 
-	acc(&a_sin, hl_sin(x), sinl(x), x, 0, 0);
-	acc(&a_cos, hl_cos(x), cl, x, 0, 0);
-	acc(&f_sin, hl_sinf(xf), sinl(xf), xf, 0, 1);
-	acc(&f_cos, hl_cosf(xf), cfl, xf, 0, 1);
+	acc(&a_sin, ws, sinl(x), x, 0, 0);
+	acc(&a_cos, wc, cl, x, 0, 0);
+	acc(&f_sin, wsf, sinl(xf), xf, 0, 1);
+	acc(&f_cos, wcf, cfl, xf, 0, 1);
+	hl_sincos(x, &s, &c);
+	hl_sincosf(xf, &sf, &cf);
+	if (memcmp(&s, &ws, sizeof(s)) || memcmp(&c, &wc, sizeof(c))
+		|| memcmp(&sf, &wsf, sizeof(sf)) || memcmp(&cf, &wcf, sizeof(cf)))
+	{
+		if (fails < 20)
+			printf("FAIL sincos(%a) != sin, cos\n", x);
+		fails++;
+	}
 	if (fabsl(cl) > 1e-3L)
 		acc(&a_tan, hl_tan(x), tanl(x), x, 0, 0);
 	if (fabsl(cfl) > 1e-3L)
@@ -289,6 +301,41 @@ int main(void)
 	{
 		printf("FAIL sin/cos beyond 2^19: abs err %.3g\n", big_err);
 		fails++;
+	}
+	/* render approximations: absolute error, sin / cos over the pose's
+	 * half angles and slerp arguments (and the fallback range), acos
+	 * over [-1, 1] */
+	{
+		double es = 0, ea = 0, xs = 0, xa = 0;
+
+		for (i = 0; i < 2000000; i++)
+		{
+			float x = (float)(i < 1000000 ? uni(-4 * M_PI, 4 * M_PI) : uni(-9000, 9000)), s, c;
+			double e;
+
+			hl_rsincosf(x, &s, &c);
+			e = fabs((double)(s - sinl(x)));
+			if (fabs((double)(c - cosl(x))) > e)
+				e = fabs((double)(c - cosl(x)));
+			if (hl_rsinf(x) != s)
+				e = 1;
+			if (e > es)
+				es = e, xs = x;
+		}
+		for (i = 0; i <= 2000000; i++)
+		{
+			float x = (float)(i < 1000000 ? uni(-1, 1) : (i - 1500000) * 2e-6);
+			double e = fabs((double)(hl_racosf(x) - acosl(x)));
+
+			if (e > ea)
+				ea = e, xa = x;
+		}
+		printf("max rsincosf abs err %.3g at %a, racosf %.3g at %a\n", es, xs, ea, xa);
+		if (!(es < 1e-6) || !(ea < 1e-6))
+		{
+			printf("FAIL render approximations: abs err %.3g / %.3g > 1e-6\n", es, ea);
+			fails++;
+		}
 	}
 	if (fails)
 	{

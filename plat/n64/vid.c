@@ -52,12 +52,21 @@ static void pace_show(surface_t *s)
 	pace_open = pace_vbl + HL64_PRESENT_VBL;
 }
 
+/* the last submitted frame's RDP work not finished (vid_gpu_busy) */
+static volatile int rdp_pending;
+
 static void pace_rdp_done(void *arg)
 {
+	rdp_pending = 0;
 	if ((int32_t)(pace_vbl - pace_open) >= 0)
 		pace_show(arg);
 	else
 		pace_parked = arg;
+}
+
+int vid_gpu_busy(void)
+{
+	return rdp_pending;
 }
 
 static void pace_vblank(void *arg)
@@ -114,6 +123,7 @@ void sys_frame_end(void)
 {
 	last = disp;
 	disp = NULL;
+	rdp_pending = 1;
 	rdpq_detach_cb(pace_rdp_done, last);
 }
 
@@ -151,5 +161,8 @@ int sys_shot(void)
 		return -1;
 	rspq_wait();
 	th_screenshot(last->buffer, last->width, last->height, 2);
+#ifdef HL64_PSAMP
+	psamp_dump();
+#endif
 	return 0;
 }

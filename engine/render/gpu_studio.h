@@ -48,7 +48,9 @@ typedef struct {
 	const uint16_t		*tex;		/* texture of each drawn run */
 	uint8_t			rgba[4];	/* light (rgb) and blend (a) */
 	uint8_t			mode;		/* GPU_STUDIO_* */
-	uint8_t			pad[3];
+	uint8_t			view;		/* 1: the view model, drawn in the front
+						 * of the depth range (both draws) */
+	uint8_t			pad[2];
 } gpu_studio_ent_t;
 
 /* Once per frame before any studio draw: flips the matrix pool halves,
@@ -61,10 +63,12 @@ void		gpu_studio_end(void);
 /* One entity; 0 drawn, -1 when the frame's matrix pool is full. */
 int		gpu_studio_draw(void *state, const sfmt_mesh_t *mesh, const gpu_studio_ent_t *ent);
 
-/* CPU-skinned draw (view model): ready vertex pairs (camera-relative, at
- * 2^-pos_shift scale under `model`) replace the mesh's packed vertices;
- * meshlets of the listed runs are loaded and drawn without bone
- * matrices. */
+/* CPU-skinned draw (view model's chrome runs): ready vertex pairs
+ * (camera-relative, at 2^-pos_shift scale under `model`) replace the
+ * mesh's packed vertices; meshlets of the listed runs are loaded and drawn
+ * without bone matrices, in the view model's depth range (ent->view): the
+ * front of the depth buffer's range, before every world surface not right
+ * at the eye. */
 int		gpu_studio_draw_cpu(void *state, const sfmt_mesh_t *mesh, const w64_vert_t *verts,
 			const gpu_studio_ent_t *ent);
 

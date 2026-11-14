@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: MIT
+# Scene seam-3to2 (test/README.md): the hldemo3 exit tunnel and the
+# hldemo3 -> hldemo2 touch switch (landmark hldemo2_3b) with the hldemo2
+# return arrival and its first crawl: uplink.route lines 518-555 (route ops
+# 367-392). New Game on hldemo3: hldemo2 opens fresh (no first-visit state).
+# scene-window: uplink 367 393
+startmap hldemo3
+waitmap hldemo3 60
+# the route's player has the suit here (hldemo1's item_suit): drop it on
+# him (HLSDK CBaseEntity::Create, touch pickup)
+setpos -150 -2880 -764 0 180
+wait 0.3
+drop item_suit -150 -2880 -764
+wait 1
+setpos 180 -2786 -764 0 180
+wait 1
+stats begin
+setpos 180 -2786 -764 0 180
+wait 0.3
+setpos 0 -2800 -764 0 180
+wait 0.3
+setpos -150 -2880 -764 0 180
+wait 2
+shot hldemo3-exit
+# trigger_changelevel #21 (landmark hldemo2_3b) -> hldemo2: down the middle of
+# the tunnel, the eye is in the seam's switch box (y -3000..-2808)
+setpos -208 -2880 -764 0 180
+waitmap hldemo2 30
+shot seam3-at
+
+# ---- D: hldemo2 return → elevator → hldemo1 (derived on the old tree's host build) ----
+# ---- Segment D: hldemo2 second visit (from hldemo3, landmark hldemo2_3b) ----
+# Arrival: seam switch from the hldemo3 exit trigger (landmark hldemo2_3b)
+# -> hldemo2 (2528 -48 -348), tunnel floor -384, facing west.
+# Headcrabs bite 30 hp here and 10 more in hldemo1-return: survivable with the
+# health carried from hldemo3, so these two visits run mortal.
+waitmap hldemo2 30
+god 0
+waitnear 2528 -48 -348 1 0
+look 0 180
+wait 0.5
+shot hldemo2-return
+stats hldemo2-return
+# tunnel west, crawl south (crouch-only y -64..-144) into the corridor, stand
+# at its south end and climb ladder #48: passes trigger_once #520
+# (z -96..-60) -> multisource battle_master enabled
+setpos 2228 -20 -348 0 270
+wait 0.3
++duck
+wait 0.5
++forward
+waitnear 2228 -200 -366 24 8
+-duck
+waitnear 2228 -456 -348 10 8
+-forward
+stats end
+wait 0.2
+pass

@@ -597,6 +597,7 @@ int W_Deploy(int id)
 	int r = vt && vt->Deploy ? vt->Deploy(id) : 0;
 
 	hud_weapon_select(id);
+	log_printf("weapon: deploy %s\n", game_class_name(ItemInfoOf(id)->cls));
 	return r;
 }
 
@@ -626,6 +627,8 @@ int W_DefaultReload(int id, int clipsize, int anim, float delay)
 	p->m_flNextAttack = delay;
 	W_SendWeaponAnim(anim);
 	w->m_fInReload = 1;
+	log_printf("weapon: reload %s, clip %d + %d\n", game_class_name(ItemInfoOf(id)->cls),
+		w->m_iClip, j);
 	w->m_flTimeWeaponIdle = 3;
 	return 1;
 }

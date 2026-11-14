@@ -35,6 +35,7 @@
 #include "engine/io/io.h"
 #include "engine/mem/heap.h"
 #include "engine/snd/snd_hw.h"
+#include "plat/n64/n64.h"
 
 #define BOUNCE		2048
 #define FILES		16
@@ -436,10 +437,37 @@ void snd_hw_vol(int v, float left, float right)
 	mixer_ch_set_vol(v, left, right);
 }
 
+#ifdef HL64_PROFILE
+static unsigned	pump_n[2];
+static uint64_t	pump_ticks[2];
+
+void audio_pump_take(unsigned n[2], uint64_t ticks[2])
+{
+	int k;
+
+	for (k = 0; k < 2; k++)
+	{
+		n[k] = pump_n[k];
+		ticks[k] = pump_ticks[k];
+		pump_n[k] = 0;
+		pump_ticks[k] = 0;
+	}
+}
+#endif
+
 void snd_hw_pump(double dt)
 {
+#ifdef HL64_PROFILE
+	int busy = vid_gpu_busy() != 0;
+	uint32_t t0 = TICKS_READ();
+#endif
+
 	(void)dt;
 	mixer_try_play();
+#ifdef HL64_PROFILE
+	pump_n[busy]++;
+	pump_ticks[busy] += TICKS_READ() - t0;
+#endif
 }
 
 void snd_hw_mem(uint32_t *now, uint32_t *peak)

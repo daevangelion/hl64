@@ -58,7 +58,7 @@ typedef struct {
 
 static wld_map_t	maps[HL64_MAX_MAPS];
 static int		nmaps, start_map;
-static wld_layer_t	layers[HL64_WORLD_LAYERS];
+wld_layer_t		wld_layers[HL64_WORLD_LAYERS];
 /* tools/cook/layerdirs.py proves the layer region with these sizes */
 _Static_assert(sizeof(wld_chunk_t) == 20, "wld_chunk_t: update tools/cook/layerdirs.py");
 _Static_assert(sizeof(wld_mover_t) == 16, "wld_mover_t: update tools/cook/layerdirs.py");
@@ -726,7 +726,7 @@ static int pinned(const wld_layer_t *L, int c)
 
 static void req_done(io_req_t *r)
 {
-	wld_layer_t *L = &layers[r->user >> 16];
+	wld_layer_t *L = &wld_layers[r->user >> 16];
 	int c = r->user & 0xFFFF;
 	wld_chunk_t *ch = &L->ch[c];
 
@@ -767,7 +767,7 @@ static void drop(wld_layer_t *L, int c)
 /* Cancel a queued read nothing has landed of. */
 static void cancel_queued(io_req_t *r)
 {
-	wld_layer_t *L = &layers[r->user >> 16];
+	wld_layer_t *L = &wld_layers[r->user >> 16];
 
 	io_cancel(r);
 	drop(L, r->user & 0xFFFF);
@@ -787,7 +787,7 @@ static io_req_t *weaker_queued(int p, int cls)
 		io_req_t *r = &reqs[i];
 
 		if (r->user < 0 || r->state != IO_QUEUED || r->done || prio_cls(r->prio) >= cls
-			|| (p >= 0 && chunk_pool(layers[r->user >> 16].chunks[r->user & 0xFFFF].fourcc) != p))
+			|| (p >= 0 && chunk_pool(wld_layers[r->user >> 16].chunks[r->user & 0xFFFF].fourcc) != p))
 			continue;
 		if (!best || r->prio > best->prio)
 			best = r;
@@ -827,7 +827,7 @@ static void evc_scan(int p, int cls)
 	e->n = e->at = 0;
 	for (i = 0; i < HL64_WORLD_LAYERS; i++)
 	{
-		const wld_layer_t *L = &layers[i];
+		const wld_layer_t *L = &wld_layers[i];
 
 		if (!L->open || !L->ch)
 			continue;
@@ -888,7 +888,7 @@ static int evict_one(int p, int cls)
 	{
 		for (j = e->at; j < e->n; j++)
 		{
-			wld_layer_t *L = &layers[(e->key[j] >> 16) & (HL64_WORLD_LAYERS - 1)];
+			wld_layer_t *L = &wld_layers[(e->key[j] >> 16) & (HL64_WORLD_LAYERS - 1)];
 			int c = (int)(e->key[j] & 0xFFFF);
 
 			if (e->key[j] == EVC_GONE || !L->open || !L->ch || c >= L->dir->nchunks
@@ -1116,7 +1116,7 @@ void wld_want_measure(void)
 
 	for (s = 0; s < HL64_WORLD_LAYERS; s++)
 	{
-		const wld_layer_t *L = &layers[s];
+		const wld_layer_t *L = &wld_layers[s];
 
 		if (!L->open || L->ready != 1)
 			continue;
@@ -1366,7 +1366,7 @@ uint32_t wld_layer_bytes(uint32_t dir_size, uint32_t nchunks, uint32_t npages, u
 
 wld_layer_t *wld_slot(int s)
 {
-	return &layers[s];
+	return &wld_layers[s];
 }
 
 static const char *pkg_path(const wld_layer_t *L)
@@ -1410,17 +1410,17 @@ static wld_layer_t *open_begin(int map)
 	if ((L = wld_layer_of_map(map)))
 		return L;
 	for (s = 0; s < HL64_WORLD_LAYERS; s++)
-		if (!layers[s].open)
+		if (!wld_layers[s].open)
 		{
 			if (!L)
-				L = &layers[s];
+				L = &wld_layers[s];
 		}
-		else if (!layers[s].high)
+		else if (!wld_layers[s].high)
 			other_low = 1;
 	if (!L)
 		return NULL;
 	memset(L, 0, sizeof(*L));
-	L->slot = (uint8_t)(L - layers);
+	L->slot = (uint8_t)(L - wld_layers);
 	L->want_leaf = -1;
 	L->map = (uint16_t)map;
 	L->high = (uint8_t)other_low;
@@ -1701,19 +1701,13 @@ void wld_close(wld_layer_t *L)
 	wld_layer_gen++;
 }
 
-wld_layer_t *wld_layer(int slot)
-{
-	return slot >= 0 && slot < HL64_WORLD_LAYERS && layers[slot].open && layers[slot].ready == 1
-		? &layers[slot] : NULL;
-}
-
 wld_layer_t *wld_layer_of_map(int map)
 {
 	int s;
 
 	for (s = 0; s < HL64_WORLD_LAYERS; s++)
-		if (layers[s].open && layers[s].map == map)
-			return &layers[s];
+		if (wld_layers[s].open && wld_layers[s].map == map)
+			return &wld_layers[s];
 	return NULL;
 }
 

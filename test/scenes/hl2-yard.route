@@ -1,0 +1,234 @@
+# SPDX-License-Identifier: MIT
+# Scene hl2-yard (test/README.md): hldemo2 first visit, the route's 'yard'
+# span: ceiling vent -> shotgun room -> barney -> zombie corridor ->
+# tripmines -> warehouse gate grunt -> crane -> yard drop (init_trailer_mortars_mm,
+# fallback_grunts_mm) -> trailer yard, fallback squad engaging under the deck.
+# The window (stats begin .. stats end) replays test/routes/uplink.route
+# lines 136-271 (its ops after SHOT vent-flashlight up to SHOT grunts-fight)
+# unchanged; the prelude is the route's own soda room and pipe duct crawl
+# (lines 66-135, as hl2-duct-flashlight) from the hldemo2 arrival spot. A
+# prelude that put the player straight into the duct end with the flashlight
+# on measured +3.0 ms frame avg over the route's window (world +2.1 ms in the
+# window's first 4 s, the HEV logon's sound); with the crawl the scene is
+# within 0.6 ms of the route in every zone. 70 s of game time.
+# scene-window: uplink vent-flashlight grunts-fight
+startmap hldemo2
+waitmap hldemo2 60
+# the route's player has the suit here (hldemo1's item_suit): drop it on
+# him (HLSDK CBaseEntity::Create, touch pickup)
+setpos -416 210 196 0 90
+wait 0.3
+drop item_suit -416 210 196
+wait 1
+setpos -452 -100 196 0 8
+wait 1
+# soda room: trigger_multiple #591 opens soda_room_door
+setpos -368 120 196 0 90
+waitmoved soda_room_door 5
+# crowbar from the shelf, then bust the soda machine (func_breakable #106, health
+# 15: two crowbar hits -> busted_soda_mm; 7 s later busted_wall_mm tips
+# soda_machine_shell over and breaks busted_pipes_cover). The shell is a
+# func_door_rotating with dmg 9999 that falls 91 degrees towards -y (tip at y 180):
+# a player in its arc is crushed (GoldSrc CBaseDoor::Blocked), so step west
+# out of it (the shell spans x ~-320..-240; the room's south wall starts at
+# y ~180, so -280 150 is inside the wall and leaves the player stuck)
+# until it lies still (91 degrees at 175/s: ~0.5 s)
+setpos -416 290 196 0 0
+wait 0.3
+setpos -280 260 196 0 90
+impulse 1
+wait 0.5
++attack
+wait 2
+-attack
+setpos -416 210 196 0 90
+waitgone busted_pipes_cover 15
+wait 1
+# steam valve func_rot_button #634 -> steam_off_mm turns busted_pipes_smoke off
+# (stand on the fallen machine shell at y 270: the hull stays clear of the
+# steam's trigger_hurt #141, y 296..328, which scalds 10 per 0.5 s)
+setpos -262 270 196 0 75
+wait 0.5
++use
+wait 0.2
+-use
+waitgone busted_pipes_smoke 3
+wait 2
+# pipe duct: the pipe stubs in the steam-pipe hole leave the crouch hull a slit
+# (origin x -268..-264.25, z 178..180), so line up ducked on the shell at x -266
+# (the valve use leaves the player a few units east), crawl north off the shell
+# through the hole, east, north to ladder #639 and strafe into it: it climbs
+# ducked into the ceiling vent, crawl east along it
++duck
+wait 0.5
+setpos -266 282 196 0 90
++forward
+waitnear -266 384 178 6 10
+-forward
++moveright
+# widened: 6 -> 14: GoldSrc pm_shared PM_Friction scales the whole ground
+# velocity while PM_Accelerate adds the strafe, so the ducked crawl's 106.56 u/s
+# northward speed decays over ~0.5 s and carries the player ~20 u on into the
+# junction (y 394..401) as he strafes east: x -240 is crossed at y ~396
+waitnear -240 384 178 14 10
+-moveright
+wait 0.5
+# HEV flashlight (impulse 100), looking down the dark duct north to its
+# floor: HLSDK player.cpp drains 1 unit per FLASH_DRAIN_TIME 1.2 s while
+# on; the log's `flashlight: on|off|charged, battery N, t=T` lines carry
+# the numbers (game/hl/player.c)
+look 20 90
+wait 0.3
+shot duct-dark
+impulse 100
+wait 0.3
+shot duct-flashlight
+stats flashlight-on
+look 0 90
++forward
+# widened: 6 -> 8: the junction strafe above ends at x -235.9 (GoldSrc
+# PM_Friction stops the 106.56 u/s ducked strafe 7.5 u after -moveright), and
+# the straight crawl up the duct's north leg (x -240..-210) keeps that x
+waitnear -229 566 178 8 10
+-forward
+shot vent-flashlight
+stats begin
++moveright
+waitnear 16 568 426 12 20
+-moveright
+# vent south (backwards): touch trigger_once #644 -> shotgun_ventbreak drops the vent
+# floor onto the ceiling tiles; trigger_once #642 (delay 1) -> shotgun_ceiling breaks,
+# fall into the room. From here on headcrabs (shotgun room, barney's crab ambush)
+# and the crate zombie bite and claw a route that does not fight them (old host
+# without god: dead at the tripmine barrier, 100 hp of 10 hp bites and a 20 hp
+# slash): god, combat is not under test.
+god 1
++back
+waitgone shotgun_ventbreak 15
+waitgone shotgun_ceiling 6
+-back
+wait 1
+-duck
+# flashlight off: recharges 1 unit per FLASH_CHARGE_TIME 0.2 s
+impulse 100
+wait 0.1
+stats flashlight-off
+# shotgun pickup
+setpos -35 242 196 0 0
+wait 0.3
+# trigger_once #658 unlocks shotgun_door_master; walk into door #659 -> barney_crab_ambush_ss_rl
+setpos 40 196 196 0 270
+wait 0.5
++forward
+wait 1
+-forward
+wait 1
+# hallway: 9mm handgun + clips
+setpos -20 136 196 0 0
+wait 0.3
+stats flashlight-recharge
+# touch-door #62 into the barney room (barney_38_sentence trigger #672 beyond)
+setpos 76 48 196 0 0
+wait 0.3
++forward
+wait 1.5
+-forward
+wait 2
+# east corridor (autosave #596), zombie corridor
+setpos 440 -40 196 0 0
+wait 0.3
+setpos 840 -40 196 0 270
+wait 0.3
+setpos 840 -300 196 0 270
+wait 0.3
+# trigger_once #593 -> zombie_crates break, zombie released
+setpos 840 -372 196 0 270
+waitgone zombie_crates 2
+wait 2
+# tripmine corridor: low wooden barrier #201 (health 20) - crowbar it
+setpos 908 -440 196 45 0
+impulse 1
+wait 0.6
++attack
+wait 2
+-attack
+# break the high beams of mines #206/#207: chain reaction takes out #204 (its floor breakable #208
+# fires tripmine_explosion_mm) and the far barrier #205 with mines #202/#203
+setpos 958 -440 196 0 0
+wait 1
+setpos 1113 -440 196 0 0
+wait 2.5
+# west ledge, down the stairs to the warehouse floor
+setpos 1340 -440 196 0 270
+wait 0.3
+setpos 1378 -600 196 0 0
+wait 0.3
+setpos 1800 -600 100 0 0
+wait 0.5
+setpos 2050 -600 -60 0 90
+wait 0.3
+# trigger_once #245 -> gate_grunt_1 scripts: frontkick breaks gate_button_1, warehouse_gate_1 closes
+setpos 1900 -6 -60 0 90
+waitmoved warehouse_gate_1 20
+# ladder #312 up to the east walkway; crane button #225 -> warehouse_crane
+setpos 2128 880 196 0 270
+wait 0.3
+setpos 2135 310 196 35 0
+wait 0.6
++use
+wait 0.2
+-use
+# ladder #312 continues to the wall-top ledge (z 304); step onto the crane beam once it parks north
+setpos 2152 920 341 0 180
+wait 0.3
+waitmoved warehouse_crane 15
+setpos 2100 982 341 0 180
+wait 0.3
+# down into the crane cab, step off its north edge over the closed gate into the yard
+# (trigger_once #319 -> init_trailer_mortars_mm, fallback_grunts_mm). The yard
+# player picks up sideways velocity during the drop (lands ~40-90 units NW),
+# so accept any yard-floor spot (r 100 excludes the 49/68/156/196 cab ledges)
+setpos 1830 1020 156 0 90
+wait 0.5
+setpos 1830 1072 156 0 90
+waitnear 1830 1072 -60 100 4
+wait 4
+# trigger_once #242 unlocks gate_lock_1; button #235 reopens warehouse_gate_1 (return path)
+setpos 2013 1080 -60 30 270
+wait 0.5
++use
+wait 0.2
+-use
+wait 2
+# ladder #315 from the yard up to the catwalk (z 160)
+setpos 2352 1124 -60 -60 90
+wait 0.3
++forward
+waitnear 2352 1170 196 40 5
+-forward
+# catwalk south to trailer_door_2 (trigger_multiple #310), through the door and down into the trailer yard
+# (the drop slides down the trailer deck's east face: at 72 fps the player reaches the
+# yard floor (z -60), at 17 fps it landed on the z 60 ledge beside the deck;
+# either is off the catwalk, the next waypoint is on the yard floor)
+setpos 2466 1000 196 0 270
+wait 0.3
+setpos 2466 915 196 0 270
+wait 1.5
++forward
+wait 0.6
+-forward
+# widened: 90 -> 120: GoldSrc runs at sv_maxspeed 320 (cl_forwardspeed 400
+# clamped, pm_shared PM_PlayerMove) and keeps that speed in the air (PM_AirMove):
+# the player clears the deck's east face (hull x 2464) and lands against the
+# yard's south wall at 2466 680 -60, 117 u from the old landing spot's centre
+waitnear 2466 780 0 120 4
+# MP5 + clip on the radio table under the trailer deck
+setpos 2246 716 -60 0 270
+wait 0.5
+# under the trailer deck: fallback squad (fallback_grunt_2 + squad 2) engages the player
+setpos 2440 706 -58 0 180
+wait 2.5
+shot grunts-fight
+stats end
+wait 0.2
+pass

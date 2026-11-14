@@ -128,26 +128,63 @@ static void undo(int upto)
 	}
 }
 
-/* Candidates: entities whose linked box meets [mins, maxs] (the pusher's
- * frame), ascending index, the pusher excluded. Pending and dry records
- * in the box hydrate first (architecture.md 6.4: moves wake the records
- * in their box): GoldSrc's pusher meets every map entity, near the
- * player or not (hldemo3's dish momentary_doors carry the func_pushable
- * through the `on` trigger 1300 u from the control room). */
-static int gather(int e, const float mins[3], const float maxs[3])
+/* c falls under gravity until it lands (physics-movetypes.md 3: STEP,
+ * PUSHSTEP, TOSS, BOUNCE; not flying or swimming, not on the ground). */
+static int falls(int c)
+{
+	const col_ent_t *cv = &ent_c.cv[c];
+
+	return (cv->movetype == MOVETYPE_STEP || cv->movetype == MOVETYPE_PUSHSTEP
+		|| cv->movetype == MOVETYPE_TOSS || cv->movetype == MOVETYPE_BOUNCE)
+		&& !(cv->flags & (FL_ONGROUND | FL_FLY | FL_SWIM));
+}
+
+/*
+ * Before the pusher moves: the pending and dry records its move meets,
+ * [mins, maxs] (old and new linked boxes, the pusher's frame), or that
+ * rest on it, hydrate (architecture.md 6.4: moves wake the records in
+ * their box; rec_wake_pusher). GoldSrc's pusher meets every map entity,
+ * near the player or not, where it came to rest after map start:
+ * hldemo3's dish momentary_doors carry the func_pushable through the `on`
+ * trigger 1300 u from the control room, and its record holds the
+ * mapper's place 16 u above them. So a woken entity that falls settles
+ * first (DROP_TO_FLOOR's trace, the 256 u rec_wake_pusher looks above
+ * the box), onto the pusher at its old place when it is beneath: then it
+ * rides this move like any rider. One that found no floor falls on, and
+ * release leaves it meanwhile (rec_hold_falling).
+ */
+static void wake(const float mins[3], const float maxs[3])
 {
 	const float *gm = eng_layer_origin(eng_frame_layer());
 	float gmins[3], gmaxs[3];
-	int n, i, j = 0, k;
+	uint16_t woken[PUSH_MAX];
+	int frame = eng_frame_layer(), n, i, k;
 
 	for (k = 0; k < 3; k++)
 	{
 		gmins[k] = mins[k] + gm[k];
 		gmaxs[k] = maxs[k] + gm[k];
 	}
-	rec_wake_box(gmins, gmaxs);
-	n = ent_query_in(eng_frame_layer(), mins, maxs, ENT_Q_SOLID | ENT_Q_TRIGGER, P.found,
-		PUSH_MAX);
+	n = rec_wake_pusher(gmins, gmaxs, woken, PUSH_MAX);
+	for (i = 0; i < n && i < PUSH_MAX; i++)
+	{
+		int c = woken[i];
+
+		if (!ent_is_live(c) || !falls(c))
+			continue;
+		eng_set_frame_layer(ent_c.id[c].layer);
+		if (phy_drop_to_floor(c) != 1)
+			rec_hold_falling(c);
+		eng_set_frame_layer(frame);
+	}
+}
+
+/* Candidates: entities whose linked box meets [mins, maxs] (the pusher's
+ * frame), ascending index, the pusher excluded. */
+static int gather(int e, const float mins[3], const float maxs[3])
+{
+	int n = ent_query_in(eng_frame_layer(), mins, maxs, ENT_Q_SOLID | ENT_Q_TRIGGER, P.found,
+		PUSH_MAX), i, j = 0;
 
 	if (n == PUSH_MAX && !P.warned)
 	{
@@ -267,10 +304,21 @@ static int translate(int e, float mt, float ltime0)
 	memcpy(mins, pv->absmin, sizeof(mins));
 	memcpy(maxs, pv->absmax, sizeof(maxs));
 	for (k = 0; k < 3; k++)
-	{
 		move[k] = vel[k] * mt;
-		pv->origin[k] += move[k];
+	if (pv->solid != COL_SOLID_NOT)
+	{
+		float lo[3], hi[3];
+
+		/* the old box and the new (moved by move) */
+		for (k = 0; k < 3; k++)
+		{
+			lo[k] = mins[k] + (move[k] < 0 ? move[k] : 0);
+			hi[k] = maxs[k] + (move[k] > 0 ? move[k] : 0);
+		}
+		wake(lo, hi);
 	}
+	for (k = 0; k < 3; k++)
+		pv->origin[k] += move[k];
 	tm->ltime = ltime0 + mt;
 	ent_link(pv);
 	if (pv->solid == COL_SOLID_NOT)
@@ -328,6 +376,26 @@ static int rotate(int e, float mt, float ltime0)
 	memcpy(ang, pv->angles, sizeof(ang));
 	memcpy(mins, pv->absmin, sizeof(mins));
 	memcpy(maxs, pv->absmax, sizeof(maxs));
+	if (pv->solid != COL_SOLID_NOT)
+	{
+		float lo[3], hi[3], m = 0;
+
+		/* the old box and the new: a turned SOLID_BSP links as the cube
+		 * of its largest extent (area-links-and-touch.md A1) */
+		memcpy(lo, mins, sizeof(lo));
+		memcpy(hi, maxs, sizeof(hi));
+		if (pv->solid == COL_SOLID_BSP)
+		{
+			for (k = 0; k < 3; k++)
+				m = fmaxf(m, fmaxf(fabsf(pv->mins[k]), fabsf(pv->maxs[k])));
+			for (k = 0; k < 3; k++)
+			{
+				lo[k] = fminf(lo[k], pv->origin[k] - m - 1);
+				hi[k] = fmaxf(hi[k], pv->origin[k] + m + 1);
+			}
+		}
+		wake(lo, hi);
+	}
 	for (k = 0; k < 3; k++)
 	{
 		amove[k] = av[k] * mt;

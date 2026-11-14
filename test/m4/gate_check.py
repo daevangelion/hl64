@@ -174,9 +174,13 @@ def main():
         if rec.get("expired", 0):
             rbad.append("stats %d: expired=%d open gates" % (n, rec["expired"]))
     last = next((r["rec"] for r in reversed(list(st.values())) if "rec" in r), None)
+    # wakeover (frames whose box wakes alone went over the entity budget,
+    # since New Game) is reported, not failed: a pusher or a link must
+    # meet the entities GoldSrc's would
     check("rec", bool(mains) and not rbad, "; ".join(rbad[:4]) if rbad else "last: live=%s pending=%s "
-          "dry=%s released=%s store=%s" % tuple(
-              last.get(k) for k in ("live", "pending", "dry", "released", "store")) if last else "")
+          "dry=%s released=%s store=%s wakeover=%s" % tuple(
+              last.get(k) for k in ("live", "pending", "dry", "released", "store", "wakeover"))
+          if last else "")
 
     failed = [n for n, ok in results if not ok]
     print("gate-check %s (%d of %d failed)%s" % ("FAIL" if failed else "PASS", len(failed), len(results),

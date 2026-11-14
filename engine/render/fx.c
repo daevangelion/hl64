@@ -797,32 +797,27 @@ void fx_view(float org_ofs[3], float ang_ofs[3], uint8_t fade_rgba[4])
 	fade_rgba[3] = (uint8_t)fade_alpha();
 }
 
-uint16_t fx_text_current(float *alpha)
+uint16_t fx_text_current(float *time)
 {
 	const res_title_t *t;
-	float s, in, hold, out, a;
+	float s, end;
 
-	*alpha = 0;
+	*time = 0;
 	if (fx.title == NO_TITLE)
 		return NO_TITLE;
 	s = (float)(fx_s.now - fx.title_start);
 	t = res_title(fx.title);
-	/* without a table entry: 2 s plain [own] */
-	in = t ? t->fadein : 0;
-	hold = t ? t->holdtime : 2.0f;
-	out = t ? t->fadeout : 0;
-	if (s < in)
-		a = s / in;
-	else if (s < in + hold)
-		a = 1;
-	else if (s < in + hold + out)
-		a = 1 - (s - in - hold) / out;
-	else
+	/* titles.txt: fade in, hold, fade out; under effect 2 (write out)
+	 * the fade-in time is per character and the hold starts once the text
+	 * has scanned out. Without a table entry: 2 s [own]. */
+	end = !t ? 2.0f : (t->effect == 2 ? t->fadein * t->text_len : t->fadein) + t->holdtime
+		+ t->fadeout;
+	if (s > end)
 	{
 		fx.title = NO_TITLE;
 		return NO_TITLE;
 	}
-	*alpha = a;
+	*time = s;
 	return fx.title;
 }
 

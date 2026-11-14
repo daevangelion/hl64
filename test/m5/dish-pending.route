@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: MIT
+# Regression scene (test/run/m5.sh "scenes"): hldemo3's dish turned from
+# the control room first. uplink.route reaches the control room through
+# the upper corridor (500 0 46), whose spawn radius hydrates the dish's
+# func_pushable #137; straight from the arrival to the control room
+# (-260 0 46, 1360 u from it, past the 768 + 192 u spawn radius) its
+# record is still pending at the mapper's place, 16 u above the
+# dish_control momentary_doors. GoldSrc spawned it at map start, it fell
+# onto the doors, and wheel #178 drives the doors, which carry it through
+# trigger_multiple #140 (target `on`) -> trigger_relay #146 -> multisource
+# dish_light_ms, the master of dish button #176 -> dish_mm -> env_global
+# hldemo_global_dish_ms (HLSDK CMomentaryDoor::Use, CPushable,
+# CMultiSource::Use, CEnvGlobal::Use). The pusher's move wakes and
+# settles it (engine/phys/push.c wake, rec_wake_pusher). Steps and timing
+# as uplink.route lines 388-406 without the corridor.
+startmap hldemo3
+waitmap hldemo3 60
+# the route's player has hldemo1's item_suit (HLSDK CBaseEntity::Create,
+# touch pickup)
+setpos -438 -576 -476 0 177
+wait 0.3
+drop item_suit -438 -576 -476
+wait 1
+god 1
+# control room: trigger_once #147 -> start_dish_mm (scientist briefing)
+setpos -260 0 46 0 0
+wait 12
+# turn the dish: hold +use on wheel #178 (momentary_rot_button 'dish')
+setpos -224 -37 46 20 0
+wait 0.5
++use
+waitmoved dish_control 5
+stats moved
+wait 9
+-use
+wait 0.5
+# dish button #176 (master dish_light_ms) -> dish_mm
+setpos -224 0 46 40 0
+wait 0.5
++use
+wait 0.2
+-use
+waitglobal hldemo_global_dish_ms 30
+stats dish
+pass

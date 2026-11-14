@@ -76,6 +76,9 @@ int main(void)
 	cart_mount();
 
 	eng_boot("n64");
+#ifdef HL64_PSAMP
+	psamp_init();
+#endif
 #ifdef HL64_TEST
 	/* a test ROM runs the host-written command file dbg.cmd when the ROM
 	 * carries one; without it and without a route (route.rbc, loaded by

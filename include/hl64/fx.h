@@ -115,7 +115,9 @@ void	fx_init(void);
 void	fx_frame(double time, double dt);
 /* Screen state for the view and HUD: shake offset / angle, fade colour. */
 void	fx_view(float org_ofs[3], float ang_ofs[3], uint8_t fade_rgba[4]);
-uint16_t fx_text_current(float *alpha);
+/* The showing title (0xFFFF none) and s since fx_text; the HUD draws it
+ * (game/hud: colour, scan-out, position). */
+uint16_t fx_text_current(float *time);
 
 typedef struct {
 	uint32_t	temps, temps_peak, particles_peak, beams_peak, decals, decal_drops;

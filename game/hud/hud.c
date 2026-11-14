@@ -607,35 +607,158 @@ static void draw_selection(const CBasePlayer *p)
 	}
 }
 
-/* client text messages: the current title (titles.txt) */
+/* CHudMessage::XPosition (cl_dll/message.cpp): -1 centres the line,
+ * other negatives align the block's right edge, then clamp on screen */
+static int title_x(float x, int width, int total)
+{
+	int pos;
+
+	if (x == -1)
+		pos = (SCREEN_W - width) / 2;
+	else if (x < 0)
+		pos = (int)((1.0f + x) * SCREEN_W - total);
+	else
+		pos = (int)(x * SCREEN_W);
+	if (pos + width > SCREEN_W)
+		pos = SCREEN_W - width;
+	else if (pos < 0)
+		pos = 0;
+	return pos;
+}
+
+/* CHudMessage::YPosition: -1 centres, other negatives align the bottom */
+static int title_y(float y, int height)
+{
+	int pos;
+
+	if (y == -1)
+		pos = (int)((SCREEN_H - height) * 0.5f);
+	else if (y < 0)
+		pos = (int)((1.0f + y) * SCREEN_H - height);
+	else
+		pos = (int)(y * SCREEN_H);
+	if (pos + height > SCREEN_H)
+		pos = SCREEN_H - height;
+	else if (pos < 0)
+		pos = 0;
+	return pos;
+}
+
+/* gHUD.m_scrinfo.charWidths[c] of the text font */
+static int title_char_w(unsigned char c)
+{
+	char s[2] = { (char)c, 0 };
+
+	return d2_text(-1000, -1000, s, 0, 0, 0, 0);	/* off screen: measured, not drawn */
+}
+
+/* client text messages: CHudMessage::MessageDrawScan with MessageScanStart
+ * and MessageScanNextChar for the current title (titles.txt). Effect 1
+ * fades like effect 0: its flicker redraws a character in color2, black
+ * in titles.txt, which adds nothing. */
 static void draw_title(void)
 {
-	float alpha;
-	uint16_t id = fx_text_current(&alpha);
+	float time, fade_time = 0, char_time = 0, dt;
+	uint16_t id = fx_text_current(&time);
 	const res_title_t *t;
-	const char *s;
-	char line[64];
-	int n, y, nl = 1, lh = d2_text_height(), w, i;
+	const char *s, *p;
+	unsigned char line[80];
+	uint8_t cw[80];
+	int lines = 1, length = 0, width = 0, total_width = 0, lh = d2_text_height();
+	int fade_blend = 0, blend, x, y, i, j, n, next, k, src[3], dst[3], c[3];
 
 	if (id == 0xFFFF || !(t = res_title(id)) || !(s = res_title_text(id)) || !lh)
 		return;
-	for (i = 0; s[i]; i++)
-		nl += s[i] == '\n';
-	y = t->y < 0 ? (SCREEN_H - nl * lh) / 2 : (int)(t->y * (SCREEN_H - nl * lh));
-	while (*s)
+	for (p = s; *p; p++, length++)
 	{
-		for (n = 0; s[n] && s[n] != '\n' && n < (int)sizeof(line) - 1; n++)
-			line[n] = s[n];
-		line[n] = 0;
-		/* measure (off screen: clipped, not drawn), then draw */
-		w = d2_text(-1000, -1000, line, 0, 0, 0, 0);
-		d2_text(t->x < 0 ? (SCREEN_W - w) / 2 : (int)(t->x * (SCREEN_W - w)), y, line,
-			(uint8_t)(t->color1[0] * alpha), (uint8_t)(t->color1[1] * alpha),
-			(uint8_t)(t->color1[2] * alpha), 255);
+		if (*p == '\n')
+		{
+			lines++;
+			if (width > total_width)
+				total_width = width;
+			width = 0;
+		}
+		else
+			width += title_char_w((unsigned char)*p);
+	}
+	y = title_y(t->y, lines * lh);
+	/* MessageScanStart */
+	switch (t->effect)
+	{
+	case 0:
+	case 1:
+		fade_time = t->fadein + t->holdtime;
+		if (time < t->fadein)
+			fade_blend = (int)((t->fadein - time) * (1.0f / t->fadein) * 255);
+		else if (time > fade_time)
+			fade_blend = t->fadeout > 0 ? (int)((time - fade_time) / t->fadeout * 255) : 255;
+		break;
+	case 2:
+		fade_time = t->fadein * length + t->holdtime;
+		if (time > fade_time && t->fadeout > 0)
+			fade_blend = (int)((time - fade_time) / t->fadeout * 255);
+		break;
+	}
+	for (p = s, i = 0; i < lines; i++)
+	{
+		for (n = 0, width = 0; *p && *p != '\n' && n < (int)sizeof(line) - 1; n++, p++)
+		{
+			line[n] = (unsigned char)*p;
+			cw[n] = (uint8_t)title_char_w(line[n]);
+			width += cw[n];
+		}
+		if (*p)
+			p++;	/* the LF */
+		x = title_x(t->x, width, total_width);
+		for (j = 0; j < n; j++)
+		{
+			next = x + cw[j];
+			/* MessageScanNextChar */
+			for (k = 0; k < 3; k++)
+			{
+				src[k] = t->color1[k];
+				dst[k] = 0;
+			}
+			blend = 0;
+			switch (t->effect)
+			{
+			case 0:
+			case 1:
+				blend = fade_blend;
+				break;
+			case 2:
+				char_time += t->fadein;
+				if (char_time > time)
+				{
+					src[0] = src[1] = src[2] = 0;
+					break;
+				}
+				dt = time - char_time;
+				if (time > fade_time)
+					blend = fade_blend;
+				else if (dt > t->fxtime || t->fxtime <= 0)
+					blend = 0;
+				else
+				{
+					for (k = 0; k < 3; k++)
+						dst[k] = t->color2[k];
+					blend = 255 - (int)(dt * (1.0f / t->fxtime) * 255.0f + 0.5f);
+				}
+				break;
+			}
+			blend = blend > 255 ? 255 : blend < 0 ? 0 : blend;
+			for (k = 0; k < 3; k++)
+				c[k] = (src[k] * (255 - blend) + dst[k] * blend) >> 8;
+			/* additive: a black character adds nothing */
+			if (x >= 0 && y >= 0 && next <= SCREEN_W && (c[0] | c[1] | c[2]))
+			{
+				char ch[2] = { (char)line[j], 0 };
+
+				d2_text(x, y, ch, (uint8_t)c[0], (uint8_t)c[1], (uint8_t)c[2], 255);
+			}
+			x = next;
+		}
 		y += lh;
-		s += n;
-		if (*s == '\n')
-			s++;
 	}
 }
 
