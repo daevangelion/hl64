@@ -52,14 +52,34 @@ drawn (it stays solid).
 
 | mode | brush | studio | sprite |
 |---|---|---|---|
-| Normal 0 | opaque | opaque, lit | alpha-tested cutout, depth write |
-| TransColor 1 | flat `rendercolor`, alpha = blend | as TransTexture | colour = rendercolor × texture, alpha = blend |
-| TransTexture 2 | texture, unlit (fullbright), alpha = blend | texture lit, alpha = blend | alpha = blend |
-| Glow 3 | as TransAdd | as TransAdd | additive, no depth test, constant screen size, faded by an occlusion test (3) |
-| TransAlpha 4 | opaque pass, alpha compare (palette index 255 transparent) | as Normal | cutout with alpha = blend |
-| TransAdd 5 | texture, additive × blend | additive × blend | additive × blend |
+| Normal 0 | opaque | opaque, lit | palette colours × `rendercolor`; `renderamt` ignored; alpha-test sprites are cut out (last palette index transparent), depth write |
+| TransColor 1 | flat `rendercolor`, alpha = blend | as TransTexture | drawn as Normal **without tint** (`rendercolor` ignored); visible only while blend > 0 (`renderamt` and the render fx act as a visibility flag, not an alpha) |
+| TransTexture 2 | texture, unlit (fullbright), alpha = blend | texture lit, alpha = blend | texture × `rendercolor`, alpha = blend |
+| Glow 3 | as TransAdd | as TransAdd | additive (2a) texture × `rendercolor` × blend, no depth test, constant screen size, faded by an occlusion test (3) |
+| TransAlpha 4 | translucent pass, alpha compare (palette index 255 transparent), depth write | as Normal | as TransTexture (alpha-test sprites cut out) |
+| TransAdd 5 | texture, additive × blend | additive × blend | additive texture × `rendercolor` × blend |
 
-Translucent items (everything except Normal and TransAlpha) draw after the
+Sprite colour, from black-box documentation of GoldSrc (the engine draws
+sprites; HLSDK's client and server code only set the fields):
+`rendercolor` tints a sprite (texture × colour) in every mode except
+TransColor, Glow included; `0 0 0` means untinted. In TransColor the sprite
+keeps its palette colours and `renderamt` only toggles visibility; in
+Normal the amount is ignored. Sources: TWHL "env_sprite" (render modes and
+sprite texture formats, with screenshots of each format in each mode at
+amount 255 / 63 and colour 255 0 0) and TWHL "Tutorial: Render
+Properties" (sprite table: Color mode "fully opaque if > 0", colour "no
+effect"). HLSDK `const.h`'s formula for TransColor, `c*a + dest*(1-a)`,
+describes brushes, the only type that draws the flat colour. Map content
+relies on the tint: hldemo1's red env_glows are glow02 × 238 30 46, its
+fire is TransAdd at `0 0 0`, and HLSDK's turret eye glow is flare3 set to
+255 0 0 in Glow mode (`turret.cpp`). Confirmed on retail by capture X-glow
+**[probe]** (retail client).
+
+Brush entities whose render mode is not Normal are never folded into the
+cooked static world (w64-format.md, `FOLDED`): they stay movers and draw
+in the translucent pass below, even when nothing can move or fire them.
+
+Translucent items (every entity whose mode is not Normal, except studio models in TransAlpha, which draw as Normal) draw after the
 opaque world, movers, studio models and particles, sorted back to front by
 the distance of their origin (brushes: their box centre), with depth test
 and without depth write; at most 64 per frame (nearest kept, overflow

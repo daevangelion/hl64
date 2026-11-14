@@ -160,8 +160,12 @@ index or `0xFFFF`).
   (lightstyles.md 4) splits the value into a base and one style term.
 
 Static submodels — `func_wall` / `func_illusionary` with no `targetname`
-(nothing can fire, move or kill them) and no `origin`/`angles` — are cooked
-into the sectors (`FOLDED`); their entities are skipped at draw time.
+(nothing can fire, move or kill them), no `origin`/`angles` and render
+mode Normal (`rendermode` 0 or absent) — are cooked into the sectors
+(`FOLDED`); their entities are skipped at draw time. A submodel used by an
+entity with any other render mode is never folded: it draws in the
+translucent pass (render-fx.md 2). (Cook: `tools/w64c/w64c.py`
+`FOLD_CLASSES` test must add the render-mode condition.)
 Every other submodel used by a non-`trigger_*` entity gets a `MOVR` chunk in
 its local space, drawn with the entity's origin/angles matrix. Submodels used
 only by triggers (or by nothing) are `NONE`.

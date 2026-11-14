@@ -24,21 +24,26 @@
 #          missing=0 extra=0, sane rec lines; K9: a second run stepping
 #          every live entity (`stepall 1`) gives identical route ops and
 #          player / entity / seam / rec records.
-#   ares:  each route on a PROFILE HL64_TEST ROM (PASS runs `mem`): route
-#          PASS and harness exit 0 at the same checkpoints (forced switches
-#          reported, not failed); K10: route ops and player / entity
-#          records identical to the host's; the host's heap after the carve
-#          equal to the cart's; per route the CPU / memory table per map
-#          visit (test/m5/cpu_table.py: frame avg / p90 / max, the worst
-#          frames with their zones, frames > 50 ms and those where mon
-#          dominates, memory peaks; the old tree's cart numbers beside it),
-#          the run-wide region table (test/m3/gate_table.py) and the
-#          seam-window table (test/m4/gate_table.py) into the gate log.
+#   ares:  each route (uplink, hazard and m4: the M5 AI acceptance's
+#          routes are uplink and m4; m4 is checked as by test/run/m4.sh,
+#          with no old-tree oracle) on a PROFILE HL64_TEST ROM (PASS runs
+#          `mem`): route PASS and harness exit 0 at the same checkpoints
+#          (forced switches reported, not failed); K10: route ops and
+#          player / entity records identical to the host's; the heap after
+#          the carve of a PROFILE host built from the same tree right after
+#          the first ROM equal to the cart's; M5 AI acceptance
+#          (test/m5/ai_check.py, gated on uplink and m4, reported on
+#          hazard): no frame over 50 ms with mon >= half its CPU, per map
+#          mon p50 / p90 / max, AI-pushed frames, the worst AI frames; per
+#          route the CPU / memory table per map visit (test/m5/cpu_table.py,
+#          the old tree's cart numbers beside it), the run-wide region
+#          table (test/m3/gate_table.py) and the seam-window table
+#          (test/m4/gate_table.py) into the gate log.
 #
 # Every route check runs (and is logged) even after an earlier one failed;
 # the gate fails at the end, naming each failure.
 #
-# Usage: test/run/m5.sh [--ares] [--no-earlier] [--route uplink|hazard ...]
+# Usage: test/run/m5.sh [--ares] [--no-earlier] [--route uplink|hazard|m4 ...]
 #        --no-earlier skips test/run/m4.sh, --route runs only the named
 #        routes (iteration only: neither is a gate run)
 # Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c7
@@ -62,16 +67,19 @@ while [[ $# -gt 0 ]]; do
 	--ares) ARES=1 ;;
 	--no-earlier) EARLIER=0 ;;
 	--route)
-		[[ "${2:-}" == uplink || "${2:-}" == hazard ]] || { echo "--route uplink|hazard" >&2; exit 2; }
+		[[ "${2:-}" =~ ^(uplink|hazard|m4)$ ]] || { echo "--route uplink|hazard|m4" >&2; exit 2; }
 		ROUTES+=("$2")
 		shift
 		;;
-	*) echo "usage: test/run/m5.sh [--ares] [--no-earlier] [--route uplink|hazard ...]" >&2; exit 2 ;;
+	*) echo "usage: test/run/m5.sh [--ares] [--no-earlier] [--route uplink|hazard|m4 ...]" >&2; exit 2 ;;
 	esac
 	shift
 done
 SUBSET=0
-if [[ ${#ROUTES[@]} -eq 0 ]]; then ROUTES=(uplink hazard); else SUBSET=1; fi
+if [[ ${#ROUTES[@]} -eq 0 ]]; then ROUTES=(uplink hazard m4); else SUBSET=1; fi
+# routes the AI acceptance gates on ares (test/m5/ai_check.py); the others
+# are reported
+AI_GATED=" uplink m4 "
 CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/M4Lead/c7}"
 FIX="${HL64_FIXTURES:-/scratch/hl64/fixtures}"
 DATA="${HL64_DATA:-/scratch/hl1/valve}"
@@ -103,6 +111,7 @@ switches() {
 	hazard) echo --switch t0a0:t0a0a:touch --switch t0a0a:t0a0b1:touch \
 		--switch t0a0b1:t0a0b2:touch --switch t0a0b2:t0a0c:touch --switch t0a0c:t0a0b:touch \
 		--switch t0a0b:t0a0c:touch --switch t0a0c:t0a0d:touch ;;
+	m4) echo --switch hldemo1:hldemo2:use --switch hldemo2:hldemo3:touch ;;
 	esac
 }
 
@@ -153,6 +162,7 @@ else
 	say "suite oracle-cart-frames: $OLD_CART_LOG not on this machine (skipped)"
 fi
 # every entry point of test/m5 runs here (cpu_table.py: the ares table below)
+suite ai_check.py ai-check-selftest python3 test/m5/ai_check.py --selftest
 RAN+="cpu_table.py "
 for f in "$ROOT"/test/m5/*.py "$ROOT"/test/m5/*.sh; do
 	[[ -e "$f" ]] || continue
@@ -167,12 +177,16 @@ records() { grep -E "^route: [0-9]|^stats [0-9]+ ($1): " "$2" || true; }
 route_checks() {
 	local r="$1" log="$2" name="$3" code
 	shift 3
-	code=0
-	python3 "$ROOT/test/m5/checkpoints.py" check --name "$r" --oracle "$ROOT/test/m5/oracle/$r.txt" \
-		--log "$log" --dump "$OUT/$r.dump" --route "$ROOT/test/routes/$r.route" \
-		>"$OUT/checkpoints-$name.txt" || code=$?
-	tee -a "$GATE_LOG" <"$OUT/checkpoints-$name.txt" >/dev/null
-	[[ $code -eq 0 ]] || fail "$r ($name): $(tail -1 "$OUT/checkpoints-$name.txt")"
+	# route m4 (the AI acceptance's second route) has no old-tree oracle:
+	# its checkpoints are test/run/m4.sh's
+	if [[ -f "$ROOT/test/m5/oracle/$r.txt" ]]; then
+		code=0
+		python3 "$ROOT/test/m5/checkpoints.py" check --name "$r" --oracle "$ROOT/test/m5/oracle/$r.txt" \
+			--log "$log" --dump "$OUT/$r.dump" --route "$ROOT/test/routes/$r.route" \
+			>"$OUT/checkpoints-$name.txt" || code=$?
+		tee -a "$GATE_LOG" <"$OUT/checkpoints-$name.txt" >/dev/null
+		[[ $code -eq 0 ]] || fail "$r ($name): $(tail -1 "$OUT/checkpoints-$name.txt")"
+	fi
 	code=0
 	# shellcheck disable=SC2046
 	python3 "$ROOT/test/m4/gate_check.py" "$log" $(switches "$r") "$@" >"$OUT/check-$name.txt" || code=$?
@@ -185,9 +199,12 @@ route_checks() {
 declare -A HOSTOK
 for r in "${ROUTES[@]}"; do
 	HOSTOK[$r]=0
-	python3 "$ROOT/test/m5/widening.py" --name "$r" --oracle "$ROOT/test/m5/oracle/$r.txt" \
-		--route "$ROOT/test/routes/$r.route" >"$OUT/widening-$r.txt" || fail "$r widening: $(tail -1 "$OUT/widening-$r.txt")"
-	tee -a "$GATE_LOG" <"$OUT/widening-$r.txt" >/dev/null
+	if [[ -f "$ROOT/test/m5/oracle/$r.txt" ]]; then
+		python3 "$ROOT/test/m5/widening.py" --name "$r" --oracle "$ROOT/test/m5/oracle/$r.txt" \
+			--route "$ROOT/test/routes/$r.route" >"$OUT/widening-$r.txt" \
+			|| fail "$r widening: $(tail -1 "$OUT/widening-$r.txt")"
+		tee -a "$GATE_LOG" <"$OUT/widening-$r.txt" >/dev/null
+	fi
 	(cd "$ROOT" && python3 -m tools.routec.routec --rtb "$RTB" "test/routes/$r.route" -o "$OUT/$r.rbc" \
 		&& python3 -m tools.routec.routec --rtb "$RTB" --dump "$OUT/$r.rbc" >"$OUT/$r.dump") \
 		>"$OUT/routec-$r.log" 2>&1 || { cat "$OUT/routec-$r.log" >&2; fail "routec $r"; continue; }
@@ -199,8 +216,8 @@ for r in "${ROUTES[@]}"; do
 	route_checks "$r" "$OUT/host-$r.log" "host-$r"
 	[[ $CODE -eq 0 && ${#FAILS[@]} -eq $nf ]] || continue
 	HOSTOK[$r]=1
-	say "$r: route PASS (host), $(grep -c '^seam: switch ' "$OUT/host-$r.log") switches, 0 forced," \
-		"checkpoints = old run's"
+	say "$r: route PASS (host), $(grep -c '^seam: switch ' "$OUT/host-$r.log") switches, 0 forced$(
+		[[ -f "$ROOT/test/m5/oracle/$r.txt" ]] && echo ", checkpoints = old run's")"
 	CODE=0
 	"$B/hl64-host" --root "$CONTENT" --route "$OUT/$r.rbc" "${CMDS[@]}" --cmd "@1 stepall 1" \
 		>"$OUT/host-$r-stepall.log" 2>&1 || CODE=$?
@@ -248,6 +265,16 @@ for r in "${ROUTES[@]}"; do
 		HL64_CONTENT="$BC" HL64_CMDS="$ROMDIR/m5.cmd" rom >"$OUT/rom-build-$r.log" 2>&1 \
 		|| { tail -40 "$OUT/rom-build-$r.log" >&2; die "PROFILE rom build ($r)"; }
 	grep -E 'warning:' "$OUT/rom-build-$r.log" && die "rom build has warnings ($r)"
+	if [[ $HEAP_DONE -eq 0 ]]; then
+		# the PROFILE host from the same tree as the ROM, built now (not
+		# after the hour-long ares run): its heap after the carve must equal
+		# the cart's (test/run/m3.sh)
+		make -C "$ROOT" --no-print-directory BUILD_DIR="$ROMDIR" PROFILE=1 host \
+			>"$OUT/host-profile-build.log" 2>&1 \
+			|| { tail -30 "$OUT/host-profile-build.log" >&2; die "PROFILE host build"; }
+		"$ROMDIR/host/hl64-host" --root "$BC" "${CMDS[@]}" --frames 1 >"$OUT/host-profile-boot.log" 2>&1 \
+			|| { tail -20 "$OUT/host-profile-boot.log" >&2; die "PROFILE host boot"; }
+	fi
 	CODE=0
 	(cd "$ROMDIR" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 \
 		timeout "${ARES_TIMEOUT:-14400}" "$ARES_BIN" --system "Nintendo 64" \
@@ -262,8 +289,7 @@ for r in "${ROUTES[@]}"; do
 	grep -q '^TESTHARNESS exit 0' "$OUT/ares-$r.log" || fail "$r (ares): no harness exit 0"
 	grep -q '^mem world: ' "$OUT/ares-$r.log" || fail "$r (ares): no \`mem world:\` line (PASS's mem)"
 	[[ ${#FAILS[@]} -eq $nf ]] && say "$r: route PASS (ares), $(grep -c '^seam: switch ' "$OUT/ares-$r.log")" \
-		"switches, $(grep -c '^seam: switch .*(forced' "$OUT/ares-$r.log" || true) forced (host 0)," \
-		"checkpoints = old run's"
+		"switches, $(grep -c '^seam: switch .*(forced' "$OUT/ares-$r.log" || true) forced (host 0)"
 	if [[ ${HOSTOK[$r]:-0} -eq 1 ]]; then
 		if diff <(records 'player|ents' "$OUT/host-$r.log") <(records 'player|ents' "$OUT/ares-$r.log") \
 			>"$OUT/k10-$r.diff"; then
@@ -276,12 +302,6 @@ for r in "${ROUTES[@]}"; do
 		fail "K10 $r: no passing host run to compare with"
 	fi
 	if [[ $HEAP_DONE -eq 0 ]]; then
-		# host heap = the cart's heap after the carve (test/run/m3.sh)
-		make -C "$ROOT" --no-print-directory BUILD_DIR="$ROMDIR" PROFILE=1 host \
-			>"$OUT/host-profile-build.log" 2>&1 \
-			|| { tail -30 "$OUT/host-profile-build.log" >&2; die "PROFILE host build"; }
-		"$ROMDIR/host/hl64-host" --root "$BC" "${CMDS[@]}" --frames 1 >"$OUT/host-profile-boot.log" 2>&1 \
-			|| { tail -20 "$OUT/host-profile-boot.log" >&2; die "PROFILE host boot"; }
 		heapfree() { sed -n 's/^mem: heap free .* free \([0-9]*\) B$/\1/p' "$1" | head -1; }
 		HH="$(heapfree "$OUT/host-profile-boot.log")"
 		CH="$(heapfree "$OUT/ares-$r.log")"
@@ -291,6 +311,14 @@ for r in "${ROUTES[@]}"; do
 			fail "heap after carve: host ${HH:-?} B, cart ${CH:-?} B (recalibrate limits.h HL64_CART_BOOT_BYTES)"
 		fi
 		HEAP_DONE=1
+	fi
+	# M5 AI acceptance: no frame over 50 ms with mon >= half its CPU
+	CODE=0
+	python3 "$ROOT/test/m5/ai_check.py" "$OUT/ares-$r.log" --name "$r" >"$OUT/table-ai-$r.md" || CODE=$?
+	if [[ $CODE -ne 0 && "$AI_GATED" == *" $r "* ]]; then
+		fail "$r AI frame budget: $(tail -1 "$OUT/table-ai-$r.md")"
+	else
+		say "$r AI frame budget$([[ "$AI_GATED" == *" $r "* ]] || echo ' (reported)'): $(tail -1 "$OUT/table-ai-$r.md")"
 	fi
 	OLD=()
 	[[ -f "$ROOT/test/m5/oracle/$r-cart-frames.txt" ]] && OLD=(--old "$ROOT/test/m5/oracle/$r-cart-frames.txt")

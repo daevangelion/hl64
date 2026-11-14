@@ -215,6 +215,7 @@ information only.
 | HUD sheets + font (ui8) | 128 | 71.5 KB (56%) | similar | **measured** |
 | debug log ring (cart) | 8 | — | 16 KB console text | 12 |
 | per-frame scratch arena | 96 | not reported | — | |
+| aithink (spread monster thinks: 6 contexts × (8 KB stack + 8 KB cover tables)) | 96 | stack peak 4552 B of 8192 (cart, routes uplink + m4); cover tables 2 × 1024 × f32 by construction | — (thinks ran whole) | **measured** stack (`prof ai_ctx stack=`; co.c logs a context past 3/4, overflow into its guard words is fatal); M5 `game/hl/aithink.c`, think-and-time.md 2.1 |
 | stack + libdragon slack | 256 | 4.5 KB stack peak | — | measured stack only |
 | **total** | **≈ 5.1 MB** (carved heap 3696 KB measured) | | old cart route low point: 259 KB heap free (PROFILE) **measured** | headroom ≈ 3 MB |
 
