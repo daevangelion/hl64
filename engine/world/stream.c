@@ -278,6 +278,83 @@ static int box_seen_b(const wld_layer_t *L, const float lo[3], const float hi[3]
 	return box_seen(L, lo, hi, list, cnt);
 }
 
+/* The ENTS placements of a layer stand still while it is open: which of
+ * them a sector list's boxes meet depends on (layer, list) only. The last
+ * MCACHE lists' hits (in placement order) and bounds, so a list seen again
+ * (the standing eye leaf every frame, name_all's leaves, a pin's arrival
+ * leaves) skips the box tests; keyed by the layer generation (any open or
+ * close), slot and map. n > MCACHE_HITS: too many hits to keep (the
+ * placements are tested again). */
+#define MCACHE		8
+#define MCACHE_HITS	128
+typedef struct {
+	const uint16_t	*list;
+	uint32_t	lgen;
+	int32_t		cnt;
+	int16_t		slot;
+	uint16_t	map, n;
+	float		ub[6];
+	uint16_t	sub[MCACHE_HITS];
+} mcache_t;
+static mcache_t mcache[MCACHE];
+static int mcache_next;
+
+static const wld_mover_t *placement(const wld_layer_t *L, int i)
+{
+	return &L->movers[i < L->nmovers ? i : L->dir->nsub - 1 - (i - L->nmovers)];
+}
+
+/* A placement's box (rest position) meets a sector of list. */
+static int placement_seen(const wld_layer_t *L, const wld_mover_t *mv, const uint16_t *list,
+	int cnt, const float ub[6])
+{
+	const int16_t *mb = L->subs[mv->sub].bbox;
+	float lo[3], hi[3];
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		lo[k] = mb[k] + mv->origin[k] - MOVER_MARGIN;
+		hi[k] = mb[k + 3] + mv->origin[k] + MOVER_MARGIN;
+	}
+	return box_seen_b(L, lo, hi, list, cnt, ub);
+}
+
+static const mcache_t *mover_hits(const wld_layer_t *L, const uint16_t *list, int cnt)
+{
+	mcache_t *c;
+	int i, n = 0;
+
+	for (i = 0; i < MCACHE; i++)
+	{
+		c = &mcache[i];
+		if (c->list == list && c->cnt == cnt && c->lgen == wld_layer_gen
+			&& c->slot == L->slot && c->map == L->map)
+			return c;
+	}
+	c = &mcache[mcache_next];
+	mcache_next = (mcache_next + 1) % MCACHE;
+	c->list = list;
+	c->cnt = cnt;
+	c->lgen = wld_layer_gen;
+	c->slot = (int16_t)L->slot;
+	c->map = L->map;
+	list_bounds(L, list, cnt, c->ub);
+	for (i = 0; i < L->nmovers + L->ntrans_movers; i++)
+	{
+		const wld_mover_t *mv = placement(L, i);
+
+		if (placement_seen(L, mv, list, cnt, c->ub))
+		{
+			if (n < MCACHE_HITS)
+				c->sub[n] = mv->sub;
+			n++;
+		}
+	}
+	c->n = (uint16_t)(n > MCACHE_HITS ? MCACHE_HITS + 1 : n);
+	return c;
+}
+
 /* The MOVR models the renderer can draw in the sectors of list: the ENTS
  * placements (rest positions, opaque and translucent; a record not yet
  * hydrated, or woken and drawn in the same frame, is drawn there) and the
@@ -287,25 +364,23 @@ static int box_seen_b(const wld_layer_t *L, const float lo[3], const float hi[3]
 static int each_mover(wld_layer_t *L, const uint16_t *list, int cnt, int cls,
 	int (*fn)(wld_layer_t *L, int sub, int cls))
 {
+	const mcache_t *c = mover_hits(L, list, cnt);
 	int i, k, ok = 1;
-	float ub[6];
 
-	list_bounds(L, list, cnt, ub);
-	for (i = 0; i < L->nmovers + L->ntrans_movers; i++)
+	if (c->n <= MCACHE_HITS)
 	{
-		const wld_mover_t *mv = &L->movers[i < L->nmovers ? i
-			: L->dir->nsub - 1 - (i - L->nmovers)];
-		const int16_t *mb = L->subs[mv->sub].bbox;
-		float lo[3], hi[3];
-
-		for (k = 0; k < 3; k++)
-		{
-			lo[k] = mb[k] + mv->origin[k] - MOVER_MARGIN;
-			hi[k] = mb[k + 3] + mv->origin[k] + MOVER_MARGIN;
-		}
-		if (box_seen_b(L, lo, hi, list, cnt, ub) && !fn(L, mv->sub, cls))
-			ok = 0;
+		for (i = 0; i < c->n; i++)
+			if (!fn(L, c->sub[i], cls))
+				ok = 0;
 	}
+	else
+		for (i = 0; i < L->nmovers + L->ntrans_movers; i++)
+		{
+			const wld_mover_t *mv = placement(L, i);
+
+			if (placement_seen(L, mv, list, cnt, c->ub) && !fn(L, mv->sub, cls))
+				ok = 0;
+		}
 	for (i = 0; i < S.nbrush; i++)
 	{
 		int e = S.brush[i];
@@ -331,7 +406,7 @@ static int each_mover(wld_layer_t *L, const uint16_t *list, int cnt, int cls,
 			lo[k] = cv->absmin[k] + (d < 0 ? d : 0) - MOVER_MARGIN;
 			hi[k] = cv->absmax[k] + (d > 0 ? d : 0) + MOVER_MARGIN;
 		}
-		if (box_seen_b(L, lo, hi, list, cnt, ub) && !fn(L, (int)RES_SUB_NUM(m), cls))
+		if (box_seen_b(L, lo, hi, list, cnt, c->ub) && !fn(L, (int)RES_SUB_NUM(m), cls))
 			ok = 0;
 	}
 	return ok;
@@ -425,12 +500,15 @@ static int name_movr(wld_layer_t *L, int n, int cls)
 static void cell_range(const wld_layer_t *L, const float lo[3], const float hi[3], int32_t r[6])
 {
 	const w64_grid_t *g = L->grid;
+	/* the format's cell is a power of two: times its exact reciprocal
+	 * rounds as the division does (wld_point_leaf) */
+	float rc = g->cell == W64_GRID_CELL ? 1.0f / W64_GRID_CELL : 0;
 	int k;
 
 	for (k = 0; k < 3; k++)
 	{
-		float a = (lo[k] - g->origin[k]) / (float)g->cell;
-		float b = (hi[k] - g->origin[k]) / (float)g->cell;
+		float a = rc != 0 ? (lo[k] - g->origin[k]) * rc : (lo[k] - g->origin[k]) / (float)g->cell;
+		float b = rc != 0 ? (hi[k] - g->origin[k]) * rc : (hi[k] - g->origin[k]) / (float)g->cell;
 
 		r[k] = a < 0 ? 0 : a >= g->dims[k] ? g->dims[k] : (int32_t)a;
 		r[k + 3] = b < 0 ? -1 : b >= g->dims[k] ? g->dims[k] - 1 : (int32_t)b;
@@ -601,34 +679,46 @@ static int ent_window(int e, wld_layer_t *L, const ewin_t *prev, ewin_t *w)
  * a gib shoved through a trigger: their first move reads them before a
  * window could name them); the destinations of the trigger_teleports
  * there (architecture.md 5.3 pin class: reachable teleport
- * destinations); the brush entity list (each_mover). A window or seen
- * hull change is named into the standing generation (S.dwin / S.dseen:
- * name_delta); a teleport destination change bumps pin_gen. */
-static void ent_scan(wld_layer_t *H, const float eye[3])
+ * destinations); the brush entities drawn from a MOVR (each_mover; the
+ * others name nothing there). A window or seen hull change is named into
+ * the standing generation (S.dwin / S.dseen: name_delta); a teleport
+ * destination change bumps pin_gen. leaf: the home eye leaf. */
+static void ent_scan(wld_layer_t *H, int leaf)
 {
 	static ewin_t nw[ENT_WINDOWS];
 	uint32_t ns[SEEN_MODELS];
 	tele_pin_t nt[TELE_PINS];
+	wld_layer_t *lay[HL64_WORLD_LAYERS];
 	const uint16_t *list = NULL;
-	int e, n = 0, nsn = 0, ntl = 0, p = 0, cnt = 0, leaf, nd = 0;
+	float ub[6];
+	int e, n = 0, nsn = 0, ntl = 0, p = 0, cnt = 0, nd = 0, s;
 
-	if (H && (leaf = wld_point_leaf(H, eye)) > 0)
+	if (H && leaf > 0)
+	{
 		list = wld_leaf_sectors(H, leaf, &cnt);
+		list_bounds(H, list, cnt, ub);
+	}
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+		lay[s] = wld_layer(s);
 	memset(nt, 0, sizeof(nt));
 	S.nbrush = 0;
 	for (e = ent_next_live(ENT_PLAYER); e >= 0; e = ent_next_live(e))
 	{
 		const col_ent_t *cv;
 		wld_layer_t *L;
+		unsigned ly = (unsigned)ent_idc(e)->layer;
+		res_t m;
 
-		if (!(L = wld_layer(ent_idc(e)->layer)))
+		if (ly >= HL64_WORLD_LAYERS || !(L = lay[ly]))
 			continue;
 		cv = ent_cv(e);
-		if (RES_KIND(ent_rnd(e)->model) == RES_K_SUBMODEL)
+		m = ent_rnd(e)->model;
+		if (RES_KIND(m) == RES_K_SUBMODEL && RES_SUB_SLOT(m) == L->slot
+			&& RES_SUB_NUM(m) < L->dir->nsub && L->subs[RES_SUB_NUM(m)].kind == W64_SUB_MOVR)
 			S.brush[S.nbrush++] = (uint16_t)e;
 		if (L == H && list && cv->model != COL_NONE && COL_MODEL_SLOT(cv->model) == L->slot
 			&& (cv->solid == COL_SOLID_TRIGGER || cv->movetype == MOVETYPE_PUSH)
-			&& box_seen(H, cv->absmin, cv->absmax, list, cnt))
+			&& box_seen_b(H, cv->absmin, cv->absmax, list, cnt, ub))
 		{
 			float org[3];
 
@@ -1061,7 +1151,8 @@ static int32_t eye_cell(const wld_layer_t *L, const float p[3])
 
 	for (k = 0; k < 3; k++)
 	{
-		float f = (p[k] - g->origin[k]) / (float)g->cell;
+		float f = g->cell == W64_GRID_CELL ? (p[k] - g->origin[k]) * (1.0f / W64_GRID_CELL)
+			: (p[k] - g->origin[k]) / (float)g->cell;
 
 		if (!(f >= 0) || f >= g->dims[k])
 			return -1;
@@ -1129,8 +1220,8 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 	uint64_t t0 = sys_time_us(), tm = t0;
 	double now = eng_time();
 	wld_layer_t *H;
-	int32_t vb[3];
-	int s, k, seam_out = 0, changed;
+	int32_t vb[3], leaf, vl[VIEW_PTS];
+	int s, k, seam_out = 0, changed, nv;
 	uint32_t us;
 
 	/* async opens: one stage (and <= 16 KB of directory CRC) per frame */
@@ -1178,31 +1269,59 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 		H = NULL;
 	for (k = 0; k < 3; k++)
 		vb[k] = vbucket(S.vel[k]);
+	/* the home eye leaf and the drawn eye's other leaves (bob, punch,
+	 * shake: last frame's offset, and VIEW_SLACK around the eye: it can
+	 * sit in a neighbouring leaf); looked up again only when the eye, the
+	 * offset or the layer changed */
+	{
+		static struct {
+			int32_t		slot, map, leaf, vl[VIEW_PTS], nv;
+			uint32_t	lgen;
+			float		eye[3], off[3];
+		} pc = { -1, -1, -1, { 0 }, 0, 0, { 0 }, { 0 } };
+		float off[3];
+		int i, j, use = len3(S.voff) < TELE_SLACK;
+
+		for (k = 0; k < 3; k++)
+			off[k] = use ? S.voff[k] : 0;
+		if (!H)
+			pc.slot = -1;
+		else if (pc.slot != H->slot || pc.map != H->map || pc.lgen != wld_layer_gen
+			|| memcmp(pc.eye, eye, sizeof(pc.eye)) || memcmp(pc.off, off, sizeof(off)))
+		{
+			pc.slot = H->slot;
+			pc.map = H->map;
+			pc.lgen = wld_layer_gen;
+			memcpy(pc.eye, eye, sizeof(pc.eye));
+			memcpy(pc.off, off, sizeof(off));
+			pc.leaf = wld_point_leaf(H, eye);
+			pc.nv = 0;
+			for (i = 0; i < VIEW_PTS; i++)
+			{
+				float v[3];
+				int32_t l;
+
+				for (k = 0; k < 3; k++)
+					v[k] = eye[k] + (i == 0 ? off[k]
+						: (i - 1) / 2 == k ? ((i & 1) ? VIEW_SLACK : -VIEW_SLACK) : 0);
+				l = wld_point_leaf(H, v);
+				for (j = 0; j < pc.nv && pc.vl[j] != l; j++)
+					;
+				if (l > 0 && l != pc.leaf && j == pc.nv)
+					pc.vl[pc.nv++] = l;
+			}
+		}
+		leaf = H ? pc.leaf : -1;
+		nv = H ? pc.nv : 0;
+		memcpy(vl, pc.vl, sizeof(vl));
+	}
 	/* moving entities' windows (a rebuild when one's cells changed) and
 	 * reachable teleport destinations */
-	ent_scan(H, eye);
+	ent_scan(H, leaf);
 	{
 		int hs = H ? H->slot : -1;
-		int32_t leaf = H ? wld_point_leaf(H, eye) : -1, cell = H ? eye_cell(H, eye) : -1;
-		int32_t vl[VIEW_PTS];
-		int nv = 0, i, j;
+		int32_t cell = H ? eye_cell(H, eye) : -1;
 
-		/* the drawn eye (bob, punch, shake: last frame's offset, and
-		 * VIEW_SLACK around the eye) can sit in a neighbouring leaf */
-		for (i = 0; H && i < VIEW_PTS; i++)
-		{
-			float v[3];
-			int32_t l;
-
-			for (k = 0; k < 3; k++)
-				v[k] = eye[k] + (i == 0 ? (len3(S.voff) < TELE_SLACK ? S.voff[k] : 0)
-					: (i - 1) / 2 == k ? ((i & 1) ? VIEW_SLACK : -VIEW_SLACK) : 0);
-			l = wld_point_leaf(H, v);
-			for (j = 0; j < nv && vl[j] != l; j++)
-				;
-			if (l > 0 && l != leaf && j == nv)
-				vl[nv++] = l;
-		}
 		changed = !S.valid || hs != S.home_slot || leaf != S.leaf || cell != S.cell
 			|| nv != S.nvleaf || memcmp(vl, S.vleaf, (size_t)nv * sizeof(vl[0]))
 			|| memcmp(vb, S.vb, sizeof(vb)) || S.pin_gen != S.pin_gen_seen
