@@ -32,9 +32,27 @@ const float	g_vecZero[3] = { 0, 0, 0 };
 
 /* ---- vectors and angles ------------------------------------------------------ */
 
+/* AngleVectors (six double sin / cos) of the last angles asked: a Look
+ * makes the looker's vectors once per candidate (FInViewCone), a think
+ * the same ones again and again. The vectors are a pure function of the
+ * angles' bits, so a repeat copies them. */
 void UTIL_MakeVectors(const float ang[3])
 {
-	AngleVectors(ang, gpGlobals.v_forward, gpGlobals.v_right, gpGlobals.v_up);
+	static uint32_t	key[3];
+	static float	v[9];
+	static int	have;
+	uint32_t	k[3];
+
+	memcpy(k, ang, sizeof(k));
+	if (!have || k[0] != key[0] || k[1] != key[1] || k[2] != key[2])
+	{
+		AngleVectors(ang, v, v + 3, v + 6);
+		memcpy(key, k, sizeof(key));
+		have = 1;
+	}
+	memcpy(gpGlobals.v_forward, v, sizeof(gpGlobals.v_forward));
+	memcpy(gpGlobals.v_right, v + 3, sizeof(gpGlobals.v_right));
+	memcpy(gpGlobals.v_up, v + 6, sizeof(gpGlobals.v_up));
 }
 
 void UTIL_MakeAimVectors(const float ang[3])
