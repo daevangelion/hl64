@@ -1834,7 +1834,7 @@ static void draw_view(const float eye[3])
 	const sfmt_run_t *runs;
 	const sfmt_meshlet_t *ml;
 	const sfmt_load_t *ld;
-	const uint16_t *skins;
+	static uint16_t view_crun[256], view_ctex[256];
 	const uint32_t *tofs;
 	const w64_vert_t *src;
 	w64_vert_t *dst;
@@ -1842,7 +1842,7 @@ static void draw_view(const float eye[3])
 	game_pose_t p;
 	float f[3], rt[3], u[3], pk, ipk;
 	const float *gm;
-	int n, ri, i, l, k, slot = 0, layer, skin;
+	int n, ri, i, l, k, layer, nr, np = 0, nc = 0, drop = 0;
 
 	if (!view_set)
 		return;
@@ -1874,50 +1874,29 @@ static void draw_view(const float eye[3])
 	runs = (const sfmt_run_t *)(b + ms->run_ofs);
 	ml = (const sfmt_meshlet_t *)(b + ms->meshlet_ofs);
 	ld = (const sfmt_load_t *)(b + ms->load_ofs);
-	skins = (const uint16_t *)(b + ms->skin_ofs);
 	tofs = (const uint32_t *)(b + ms->tex_ofs);
 	src = (const w64_vert_t *)(b + ms->vert_ofs);
-	dst = view_verts[view_flip];
-	view_flip ^= 1;
-	skin = view.skin < ms->nfamilies ? view.skin : 0;
-	pk = (float)(1 << ms->pos_shift);
-	ipk = 1.0f / pk;
-	if (nbone)
+	/* the drawn runs (body, skin): the chrome ones (texture coordinates
+	 * from each vertex's normal) CPU-skinned, the others drawn from their
+	 * blocks with the pose's bone matrices, as an entity's (the pose is
+	 * already eye-relative: identity model matrix) */
+	nr = pick_runs(m, view.body, view.skin);
+	for (k = 0; k < nr; k++)
 	{
-		ren_angle_axes(ren_cam.ang, f, rt, u);
-		game_studio_chrome_axes((const float (*)[3][4])bones, n, rt, chrome_up, chrome_right);
+		const w64_texp_t *tex = (const w64_texp_t *)(b + tofs[tex_buf[k]]);
+
+		if (nbone && (tex->pad2 & SFMT_NF_CHROME))
+		{
+			view_crun[nc] = runs_buf[k];
+			view_ctex[nc++] = tex_buf[k];
+		}
+		else
+		{
+			runs_buf[np] = runs_buf[k];
+			tex_buf[np++] = tex_buf[k];
+		}
 	}
-	memcpy(dst, src, ms->nslots / 2u * sizeof(w64_vert_t));
-	for (ri = 0; ri < ms->nruns; ri++)
-	{
-		const w64_texp_t *tex = (const w64_texp_t *)(b + tofs[skins[skin * ms->nskinref
-			+ runs[ri].skinref]]);
-		int chrome = nbone && (tex->pad2 & SFMT_NF_CHROME);
-
-		for (i = runs[ri].meshlet_first; i < runs[ri].meshlet_first + runs[ri].meshlet_count; i++)
-			for (l = ml[i].load_first; l < ml[i].load_first + ml[i].nloads; l++)
-			{
-				int bone = bslot[ld[l].bslot], c = ld[l].count + (ld[l].count & 1);
-
-				for (k = 0; k < c; k++, slot++)
-				{
-					w64_vert_t *v = &dst[slot >> 1];
-					int nb = nbone ? nbone[slot] : bone;
-
-					if (slot & 1)
-						skin_vert(pk, ipk, v->posB, v->normB, v->stB, bone, nb, chrome, tex);
-					else
-						skin_vert(pk, ipk, v->posA, v->normA, v->stA, bone, nb, chrome, tex);
-				}
-			}
-	}
-	gpu_writeback(dst, ms->nslots / 2u * sizeof(w64_vert_t));
 	memset(&ge, 0, sizeof(ge));
-	ge.model.m[0][0] = ge.model.m[1][1] = ge.model.m[2][2] = 1.0f / (float)(1 << ms->pos_shift);
-	ge.model.m[3][3] = 1;
-	ge.nruns = pick_runs(m, view.body, view.skin);
-	ge.runs = runs_buf;
-	ge.tex = tex_buf;
 	ge.rgba[0] = ge.rgba[1] = ge.rgba[2] = ge.rgba[3] = 255;
 	if (ent_is_live(1))
 	{
@@ -1942,7 +1921,74 @@ static void draw_view(const float eye[3])
 			ge.rgba[0] = ge.rgba[1] = ge.rgba[2] = (uint8_t)lv;
 		}
 	}
-	if (gpu_studio_draw_cpu(m->gstate, ms, dst, &ge))
+	ge.model.m[3][3] = 1;
+	if (np)
+	{
+		slot_matrices(m);
+		ge.model.m[0][0] = ge.model.m[1][1] = ge.model.m[2][2] = 1;
+		ge.bones = (const float (*)[3][4])slots;
+		ge.nbones = ms->nbslots;
+		ge.nruns = np;
+		ge.runs = runs_buf;
+		ge.tex = tex_buf;
+		if (gpu_studio_draw(m->gstate, ms, &ge))
+			drop = 1;
+	}
+	if (nc)
+	{
+		uint32_t lo = 0xFFFFFFFFu, hi = 0;
+
+		dst = view_verts[view_flip];
+		view_flip ^= 1;
+		pk = (float)(1 << ms->pos_shift);
+		ipk = 1.0f / pk;
+		ren_angle_axes(ren_cam.ang, f, rt, u);
+		game_studio_chrome_axes((const float (*)[3][4])bones, n, rt, chrome_up, chrome_right);
+		for (ri = 0; ri < nc; ri++)
+		{
+			const sfmt_run_t *ru = &runs[view_crun[ri]];
+			const w64_texp_t *tex = (const w64_texp_t *)(b + tofs[view_ctex[ri]]);
+			int slot = 0, s0;
+
+			/* the run's first slot: every earlier load's padded count */
+			for (i = 0; i < ru->meshlet_first; i++)
+				for (l = ml[i].load_first; l < ml[i].load_first + ml[i].nloads; l++)
+					slot += ld[l].count + (ld[l].count & 1);
+			s0 = slot;
+			for (i = ru->meshlet_first; i < ru->meshlet_first + ru->meshlet_count; i++)
+				for (l = ml[i].load_first; l < ml[i].load_first + ml[i].nloads; l++)
+				{
+					int bone = bslot[ld[l].bslot], c = ld[l].count + (ld[l].count & 1);
+
+					memcpy(&dst[slot >> 1], &src[slot >> 1], (uint32_t)c / 2u * sizeof(w64_vert_t));
+					for (k = 0; k < c; k++, slot++)
+					{
+						w64_vert_t *v = &dst[slot >> 1];
+
+						if (slot & 1)
+							skin_vert(pk, ipk, v->posB, v->normB, v->stB, bone, nbone[slot],
+								1, tex);
+						else
+							skin_vert(pk, ipk, v->posA, v->normA, v->stA, bone, nbone[slot],
+								1, tex);
+					}
+				}
+			if ((uint32_t)s0 < lo)
+				lo = (uint32_t)s0;
+			if ((uint32_t)slot > hi)
+				hi = (uint32_t)slot;
+		}
+		gpu_writeback(&dst[lo >> 1], (hi - lo) / 2u * sizeof(w64_vert_t));
+		ge.model.m[0][0] = ge.model.m[1][1] = ge.model.m[2][2] = ipk;
+		ge.bones = NULL;
+		ge.nbones = 0;
+		ge.nruns = nc;
+		ge.runs = view_crun;
+		ge.tex = view_ctex;
+		if (gpu_studio_draw_cpu(m->gstate, ms, dst, &ge))
+			drop = 1;
+	}
+	if (drop)
 		st.dropped++;
 	else
 		st.drawn++;
