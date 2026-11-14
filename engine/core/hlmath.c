@@ -319,3 +319,62 @@ float hl_acosf(float x)
 {
 	return (float)hl_acos(x);
 }
+
+/* ---- render approximations (hlmath.h) --------------------------------------- */
+
+/* pi / 2 = RP1 + RP2: RP1 has 11 significant bits, so n * RP1 is exact for
+ * |n| < 2^13 */
+#define RP1		1.5703125f
+#define RP2		4.8382679e-4f
+#define R_INV_PIO2	0.63661977f
+#define R_MAX		8192.0f		/* |x| above: the exact functions */
+
+void hl_rsincosf(float x, float *s, float *c)
+{
+	float k, r, z, sr, cr;
+	int n;
+
+	if (!(x < R_MAX && x > -R_MAX))
+	{
+		hl_sincosf(x, s, c);
+		return;
+	}
+	k = x * R_INV_PIO2;
+	n = (int)(k < 0 ? k - 0.5f : k + 0.5f);
+	r = (x - (float)n * RP1) - (float)n * RP2;
+	z = r * r;
+	/* Taylor series to r^9 / r^8 on |r| <= ~pi / 4 */
+	sr = r + r * z * (-1.6666667e-1f + z * (8.3333333e-3f + z * (-1.9841270e-4f
+		+ z * 2.7557319e-6f)));
+	cr = 1.0f + z * (-0.5f + z * (4.1666668e-2f + z * (-1.3888889e-3f + z * 2.4801587e-5f)));
+	switch (n & 3)
+	{
+	case 0: *s = sr; *c = cr; break;
+	case 1: *s = cr; *c = -sr; break;
+	case 2: *s = -sr; *c = -cr; break;
+	default: *s = -cr; *c = sr; break;
+	}
+}
+
+float hl_rsinf(float x)
+{
+	float s, c;
+
+	hl_rsincosf(x, &s, &c);
+	return s;
+}
+
+/* acos x = sqrt(1 - x) * p(x) on [0, 1] (a degree-7 fit, |error| <= 2e-8
+ * before rounding), pi - acos(-x) below 0 */
+float hl_racosf(float x)
+{
+	float a = x < 0 ? -x : x, p;
+
+	if (!(a <= 1.0f))
+		return hl_acosf(x);
+	p = 1.5707963050f + a * (-0.2145988016f + a * (0.0889789874f + a * (-0.0501743046f
+		+ a * (0.0308918810f + a * (-0.0170881256f + a * (0.0066700901f
+		+ a * -0.0012624911f))))));
+	p *= sqrtf(1.0f - a);
+	return x < 0 ? 3.14159265f - p : p;
+}

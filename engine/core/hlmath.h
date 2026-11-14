@@ -41,4 +41,13 @@ float	hl_asinf(float x);
 float	hl_acosf(float x);
 void	hl_sincosf(float x, float *s, float *c);
 
+/* Render approximations: float, from short series, not bit-matched to the
+ * functions above (bounds measured by test/m4/hlmath.c). Only for what
+ * nothing but the picture reads (the client / draw pose); never where
+ * host and cart or the game must agree. |x| >= 8192 / outside [-1, 1]:
+ * the exact functions. */
+void	hl_rsincosf(float x, float *s, float *c);
+float	hl_rsinf(float x);
+float	hl_racosf(float x);
+
 #endif
