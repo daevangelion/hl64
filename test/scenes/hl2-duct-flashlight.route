@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: MIT
+# Scene hl2-duct-flashlight (test/README.md): hldemo2's dark pipe duct with
+# the HEV flashlight on (dynamic light over the duct's world surfaces):
+# uplink.route lines 66-135 (the soda room opens the duct: hl2-soda's ops),
+# window SHOT duct-dark .. SHOT vent-flashlight (2.5 s in the route), then
+# 8 s held at the duct end looking down it, flashlight still on (part
+# `hold`, SHOT vent-flashlight .. SHOT duct-hold).
+# scene-window: uplink duct-dark vent-flashlight
+# scene-part: hold vent-flashlight duct-hold
+startmap hldemo2
+waitmap hldemo2 60
+# the route's player has the suit here (hldemo1's item_suit): drop it on
+# him (HLSDK CBaseEntity::Create, touch pickup)
+setpos -416 210 196 0 90
+wait 0.3
+drop item_suit -416 210 196
+wait 1
+setpos -452 -100 196 0 8
+wait 1
+# soda room: trigger_multiple #591 opens soda_room_door
+setpos -368 120 196 0 90
+waitmoved soda_room_door 5
+# crowbar from the shelf, then bust the soda machine (func_breakable #106, health
+# 15: two crowbar hits -> busted_soda_mm; 7 s later busted_wall_mm tips
+# soda_machine_shell over and breaks busted_pipes_cover). The shell is a
+# func_door_rotating with dmg 9999 that falls 91 degrees towards -y (tip at y 180):
+# a player in its arc is crushed (GoldSrc CBaseDoor::Blocked), so step west
+# out of it (the shell spans x ~-320..-240; the room's south wall starts at
+# y ~180, so -280 150 is inside the wall and leaves the player stuck)
+# until it lies still (91 degrees at 175/s: ~0.5 s)
+setpos -416 290 196 0 0
+wait 0.3
+setpos -280 260 196 0 90
+impulse 1
+wait 0.5
++attack
+wait 2
+-attack
+setpos -416 210 196 0 90
+waitgone busted_pipes_cover 15
+wait 1
+# steam valve func_rot_button #634 -> steam_off_mm turns busted_pipes_smoke off
+# (stand on the fallen machine shell at y 270: the hull stays clear of the
+# steam's trigger_hurt #141, y 296..328, which scalds 10 per 0.5 s)
+setpos -262 270 196 0 75
+wait 0.5
++use
+wait 0.2
+-use
+waitgone busted_pipes_smoke 3
+wait 2
+# pipe duct: the pipe stubs in the steam-pipe hole leave the crouch hull a slit
+# (origin x -268..-264.25, z 178..180), so line up ducked on the shell at x -266
+# (the valve use leaves the player a few units east), crawl north off the shell
+# through the hole, east, north to ladder #639 and strafe into it: it climbs
+# ducked into the ceiling vent, crawl east along it
++duck
+wait 0.5
+setpos -266 282 196 0 90
++forward
+waitnear -266 384 178 6 10
+-forward
++moveright
+# widened: 6 -> 14: GoldSrc pm_shared PM_Friction scales the whole ground
+# velocity while PM_Accelerate adds the strafe, so the ducked crawl's 106.56 u/s
+# northward speed decays over ~0.5 s and carries the player ~20 u on into the
+# junction (y 394..401) as he strafes east: x -240 is crossed at y ~396
+waitnear -240 384 178 14 10
+-moveright
+wait 0.5
+# HEV flashlight (impulse 100), looking down the dark duct north to its
+# floor: HLSDK player.cpp drains 1 unit per FLASH_DRAIN_TIME 1.2 s while
+# on; the log's `flashlight: on|off|charged, battery N, t=T` lines carry
+# the numbers (game/hl/player.c)
+look 20 90
+wait 0.3
+stats begin
+shot duct-dark
+impulse 100
+wait 0.3
+shot duct-flashlight
+stats flashlight-on
+look 0 90
++forward
+# widened: 6 -> 8: the junction strafe above ends at x -235.9 (GoldSrc
+# PM_Friction stops the 106.56 u/s ducked strafe 7.5 u after -moveright), and
+# the straight crawl up the duct's north leg (x -240..-210) keeps that x
+waitnear -229 566 178 8 10
+-forward
+shot vent-flashlight
+stats end
+look 20 90
+wait 8
+shot duct-hold
+wait 0.2
+pass
