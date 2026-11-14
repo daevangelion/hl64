@@ -446,10 +446,10 @@ static int cmd_stats(const dbg_cmd_t *c)
 
 		rec_stats(&r, 0);
 		log_printf("stats %lu rec: live=%lu pending=%lu dry=%lu released=%lu store=%lu/%lu "
-			"expired=%lu\n", (unsigned long)c->arg[0].u, (unsigned long)r.live,
+			"expired=%lu wakeover=%lu\n", (unsigned long)c->arg[0].u, (unsigned long)r.live,
 			(unsigned long)r.pending, (unsigned long)r.dry, (unsigned long)r.released_total,
 			(unsigned long)r.store_used, (unsigned long)r.store_peak,
-			(unsigned long)r.open_expired);
+			(unsigned long)r.open_expired, (unsigned long)r.wake_over);
 	}
 	game_ai_stats(c->arg[0].u);
 	return 0;

@@ -548,12 +548,17 @@ models; optional hydration only while 48 slots stay free, transient
 effects keep their own 32-slot reserve; named fires and class searches
 wake pending records synchronously (≤ 2 hydrate in the frame, the rest
 queue first); moves and traces wake pending records in their box via the
-pending grid; deferred uses into a closed map as a canonical (map, lump) /
-runtime-id FIFO, never entity pointers; closing a map freezes its timers
+pending grid, a moving pusher also those up to 256 u above its swept box
+(what rests on it: GoldSrc's had fallen there at map start), settled by
+DROP_TO_FLOOR before it moves (physics-movetypes.md 4.2); deferred uses
+into a closed map as a canonical (map, lump) / runtime-id FIFO, never
+entity pointers; closing a map freezes its timers
 (128) by remaining time and cuts cross-boundary references; runtime
 pickups and monstermaker children persist by (map, runtime id), ≤ 64
 pickups; entity budget 2 ms cart / 8 records host, shared in the order
-neighbour release, arrival pump, home pump, closing release.
+box wakes (links, pushers: synchronous, a frame where they alone exceed
+the budget is logged and counted, stats `rec: wakeover=`), neighbour
+release, arrival pump, home pump, closing release.
 
 ### 6.5 Resources
 

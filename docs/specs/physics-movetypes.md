@@ -236,6 +236,18 @@ stalls and its think does not run **[probe:measured K-pusher]**.
    old ∪ new linked boxes): SOLID_NOT entities are not in the grid, so a
    SOLID_NOT entity resting on a pusher is not carried (GoldSrc carries
    it) — a known deviation, no capture.
+8. hl64 records (architecture.md 6.4): GoldSrc's pusher meets every map
+   entity where it came to rest after map start; an hl64 pending record
+   still holds the mapper's place (hldemo3's dish func_pushable, 16 u above
+   the dish_control momentary_doors that carry it to the `on` trigger, 1360
+   u from the control room). So before the move (before step 2) the
+   pending and dry records whose box meets the old ∪ new linked boxes, or
+   the 256 u above them, hydrate; a woken STEP / PUSHSTEP / TOSS / BOUNCE
+   entity not on the ground, not FL_FLY / FL_SWIM, settles by
+   DROP_TO_FLOOR's trace onto the pusher at its old place (or whatever is
+   beneath) and is a rider of this move; one that finds no floor falls on
+   and release leaves it 1 s (a 256 u fall). Rotation (4.3) wakes over the
+   old box ∪ the rotated-brush cube.
 
 ### 4.3 Rotation
 As 4.2 with: amove = avelocity·movetime added to angles; swept box = the

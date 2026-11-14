@@ -10,6 +10,8 @@
 #   host:  the earlier gates' host parts (test/run/m4.sh, which runs m3,
 #          m2, m1, m0 and coll), the test/m5 suites (the table below; a
 #          test/m5 entry point missing from it fails the gate), the
+#          regression scenes test/m5/*.route (each `route PASS`, exit 0,
+#          `rec: wakeover=0`; every route there runs, --route or not), the
 #          widening report per route (test/m5/widening.py: the route's
 #          checkpoints equal the old cfg's; every waitnear radius widened
 #          versus the old cfg carries `# widened: <old> -> <new>: <reason>`,
@@ -167,6 +169,28 @@ RAN+="cpu_table.py "
 for f in "$ROOT"/test/m5/*.py "$ROOT"/test/m5/*.sh; do
 	[[ -e "$f" ]] || continue
 	[[ "$RAN" == *" $(basename "$f") "* ]] || die "test/m5/$(basename "$f") is not wired into test/run/m5.sh"
+done
+
+# ---- regression scenes (host): every test/m5/*.route (a short route
+# from New Game on one map: a game behaviour a whole route can miss, e.g.
+# dish-pending: the dish turned from the control room first) at the fixed
+# 1/30 s: `route PASS`, exit 0, no frame whose box wakes went over the
+# entity budget (stats `rec: wakeover=0`) ----
+for f in "$ROOT"/test/m5/*.route; do
+	[[ -e "$f" ]] || continue
+	s="$(basename "$f" .route)"
+	(cd "$ROOT" && python3 -m tools.routec.routec --rtb "$RTB" "test/m5/$s.route" -o "$OUT/scene-$s.rbc") \
+		>"$OUT/routec-scene-$s.log" 2>&1 || { cat "$OUT/routec-scene-$s.log" >&2; fail "routec scene $s"; continue; }
+	CODE=0
+	"$B/hl64-host" --root "$CONTENT" --route "$OUT/scene-$s.rbc" "${CMDS[@]}" >"$OUT/scene-$s.log" 2>&1 || CODE=$?
+	if [[ $CODE -ne 0 ]] || ! grep -q '^route PASS$' "$OUT/scene-$s.log"; then
+		grep '^route FAIL' "$OUT/scene-$s.log" | tee -a "$GATE_LOG" >&2 || true
+		fail "scene $s (host): exit $CODE"
+	elif grep -qE '^stats [0-9]+ rec: .* wakeover=[1-9]' "$OUT/scene-$s.log"; then
+		fail "scene $s (host): $(grep -E '^rec: frame [0-9]+: box wakes' "$OUT/scene-$s.log" | head -1)"
+	else
+		say "scene $s: route PASS (host)"
+	fi
 done
 
 # ---- routes (host) ----

@@ -113,10 +113,19 @@ name_t		rec_name_find(int slot, const char *s);
 const void	*rec_node_graph(int slot, uint32_t *size);
 
 /* Pending-record wake (area-links-and-touch.md 3 "Pending-record wake",
- * architecture.md 6.4): hydrate the pending records of every open slot
- * whose cooked box meets the GLOBAL box (links with touch, moves);
- * returns the number hydrated. */
+ * architecture.md 6.4): hydrate the pending and dry records of every open
+ * slot whose box meets the GLOBAL box (links with touch); returns the
+ * number hydrated. The hydrations count against the frame's entity
+ * budget (rec_frame). */
 int		rec_wake_box(const float gmins[3], const float gmaxs[3]);
+/* A moving pusher's wake (physics-movetypes.md 4.2): rec_wake_box over
+ * its swept box and what rests on it (the 256 u above: a record there
+ * had fallen onto it in GoldSrc). The woken entities (the first max) go
+ * to woken for the pusher to settle. Returns the number hydrated. */
+int		rec_wake_pusher(const float gmins[3], const float gmaxs[3], uint16_t *woken, int max);
+/* A pusher woke e and it found no floor to settle on: release leaves it
+ * while it falls (REC_PUSH_HOLD). */
+void		rec_hold_falling(int e);
 
 /* HLSDK FireTargets: every live / woken entity with the name gets
  * game_use; logic records get game_logic_use; caller is an entity slot or
@@ -223,6 +232,7 @@ typedef struct {
 	uint32_t	released_total;		/* since New Game */
 	uint32_t	store_used, store_peak;	/* dehydrate store bytes */
 	uint32_t	open_expired;		/* open gates (precache hold) expired with data pending */
+	uint32_t	wake_over;		/* frames whose box wakes alone went over the entity budget */
 } rec_stats_t;
 void		rec_stats(rec_stats_t *s, int reset);
 /* O(REC_SLOTS), no record walk (per-frame profilers): HLE region bytes in

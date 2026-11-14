@@ -47,6 +47,9 @@ enum {
 #define REC_RELEASE_PERIOD	0.1	/* s between release batches of a slot */
 #define REC_RELEASE_BATCH	8	/* releases a batch may try past the budget */
 #define REC_RELEASE_RETRY	0.5	/* s before a refused entity is asked again */
+#define REC_PUSH_HOLD		1.0	/* s release leaves an entity a pusher woke
+					   that found no floor (rec_hold_falling):
+					   a 256 u fall at sv_gravity 800 is 0.8 s */
 #define REC_BUDGET_US		2000u	/* playable builds: pump wall time per frame */
 #define REC_BUDGET_HOST		8	/* HL64_TEST builds (host and cart): records
 					   per frame, deterministic (K10) */
