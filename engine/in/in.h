@@ -4,7 +4,9 @@
  * docs/specs/pmove-host.md 1 step 1).
  *
  * The pad (stick move / turn, C-buttons strafe / look, A jump, B use,
- * Z attack, R attack2, L duck) and the held route / debug buttons
+ * Z attack, R attack2, L duck, D-down reload; D-up flashlight, D-left /
+ * D-right previous / next weapon and Start last weapon as one impulse per
+ * press: docs/controls.md) and the held route / debug buttons
  * (IN_BTN_FORWARD... as the HLSDK client's +forward etc.) build one
  * in_cmd_t per frame: msec = round(dt) in [1, 100], the view angles,
  * forward / side / up moves at cl_forwardspeed 400, cl_sidespeed 400,

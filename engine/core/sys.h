@@ -93,6 +93,10 @@ typedef struct {
 #define SYS_PAD_C_DOWN	0x0080
 #define SYS_PAD_C_LEFT	0x0100
 #define SYS_PAD_C_RIGHT	0x0200
+#define SYS_PAD_D_UP	0x0400
+#define SYS_PAD_D_DOWN	0x0800
+#define SYS_PAD_D_LEFT	0x1000
+#define SYS_PAD_D_RIGHT	0x2000
 
 /* Port 1 now (the host's scripted pad reads as idle). */
 void		sys_pad_read(sys_pad_t *p);

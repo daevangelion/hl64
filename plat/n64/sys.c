@@ -264,5 +264,7 @@ void sys_pad_read(sys_pad_t *p)
 		| (in.btn.z ? SYS_PAD_Z : 0) | (in.btn.start ? SYS_PAD_START : 0)
 		| (in.btn.l ? SYS_PAD_L : 0) | (in.btn.r ? SYS_PAD_R : 0)
 		| (in.btn.c_up ? SYS_PAD_C_UP : 0) | (in.btn.c_down ? SYS_PAD_C_DOWN : 0)
-		| (in.btn.c_left ? SYS_PAD_C_LEFT : 0) | (in.btn.c_right ? SYS_PAD_C_RIGHT : 0));
+		| (in.btn.c_left ? SYS_PAD_C_LEFT : 0) | (in.btn.c_right ? SYS_PAD_C_RIGHT : 0)
+		| (in.btn.d_up ? SYS_PAD_D_UP : 0) | (in.btn.d_down ? SYS_PAD_D_DOWN : 0)
+		| (in.btn.d_left ? SYS_PAD_D_LEFT : 0) | (in.btn.d_right ? SYS_PAD_D_RIGHT : 0));
 }

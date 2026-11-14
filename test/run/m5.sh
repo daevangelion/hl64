@@ -166,6 +166,11 @@ fi
 # every entry point of test/m5 runs here (cpu_table.py: the ares table below)
 suite ai_check.py ai-check-selftest python3 test/m5/ai_check.py --selftest
 RAN+="cpu_table.py "
+# the pad binding (test/m5/in_test.c); its ares check, test/m5/controls_ares.sh,
+# runs by hand (docs/controls.md)
+suite in_test.c pad-binding bash -c 'make --no-print-directory BUILD_DIR="$1" intest >/dev/null \
+	&& "$1/host/hl64-in"' _ "$BUILD_DIR"
+RAN+="controls_ares.sh "
 for f in "$ROOT"/test/m5/*.py "$ROOT"/test/m5/*.sh; do
 	[[ -e "$f" ]] || continue
 	[[ "$RAN" == *" $(basename "$f") "* ]] || die "test/m5/$(basename "$f") is not wired into test/run/m5.sh"

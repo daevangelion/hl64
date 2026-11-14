@@ -137,7 +137,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest rec4test sndtest gamelstest seamproftest mathtest seamtest streamtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest rec4test sndtest gamelstest intest seamproftest mathtest seamtest streamtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -453,6 +453,14 @@ GAMELS_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(GAMELS_BIN): $(GAMELS_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) $(foreach f,$(GAMELS_WRAP),-Wl,--wrap=$(f))
 gamelstest: $(GAMELS_BIN)
+# Pad binding driver (test/m5/in_test.c, run by test/run/m5.sh): the pad
+# is the driver's (sys_pad_read --wrap).
+INTEST_BIN := $(BUILD_DIR)/host/hl64-in
+INTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m5/in_test.o
+$(INTEST_BIN): $(INTEST_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) -Wl,--wrap=sys_pad_read
+intest: $(INTEST_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 
