@@ -322,6 +322,10 @@ static void Ga_EyeUpdate(int e)
 		(float)g->m_eyeRenderamt, 26);
 	if (g->m_eyeRenderamt == 0)
 		return;	/* EF_NODRAW */
+	/* a spread think may pause before the attachment's pose (~6 ms on
+	 * the cart) */
+	if (Ai_PauseDue(e, AI_POSE_RESERVE))
+		Ai_Pause(e, 0);
 	gs_attachment(e, 0, pos);
 	fx_glow_sprite(pos, RESID(GA_EYE_SPR), 2, 10, g->m_eyeRenderamt);
 }
@@ -462,6 +466,10 @@ static void Ga_FlameUpdate(int e)
 
 	for (i = 0; i < 2; i++)
 	{
+		/* a spread think may pause before each flame: its attachment
+		 * pose, hitbox trace, decal and burn (~5-15 ms on the cart) */
+		if (Ai_PauseDue(e, AI_EVENT_RESERVE))
+			Ai_Pause(e, 0);
 		if (!g->m_flameOn)
 			continue;
 		VecCopy(ent_cv(e)->angles, aim);

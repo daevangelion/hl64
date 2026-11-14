@@ -611,33 +611,48 @@ static void build_matrices(const sfmt_info_t *hdr, const float (*root)[4], float
 
 /* ---- server pose (memoised) -------------------------------------------------- */
 
-#define SV_CACHE	2
+/* 4: an islave zap's two beams pose the slave (attachments) and the
+ * entities its traces pass by, a shotgun's pellets the same few
+ * entities; 2 entries thrashed between three poses */
+#define SV_CACHE	4
 
-static struct {
+typedef struct {
 	game_pose_t	in;
 	int		n;
 	int		valid;
 	float		bones[GS_MAXBONES][3][4];
-} sv_cache[SV_CACHE];
-static int	sv_next;
+} pose_memo_t;
 
-int game_studio_pose(const game_pose_t *p, float (*out)[3][4], int max)
+/* the game's memo: the renderer reads it but never fills it */
+static pose_memo_t	sv_cache[SV_CACHE];
+static int		sv_next;
+uint32_t		game_studio_pose_bones;
+
+static int memo_get(const pose_memo_t *m, const game_pose_t *p, float (*out)[3][4])
 {
-	const sfmt_info_t *hdr = gs_info(p->model);
+	if (!m->valid || memcmp(&m->in, p, sizeof(*p)))
+		return 0;
+	memcpy(out, m->bones, sizeof(out[0]) * (size_t)m->n);
+	return m->n;
+}
+
+static void memo_put(pose_memo_t *m, const game_pose_t *p, int n, float (*out)[3][4])
+{
+	m->in = *p;
+	m->n = n;
+	m->valid = 1;
+	memcpy(m->bones, out, sizeof(out[0]) * (size_t)n);
+}
+
+/* the pose of p (hdr its info); 0 when its chunk is missing (a bad file) */
+static int pose_compute(const sfmt_info_t *hdr, const game_pose_t *p, float (*out)[3][4])
+{
 	const sfmt_seq_t *pseqdesc;
 	const uint16_t *chunk;
 	float adj[8], s[2], f, angles[3], rot[3][4];
 	gs_clent_t cl;
-	int seq, i, c;
+	int seq, i;
 
-	if (!hdr || !hdr->numbones || hdr->numbones > max || !hdr->numseq)
-		return 0;
-	for (c = 0; c < SV_CACHE; c++)
-		if (sv_cache[c].valid && !memcmp(&sv_cache[c].in, p, sizeof(*p)))
-		{
-			memcpy(out, sv_cache[c].bones, sizeof(out[0]) * (size_t)sv_cache[c].n);
-			return sv_cache[c].n;
-		}
 	seq = p->sequence < hdr->numseq ? p->sequence : 0;
 	pseqdesc = &SFMT_SEQS(hdr)[seq];
 	chunk = studio_anim_now(p->model, seq, NULL);
@@ -657,16 +672,53 @@ int game_studio_pose(const game_pose_t *p, float (*out)[3][4], int max)
 	for (i = 0; i < 3; i++)
 		rot[i][3] = p->origin[i];
 	build_matrices(hdr, (const float (*)[4])rot, out);
+	return chunk != NULL;
+}
+
+static const sfmt_info_t *pose_info(const game_pose_t *p, int max)
+{
+	const sfmt_info_t *hdr = gs_info(p->model);
+
+	if (!hdr || !hdr->numbones || hdr->numbones > max || !hdr->numseq)
+		return NULL;
+	return hdr;
+}
+
+/* The game's poses (hitboxes, attachments, bone positions), memoised:
+ * only game code uses the memo, so its hits and the bones computed
+ * (game_studio_pose_bones, the AI work units) are the same on the host
+ * and the cart. */
+int game_studio_pose(const game_pose_t *p, float (*out)[3][4], int max)
+{
+	const sfmt_info_t *hdr = pose_info(p, max);
+	int c, n;
+
+	if (!hdr)
+		return 0;
+	for (c = 0; c < SV_CACHE; c++)
+		if ((n = memo_get(&sv_cache[c], p, out)) != 0)
+			return n;
+	game_studio_pose_bones += (uint32_t)hdr->numbones;
 	/* a pose missing its chunk (a bad file) is not memoised */
-	if (chunk)
+	if (pose_compute(hdr, p, out))
 	{
-		c = sv_next;
+		memo_put(&sv_cache[sv_next], p, hdr->numbones, out);
 		sv_next = (sv_next + 1) % SV_CACHE;
-		sv_cache[c].in = *p;
-		sv_cache[c].n = hdr->numbones;
-		sv_cache[c].valid = 1;
-		memcpy(sv_cache[c].bones, out, sizeof(out[0]) * hdr->numbones);
 	}
+	return hdr->numbones;
+}
+
+int game_studio_pose_draw(const game_pose_t *p, float (*out)[3][4], int max)
+{
+	const sfmt_info_t *hdr = pose_info(p, max);
+	int c, n;
+
+	if (!hdr)
+		return 0;
+	for (c = 0; c < SV_CACHE; c++)
+		if ((n = memo_get(&sv_cache[c], p, out)) != 0)
+			return n;
+	pose_compute(hdr, p, out);
 	return hdr->numbones;
 }
 

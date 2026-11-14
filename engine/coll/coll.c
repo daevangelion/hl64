@@ -1137,6 +1137,7 @@ void col_move(const float start[3], const float mins[3], const float maxs[3], co
 	copy3(wend, tr->end);
 	wfrac = tr->frac;
 	n = col_ents_box(lo, hi, cand, HL64_MAX_ENTITIES);
+	st.cands += (uint32_t)n;
 	for (i = 0; i < n; i++)
 	{
 		const col_ent_t *e = cand[i];
