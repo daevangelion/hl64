@@ -404,6 +404,15 @@ translation `T`). Requirements:
    (4.1); everything thaws on reopen.
 5. OPEN seams draw B's draw set translated by −T, scaled about the eye by
    1 + 1/256, limited to meshlets touching the carry box.
+6. Approach ghosts: while the approached seam's B is ready (B runs while
+   the player approaches), B's live entities drawn into B's carry box —
+   not a twin's B copy, not one an A entity of the same class within 1 u
+   of the mapped place stands for — draw in A's view at their global
+   position − T (studio, brush and sprite entities; culled by A's visible
+   sectors), so what the arrival shows in the carry box shows before the
+   switch (seam.h `seam_ghost`). Drawing only: not solid, no touches or
+   sound in A. The switch's continuity check holds them in its "before"
+   set and matches each to itself after the switch.
 
 GoldSrc shows a loading pause and a level transition at these points; the
 continuous world is a deliberate improvement, and every state rule above

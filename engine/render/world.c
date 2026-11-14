@@ -512,19 +512,18 @@ static void mover_matrix(int e, const float org_g[3], ren_mat_t *mt)
 	mt->m[3][3] = 1.0f;
 }
 
-/* The entity's linked box (map-local) meets a visible sector and the
- * frustum. */
-static int ent_visible(const wld_layer_t *L, int e, const uint16_t *list, int cnt)
+/* A box (map-local) meets a visible sector and the frustum. */
+static int box_visible(const wld_layer_t *L, const float lo[3], const float hi[3],
+	const uint16_t *list, int cnt)
 {
-	const col_ent_t *cv = ent_cv(e);
 	int16_t bb[6];
 	float d[4];
 	int i, k;
 
 	for (k = 0; k < 3; k++)
 	{
-		bb[k] = (int16_t)floorf(cv->absmin[k]);
-		bb[k + 3] = (int16_t)ceilf(cv->absmax[k]);
+		bb[k] = (int16_t)floorf(lo[k]);
+		bb[k + 3] = (int16_t)ceilf(hi[k]);
 	}
 	plane_d(L->gofs, d);
 	if (box_culled(bb, d))
@@ -542,6 +541,13 @@ static int ent_visible(const wld_layer_t *L, int e, const uint16_t *list, int cn
 	return 0;
 }
 
+/* The entity's linked box (map-local) meets a visible sector and the
+ * frustum. */
+static int ent_visible(const wld_layer_t *L, int e, const uint16_t *list, int cnt)
+{
+	return box_visible(L, ent_cv(e)->absmin, ent_cv(e)->absmax, list, cnt);
+}
+
 static int mover_opaque(int e)
 {
 	int m = ent_cv(e)->rendermode;
@@ -549,8 +555,9 @@ static int mover_opaque(int e)
 	return m == 0 || m == 4;	/* Normal, TransAlpha (alpha compare) */
 }
 
-/* One mover under its own matrix (opaque pass or the translucent pass). */
-static void draw_mover(wld_layer_t *L, int e, int lit)
+/* One mover under its own matrix (opaque pass or the translucent pass);
+ * off: added to its global place (a seam ghost, seam_ghost), or NULL. */
+static void draw_mover(wld_layer_t *L, int e, int lit, const float *off)
 {
 	const w64_sub_t *sb = &L->subs[mover_sub(L, e)];
 	float org[3];
@@ -559,7 +566,7 @@ static void draw_mover(wld_layer_t *L, int e, int lit)
 	int k, n;
 
 	for (k = 0; k < 3; k++)
-		org[k] = L->gofs[k] + ent_cv(e)->origin[k];
+		org[k] = L->gofs[k] + ent_cv(e)->origin[k] + (off ? off[k] : 0);
 	if (!(ch = wld_chunk_use(L, sb->chunk)))
 	{
 		st.missing++;
@@ -580,16 +587,35 @@ static void draw_mover(wld_layer_t *L, int e, int lit)
 	gpu_matrix_pop();
 }
 
+/* Layer L's texture pages (animation frame 0) for its meshlets. */
+static void set_pages(const wld_layer_t *L)
+{
+	int i;
+
+	for (i = 0; i < L->dir->ntex; i++)
+		tex_page0[i] = L->texs[ren_tex_anim(L->texs, L->dir->ntex, i, 0, r10)].page;
+}
+
 void ren_mover_draw(int e, int gpu_mode, const uint8_t prim[4])
 {
-	wld_layer_t *L;
+	wld_layer_t *L, *H = NULL;
+	float off[3];
 
 	if (!ent_is_live(e) || !(L = wld_layer(ent_idc(e)->layer)) || mover_sub(L, e) < 0)
 		return;
+	/* a seam ghost (ghost_movers): B's pages, then the home layer's again */
+	if (L->map != ren_cam.map)
+	{
+		if (!seam_ghost(e, ren_cam.map, off) || !(H = wld_layer_of_map(ren_cam.map)))
+			return;
+		set_pages(L);
+	}
 	gpu_fx_mode(gpu_mode, prim);
 	last_bind = NULL;
-	draw_mover(L, e, 0);
+	draw_mover(L, e, 0, H ? off : NULL);
 	last_bind = NULL;
+	if (H)
+		set_pages(H);
 }
 
 /* ---- flashlight pool (dlights.md 3) ----------------------------------- */
@@ -986,7 +1012,7 @@ static void draw_layer(wld_layer_t *L)
 				continue;
 			}
 			moved++;
-			draw_mover(L, e, 1);
+			draw_mover(L, e, 1, NULL);
 		}
 		return;
 	}
@@ -1026,6 +1052,70 @@ static void draw_layer(wld_layer_t *L)
 		draw_list(L, n, org, 1);
 		gpu_matrix_pop();
 	}
+}
+
+/* ---- seam ghosts (seam_ghost; architecture.md 5.4 item 6) ------------------------- */
+
+/* Home layer A's view of the approached seam's ghost brush entities (B's
+ * movers drawn into B's carry box): under their own matrix at their
+ * global place + off (-T), culled by A's visible sectors with their box
+ * in A's frame; translucent ones to the translucent pass (ren_mover_draw). */
+static void ghost_movers(wld_layer_t *A)
+{
+	int16_t ghost[SEAM_GHOSTS];
+	const uint16_t *list = NULL;
+	wld_layer_t *pages = NULL;
+	float off[3];
+	int i, k, cnt = 0, n = seam_ghosts(A->map, ghost, off);
+
+	for (i = 0; i < n; i++)
+	{
+		int e = ghost[i];
+		wld_layer_t *B;
+		const col_ent_t *cv;
+		float lo[3], hi[3], d2 = 0;
+
+		/* live, drawn, in B's carry box (seam_ghosts) */
+		if (!(B = wld_layer(ent_idc(e)->layer)) || mover_sub(B, e) < 0)
+			continue;
+		if (!list)
+		{
+			float eye_l[3];
+
+			for (k = 0; k < 3; k++)
+				eye_l[k] = eye_g[k] - A->gofs[k];
+			list = wld_leaf_sectors(A, wld_point_leaf(A, eye_l), &cnt);
+		}
+		cv = ent_cv(e);
+		for (k = 0; k < 3; k++)
+		{
+			float s = B->gofs[k] + off[k] - A->gofs[k];
+
+			lo[k] = cv->absmin[k] + s;
+			hi[k] = cv->absmax[k] + s;
+		}
+		if (!box_visible(A, lo, hi, list, cnt))
+			continue;
+		if (!mover_opaque(e))
+		{
+			for (k = 0; k < 3; k++)
+			{
+				float c = A->gofs[k] + 0.5f * (lo[k] + hi[k]) - eye_g[k];
+
+				d2 += c * c;
+			}
+			ren_trans_brush(e, d2);
+			continue;
+		}
+		if (pages != B)
+		{
+			set_pages(B);
+			pages = B;
+		}
+		draw_mover(B, e, 1, off);
+	}
+	if (pages)
+		set_pages(A);
 }
 
 /* ---- OPEN seams (cwg-format.md "OPEN seams") ------------------------------------- */
@@ -1254,6 +1344,7 @@ void ren_frame(double time)
 		if ((L = wld_layer(i)) && L->map == ren_cam.map)
 		{
 			draw_layer(L);
+			ghost_movers(L);
 			open_seams(L);
 		}
 	st.world_us = (uint32_t)(sys_time_us() - t0);
