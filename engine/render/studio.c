@@ -1773,7 +1773,7 @@ void studio_draw_temp(res_t model, int body, int skin, const float org_g[3], con
 		return;
 	memset(&p, 0, sizeof(p));
 	p.model = model;
-	if (game_studio_pose(&p, bones, MAXBONES) < m->info->numbones)
+	if (game_studio_pose_draw(&p, bones, MAXBONES) < m->info->numbones)
 		return;
 	slot_matrices(m);
 	memset(&ge, 0, sizeof(ge));
@@ -1916,7 +1916,7 @@ static void draw_view(const float eye[3])
 	memcpy(p.controller, view.controller, sizeof(p.controller));
 	for (k = 0; k < 3; k++)
 		p.origin[k] = view.org[k] + gm[k] - eye[k];
-	n = game_studio_pose(&p, bones, MAXBONES);
+	n = game_studio_pose_draw(&p, bones, MAXBONES);
 	if (n < m->info->numbones)
 		return;
 	b = (const uint8_t *)ms;
