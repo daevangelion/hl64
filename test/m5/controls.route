@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Pad controls check (docs/controls.md), run on ares by
+# test/m5/controls_ares.sh: hldemo1, god mode, every weapon (impulse 101,
+# test builds), the crowbar then the 9mm handgun selected (slot 1 then
+# slot 2: the handgun whatever 101 left active), one handgun shot (a clip
+# to reload), then the `padready` stats line; the script's pad input runs
+# while the route waits. Syntax: docs/formats/route-bytecode.md.
+startmap hldemo1
+wait 3
+god 1
+setpos -489 -295 41 0 0
+impulse 101
+wait 1
+impulse 1
+wait 1
+impulse 2
+wait 1.5
++attack
+wait 0.3
+-attack
+wait 1
+stats padready
+wait 3600
+pass

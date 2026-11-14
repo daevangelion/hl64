@@ -18,24 +18,44 @@
 #define STICK_FULL	80.0f
 #define PITCH_LIMIT	89.0f	/* cl_pitchup / cl_pitchdown */
 
-/* pad buttons -> command buttons */
+/* Impulses the pad sends (game/hl/player.c ImpulseCommands): HLSDK 100
+ * flashlight; hl64's 6 / 7 / 8 = the HLSDK client's invnext / invprev /
+ * lastinv. */
+#define IMP_INVNEXT	6
+#define IMP_INVPREV	7
+#define IMP_LASTINV	8
+#define IMP_FLASHLIGHT	100
+
+/* The pad binding (docs/controls.md). A button with a command button
+ * holds it while down; one with an impulse sends it once per press (the
+ * frame it goes down). C-up / C-down pitch and the stick are in_frame's. */
 static const struct {
 	uint16_t	pad;
-	uint16_t	btn;
+	uint16_t	btn;		/* IN_BTN_* held */
+	uint8_t		impulse;	/* sent on the press edge */
 } bind[] = {
-	{ SYS_PAD_A, IN_BTN_JUMP },
-	{ SYS_PAD_B, IN_BTN_USE },
-	{ SYS_PAD_Z, IN_BTN_ATTACK },
-	{ SYS_PAD_R, IN_BTN_ATTACK2 },
-	{ SYS_PAD_L, IN_BTN_DUCK },
-	{ SYS_PAD_C_LEFT, IN_BTN_MOVELEFT },
-	{ SYS_PAD_C_RIGHT, IN_BTN_MOVERIGHT },
+	{ SYS_PAD_A, IN_BTN_JUMP, 0 },
+	{ SYS_PAD_B, IN_BTN_USE, 0 },
+	{ SYS_PAD_Z, IN_BTN_ATTACK, 0 },
+	{ SYS_PAD_R, IN_BTN_ATTACK2, 0 },
+	{ SYS_PAD_L, IN_BTN_DUCK, 0 },
+	{ SYS_PAD_C_LEFT, IN_BTN_MOVELEFT, 0 },
+	{ SYS_PAD_C_RIGHT, IN_BTN_MOVERIGHT, 0 },
+	{ SYS_PAD_D_DOWN, IN_BTN_RELOAD, 0 },
+	{ SYS_PAD_D_UP, 0, IMP_FLASHLIGHT },
+	{ SYS_PAD_D_LEFT, 0, IMP_INVPREV },
+	{ SYS_PAD_D_RIGHT, 0, IMP_INVNEXT },
+	{ SYS_PAD_START, 0, IMP_LASTINV },
 };
+#define NBIND	(sizeof(bind) / sizeof(bind[0]))
+_Static_assert(NBIND <= 16, "pending presses are a 16-bit mask over bind[]");
 
 static struct {
 	float		ang[3];
 	uint16_t	held;		/* route / debug buttons */
-	uint8_t		impulse;
+	uint8_t		impulse;	/* route / debug impulse */
+	uint16_t	pad_last;	/* pad buttons of the last frame */
+	uint16_t	pend;		/* bind[] impulse presses not yet sent */
 } in;
 
 static float stick(int v)
@@ -87,9 +107,24 @@ void in_frame(uint32_t dt_us, float maxspeed, in_cmd_t *cmd)
 	unsigned i;
 
 	sys_pad_read(&p);
-	for (i = 0; i < sizeof(bind) / sizeof(bind[0]); i++)
-		if (p.buttons & bind[i].pad)
-			b |= bind[i].btn;
+	for (i = 0; i < NBIND; i++)
+	{
+		if (!(p.buttons & bind[i].pad))
+			continue;
+		b |= bind[i].btn;
+		if (bind[i].impulse && !(in.pad_last & bind[i].pad))
+			in.pend |= (uint16_t)(1u << i);
+	}
+	in.pad_last = p.buttons;
+	/* one impulse per command: a route / debug impulse first, then the
+	 * pad's presses in bind[] order, each in its own command */
+	if (!in.impulse && in.pend)
+	{
+		for (i = 0; !(in.pend & (1u << i)); i++)
+			;
+		in.pend &= (uint16_t)~(1u << i);
+		in.impulse = bind[i].impulse;
+	}
 	sx = stick(p.stick_x);
 	sy = stick(p.stick_y);
 

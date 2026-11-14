@@ -896,10 +896,12 @@ spatialise without conversion.
 
 ## 11. Input
 
-Pad → `usercmd` (stick move/look per settings, C-buttons strafe/look, Z
-attack, R attack2/jump; table in `engine/core/bind.c`); absolute stick
-turning scales by `dt`. The route VM and `ARES_TEST_INPUT` inject at the
-same point.
+Pad → `usercmd` (stick turn + forward/back, C-buttons strafe/look, Z
+attack, R attack2, A jump, B use, L duck, D-down reload; D-up flashlight,
+D-left/D-right previous/next weapon, Start last weapon as one impulse per
+press; one table in `engine/in/in.c`, documented in `docs/controls.md`);
+absolute stick turning scales by `dt`. The route VM injects held buttons
+and impulses into the same command; `ARES_TEST_INPUT` injects at the pad.
 
 ## 12. Settings and debug commands
 
