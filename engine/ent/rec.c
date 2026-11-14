@@ -2609,29 +2609,39 @@ static void deliver_deferred(uint64_t t0, uint32_t *done)
 #define CAND		16
 #define CAND_RT		0x8000	/* candidate is runtime entry (index | CAND_RT) */
 #define REC_SPAWNERS	4	/* pending spawner thinks a slot's spawn windows name */
+#define REC_SPAWN_LEAD	1.0	/* s before its think a spawner's box is named */
 
-/* the spawner set pump last scanned with, per slot (spawners) */
+/* the spawner set pump last scanned with, per slot (spawners); the
+ * player's home slot of this rec_frame (-1 none) */
 static uint32_t	spawn_sig[REC_SLOTS];
+static int	spawn_home = -1;
 
-/* The slot's logic records with a pending think that will create an
- * entity (game_spawner_box: a monstermaker), soonest first, at most
- * REC_SPAWNERS: their children's boxes, and a signature of the set. A
- * child spawns, falls and moves in its box the frame its maker thinks; a
- * map opened beside the player runs its makers 3000 u away, where no
- * window named the collision (a sync COLL read the frame the child
- * fell). Prefetch only: no game state changes. */
+/* A neighbour slot's logic records with a think due within
+ * REC_SPAWN_LEAD that will create an entity (game_spawner_box: a
+ * monstermaker), soonest first, at most REC_SPAWNERS: their children's
+ * boxes, and a signature of the set. A child spawns, falls and moves in
+ * its box the frame its maker thinks; a map opened beside the player runs
+ * its makers 3000 u away, where no window named the collision (a sync
+ * COLL read the frame the child fell). Prefetch only: no game state
+ * changes. None in the home slot (its windows fill the collision pool
+ * around the player; standing spawner boxes of the hldemo2 fight timed
+ * out hldemo3's open gate on the m4 route) and none while a map's open
+ * gate waits (precache_held): its candidates' windows come first. */
 static int spawners(const rmap_t *m, float (*box)[6], uint32_t *sig)
 {
 	const rtimer_t *at[REC_SPAWNERS];
+	const double due = eng_time() + REC_SPAWN_LEAD;
 	float b[6];
 	uint32_t h = 2166136261u;
 	int n = 0, i, j, k;
 
-	for (i = 0; i < REC_TIMERS && R.ntm; i++)
+	for (i = 0; i < REC_SLOTS && !R.map[i].pre_wait; i++)
+		;
+	for (i = i < REC_SLOTS || m->slot == spawn_home ? REC_TIMERS : 0; i < REC_TIMERS && R.ntm; i++)
 	{
 		const rtimer_t *tm = &R.tm[i];
 
-		if (tm->kind != TM_REC || (int)GID_SLOT(tm->gid) != m->slot)
+		if (tm->kind != TM_REC || (int)GID_SLOT(tm->gid) != m->slot || (double)tm->t > due)
 			continue;
 		for (j = n; j > 0 && (at[j - 1]->t > tm->t
 			|| (at[j - 1]->t == tm->t && at[j - 1]->seq > tm->seq)); j--)
@@ -2976,8 +2986,10 @@ static int precache_held(rmap_t *m, const float (*loc)[3], int n)
 	if ((ni || nw) && m->pre_wait < REC_PRECACHE_FRAMES)
 	{
 		m->pre_wait++;
+		wld_stream_spawn_gate(m->slot, nw != 0);
 		return 1;
 	}
+	wld_stream_spawn_gate(m->slot, 0);
 	if (ni || nw)
 		R.st.open_expired++;
 	log_printf("rec: %s precache %s after %u frames (%d infos, %d spawn windows pending)\n",
@@ -3029,6 +3041,7 @@ void rec_frame(const float (*anchors)[3], int nanchors)
 	if (n > 0)
 	{
 		home = home_slot(anchors[0]);
+		spawn_home = home;
 		/* 6.4 budget order: neighbour release, arrival pump, home pump,
 		 * then the home map's own far entities (lowest) */
 		for (s = 0; s < REC_SLOTS; s++)

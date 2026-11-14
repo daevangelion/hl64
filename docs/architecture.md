@@ -357,9 +357,10 @@ SA2 §4.2 as built):
 - **prefetch**: eye-leaf sets at eye + v·{0.25, 0.5, 1} s; collision window
   + v·0.5 s; cells of moving monsters/projectiles; hulls of brush entities
   in the box spanned by thinking monsters and projectiles; cells of the
-  hydration candidates' spawn boxes and of the boxes the pending thinks of
-  spawner logic records will create entities in (`game_spawner_box`: a
-  monstermaker's child, possibly in a neighbour map far from the player).
+  hydration candidates' spawn boxes and of the boxes the thinks of a
+  neighbour map's spawner logic records due within 1 s will create
+  entities in (`game_spawner_box`: a monstermaker's child far from the
+  player).
 - **pinned**: world hull-0 COLL while the layer is open.
 
 Eviction: queued-not-started first, then LRU among chunks not wanted this
@@ -968,7 +969,10 @@ mostly block copies.
   opened by a seam has one open gate after its layer and HLE reads: its
   records hydrate once its precache infos and spawn windows are
   resident, bounded (`REC_PRECACHE_FRAMES`; an expiry is logged, counted
-  in `stats N rec: expired=` and fails the M4 gate). Seam pins B as soon
+  in `stats N rec: expired=` and fails the M4 gate); while it waits on
+  spawn windows they are named at the pin class (after the want measure),
+  so they may evict prefetch chunks of a full collision pool, and no
+  spawner box is named. Seam pins B as soon
   as its layer is ready. Playable builds publish a request as soon as its
   last piece lands (at the next io call), plan again once a plan has
   landed, and chain across frame boundaries. Triage:

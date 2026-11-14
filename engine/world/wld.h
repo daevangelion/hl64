@@ -227,6 +227,11 @@ void		wld_stream_coll(const float lo[3], const float hi[3], const uint32_t *mode
  * first steps) and the submodel's COLL are prefetched (an input of the
  * target set; n 0 clears). */
 void		wld_stream_spawns(int slot, const float (*box)[6], const int *sub, int n);
+/* rec's map-open hold of `slot` waits on its spawn windows (on 1, off 0):
+ * they are named at the pin class (after the want measure, as the route's
+ * point pins), so they may evict prefetch chunks; else the windows of a
+ * fight standing in a full collision pool time the gate out. */
+void		wld_stream_spawn_gate(int slot, int on);
 /* 1 when every COLL chunk of a spawn window (as wld_stream_spawns names
  * it; a brush record's: its submodel's alone) is resident (rec's map-open
  * hold). */
