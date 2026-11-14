@@ -190,7 +190,7 @@ scene_ares() {	# scene_ares <tree id> <scene>: the ROM here, the ares run in the
 		HL64_CONTENT="$rd/content" HL64_CMDS="$d/scene.cmd" rom >"$d/rom-build.log" 2>&1 \
 		|| { tail -20 "$d/rom-build.log" >&2; echo 2 >"$d/exit"; return 0; }
 	mv "$rd/hl64.z64" "$d/hl64.z64"
-	while [[ $(jobs -rp | wc -l) -ge $JOBS ]]; do wait -n || true; done
+	throttle
 	(
 		code=0
 		ares_run "$d" hl64.z64 ares.raw.log || code=$?
@@ -205,6 +205,20 @@ scene_ares() {	# scene_ares <tree id> <scene>: the ROM here, the ares run in the
 		fi
 		echo "scene: $s ($t): exit $code, $(cat "$d/wall.txt")"
 	) &
+	PIDS+=($!)
+}
+
+# the scene runs in the background (not the private Xvfb ares_setup starts
+# as a job of this shell: it never ends)
+PIDS=()
+throttle() {
+	local n p
+	while :; do
+		n=0
+		for p in "${PIDS[@]}"; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done
+		[[ $n -ge $JOBS ]] || return 0
+		wait -n || true
+	done
 }
 
 if [[ $MODE == ares ]]; then
@@ -218,12 +232,13 @@ for s in "${SCENES[@]}"; do
 		if [[ $MODE == ares ]]; then
 			scene_ares "$t" "$s"
 		else
-			while [[ $(jobs -rp | wc -l) -ge $JOBS ]]; do wait -n || true; done
+			throttle
 			host_run "$t" "$s" &
+			PIDS+=($!)
 		fi
 	done
 done
-wait
+for p in "${PIDS[@]}"; do wait "$p" || true; done
 
 # ---- results ----
 FAILS=()
