@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Scene hl1-start (test/README.md): New Game at hldemo1, the start room
+# intro until hldemo_init_mm's trigger_teleport (26 s) drops the player in the
+# start corridor: test/routes/uplink.route lines 20-24 (boot .. SHOT start)
+# unchanged, then the corridor
+# (after the window).
+# scene-window: uplink 1 start
+startmap hldemo1
+waitmap hldemo1 600
+stats begin
+waitnear -2048 744 36 48 60
+shot start
+stats end
+look 0 270
+wait 3
+shot corridor
+wait 0.2
+pass
