@@ -24,17 +24,21 @@
  * tables HLSDK derives from the same searches are not cooked), with the
  * path cut at MAX_PATH_SIZE as the table branch does. FindNearestNode is
  * HLSDK's "nearest node a line trace reaches" without the region index
- * (an acceleration): candidates are tried nearest first. HLN1 stores the
- * dropped node origin only, so it stands for m_vecOriginPeek too.
+ * (an acceleration): candidates are tried nearest first; in front of it
+ * HLSDK's m_Cache (128 slots by CRC32 of the origin, the origin alone as
+ * key, kept until the graph reloads: a door that moved since leaves a
+ * stale answer, as in GoldSrc). HLN1 stores the dropped node origin
+ * only, so it stands for m_vecOriginPeek too.
  */
 #include <string.h>
 
 #define HLN_FORMAT_ONLY
 #include "tools/w64c/hl_nodecook.h"
 #include "game/hl/monster.h"
+#include "engine/res/res.h"	/* rtb_crc32: the CRC-32 of GoldSrc's CRC32_* */
 
 #define GRAPH_SLOTS		4	/* HLE slots */
-#define NEAREST_CACHE		64
+#define CACHE_SIZE		128	/* nodes.h CACHE_SIZE */
 #define SF_DOOR_USE_ONLY	256
 #define SF_DOOR_NOMONSTERS	512
 #define SF_DOOR_NO_AUTO_RETURN	32
@@ -45,7 +49,10 @@ typedef struct {
 	const hln_link_t	*links;
 	int			n;
 	int			lastCoverSearch;
-	struct { float v[3]; int16_t n; uint8_t valid; } cache[NEAREST_CACHE];
+	/* CGraph::m_Cache: FindNearestNode's answers by origin (zeroed with
+	 * the graph: an origin 0,0,0 not yet searched answers node 0, as in
+	 * HLSDK) */
+	struct { float v[3]; int16_t n; } cache[CACHE_SIZE];
 } graph_t;
 
 static graph_t	graphs[GRAPH_SLOTS];
@@ -222,32 +229,35 @@ static void nn_down(int i)
 	}
 }
 
-int Graph_FindNearestNode(int e, const float org[3], int afNodeTypes)
+/* CGraph::FindNearestNode's cache slot: (CACHE_SIZE - 1) & CRC32 of the
+ * origin's three floats as an x86 GoldSrc holds them (little-endian), so
+ * the host and the big-endian cart pick HLSDK's slot */
+static uint32_t cache_slot(const float org[3])
 {
-	int		slot = ent_idc(e)->layer, i, best, k;
-	graph_t		*g = graph(slot);
-	uint32_t	hsh;
+	uint8_t		b[12];
+	uint32_t	u;
+	int		i;
+
+	for (i = 0; i < 3; i++)
+	{
+		memcpy(&u, &org[i], 4);
+		b[4 * i] = (uint8_t)u;
+		b[4 * i + 1] = (uint8_t)(u >> 8);
+		b[4 * i + 2] = (uint8_t)(u >> 16);
+		b[4 * i + 3] = (uint8_t)(u >> 24);
+	}
+	return rtb_crc32(0, b, sizeof(b)) & (CACHE_SIZE - 1);
+}
+
+/* the search: candidates nearest first (ties: the lower node); the first
+ * one a line trace reaches. A heap of every candidate's distance gives
+ * the order of repeated nearest-untried scans in O(n log n). */
+static int nn_search(const graph_t *g, const float org[3], int afNodeTypes)
+{
+	int		i, k;
 	float		d;
 	col_trace_t	tr;
 
-	if (!g)
-		return NO_NODE;
-	if (afNodeTypes < 0)
-		afNodeTypes = Graph_NodeType(e);
-	{
-		uint32_t b[3];
-
-		memcpy(b, org, sizeof(b));
-		hsh = (b[0] * 2654435761u ^ b[1] * 40503u ^ b[2] * 2246822519u ^ (uint32_t)afNodeTypes) &
-			(NEAREST_CACHE - 1);
-	}
-	if (g->cache[hsh].valid && VecEq(g->cache[hsh].v, org))
-		return g->cache[hsh].n;
-	mon_aiw.nn++;
-	best = NO_NODE;
-	/* candidates nearest first (ties: the lower node); the first one a
-	 * line trace reaches. A heap of every candidate's distance gives the
-	 * order of repeated nearest-untried scans in O(n log n). */
 	nn_n = 0;
 	for (k = 0; k < g->n; k++)
 	{
@@ -272,14 +282,33 @@ int Graph_FindNearestNode(int e, const float org[3], int afNodeTypes)
 		mon_aiw.nnt++;
 		UTIL_TraceLine(org, g->nodes[i].origin, ignore_monsters, -1, &tr);
 		if (tr.frac == 1.0f)
-		{
-			best = i;
-			break;
-		}
+			return i;
 	}
+	return NO_NODE;
+}
+
+int Graph_FindNearestNode(int e, const float org[3], int afNodeTypes)
+{
+	int		slot = ent_idc(e)->layer, best;
+	graph_t		*g = graph(slot);
+	uint32_t	hsh;
+	uint64_t	t0;
+
+	if (!g)
+		return NO_NODE;
+	if (afNodeTypes < 0)
+		afNodeTypes = Graph_NodeType(e);
+	/* HLSDK's cache: keyed by the origin alone (whatever node types the
+	 * hit was searched for), never invalidated while the graph stays */
+	hsh = cache_slot(org);
+	if (VecEq(g->cache[hsh].v, org))
+		return g->cache[hsh].n;
+	t0 = Mon_PzBegin();
+	mon_aiw.nn++;
+	best = nn_search(g, org, afNodeTypes);
 	VecCopy(org, g->cache[hsh].v);
 	g->cache[hsh].n = (int16_t)best;
-	g->cache[hsh].valid = 1;
+	Mon_PzEnd(MPZ_NN, t0);
 	return best;
 }
 
