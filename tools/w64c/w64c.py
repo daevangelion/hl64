@@ -101,7 +101,11 @@ LIGHT_SCALE = F32(2.5)
 SKIP_TEX = {"clip", "origin", "null", "bevel", "skip", "hint", "aaatrigger"}
 
 # Submodels folded into the static world: never move, never toggle (no
-# targetname means nothing can fire them), drawn at identity.
+# targetname means nothing can fire them), drawn at identity, opaque. A
+# non-Normal rendermode keeps the entity a mover: GoldSrc draws it in the
+# translucent pass (e.g. hldemo1 *76 / *87, func_wall TransTexture);
+# renderamt / rendercolor / renderfx change nothing under rendermode Normal
+# (w64-format.md, render-fx.md 2).
 FOLD_CLASSES = {"func_wall", "func_illusionary"}
 
 CHUNK_REND, CHUNK_MOVR, CHUNK_TEXP = b"REND", b"MOVR", b"TEXP"
@@ -1698,17 +1702,9 @@ def load_decl(path: Path) -> bytes:
     return b
 
 
-def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
-         mats: "Materials | None" = None, decl: "bytes | None" = None):
-    """Cook one map; hle = the ENTS blob bytes or None; decl = the DECL
-    chunk (the map's placed-decal sheet) or None."""
-    bsp = Bsp(bsp_path)
-    pack = TexPack(wci4_path)
-    tex, missing = build_textures(bsp, pack)
-    ents = parse_entities(bsp.entities)
-
-    # submodel classification
-    nmod = len(bsp.models)
+def submodel_kinds(ents, nmod: int):
+    """Per BSP model index: (SUB_* kind, classname of its last user). One
+    non-static user of *N makes it a mover (see FOLD_CLASSES)."""
     sub_kind = [SUB_NONE] * nmod
     sub_class = [""] * nmod
     for e in ents:
@@ -1727,13 +1723,26 @@ def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
             continue
         static = (cls in FOLD_CLASSES and not e.get("targetname")
                   and e.get("origin", "0 0 0").split() in (["0", "0", "0"], [])
-                  and e.get("angles", "0 0 0").split() in (["0", "0", "0"], []))
-        kind = SUB_FOLDED if static else SUB_MOVR
-        # one non-static user of *N makes it a mover
-        if kind == SUB_MOVR or sub_kind[mi] == SUB_MOVR:
+                  and e.get("angles", "0 0 0").split() in (["0", "0", "0"], [])
+                  and not int(atof(e.get("rendermode"))))
+        if not static or sub_kind[mi] == SUB_MOVR:
             sub_kind[mi] = SUB_MOVR
         else:
             sub_kind[mi] = SUB_FOLDED
+    return sub_kind, sub_class
+
+
+def cook(bsp_path: Path, wci4_path: Path, out_path: Path, hle,
+         mats: "Materials | None" = None, decl: "bytes | None" = None):
+    """Cook one map; hle = the ENTS blob bytes or None; decl = the DECL
+    chunk (the map's placed-decal sheet) or None."""
+    bsp = Bsp(bsp_path)
+    pack = TexPack(wci4_path)
+    tex, missing = build_textures(bsp, pack)
+    ents = parse_entities(bsp.entities)
+
+    nmod = len(bsp.models)
+    sub_kind, sub_class = submodel_kinds(ents, nmod)
 
     # world + folded faces
     polys = []

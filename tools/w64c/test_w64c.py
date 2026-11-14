@@ -299,6 +299,33 @@ class TestTextureAnimation(unittest.TestCase):
         self.assertIn("+kbad", str(cm.exception))
 
 
+class TestSubmodelKinds(unittest.TestCase):
+    def test_translucent_walls_stay_movers(self):
+        ents = [
+            {"classname": "worldspawn"},
+            {"classname": "func_wall", "model": "*1"},
+            {"classname": "func_wall", "model": "*2", "rendermode": "2", "renderamt": "128"},
+            {"classname": "func_illusionary", "model": "*3", "rendermode": "5"},
+            {"classname": "func_wall", "model": "*4", "rendermode": "4", "renderfx": "16"},
+            {"classname": "func_wall", "model": "*5", "rendermode": "0", "renderfx": "2",
+             "renderamt": "100", "rendercolor": "255 0 0"},
+            {"classname": "func_wall", "model": "*6", "targetname": "w"},
+            {"classname": "trigger_once", "model": "*7"},
+        ]
+        kinds, cls = W.submodel_kinds(ents, 9)
+        # Normal (*5) folds whatever its amount / colour / fx
+        self.assertEqual(kinds, [W.SUB_NONE, W.SUB_FOLDED, W.SUB_MOVR, W.SUB_MOVR,
+                                 W.SUB_MOVR, W.SUB_FOLDED, W.SUB_MOVR, W.SUB_NONE,
+                                 W.SUB_NONE])
+        self.assertEqual(cls[3], "func_illusionary")
+
+    def test_one_translucent_user_makes_a_mover(self):
+        ents = [{"classname": "func_wall", "model": "*1"},
+                {"classname": "func_wall", "model": "*1", "rendermode": "4"},
+                {"classname": "func_wall", "model": "*1"}]
+        self.assertEqual(W.submodel_kinds(ents, 2)[0], [W.SUB_NONE, W.SUB_MOVR])
+
+
 # --------------------------------------------------------------------------
 # hostile input
 # --------------------------------------------------------------------------

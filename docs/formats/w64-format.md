@@ -12,7 +12,8 @@ One file per map, `maps/<map>.w64`, cooked from the map's BSP30 by
 `MOVR` + `TEXP`; version 2 adds streamed collision (`COLL` + model table +
 leaf contents + collision grid), the entity blob (`ENTS`), the PVS rows
 (`VISR`) and per-sector light probes; version 3 adds the additive ramp of
-the `TEXP` pages additive movers bind (`TEXF_RAMP`). Struct definitions:
+the `TEXP` pages additive movers bind (`TEXF_RAMP`) and stops folding
+brushes with a non-Normal render mode (below). Struct definitions:
 the world format header (`include/hl64/` / `engine/world`, retargeted from
 the old `w64_format.h`).
 
@@ -165,8 +166,9 @@ Static submodels — `func_wall` / `func_illusionary` with no `targetname`
 mode Normal (`rendermode` 0 or absent) — are cooked into the sectors
 (`FOLDED`); their entities are skipped at draw time. A submodel used by an
 entity with any other render mode is never folded: it draws in the
-translucent pass (render-fx.md 2). (Cook: `tools/w64c/w64c.py`
-`FOLD_CLASSES` test must add the render-mode condition.)
+translucent pass (render-fx.md 2; TransAlpha lit, with its pages' alpha
+compare and Z write). `renderamt`, `rendercolor` and `renderfx` do not
+matter under Normal. Example: hldemo1 `*76` / `*87` (TransTexture).
 Every other submodel used by a non-`trigger_*` entity gets a `MOVR` chunk in
 its local space, drawn with the entity's origin/angles matrix. Submodels used
 only by triggers (or by nothing) are `NONE`.
