@@ -36,6 +36,22 @@ from tools.w64c.w64check import W64, Bsp as CheckedBsp
 VIEW = np.array([0., 0., 28.])
 OCCLUDERS = {"func_door", "func_door_rotating", "func_wall", "func_breakable",
              "func_button", "func_rot_button", "momentary_door"}
+# engine/world/stream.c's open + pin naming, mirrored by the crossing-window
+# proof (docs/formats/cwg-format.md, Proof and residency policy)
+MOVER_MARGIN = 128.     # a brush entity's box grown this much (MOVER_MARGIN)
+MOVER_LEAD_S = .5       # ... and swept over this much of its motion (MOVER_LEAD_S)
+VIEW_SLACK = 24.        # the drawn eye's neighbours: eye +- 24 u per axis (VIEW_SLACK)
+VIEW_OFFSET = 32.       # the drawn eye's last offset is used below 32 u (TELE_SLACK)
+DUCK_VIEW = 12.         # ducked view offset (DUCK_DZ below the standing 28)
+ARRIVAL_CORNERS = ((0, 0), (-1, -1), (1, -1), (-1, 1), (1, 1))     # arrival_leaves
+STAR = np.array([[0., 0., 0.]] + [list(np.eye(3)[k] * s * r) for r in (VIEW_SLACK, VIEW_OFFSET)
+                                  for k in range(3) for s in (-1, 1)])
+ROTATING = {"func_door_rotating", "func_rotating", "func_pendulum", "func_rot_button",
+            "momentary_rot_button", "func_tank", "func_tankrocket", "func_tanklaser",
+            "func_tankmortar"}
+SLIDING = {"func_door", "func_water", "func_button", "momentary_door"}
+PATHED = {"func_train": "path_corner", "func_guntarget": "path_corner",
+          "func_tracktrain": "path_track"}
 
 
 class EntityError(ValueError):
@@ -536,6 +552,176 @@ def twins(a, b, landmark, delta):
     return pairs, report
 
 
+def path_points(scene, e, classname):
+    """Origins of every `classname` entity reachable from e's target over
+    target / altpath links."""
+    named = {}
+    for x in scene.ents:
+        if x.get("classname") == classname and x.get("targetname"):
+            named.setdefault(x["targetname"], []).append(x)
+    todo, seen, out = [e.get("target", "")], set(), []
+    while todo:
+        name = todo.pop()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        for x in named.get(name, []):
+            out.append(origin(x))
+            todo.extend((x.get("target", ""), x.get("altpath", "")))
+    return out
+
+
+def mover_reach(scene, w):
+    """(MOVR chunk, lo, hi) per brush entity whose model has a MOVR: the box
+    stream.c's each_mover can test against a leaf's sectors. Its ENTS rest
+    placement (sub bbox + origin key) and, live, anywhere on its travel
+    (sliding doors / buttons: movedir x (size - lip); plats: their height
+    down; trains / gun targets / track trains: every path point of their
+    chain; rotating classes: the sphere about their origin), grown by its
+    speed x MOVER_LEAD_S and by MOVER_MARGIN. A func_pushable is bounded by
+    its placement (where players push it is not a cook fact)."""
+    out = []
+    for e in scene.ents:
+        if not e.get("model", "").startswith("*"):
+            continue
+        mi = model_index(scene.bsp, e)
+        kind, chunk = struct.unpack_from(">HH", w.d, w.sub_ofs + 16 * mi)
+        if kind != 2:
+            continue
+        bb = np.array(struct.unpack_from(">6h", w.d, w.sub_ofs + 16 * mi + 4), np.float64)
+        o = origin(e)
+        lo, hi = bb[:3] + o, bb[3:] + o
+        cn = e.get("classname", "")
+        radius = np.linalg.norm(np.maximum(np.abs(bb[:3]), np.abs(bb[3:])))
+        speed = 0.
+        if cn in SLIDING:
+            angles = key_floats(e, "angles", f"0 {e.get('angle', '0')} 0")
+            if angles in ([0, -1, 0], [0, -2, 0]):
+                movedir = np.array([0., 0., 1. if angles[1] == -1 else -1.])
+            else:
+                movedir = spawn_rotation({**e, "classname": ""})[:, 0]
+            d = movedir * (np.abs(movedir * (bb[3:] - bb[:3])).sum() - key_floats(e, "lip", "0", 1)[0])
+            lo, hi = np.minimum(lo, lo + d), np.maximum(hi, hi + d)
+            speed = key_floats(e, "speed", "100", 1)[0]
+        elif cn in ("func_plat", "func_platrot"):
+            lo = lo - [0, 0, abs(key_floats(e, "height", "0", 1)[0]) or bb[5] - bb[2]]
+            speed = key_floats(e, "speed", "150", 1)[0]
+        elif cn in ROTATING:
+            lo, hi = np.minimum(lo, o - radius), np.maximum(hi, o + radius)
+        elif cn in PATHED:
+            for p in path_points(scene, e, PATHED[cn]):
+                if cn == "func_tracktrain":
+                    plo, phi = p - radius, p + radius + [0, 0, abs(key_floats(e, "height", "0", 1)[0])]
+                else:
+                    plo, phi = p - (bb[3:] - bb[:3]) / 2, p + (bb[3:] - bb[:3]) / 2
+                lo, hi = np.minimum(lo, plo), np.maximum(hi, phi)
+            speed = key_floats(e, "speed", "100", 1)[0]
+        pad = MOVER_MARGIN + abs(speed) * MOVER_LEAD_S
+        out.append((chunk, lo - pad, hi + pad))
+    return out
+
+
+def teleports(scene):
+    """(lo, hi, destination eyes) per trigger_teleport: its brush box and the
+    eye stream.c's name_point names for the player origin game_teleport_dest
+    gives (each entity its target names: origin + 1 + 36, eye + 28)."""
+    out = []
+    for e in scene.ents:
+        if e.get("classname") != "trigger_teleport" or not e.get("model", "").startswith("*"):
+            continue
+        lo, hi = entity_box(scene.bsp, e)
+        dests = [origin(x) + [0., 0., 1. + 36.] + VIEW for x in scene.ents
+                 if e.get("target") and x.get("targetname") == e.get("target")]
+        if dests:
+            out.append((lo, hi, np.array(dests)))
+    return out
+
+
+def player_fits(scene, eyes):
+    """Eyes a player can have: standing (hull 1 clear at eye - 28) or ducked
+    (hull 3 clear at eye - 12); (standing, ducked) masks."""
+    bsp = scene.bsp
+    planes = np.array([node[0] for node in bsp.clip])
+    children = np.array([node[1:3] for node in bsp.clip])
+    out = []
+    for hull, view in ((1, VIEW[2]), (3, DUCK_VIEW)):
+        points = eyes - [0., 0., view]
+        cur = np.full(len(points), bsp.models[0][9 + hull], np.int64)
+        while np.any(cur >= 0):
+            ix = np.flatnonzero(cur >= 0)
+            pl = planes[cur[ix]]
+            d = np.einsum("ij,ij->i", points[ix], scene.pn[pl]) - scene.pd[pl]
+            cur[ix] = children[cur[ix], (d < 0).astype(int)]
+        out.append(cur != -2)
+    return out
+
+
+def approach_eyes(scene, lo, hi, pad):
+    """Eyes of the player origins in the approach box at `pad` (origin box
+    lo - VIEW - pad .. hi - VIEW + pad around switch eye box [lo, hi]),
+    standing or ducked, on a 16-unit grid with its endpoints, and for each
+    the smallest approach expansion that holds it."""
+    base_lo, base_hi = lo - VIEW, hi - VIEW
+    eyes = eye_grid(base_lo - pad + [0., 0., DUCK_VIEW], base_hi + pad + VIEW)
+    stand, duck = player_fits(scene, eyes)
+    need = np.full(len(eyes), np.inf)
+    for ok, view in ((stand, VIEW[2]), (duck, DUCK_VIEW)):
+        o = eyes - [0., 0., view]
+        out = np.maximum(np.maximum(base_lo - o, o - base_hi), 0).max(axis=1)
+        need = np.where(ok & (out <= pad), np.minimum(need, out), need)
+    keep = np.isfinite(need)
+    return eyes[keep], need[keep]
+
+
+def view_bytes(budget, eyes, teleport=True):
+    """Per eye, the render / texture bytes stream.c names at OPEN on a home
+    layer: the view_set of the eye leaf and of each drawn-eye leaf (STAR: the
+    eye +- VIEW_SLACK and +- VIEW_OFFSET per axis), plus the teleport point
+    pins of the eye leaf; -1 where the eye leaf is 0 (no set). Also the
+    eye leaf per eye."""
+    scene, nleaf = budget.scene, budget.w.nleaf
+    out = np.full((len(eyes), 2), -1, np.int64)
+    eye_leaf = np.zeros(len(eyes), np.int64)
+    memo = {}
+    for start in range(0, len(eyes), 16384):
+        batch = eyes[start:start + 16384]
+        leaves = scene.leaf_indices((batch[:, None, :] + STAR[None]).reshape(-1, 3)).reshape(len(batch), -1)
+        leaves[(leaves < 1) | (leaves >= nleaf)] = 0
+        rows = np.concatenate([leaves[:, :1], np.sort(leaves[:, 1:], axis=1)], axis=1)
+        uniq, inverse = np.unique(rows, axis=0, return_inverse=True)
+        sizes = np.full((len(uniq), 2), -1, np.int64)
+        for u, row in enumerate(uniq):
+            if not row[0]:
+                continue
+            key = (int(row[0]), frozenset(int(x) for x in row if x))
+            if key not in memo:
+                sets = [budget.view_set(leaf) for leaf in key[1]]
+                if teleport:
+                    sets += budget.tele_set(key[0])
+                memo[key] = (budget.chunk_bytes(frozenset().union(*(s[0] for s in sets))),
+                             budget.chunk_bytes(frozenset().union(*(s[1] for s in sets))))
+            sizes[u] = memo[key]
+        out[start:start + len(batch)] = sizes[inverse.ravel()]
+        eye_leaf[start:start + len(batch)] = leaves[:, 0]
+    return out, eye_leaf
+
+
+def pin_sets(budget, seamset, lo, hi, delta):
+    """B's seam pin as stream.c's name_seam names it: the cooked sector-pool
+    slice (sectors' REND + pages, MOVRs + pages) and the view_set of each
+    arrival eye's leaf (arrival_leaves: the switch box's centre and X/Y
+    corners at its mid height, mapped into B); render and texture chunk sets."""
+    render, texture = set(seamset[0]), set(seamset[1])
+    centre, half = (lo + hi) / 2 + delta, (hi - lo) / 2
+    points = np.array([centre + [sx * half[0], sy * half[1], 0.] for sx, sy in ARRIVAL_CORNERS])
+    leaves = sorted({int(x) for x in budget.scene.leaf_indices(points) if 0 < x < budget.w.nleaf})
+    for leaf in leaves:
+        r, t = budget.view_set(leaf)
+        render |= r
+        texture |= t
+    return frozenset(render), frozenset(texture), leaves
+
+
 class Budget:
     def __init__(self, scene, path):
         self.scene, self.w = scene, W64(path)
@@ -553,19 +739,17 @@ class Budget:
             raise ValueError(f"{path}: BSP/HLE entity-lump numbering mismatch")
         self.pinned = set(range(w.coll_first, w.coll_first + w.pinned))
         self.placements = submodel_placements(scene.bsp, scene.ents, True)
-        placements = submodel_placements(scene.bsp, scene.ents, False)
-        self.movers = []
-        for mi in range(1, w.nsub):
-            kind, chunk = struct.unpack_from(">HH", w.d, w.sub_ofs + 16 * mi)
-            if kind != 2:
-                continue
-            leaves = set()
-            for lo, hi in placements[mi]:
-                leaves.update(scene.bsp.box_leafs(lo, hi))
-            self.movers.append((chunk, sum(1 << leaf for leaf in leaves if 0 < leaf < w.nleaf)))
-        self.cache = {}
+        self.sect_box = np.array([struct.unpack_from(">6h", w.d, w.sect_ofs + 20 * s)
+                                  for s in range(w.nsect)], np.float64).reshape(-1, 6)
+        reach = mover_reach(scene, w)
+        self.reach_chunk = [chunk for chunk, _, _ in reach]
+        self.reach_lo = np.array([lo for _, lo, _ in reach]).reshape(-1, 3)
+        self.reach_hi = np.array([hi for _, _, hi in reach]).reshape(-1, 3)
+        self.teleports = teleports(scene)
         self.cell_cache = {}
         self.page_cache = {}
+        self.view_cache = {}
+        self.tele_cache = {}
 
     def pages(self, chunk):
         if chunk in self.page_cache:
@@ -613,37 +797,68 @@ class Budget:
         self.cell_cache[key] = chunks
         return chunks
 
-    def leaf(self, leaf):
-        if leaf in self.cache:
-            return self.cache[leaf]
+    def leaf_sectors(self, leaf):
+        """wld_leaf_sectors: the sectors visleaf `leaf` sees (its vis list)."""
         w = self.w
-        sets = [set(), set(), set(self.pinned)]
         index = struct.unpack_from(">I", w.d, w.leaf_ofs + leaf * 4)[0]
         pos = w.vp_ofs + 2 * index
         count = struct.unpack_from(">H", w.d, pos)[0]
-        for i in range(count):
-            sector = struct.unpack_from(">H", w.d, pos + 2 + 2 * i)[0]
-            chunk, first, num = struct.unpack_from(">HHH", w.d, w.sect_ofs + 20 * sector + 12)
-            sets[0].add(chunk)
-            sets[1].update(w.texp_first + struct.unpack_from(">H", w.d, w.pp_ofs + 2 * j)[0]
-                           for j in range(first, first + num))
-        pvs = self.scene.bsp.leaf_pvs(leaf)
-        for chunk, bits in self.movers:
-            if pvs is None or pvs & bits:
-                sets[0].add(chunk)
-                sets[1].update(self.pages(chunk))
-        self.cache[leaf] = sets
-        return sets
+        return list(struct.unpack_from(f">{count}H", w.d, pos + 2))
 
-    def point(self, eye, leaf):
-        sets = list(self.leaf(int(leaf)))
-        sets[2] = self.window_box(eye, eye)
-        return sets
-
-    def leaf_max(self, leaf, approach_lo, approach_hi):
-        """Conservative worst window, clipped to this approach/leaf overlap."""
+    def view_set(self, leaf):
+        """What stream.c's name_leaf names for `leaf`: every sector of its vis
+        list (REND + TEXP pages) and the MOVR (+ every page of its textures'
+        animation / alternate chains) of each brush entity whose reach
+        (mover_reach) meets one of those sectors' boxes (each_mover)."""
+        if leaf in self.view_cache:
+            return self.view_cache[leaf]
         w = self.w
-        result = self.sizes(self.leaf(leaf))
+        sectors = self.leaf_sectors(leaf)
+        render, texture = set(), set()
+        for s in sectors:
+            chunk, first, num = struct.unpack_from(">HHH", w.d, w.sect_ofs + 20 * s + 12)
+            render.add(chunk)
+            texture.update(w.texp_first + struct.unpack_from(">H", w.d, w.pp_ofs + 2 * j)[0]
+                           for j in range(first, first + num))
+        if sectors and self.reach_chunk:
+            box = self.sect_box[sectors]
+            meet = np.all((self.reach_lo[:, None, :] <= box[None, :, 3:]) &
+                          (box[None, :, :3] <= self.reach_hi[:, None, :]), axis=2).any(axis=1)
+            for i in np.flatnonzero(meet):
+                render.add(self.reach_chunk[i])
+                texture.update(self.pages(self.reach_chunk[i]))
+        self.view_cache[leaf] = result = (frozenset(render), frozenset(texture))
+        return result
+
+    def tele_set(self, leaf):
+        """The point pins of the trigger_teleports eye leaf `leaf` sees (stream.c
+        ent_scan: a teleport whose box meets a sector of the eye leaf's list;
+        name_point: the destination eye's leaf), as view_set pairs."""
+        if leaf in self.tele_cache:
+            return self.tele_cache[leaf]
+        out = []
+        sectors = self.leaf_sectors(leaf)
+        if sectors:
+            box = self.sect_box[sectors]
+            for lo, hi, eyes in self.teleports:
+                if np.any(np.all((lo <= box[:, 3:]) & (box[:, :3] <= hi), axis=1)):
+                    for dest in self.scene.leaf_indices(eyes):
+                        if 0 < dest < self.w.nleaf:
+                            out.append(self.view_set(int(dest)))
+        self.tele_cache[leaf] = out
+        return out
+
+    def chunk_bytes(self, chunks):
+        """Pool bytes of `chunks` as world.c allocates them (16-aligned)."""
+        return sum((self.w.chunks[c][2] + 15) & ~15 for c in chunks)
+
+    def coll_point(self, eye):
+        return sum(self.w.chunks[c][2] for c in self.window_box(eye, eye))
+
+    def coll_leaf_max(self, leaf, approach_lo, approach_hi):
+        """Conservative worst collision window, clipped to this approach/leaf overlap."""
+        w = self.w
+        result = sum(w.chunks[c][2] for c in self.pinned)
         lo = np.maximum(self.scene.leaf_lo[leaf], approach_lo)
         hi = np.minimum(self.scene.leaf_hi[leaf], approach_hi)
         first = np.maximum(0, np.floor((lo - w.gorg) / w.gcell).astype(int))
@@ -652,7 +867,7 @@ class Budget:
             cell_lo = w.gorg + np.array(xyz) * w.gcell
             cell_hi = cell_lo + w.gcell
             chunks = self.window_box(np.maximum(lo, cell_lo) + VIEW, np.minimum(hi, cell_hi) + VIEW)
-            result[2] = max(result[2], sum(w.chunks[c][2] for c in chunks))
+            result = max(result, sum(w.chunks[c][2] for c in chunks))
         return result
 
     def sector_set(self, entries):
@@ -724,9 +939,6 @@ class Budget:
                     entries.add(0x8000 | int(mi))
         return sorted(entries)
 
-    def sizes(self, sets):
-        return [sum(self.w.chunks[c][2] for c in chunks) for chunks in sets]
-
 
 def graph_for_write(graph):
     maps = graph["maps"]
@@ -738,6 +950,107 @@ def graph_for_write(graph):
             "gofs": {m["name"]: m["gofs"] for m in maps},
             "bounds": {m["name"]: m["bounds"] for m in maps},
             "info": {m["name"]: m for m in maps}, "start": graph["start"], "train": graph["train"]}
+
+
+def map_open(budget):
+    """The worst open set of a home layer with no seam pinned: view_bytes at
+    every player eye (player_fits) of a 16-unit grid (endpoints included)
+    over the world model's bounds; ([render, texture], [their eyes])."""
+    md = budget.scene.bsp.models[0]
+    lo, hi = np.array(md[:3], np.float64), np.array(md[3:6], np.float64)
+    need, where = [0, 0], [None, None]
+    for z in np.append(np.arange(lo[2], hi[2], 16.), hi[2]):
+        eyes = eye_grid(np.array([lo[0], lo[1], z]), np.array([hi[0], hi[1], z]))
+        stand, duck = player_fits(budget.scene, eyes)
+        eyes = eyes[stand | duck]
+        if not len(eyes):
+            continue
+        view, _ = view_bytes(budget, eyes)
+        for pool in (0, 1):
+            i = int(np.argmax(view[:, pool]))
+            if view[i, pool] > need[pool]:
+                need[pool], where[pool] = int(view[i, pool]), eyes[i].tolist()
+    return need, where
+
+
+def crossing_windows(windows, budgets, pools, report, no_budget):
+    """The arrival half of each seam's crossing window and the render /
+    texture pool gate. After a switch A->B, B is home: its open set at the
+    arrival eyes (the final eyes mapped by delta) plus the pin of a seam from
+    B whose approach box holds the arrival origin, standing or ducked
+    (seam.c select_seam picks one: the largest is taken). A seam's render /
+    texture need is the larger of its approach and arrival windows; the cook
+    fails when a need x1.25 exceeds the pool's carve (16-aligned bytes).
+    Every map's open set with no seam pinned (map_open) is gated the same."""
+    worst, wide = [(0, ""), (0, "")], [(0, ""), (0, "")]
+    for label, seam, entry, eyes in windows:
+        bb = budgets[seam["to"]]
+        arrivals = eyes + np.array(seam["delta"])
+        view, leaf = view_bytes(bb, arrivals)
+        pins = np.zeros((len(arrivals), 2), np.int64)
+        reverse = []
+        for _, other, other_entry, _ in windows:
+            if other["from"] != seam["to"]:
+                continue
+            lo, hi = np.array(other["approach_mins"]), np.array(other["approach_maxs"])
+            inside = np.zeros(len(arrivals), bool)
+            for view_z in (VIEW[2], DUCK_VIEW):
+                o = arrivals - [0., 0., view_z]
+                inside |= np.all((lo <= o) & (o <= hi), axis=1)
+            if inside.any():
+                reverse.append(f"{other['from']}->{other['to']} via {other['landmark']} lump {other['trigger_lump']}")
+                pins = np.where(inside[:, None], np.maximum(pins, other_entry["seam_pin"]), pins)
+        arrival, arrival_eyes = [0, 0], {}
+        ok = view[:, 0] >= 0
+        for pool, key in ((0, "render"), (1, "texture")):
+            if ok.any():
+                total = np.where(ok, view[:, pool] + pins[:, pool], -1)
+                i = int(np.argmax(total))
+                arrival[pool] = int(total[i])
+                arrival_eyes[key] = {"eye": arrivals[i].tolist(), "b_leaf": int(leaf[i]),
+                                     "b_bytes": int(view[i, pool]), "pin_bytes": int(pins[i, pool])}
+        entry.update(arrival_need=arrival, arrival_eyes=arrival_eyes, arrival_pins=reverse)
+        widest = next(iter(entry["approach_windows"].values()), [0, 0])
+        for pool in (0, 1):
+            seam["need"][pool] = max(seam["need"][pool], arrival[pool])
+            if seam["need"][pool] > worst[pool][0]:
+                worst[pool] = (seam["need"][pool], label)
+            if max(widest[pool], arrival[pool]) > wide[pool][0]:
+                wide[pool] = (max(widest[pool], arrival[pool]), label)
+        over = [f"{key} window {n} B x1.25 > {p} B" for key, n, p in
+                zip(("render", "texture"), seam["need"][:2], pools[:2]) if n * 5 > p * 4]
+        print(f"window {label}: approach {entry['approach_need'][:2]} arrival {arrival} "
+              f"need {seam['need'][:2]}", flush=True)
+        if over:
+            entry["budget_errors"] = entry["budget_errors"] + over
+            if not no_budget:
+                report["errors"].append({"seam": label, "from": seam["from"], "to": seam["to"],
+                                         "landmark": seam["landmark"], "trigger_lump": seam["trigger_lump"],
+                                         "kind": seam["kind"], "error": "; ".join(over)})
+                print(f"seam ERROR {label}: {'; '.join(over)}", flush=True)
+    # no seam pinned: a home layer's open set at every eye of the map
+    report["map_open"] = {}
+    for name, budget in budgets.items():
+        need, eyes = map_open(budget)
+        label = f"map {name} (no seam)"
+        report["map_open"][name] = {"need": need, "eyes": eyes}
+        print(f"window {label}: open {need}", flush=True)
+        for pool in (0, 1):
+            for best in (worst, wide):
+                if need[pool] > best[pool][0]:
+                    best[pool] = (need[pool], label)
+        over = [f"{key} open set {n} B x1.25 > {p} B" for key, n, p in
+                zip(("render", "texture"), need, pools[:2]) if n * 5 > p * 4]
+        if over and not no_budget:
+            report["errors"].append({"map": name, "error": "; ".join(over)})
+            print(f"map ERROR {name}: {'; '.join(over)}", flush=True)
+    report["window_worst"] = {}
+    for (n, label), (wn, wlabel), key, p in zip(worst, wide, ("render", "texture"), pools):
+        report["window_worst"][key] = {"seam": label, "bytes": n, "widest_approach_seam": wlabel,
+                                       "widest_approach_bytes": wn}
+        print(f"window: worst {key} {label}: {n} B; x1.25 = {(n * 5 // 4 + 1023) // 1024} KB; "
+              f"carve {p // 1024} KB; every approach at its widest: {wlabel} {wn} B, "
+              f"x1.25 = {(wn * 5 // 4 + 1023) // 1024} KB", flush=True)
 
 
 def cook(args):
@@ -753,7 +1066,7 @@ def cook(args):
     report = {"format": "CWG3", "seam_bytes": 136, "pools": pools,
               "ray_step": 6, "ray_max": 4096, "directions": args.rays,
               "seams": [], "notes": [], "errors": []}
-    g["seams"] = []
+    g["seams"], windows = [], []
     for name in g["order"]:
         a = scenes[name]
         triggers = [(i, e) for i, e in enumerate(a.ents)
@@ -816,38 +1129,49 @@ def cook(args):
                     draw = bb.draw_set(a, eyes, delta, dirs, kind)
                     entries = draw + [x for x in entries if x not in set(draw)]
                 seamset = bb.sector_set(entries)
-                fixed_b = bb.sizes(seamset)
-                need, bneed = [0, 0, 0], [fixed_b[0], fixed_b[1], 0]
-                worst_eyes = [None, None, None]
+                pin_r, pin_t, arrival = pin_sets(bb, seamset, lo, hi, delta)
+                pin = [bb.chunk_bytes(pin_r), bb.chunk_bytes(pin_t)]
+                # collision: A's window plus B's at each final eye
+                coll, bcoll, coll_eye = 0, 0, None
                 for eye, al, bl in zip(eyes, aleaves, bleaves):
-                    aneed = ba.sizes(ba.point(eye, al))
-                    bsets = list(seamset)
-                    bsets[2] = bb.window_box(eye + delta, eye + delta)
-                    bn = bb.sizes(bsets)
-                    for pool in range(3):
-                        bneed[pool] = max(bneed[pool], bn[pool])
-                        if worst_eyes[pool] is None or aneed[pool] + bn[pool] > need[pool]:
-                            need[pool] = aneed[pool] + bn[pool]
-                            worst_eyes[pool] = {"eye": eye.tolist(), "a_leaf": int(al), "b_leaf": int(bl),
-                                                "a_bytes": aneed[pool], "b_bytes": bn[pool]}
-                expansion, approach_worst = None, [0, 0, 0]
+                    an, bn = ba.coll_point(eye), bb.coll_point(eye + delta)
+                    bcoll = max(bcoll, bn)
+                    if coll_eye is None or an + bn > coll:
+                        coll = an + bn
+                        coll_eye = {"eye": eye.tolist(), "a_leaf": int(al), "b_leaf": int(bl),
+                                    "a_bytes": an, "b_bytes": bn}
+                # render / texture: A's open set at every approach eye (the
+                # final eyes included) plus B's seam pin
+                ap_eyes, ap_pad = approach_eyes(a, lo, hi, 512)
+                ap_eyes = np.concatenate([ap_eyes, eyes])
+                ap_pad = np.concatenate([ap_pad, np.zeros(len(eyes))])
+                ap_view, ap_leaf = view_bytes(ba, ap_eyes)
+                expansion, approach_worst, pre_eyes, pad_windows = None, [0, 0, 0], {}, {}
                 for pad in (512, 384, 256, 128, 0):
                     search = None if opened else stats.get("search")
                     if search and (np.any(lo - pad > search["trigger_eye_mins"]) or
                                    np.any(hi + pad < search["trigger_eye_maxs"])):
                         continue  # An armed player must not disarm before reaching the box.
-                    worst = [0, 0, 0]
+                    worst, worst_eyes = [pin[0], pin[1], 0], {}
+                    sel = np.flatnonzero((ap_pad <= pad) & (ap_view[:, 0] >= 0))
+                    for pool, key in ((0, "render"), (1, "texture")):
+                        if len(sel):
+                            i = sel[np.argmax(ap_view[sel, pool])]
+                            worst[pool] += int(ap_view[i, pool])
+                            worst_eyes[key] = {"eye": ap_eyes[i].tolist(), "a_leaf": int(ap_leaf[i]),
+                                               "a_bytes": int(ap_view[i, pool]), "b_bytes": pin[pool]}
                     for leaf in a.leaves(lo - VIEW - pad, hi - VIEW + pad):
-                        use = [x + y for x, y in zip(ba.leaf_max(leaf, lo - VIEW - pad, hi - VIEW + pad), bneed)]
-                        worst = [max(x, y) for x, y in zip(worst, use)]
-                    if all(n <= p for n, p in zip(worst, pools)):
-                        expansion, approach_worst = pad, worst
+                        worst[2] = max(worst[2], ba.coll_leaf_max(leaf, lo - VIEW - pad, hi - VIEW + pad) + bcoll)
+                    pad_windows[pad] = worst
+                    approach_worst, pre_eyes = worst, worst_eyes
+                    if all(n * 5 <= p * 4 for n, p in zip(worst[:2], pools[:2])) and worst[2] <= pools[2]:
+                        expansion = pad
                         break
-                    approach_worst = worst
-                over = [f"{key} {n}>{p}" for key, n, p in zip(("render", "texture", "coll"), need, pools) if n > p]
+                need = [approach_worst[0], approach_worst[1], coll]
+                over = [f"coll {coll}>{pools[2]}"] if coll > pools[2] else []
                 if expansion is None:
-                    over.append(f"no approach expansion both contains the firing region and fits pools; "
-                                f"last open set {approach_worst}, pools {pools}")
+                    over.append(f"no approach expansion both contains the firing region and fits pools "
+                                f"(render / texture x1.25, coll); last window {approach_worst}, pools {pools}")
                     expansion = 0
                 seam = {"from": name, "to": dest, "landmark": lm, "trigger_lump": lump,
                         "changetarget": e.get("changetarget", ""), "kind": kind, "flags": flags,
@@ -857,18 +1181,23 @@ def cook(args):
                         "approach_mins": (lo - VIEW - expansion).tolist(), "approach_maxs": (hi - VIEW + expansion).tolist(),
                         "need": need, "twins": pairs, "sectors": entries, "draw": len(draw),
                         "b_dir_crc": struct.unpack_from(">I", bb.w.b, 24)[0]}
-                report["seams"].append({**seam, **stats, "closed": not opened, "open_reason": opened,
-                                        "twins": pair_report,
-                                        "pools": pools, "approach_expansion": expansion,
-                                        "approach_need": approach_worst, "budget_errors": over,
-                                        "worst_eyes": dict(zip(("render", "texture", "coll"), worst_eyes)),
-                                        "destination_leafs": leaves, "destination_need": bneed,
-                                        "final_eye_count": len(eyes), "z_step": zstep})
+                entry = {**seam, **stats, "closed": not opened, "open_reason": opened,
+                         "twins": pair_report,
+                         "pools": pools, "approach_expansion": expansion,
+                         "approach_need": approach_worst, "approach_windows": pad_windows,
+                         "budget_errors": over,
+                         "worst_eyes": {**pre_eyes, "coll": coll_eye},
+                         "approach_eyes": int(np.count_nonzero(ap_pad <= expansion)),
+                         "seam_pin": pin, "arrival_leafs": arrival,
+                         "destination_leafs": leaves, "destination_need": [pin[0], pin[1], bcoll],
+                         "final_eye_count": len(eyes), "z_step": zstep}
+                report["seams"].append(entry)
                 if over and not args.no_budget:
                     raise ValueError("; ".join(over))
                 link["seam"] = len(g["seams"])
                 g["seams"].append(seam)
-                print(f"seam {label}: kind {kind} flags {flags} eyes {stats['eyes']} rays {stats['rays']} bad {stats['disagreeing_rays']} twins {len(pairs)} leaves {len(leaves)} need {need}/{pools} approach {expansion}", flush=True)
+                windows.append((label, seam, entry, eyes))
+                print(f"seam {label}: kind {kind} flags {flags} eyes {stats['eyes']} rays {stats['rays']} bad {stats['disagreeing_rays']} twins {len(pairs)} leaves {len(leaves)} approach {expansion} window {need}/{pools}", flush=True)
             except ValueError as error:
                 report["errors"].append({"seam": label, "from": name, "to": dest,
                                          "landmark": lm, "trigger_lump": lump, "kind": kind,
@@ -881,6 +1210,7 @@ def cook(args):
                                             "need": None, "pools": pools, "approach_expansion": None,
                                             **error.evidence})
                 print(f"seam ERROR {label}: {error}", flush=True)
+    crossing_windows(windows, budgets, pools, report, args.no_budget)
     args.report.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     # Do not replace a graph by a partially certified campaign on failure.
     if report["errors"]:

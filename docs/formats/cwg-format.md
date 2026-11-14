@@ -69,7 +69,7 @@ arbitrary sub-ULP fractional positions still obey ordinary float rounding.
 | 36 | f32[6] | switch eye mins, maxs, A-local |
 | 60 | f32[6] | carry mins, maxs, A-local |
 | 84 | f32[6] | approach player-origin mins, maxs, A-local |
-| 108 | u32[3] | need_render, need_texture, need_coll, bytes |
+| 108 | u32[3] | need_render, need_texture (the crossing window), need_coll, bytes (Proof and residency policy) |
 | 120 | u32 | B package directory CRC (`.w64` header offset 24) |
 | 124 | f32[3] | portal translation `T = g_B + delta - g_A` |
 
@@ -146,8 +146,8 @@ Point entities compare origins. Edict-less HLE class flags and the explicit
 info/env/light/transition/changelevel/ambient exclusions prevent logic twins.
 
 Budgets use the staged packages (CRC-checked with `w64check.W64`), not
-estimated BSP sizes. Home A retains its PVS open set: visible sector RENDs,
-PVS-visible MOVRs and all animation/alternate TEXP pages.
+estimated BSP sizes. Render and texture bytes are summed per distinct
+chunk, each rounded up to 16 bytes as `engine/world/world.c` allocates it.
 
 B's stored seam set uses actual visibility from every final sampled eye.
 Every sector whose world bbox (expanded by 1 unit) contains a B ray's
@@ -158,21 +158,62 @@ expanded by 128 units is also included (doors may already be open).
 Surface points use exact BSP entry distances; the closed-check comparison
 still uses the 6-unit point-sampling lattice.
 
-For each final eye, render/texture need is A's PVS open set plus B's fixed
-seam set. Collision uses each map's pinned hull 0 plus grid lists overlapping
-the player box (origin = eye minus 28; hull ±16 XY, ±36 Z), expanded by 128.
-Traced submodel placements touching that window plus w64c's 64-unit margin
-are included. `need_*` is the maximum paired A/B sum per pool over the final
-eyes; both pinned sets are always included. The report records the worst
-eye, A/B leaves and A/B bytes for each pool.
+The render / texture proof is the **crossing window**: what
+`engine/world/stream.c` names at its open and pin classes (prefetch
+excluded) while the seam is approached and after it switches, both layers
+at once.
+
+- A leaf's view set (stream.c `name_leaf`): the sectors of its vis list
+  (REND + TEXP pages) and the MOVR, with every page of its textures'
+  animation / alternate chains, of each brush entity whose reach meets one
+  of those sectors' boxes (`each_mover`). The reach is the entity's ENTS
+  placement (sub bbox + origin key) and, live, anywhere on its travel:
+  sliding doors / buttons movedir × (size − lip), plats their height down,
+  trains / gun targets / track trains every path point of their chain,
+  rotating classes the sphere about their origin; grown by speed × 0.5 s
+  (`MOVER_LEAD_S`) and 128 (`MOVER_MARGIN`). A pushable keeps its placement.
+- A home eye's open set: the view sets of the eye leaf and of the drawn
+  eye's leaves (the eye ± 24 per axis, `VIEW_SLACK`, and ± 32, the bound
+  of the last frame's bob / punch offset, `TELE_SLACK`), plus the point
+  pins of the trigger_teleports the eye leaf sees (destination origin
+  + 37, eye + 28: `name_point`). Eye leaf 0 names nothing.
+- B's seam pin (`name_seam`): the stored sector-pool slice plus the view
+  sets of the arrival leaves (`arrival_leaves`: the switch box's centre
+  and X/Y corners at its mid height, mapped by delta).
+- Approach window: A's open set at every approach eye plus B's seam pin.
+  Approach eyes are a 16-unit grid (endpoints included) of every eye a
+  player whose origin is in the approach box can have: standing (eye − 28,
+  hull 1 clear) or ducked (eye − 12, hull 3 clear), plus the final eyes.
+- Arrival window: after the switch B is home, its open set at each final
+  eye mapped by delta, plus the largest seam pin of a seam from B whose
+  approach box holds that arrival origin (standing or ducked): seam.c
+  approaches it at once.
+- No seam pinned (`map_open` in the report): every map's open set at every
+  player eye of a 16-unit grid over its world bounds.
+
+`need_render` / `need_texture` are the larger of the approach and arrival
+windows. Collision uses each map's pinned hull 0 plus grid lists
+overlapping the player box (origin = eye minus 28; hull ±16 XY, ±36 Z),
+expanded by 128. Traced submodel placements touching that window plus
+w64c's 64-unit margin are included. `need_coll` is the maximum paired A/B
+sum over the final eyes; both pinned sets are always included. The report
+records the worst eye, leaves and bytes per pool (`worst_eyes`,
+`arrival_eyes`), the seam pin, the arrival leaves, the reverse seams whose
+pins the arrival window takes, and `window_worst` (the worst seam or map
+per pool, also with every approach at its widest).
 
 Approach bounds start at switch-minus-view expanded by 512, then try
-384/256/128/0. Every A leaf there plus B's seam set must fit the pools;
-collision adds B's worst final-eye window. A windows are bounded per grid
-cell clipped to the approach/leaf overlap, not unioned over an entire leaf.
-For a searched armed switch, the approach must also contain the trigger's
-firing eye region minus the view offset; otherwise it could disarm before
-the player reaches the chosen cross-section.
+384/256/128/0 (`approach_windows` records each tried). The first whose
+approach window × 1.25 fits the render and texture carves and whose
+collision (every A leaf there, windows bounded per grid cell clipped to
+the approach/leaf overlap, plus B's worst final-eye window) fits the
+collision carve is kept. For a searched armed switch, the approach must
+also contain the trigger's firing eye region minus the view offset;
+otherwise it could disarm before the player reaches the chosen
+cross-section. The cook fails when a seam's render or texture need, or a
+map's open set, × 1.25 exceeds its carve (`HL64_POOL_RENDER_KB`,
+`HL64_POOL_TEXTURE_KB`; the carves are set from `window_worst`), or a
+seam's collision need exceeds `HL64_POOL_COLLISION_KB`.
 `--no-budget` records overages without rejecting; staging never uses it.
 
 Self links and USEONLY changelevels without a targetname cannot switch and

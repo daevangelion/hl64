@@ -132,14 +132,18 @@
  * fails when maps/campaign.cwg exceeds it. */
 #define HL64_CAMPAIGN_KB		6
 #define HL64_LAYER_DIRS_KB		267	/* cook-proved (tools/cook/layerdirs.py, every CWG link pair's two layers: directory + tables, 16-aligned, as engine/world/world.c allocates): worst t0a0b + t0a0a 218624 B (Uplink + Hazard c6 cook) x 1.25 */
-/* Render / texture pools: the larger of the cook proof (one leaf's open
- * set, movers included) and the measured want peak (`mem world:
- * *_want_peak`: open set + seam pins + arrival set + view-leaf
- * neighbours + brush entities, m4 route host) x 1.25. The seam window
- * holds A's open set and B's pin set at once: hldemo1->hldemo2 use seam
- * 159088 B of texture (A 105264 + B 53824) overflowed 128 KB. */
-#define HL64_POOL_RENDER_KB		336	/* want peak 273792 B (m4 route) x 1.25; cook-proved leaf: t0a0b leaf 726, 223904 B */
-#define HL64_POOL_TEXTURE_KB		240	/* want peak 190384 B (m4 route) x 1.25; cook-proved leaf: t0a0d leaf 127, 112864 B */
+/* Render / texture pools: cook-proved crossing window (tools/w64c/w64seam.py,
+ * docs/formats/cwg-format.md Proof and residency policy): what engine/world/
+ * stream.c names at open + pin while a seam is approached (A's open set at
+ * every approach eye: eye leaf + drawn-eye leaves + movers on their travel
+ * + teleport pins, plus B's seam pin: sector-pool slice + arrival leaves)
+ * and after it switches (B's open set at the arrival eyes + the reverse
+ * seam's pin), 16-aligned chunks, worst over every CWG seam and every
+ * map's open set with no seam (worst hldemo2 361952 / t0a0d 130320 B)
+ * x 1.25; the cook fails above the carve. Route m4 / hazard want peaks
+ * (host, c8 cook): render 243104 / 254464 B, texture 173376 / 121168 B. */
+#define HL64_POOL_RENDER_KB		458	/* cook-proved: seam hldemo2->hldemo3 (hldemo2_3b, approach 512) 375072 B (Uplink + Hazard c8 cook) x 1.25 */
+#define HL64_POOL_TEXTURE_KB		214	/* cook-proved: seam hldemo2->hldemo1 (hldemo1to2, approach 512) 174496 B (Uplink + Hazard c8 cook) x 1.25 */
 #define HL64_POOL_COLLISION_KB		208	/* cook-proved: seam hldemo3->hldemo2, 206592 B */
 #define HL64_POOL_STUDIO_KB		1024	/* [EST] D3(b) per-sequence chunks */
 #define HL64_STUDIO_SCRATCH_KB		192	/* [EST] skinned-mesh tables, view model */
