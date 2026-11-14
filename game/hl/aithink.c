@@ -54,14 +54,17 @@
  *     the next frame start, after the paused thinks' slices, queued
  *     thinks start oldest first (as the engine dispatches a think:
  *     nextthink := 0, the frame's time) while the frame's work is under
- *     the budget; one queued for settings ai_hold (HL64_AI_HOLD 0.2 s)
- *     of game time starts regardless (lateness bound; without a free
- *     context it runs whole at its next dispatch). A queued think leaves
- *     the queue unstarted when its entity is freed, its think function
- *     or nextthink is changed by something else, at a dehydrate / twin
- *     copy (Ai_Drop),
- *     with ai_spread != 1, or when the queue (AI_QUEUE) is full (it runs
- *     at once).
+ *     the budget. Lateness bounds: one queued for settings ai_hold
+ *     (HL64_AI_HOLD 0.2 s) of game time may start over the budget, at
+ *     most HL64_AI_AGED_PER_FRAME such starts a frame, oldest first (the
+ *     thinks queued in one busy frame age together: they start spread
+ *     over frames); one queued for settings ai_hold_max
+ *     (HL64_AI_HOLD_MAX 0.6 s) starts regardless (without a free context
+ *     it runs whole at its next dispatch). A queued think leaves the
+ *     queue unstarted when its entity is freed, its think function or
+ *     nextthink is changed by something else, at a dehydrate / twin copy
+ *     (Ai_Drop), with ai_spread != 1, or when the queue (AI_QUEUE) is
+ *     full (it runs at once).
  *   - ai_spread 2 (test): pause at every point after the slice's first and
  *     continue at once after scribbling the shared scratch: decides
  *     exactly as ai_spread 0 (a frozen world); nothing is held.
@@ -79,7 +82,8 @@
 
 #define AI_MAX_AGE	2.0f
 #define AI_MIN_START	2.5f
-#define AI_MAX_HOLD	(settings.ai_hold)	/* s: a queued think's lateness bound */
+#define AI_HOLD		(settings.ai_hold)	/* s: may start over the budget */
+#define AI_HOLD_MAX	(settings.ai_hold_max)	/* s: starts regardless */
 #define AI_QUEUE	64
 
 enum { AC_FREE, AC_RUN, AC_PAUSED, AC_DONE };
@@ -106,6 +110,7 @@ static struct {
 	uint32_t	spread, pauses, resumes, drops, defers, overruns, absorbed;
 	uint32_t	max_paused, max_frames;
 	uint32_t	holds, held_runs, held_aged, held_whole, held_drops, max_held, max_late_ms;
+	uint32_t	held_over, held_hard;
 } ac;
 
 /* queued (held) thinks, oldest first */
@@ -123,6 +128,7 @@ static ai_ctx_t		ctx[HL64_AI_CONTEXTS];
 static ai_ctx_t		*cur;		/* the running context */
 static mon_shared_t	main_sh;
 static uint32_t		order_seq, frame_no;
+static int		aged_starts;	/* this frame's over-budget starts past AI_HOLD */
 
 static int ai_index(const ai_ctx_t *c) { return (int)(c - ctx); }
 
@@ -320,6 +326,12 @@ static void held_late(const ai_held_t *h)
 		ac.max_late_ms = ms;
 }
 
+/* queued AI_HOLD_MAX: it starts regardless of the budget */
+static int held_hard(const ai_held_t *h)
+{
+	return gtime() - h->t_held >= AI_HOLD_MAX;
+}
+
 int Ai_Think(int e)
 {
 	ai_ctx_t	*c;
@@ -352,9 +364,10 @@ int Ai_Think(int e)
 	}
 	if (q >= 0)
 	{
-		/* queued: the frame start starts it; this dispatch is absorbed
-		 * until it is AI_MAX_HOLD late, then it starts here */
-		if (mode == 1 && gtime() - held[q].t_held < AI_MAX_HOLD)
+		/* queued: the frame start starts it (oldest first); this
+		 * dispatch is absorbed until it is AI_HOLD_MAX late (then
+		 * the frame start found no free context: it runs here) */
+		if (mode == 1 && !held_hard(&held[q]))
 		{
 			ac.absorbed++;
 			ent_think_at(e, held[q].due);
@@ -365,6 +378,7 @@ int Ai_Think(int e)
 		if (mode == 1)
 		{
 			ac.held_aged++;
+			ac.held_hard++;
 			c = ai_free_ctx();
 			if (!c)
 			{
@@ -434,6 +448,7 @@ void Ai_FrameStart(void)
 	int		i, j, n = 0, live, layer;
 
 	frame_no++;
+	aged_starts = 0;
 	if (settings.ai_spread != 1)
 	{
 		Ai_DropAll();
@@ -472,12 +487,14 @@ void Ai_FrameStart(void)
 		ai_slice(c);
 	}
 	/* queued thinks, oldest first, while the frame's work is under the
-	 * budget; one AI_MAX_HOLD late starts regardless (the queue is in
-	 * hold order: the late ones lead) */
+	 * budget; over it, one AI_HOLD late starts while this frame's such
+	 * starts are under HL64_AI_AGED_PER_FRAME, one AI_HOLD_MAX late
+	 * starts regardless (the queue is in hold order: the late ones lead) */
 	while (nheld > 0)
 	{
 		ai_held_t h = held[0];
-		int aged;
+		float age;
+		int over, hard = 0;
 
 		if (!held_valid(&h))
 		{
@@ -485,16 +502,27 @@ void Ai_FrameStart(void)
 			ac.held_drops++;
 			continue;
 		}
-		aged = gtime() - h.t_held >= AI_MAX_HOLD;
-		if (!aged && Mon_FrameUnits(NULL) >= (uint32_t)settings.ai_budget)
-			break;
+		age = gtime() - h.t_held;
+		over = Mon_FrameUnits(NULL) >= (uint32_t)settings.ai_budget;
+		if (over)
+		{
+			hard = held_hard(&h);
+			if (!hard && (age < AI_HOLD || aged_starts >= HL64_AI_AGED_PER_FRAME))
+				break;
+		}
 		c = ai_free_ctx();
 		if (!c)
 			break;
 		held_remove(0);
 		held_late(&h);
 		ac.held_runs++;
-		ac.held_aged += (uint32_t)aged;
+		ac.held_aged += (uint32_t)(age >= AI_HOLD);
+		if (over)
+		{
+			ac.held_over++;
+			ac.held_hard += (uint32_t)hard;
+			aged_starts += !hard;
+		}
 		/* as the engine dispatches a think: nextthink := 0 */
 		ent_think_at(h.e, 0);
 		eng_set_frame_layer(ent_idc(h.e)->layer);
@@ -545,12 +573,13 @@ void Ai_DropAll(void)
 void Ai_PrintCounts(void)
 {
 	log_printf(" spread=%lu pauses=%lu resumes=%lu drops=%lu defers=%lu overruns=%lu absorbed=%lu "
-		"max_paused=%lu max_frames=%lu holds=%lu held_runs=%lu held_aged=%lu held_whole=%lu "
-		"held_drops=%lu max_held=%lu max_late_ms=%lu", (unsigned long)ac.spread,
-		(unsigned long)ac.pauses, (unsigned long)ac.resumes, (unsigned long)ac.drops,
-		(unsigned long)ac.defers, (unsigned long)ac.overruns, (unsigned long)ac.absorbed,
-		(unsigned long)ac.max_paused, (unsigned long)ac.max_frames, (unsigned long)ac.holds,
-		(unsigned long)ac.held_runs, (unsigned long)ac.held_aged, (unsigned long)ac.held_whole,
+		"max_paused=%lu max_frames=%lu holds=%lu held_runs=%lu held_aged=%lu held_over=%lu "
+		"held_hard=%lu held_whole=%lu held_drops=%lu max_held=%lu max_late_ms=%lu",
+		(unsigned long)ac.spread, (unsigned long)ac.pauses, (unsigned long)ac.resumes,
+		(unsigned long)ac.drops, (unsigned long)ac.defers, (unsigned long)ac.overruns,
+		(unsigned long)ac.absorbed, (unsigned long)ac.max_paused, (unsigned long)ac.max_frames,
+		(unsigned long)ac.holds, (unsigned long)ac.held_runs, (unsigned long)ac.held_aged,
+		(unsigned long)ac.held_over, (unsigned long)ac.held_hard, (unsigned long)ac.held_whole,
 		(unsigned long)ac.held_drops, (unsigned long)ac.max_held, (unsigned long)ac.max_late_ms);
 }
 

@@ -192,8 +192,12 @@
  * work units (game/hl/monsters.c aiw_units: think starts, traces, BSP
  * nodes, walk steps; 1 unit ~ 5 us of cart CPU): ~20 ms of AI a frame. */
 #define HL64_AI_BUDGET			4000
-/* A held (queued) monster think's lateness bound, seconds of game time
- * (settings ai_hold default): queued that long, it starts regardless. */
+/* A held (queued) monster think's lateness bounds, seconds of game time
+ * (settings ai_hold / ai_hold_max defaults): queued ai_hold, it may start
+ * over the frame's budget, at most HL64_AI_AGED_PER_FRAME such starts a
+ * frame, oldest first; queued ai_hold_max, it starts regardless. */
 #define HL64_AI_HOLD			0.2f
+#define HL64_AI_HOLD_MAX		0.6f
+#define HL64_AI_AGED_PER_FRAME		2
 
 #endif
