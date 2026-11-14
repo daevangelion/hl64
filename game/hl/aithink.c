@@ -47,13 +47,28 @@
  *     old its picture of the world gets). Thinks before AI_MIN_START (the
  *     boot window where freed slots are reused at once) run whole.
  *   - More paused thinks than contexts: a new think waits a frame.
+ *   - Held thinks: a new think dispatched once the frame's think work has
+ *     reached the budget, or while older thinks wait, does not start: it
+ *     joins a FIFO queue and its nextthink stays due (its due time, so a
+ *     dehydrate, twin copy or New Game sees an ordinary due think). At
+ *     the next frame start, after the paused thinks' slices, queued
+ *     thinks start oldest first (as the engine dispatches a think:
+ *     nextthink := 0, the frame's time) while the frame's work is under
+ *     the budget; one queued for AI_MAX_HOLD of game time starts
+ *     regardless (lateness bound; without a free context it runs whole
+ *     at its next dispatch). A queued think leaves the queue unstarted
+ *     when its entity is freed, its think function or nextthink is
+ *     changed by something else, at a dehydrate / twin copy (Ai_Drop),
+ *     with ai_spread != 1, or when the queue (AI_QUEUE) is full (it runs
+ *     at once).
  *   - ai_spread 2 (test): pause at every point after the slice's first and
  *     continue at once after scribbling the shared scratch: decides
- *     exactly as ai_spread 0 (a frozen world).
+ *     exactly as ai_spread 0 (a frozen world); nothing is held.
  *
- * The engine dispatches the monster's think while it is paused (its
- * nextthink came due): that call is absorbed and the think re-armed 0.1 s
- * on (HLSDK MonsterThink's own first statement).
+ * The engine dispatches the monster's think while it is paused or queued
+ * (its nextthink came due): that call is absorbed and the think re-armed
+ * (paused: 0.1 s on, HLSDK MonsterThink's own first statement; queued:
+ * its due time).
  */
 #include <string.h>
 
@@ -63,6 +78,8 @@
 
 #define AI_MAX_AGE	2.0f
 #define AI_MIN_START	2.5f
+#define AI_MAX_HOLD	0.2f	/* s: a queued think's lateness bound */
+#define AI_QUEUE	64
 
 enum { AC_FREE, AC_RUN, AC_PAUSED, AC_DONE };
 
@@ -87,7 +104,19 @@ typedef struct {
 static struct {
 	uint32_t	spread, pauses, resumes, drops, defers, overruns, absorbed;
 	uint32_t	max_paused, max_frames;
+	uint32_t	holds, held_runs, held_aged, held_whole, held_drops, max_held, max_late_ms;
 } ac;
+
+/* queued (held) thinks, oldest first */
+typedef struct {
+	int		e;
+	ent_h		h;
+	fn_t		think;
+	float		due, t_held;
+} ai_held_t;
+
+static ai_held_t	held[AI_QUEUE];
+static int		nheld;
 
 static ai_ctx_t		ctx[HL64_AI_CONTEXTS];
 static ai_ctx_t		*cur;		/* the running context */
@@ -220,41 +249,19 @@ static ai_ctx_t *ai_of(int e)
 	return NULL;
 }
 
-int Ai_Think(int e)
+static ai_ctx_t *ai_free_ctx(void)
 {
-	ai_ctx_t	*c;
-	int		i, live, mode = settings.ai_spread;
+	int i;
 
-	if (mode == 0 || co_running() >= 0)
-		return 0;	/* whole; a think nested in a think runs inline */
-	c = ai_of(e);
-	if (c)
-	{
-		if (ai_valid(c, &live))
-		{
-			/* still thinking: this dispatch is absorbed */
-			ac.absorbed++;
-			if (!(ent_tm(e)->nextthink > 0))
-				ThinkIn(e, 0.1f);
-			return 1;
-		}
-		ai_drop(c);
-	}
-	if (gtime() < AI_MIN_START)
-		return 0;
-	for (i = 0, c = NULL; i < HL64_AI_CONTEXTS; i++)
+	for (i = 0; i < HL64_AI_CONTEXTS; i++)
 		if (ctx[i].state == AC_FREE)
-		{
-			c = &ctx[i];
-			break;
-		}
-	if (!c)
-	{
-		/* every context holds a paused think: this one waits a frame */
-		ac.defers++;
-		ent_think_at(e, gtime());
-		return 1;
-	}
+			return &ctx[i];
+	return NULL;
+}
+
+/* start e's think on context c (its first slice) */
+static void ai_begin(ai_ctx_t *c, int e, int mode)
+{
 	memset(c, 0, sizeof(*c));
 	c->e = e;
 	c->h = ent_handle_of(e);
@@ -276,6 +283,124 @@ int Ai_Think(int e)
 		c->frame_seen = frame_no;
 		ai_slice(c);
 	}
+}
+
+static int held_find(int e)
+{
+	int i;
+
+	for (i = 0; i < nheld; i++)
+		if (held[i].e == e)
+			return i;
+	return -1;
+}
+
+static void held_remove(int i)
+{
+	nheld--;
+	memmove(&held[i], &held[i + 1], (size_t)(nheld - i) * sizeof(held[0]));
+}
+
+/* the queued think is still the one the engine would dispatch: the same
+ * live entity, think function and due nextthink */
+static int held_valid(const ai_held_t *h)
+{
+	int e = h->e;
+
+	return ent_of(h->h) == e && ent_is_live(e) && ent_tm(e)->think == h->think &&
+		ent_tm(e)->nextthink == h->due;
+}
+
+static void held_late(const ai_held_t *h)
+{
+	uint32_t ms = (uint32_t)((gtime() - h->t_held) * 1000.0f + 0.5f);
+
+	if (ms > ac.max_late_ms)
+		ac.max_late_ms = ms;
+}
+
+int Ai_Think(int e)
+{
+	ai_ctx_t	*c;
+	int		live, q, mode = settings.ai_spread;
+
+	if (mode == 0 || co_running() >= 0)
+		return 0;	/* whole; a think nested in a think runs inline */
+	c = ai_of(e);
+	if (c)
+	{
+		if (ai_valid(c, &live))
+		{
+			/* still thinking: this dispatch is absorbed */
+			ac.absorbed++;
+			if (!(ent_tm(e)->nextthink > 0))
+				ThinkIn(e, 0.1f);
+			return 1;
+		}
+		ai_drop(c);
+	}
+	if (gtime() < AI_MIN_START)
+		return 0;
+	q = held_find(e);
+	if (q >= 0 && ent_of(held[q].h) != e)
+	{
+		/* a stale entry (its entity was freed) */
+		held_remove(q);
+		ac.held_drops++;
+		q = -1;
+	}
+	if (q >= 0)
+	{
+		/* queued: the frame start starts it; this dispatch is absorbed
+		 * until it is AI_MAX_HOLD late, then it starts here */
+		if (mode == 1 && gtime() - held[q].t_held < AI_MAX_HOLD)
+		{
+			ac.absorbed++;
+			ent_think_at(e, held[q].due);
+			return 1;
+		}
+		held_late(&held[q]);
+		held_remove(q);
+		if (mode == 1)
+		{
+			ac.held_aged++;
+			c = ai_free_ctx();
+			if (!c)
+			{
+				ac.held_whole++;
+				return 0;
+			}
+			ai_begin(c, e, mode);
+			return 1;
+		}
+	}
+	else if (mode == 1 && (nheld > 0 || Mon_FrameUnits(NULL) >= (uint32_t)settings.ai_budget) &&
+		nheld < AI_QUEUE && (ent_tm(e)->think == FN_CBaseMonster_CallMonsterThink ||
+		ent_tm(e)->think == FN_CBaseMonster_MonsterThink))
+	{
+		/* held: queued behind the older ones, nextthink due (only a think
+		 * that is MonsterThink itself: the frame start runs its body) */
+		held[nheld].e = e;
+		held[nheld].h = ent_handle_of(e);
+		held[nheld].think = ent_tm(e)->think;
+		held[nheld].due = gtime();
+		held[nheld].t_held = gtime();
+		nheld++;
+		if ((uint32_t)nheld > ac.max_held)
+			ac.max_held = (uint32_t)nheld;
+		ac.holds++;
+		ent_think_at(e, gtime());
+		return 1;
+	}
+	c = ai_free_ctx();
+	if (!c)
+	{
+		/* every context holds a paused think: this one waits a frame */
+		ac.defers++;
+		ent_think_at(e, gtime());
+		return 1;
+	}
+	ai_begin(c, e, mode);
 	return 1;
 }
 
@@ -345,6 +470,35 @@ void Ai_FrameStart(void)
 		eng_set_frame_layer(c->layer);
 		ai_slice(c);
 	}
+	/* queued thinks, oldest first, while the frame's work is under the
+	 * budget; one AI_MAX_HOLD late starts regardless (the queue is in
+	 * hold order: the late ones lead) */
+	while (nheld > 0)
+	{
+		ai_held_t h = held[0];
+		int aged;
+
+		if (!held_valid(&h))
+		{
+			held_remove(0);
+			ac.held_drops++;
+			continue;
+		}
+		aged = gtime() - h.t_held >= AI_MAX_HOLD;
+		if (!aged && Mon_FrameUnits(NULL) >= (uint32_t)settings.ai_budget)
+			break;
+		c = ai_free_ctx();
+		if (!c)
+			break;
+		held_remove(0);
+		held_late(&h);
+		ac.held_runs++;
+		ac.held_aged += (uint32_t)aged;
+		/* as the engine dispatches a think: nextthink := 0 */
+		ent_think_at(h.e, 0);
+		eng_set_frame_layer(ent_idc(h.e)->layer);
+		ai_begin(c, h.e, 1);
+	}
 	eng_set_frame_layer(layer);
 }
 
@@ -363,6 +517,13 @@ void Ai_Drop(int e)
 		else if (c->state == AC_PAUSED)
 			ai_drop(c);
 	}
+	/* a queued think leaves the queue; its nextthink stays due */
+	i = held_find(e);
+	if (i >= 0)
+	{
+		held_remove(i);
+		ac.held_drops++;
+	}
 }
 
 void Ai_DropAll(void)
@@ -376,15 +537,20 @@ void Ai_DropAll(void)
 		else if (ctx[i].state == AC_PAUSED)
 			ai_drop(&ctx[i]);
 	}
+	ac.held_drops += (uint32_t)nheld;
+	nheld = 0;
 }
 
 void Ai_PrintCounts(void)
 {
 	log_printf(" spread=%lu pauses=%lu resumes=%lu drops=%lu defers=%lu overruns=%lu absorbed=%lu "
-		"max_paused=%lu max_frames=%lu", (unsigned long)ac.spread, (unsigned long)ac.pauses,
-		(unsigned long)ac.resumes, (unsigned long)ac.drops, (unsigned long)ac.defers,
-		(unsigned long)ac.overruns, (unsigned long)ac.absorbed, (unsigned long)ac.max_paused,
-		(unsigned long)ac.max_frames);
+		"max_paused=%lu max_frames=%lu holds=%lu held_runs=%lu held_aged=%lu held_whole=%lu "
+		"held_drops=%lu max_held=%lu max_late_ms=%lu", (unsigned long)ac.spread,
+		(unsigned long)ac.pauses, (unsigned long)ac.resumes, (unsigned long)ac.drops,
+		(unsigned long)ac.defers, (unsigned long)ac.overruns, (unsigned long)ac.absorbed,
+		(unsigned long)ac.max_paused, (unsigned long)ac.max_frames, (unsigned long)ac.holds,
+		(unsigned long)ac.held_runs, (unsigned long)ac.held_aged, (unsigned long)ac.held_whole,
+		(unsigned long)ac.held_drops, (unsigned long)ac.max_held, (unsigned long)ac.max_late_ms);
 }
 
 /* `prof ai_ctx` (after `prof ai`): the counts and each context's deepest

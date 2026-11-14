@@ -32,7 +32,8 @@ residency, profiling).
 ## 2. Think rule (every movetype except PUSH)
 
 An entity thinks at most once per frame, at the point of its movetype step
-(physics-movetypes.md):
+(physics-movetypes.md); monster thinks may be held or continued at the
+frame start instead (2.1):
 
 - not due if nextthink ≤ 0, or if `(f64) nextthink > time + dt`
   **evaluated in double**, as GoldSrc evaluates it;
@@ -53,6 +54,55 @@ to frames (a think rescheduling itself at +0.12 s with dt 1/30 runs at
 frames 0, 3, 7, 10, 14 and sees t0 + 0.12 k in float sums)
 **[probe:measured K-think]**; a think whose due time passed during a long
 frame sees the frame time **[probe:measured K-think]**.
+
+### 2.1 Monster thinks spread over frames (M5, `game/hl/aithink.c`)
+
+HLSDK `CBaseMonster::MonsterThink` decides as in GoldSrc; what hl64 adds
+is *when* its work runs, so that no frame carries more monster AI than a
+budget. Budgets count work units, never time, so host and cart pause and
+hold at the same points (K9, K10).
+
+- **Work units** (`aiw_units`, ≈ 5 µs of cart CPU each): 180 per think
+  begun, 10 per collision trace, 1 per BSP node a trace visits, 5 per walk
+  step of `CheckLocalMove`. The frame's budget is setting `ai_budget`
+  (default `HL64_AI_BUDGET` 4000 ≈ 20 ms). Fitted to the PROFILE
+  `ai: frame` lines on ares (route m4: us ≈ 916 × thinks + 50 × traces +
+  5.4 × BSP nodes + 28 × steps, r² 0.93).
+- **Contexts**: with `ai_spread 1` every monster think runs on one of 6
+  cooperative contexts (own stack, own cover-search tables). A think
+  nested in a think runs inline; thinks before game time 2.5 s run whole.
+- **Pause points**: the start of each `CheckLocalMove` and each cover
+  candidate (FindCover / BuildNearestRoute), never inside FindNearestNode
+  or the Dijkstra search. At a pause point a think yields once the
+  frame's units reach the budget, except at its slice's first point.
+  Paused thinks continue at the next frame start, oldest first, each with
+  at least one check per frame; the CheckLocalMove memo scope, sight list
+  and `gpGlobals` vectors are saved per think. A think older than 2 s
+  stops pausing.
+- **Held thinks**: a monster think dispatched once the frame's units have
+  reached the budget, or while older thinks are queued, does not start:
+  it joins a FIFO queue (≤ 64) and its nextthink stays due (its due time),
+  so a dehydrate, twin copy or New Game sees an ordinary due think. At
+  the next frame start, after the paused thinks' slices, queued thinks
+  start oldest first, as the engine dispatches a think (nextthink := 0,
+  the frame's time), while the frame's units are under the budget.
+  **Lateness bound**: a think queued for 0.2 s of game time starts
+  regardless (on a free context, else whole at its next dispatch), so a
+  think runs at most 0.2 s + one frame after it came due (measured 233 ms
+  at dt 1/30). The engine's dispatch of a queued think is absorbed.
+- **Drops**: a paused think ends (its half-built route cleared) when its
+  monster is freed, killed or changes layer, or its think function,
+  schedule, task, monster state, enemy or target is changed by something
+  else, at a map open / close, dehydrate, twin copy and New Game. A
+  queued think leaves the queue unstarted when its entity is freed, its
+  think function or nextthink is changed by something else, at a
+  dehydrate / twin copy, map open / close, New Game or with
+  `ai_spread` ≠ 1; the queue full: it runs at once.
+- **Equivalence**: `ai_spread 2` (test) pauses at every point and
+  continues at once after scribbling the shared scratch; its decision
+  trace equals whole thinks (`ai_spread 0`) on routes m4, uplink and
+  hazard. With the budget, decisions are HLSDK's for the world as it is
+  when each slice runs.
 
 ## 3. Active sets (mechanism)
 

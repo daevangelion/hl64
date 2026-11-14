@@ -1122,6 +1122,7 @@ typedef struct {
 	uint32_t	nn, nnt;	/* FindNearestNode searches (cache misses), their traces */
 	uint32_t	dj, djpop;	/* Dijkstra runs, nodes expanded */
 	uint32_t	lmhit;		/* CheckLocalMoves answered by the scope memo */
+	uint32_t	starts;		/* thinks begun (Mon_ThinkRun) */
 } mon_ai_work_t;
 extern mon_ai_work_t	mon_aiw;
 void	mon_stats_script(void);

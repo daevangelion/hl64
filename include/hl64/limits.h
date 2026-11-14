@@ -189,7 +189,8 @@
 #define HL64_AI_SCRATCH_BYTES		8192
 #define HL64_AI_THINK_KB		((HL64_AI_CONTEXTS * (HL64_AI_STACK_BYTES + HL64_AI_SCRATCH_BYTES) + 1023) / 1024)
 /* The frame's monster-think work budget (settings ai_budget default), in
- * work units (game/hl/monsters.c aiw_units: walk steps and traces). */
-#define HL64_AI_BUDGET			400
+ * work units (game/hl/monsters.c aiw_units: think starts, traces, BSP
+ * nodes, walk steps; 1 unit ~ 5 us of cart CPU): ~20 ms of AI a frame. */
+#define HL64_AI_BUDGET			4000
 
 #endif
