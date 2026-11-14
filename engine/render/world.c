@@ -601,6 +601,9 @@ void ren_mover_draw(int e, int gpu_mode, const uint8_t prim[4])
 #define FP_POLY		12
 
 static const ren_dlight_t *flash;
+static float		fp_cs[9][2];	/* wedge j's direction: cos, sin of j pi / 4 */
+static int		fp_cs_ok;
+#define FP_MISS		0.5f		/* u a wedge's box must clear a triangle by */
 static int		fp_cur, fp_used, fp_iused;
 
 /* Keep the part of poly (n points) with m.x >= d. */
@@ -670,7 +673,7 @@ static void fp_flush(int *v0, int *i0)
 static void fp_tri(const wld_layer_t *L, const float lo[3], float p3[3][3],
 	const w64_vert_t *vp, const int vi[3], int *v0, int *i0)
 {
-	float e1[3], e2[3], n[3], u[3], w[3], foot[3], len, pd, reach, area;
+	float e1[3], e2[3], n[3], u[3], w[3], foot[3], len, pd, reach, area, tb[4];
 	float b = (float)flash->color[0] / 255.0f;
 	uint32_t ls = L->hdr.lightscale_x100;
 	unsigned stride = L->hdr.idx_stride ? L->hdr.idx_stride : 1;
@@ -711,13 +714,47 @@ static void fp_tri(const wld_layer_t *L, const float lo[3], float p3[3][3],
 	for (k = 0; k < 3; k++)
 		u[k] /= len;
 	fp_cross(n, u, w);
+	/* the wedge directions (the same hl_cosf / hl_sinf values, once) */
+	if (!fp_cs_ok)
+	{
+		for (j = 0; j <= 8; j++)
+		{
+			fp_cs[j][0] = hl_cosf((float)j * 0.785398f);
+			fp_cs[j][1] = hl_sinf((float)j * 0.785398f);
+		}
+		fp_cs_ok = 1;
+	}
+	/* the triangle in the fan's plane coordinates (u, w around the
+	 * foot): a wedge whose box it misses by FP_MISS cuts nothing from
+	 * it (its clip would come out empty), so it is not clipped */
+	for (k = 0; k < 3; k++)
+	{
+		float r[3], x, y;
+
+		for (e = 0; e < 3; e++)
+			r[e] = p3[k][e] - foot[e];
+		x = fp_dot(r, u);
+		y = fp_dot(r, w);
+		tb[0] = k ? (x < tb[0] ? x : tb[0]) : x;
+		tb[1] = k ? (y < tb[1] ? y : tb[1]) : y;
+		tb[2] = k ? (x > tb[2] ? x : tb[2]) : x;
+		tb[3] = k ? (y > tb[3] ? y : tb[3]) : y;
+	}
+	if (tb[0] > reach + FP_MISS || tb[2] < -reach - FP_MISS || tb[1] > reach + FP_MISS
+		|| tb[3] < -reach - FP_MISS)
+		return;
 	for (j = 0; j < 8; j++)
 	{
 		float poly[FP_POLY][3], tmp[FP_POLY][3];
-		float c0 = hl_cosf((float)j * 0.785398f), s0 = hl_sinf((float)j * 0.785398f);
-		float c1 = hl_cosf((float)(j + 1) * 0.785398f), s1 = hl_sinf((float)(j + 1) * 0.785398f);
+		float c0 = fp_cs[j][0], s0 = fp_cs[j][1], c1 = fp_cs[j + 1][0], s1 = fp_cs[j + 1][1];
+		float wx0 = reach * c0, wy0 = reach * s0, wx1 = reach * c1, wy1 = reach * s1;
 		int np = 3, i, first, lo_i = 0, hi_i, s;
 
+		if (tb[0] > (wx0 > wx1 ? (wx0 > 0 ? wx0 : 0) : (wx1 > 0 ? wx1 : 0)) + FP_MISS
+			|| tb[2] < (wx0 < wx1 ? (wx0 < 0 ? wx0 : 0) : (wx1 < 0 ? wx1 : 0)) - FP_MISS
+			|| tb[1] > (wy0 > wy1 ? (wy0 > 0 ? wy0 : 0) : (wy1 > 0 ? wy1 : 0)) + FP_MISS
+			|| tb[3] < (wy0 < wy1 ? (wy0 < 0 ? wy0 : 0) : (wy1 < 0 ? wy1 : 0)) - FP_MISS)
+			continue;
 		for (k = 0; k < 3; k++)
 		{
 			poly[0][k] = foot[k];
