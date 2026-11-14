@@ -51,9 +51,12 @@ typedef struct {
 	const uint8_t	*box;		/* box tree chunk */
 	int32_t		root;		/* gid, or a leaf child */
 	uint8_t		hull0;		/* leaves are BSP leaf indices (hull 0) */
-	/* chunk cache */
+	/* chunk cache: the current chunk and its header's derived view */
 	uint32_t	ci;
 	const uint8_t	*cp;
+	const w64_cnode_t	*nodes;		/* the chunk's node array */
+	const w64_cplane_t	*planes;	/* its plane array */
+	uint16_t	nnodes, nx, ny, nz;
 	/* impact node (materials) and its crossing point, model frame */
 	const uint8_t	*hit_cp;
 	uint32_t	hit_ci, hit_li;
@@ -88,6 +91,23 @@ static __attribute__((noreturn)) void bad_model(uint16_t model)
 		COL_MODEL_SUB(model));
 }
 
+#define HDR(cp)		((const w64_coll_t *)(cp))
+#define NODES(cp)	((const w64_cnode_t *)((cp) + 16 + 16 * HDR(cp)->nplanes))
+#define PLANES(cp)	((const w64_cplane_t *)((cp) + 16))
+
+/* s->cp's header, read once per chunk change instead of per node */
+static void chunk_view(src_t *s)
+{
+	const w64_coll_t *h = HDR(s->cp);
+
+	s->nodes = NODES(s->cp);
+	s->planes = PLANES(s->cp);
+	s->nnodes = h->nnodes;
+	s->nx = h->nx;
+	s->ny = h->ny;
+	s->nz = h->nz;
+}
+
 /* The COLL chunk of a node: cached, resident, or read now. */
 static const uint8_t *chunk_of(src_t *s, uint32_t ci)
 {
@@ -112,36 +132,70 @@ static const uint8_t *chunk_of(src_t *s, uint32_t ci)
 	}
 	s->ci = ci;
 	s->cp = cp;
+	chunk_view(s);
 	return cp;
 }
 
-#define HDR(cp)		((const w64_coll_t *)(cp))
-#define NODES(cp)	((const w64_cnode_t *)((cp) + 16 + 16 * HDR(cp)->nplanes))
-#define PLANES(cp)	((const w64_cplane_t *)((cp) + 16))
-
-static const w64_cnode_t *node_of(src_t *s, int32_t gid, const uint8_t **cpp, uint32_t *lip)
+/* Node gid of s: its chunk becomes s->cp (the view), *lip its local index. */
+static const w64_cnode_t *node_of(src_t *s, int32_t gid, uint32_t *lip)
 {
 	uint32_t ci = W64_GID_COLL(gid), li = W64_GID_LOCAL(gid);
-	const uint8_t *cp = chunk_of(s, ci);
 
-	if (li >= HDR(cp)->nnodes)
+	if (s->L && !(s->cp && ci == s->ci))
+		chunk_of(s, ci);
+	if (li >= s->nnodes)
 		sys_error("coll: node %ld past its chunk", (long)gid);
-	*cpp = cp;
 	*lip = li;
 	st.nodes++;
-	return NODES(cp) + li;
+	return s->nodes + li;
 }
 
-/* Child c of a node in chunk ci -> gid or leaf child. */
-static int32_t child_ref(const uint8_t *cp, uint32_t ci, int c)
+/* Child c of a node of the current chunk -> gid or leaf child. */
+static int32_t child_of(const src_t *s, int c)
 {
-	const w64_coll_t *h = HDR(cp);
-
 	if (c < 0)
 		return c;
-	if (c < h->nnodes)
-		return (int32_t)(ci << W64_GID_LOCAL_BITS | (uint32_t)c);
-	return (int32_t)((const uint32_t *)(NODES(cp) + h->nnodes))[c - h->nnodes];
+	if (c < s->nnodes)
+		return (int32_t)(s->ci << W64_GID_LOCAL_BITS | (uint32_t)c);
+	return (int32_t)((const uint32_t *)(s->nodes + s->nnodes))[c - s->nnodes];
+}
+
+/* Signed distance of p from node li's plane (current chunk): axial nodes
+ * 0-2 (unit normal), else the plane, in double as plane_dist. */
+static inline float view_dist(const src_t *s, const w64_cnode_t *nd, uint32_t li, const float p[3])
+{
+	const w64_cplane_t *pl;
+
+	if (li < s->nx)
+		return p[0] - nd->u.dist;
+	if (li < s->ny)
+		return p[1] - nd->u.dist;
+	if (li < s->nz)
+		return p[2] - nd->u.dist;
+	pl = s->planes + nd->u.plane;
+	return (float)((double)pl->normal[0] * p[0] + (double)pl->normal[1] * p[1]
+		+ (double)pl->normal[2] * p[2] - pl->dist);
+}
+
+/* The same for two points (one node / plane fetch). */
+static inline void view_dist2(const src_t *s, const w64_cnode_t *nd, uint32_t li, const float a[3],
+	const float b[3], float *ta, float *tb)
+{
+	const w64_cplane_t *pl;
+	int k;
+
+	if (li < s->nz)
+	{
+		k = li < s->nx ? 0 : li < s->ny ? 1 : 2;
+		*ta = a[k] - nd->u.dist;
+		*tb = b[k] - nd->u.dist;
+		return;
+	}
+	pl = s->planes + nd->u.plane;
+	*ta = (float)((double)pl->normal[0] * a[0] + (double)pl->normal[1] * a[1]
+		+ (double)pl->normal[2] * a[2] - pl->dist);
+	*tb = (float)((double)pl->normal[0] * b[0] + (double)pl->normal[1] * b[1]
+		+ (double)pl->normal[2] * b[2] - pl->dist);
 }
 
 /* Plane of node li in chunk cp: axis 0-2 (unit normal) or 3 (pl). */
@@ -203,13 +257,12 @@ static int walk_point(src_t *s, int32_t ref, const float p[3])
 
 	for (steps = 0; ref >= 0; steps++)
 	{
-		const uint8_t *cp;
 		uint32_t li;
-		const w64_cnode_t *nd = node_of(s, ref, &cp, &li);
+		const w64_cnode_t *nd = node_of(s, ref, &li);
 
 		if (steps == COL_WALK_MAX)
 			sys_error("coll: hull walk deeper than %d", COL_WALK_MAX);
-		ref = child_ref(cp, s->ci, nd->child[plane_dist(cp, li, p) >= 0 ? 0 : 1]);
+		ref = child_of(s, nd->child[view_dist(s, nd, li, p) >= 0 ? 0 : 1]);
 	}
 	return leaf_contents(s, ref);
 }
@@ -256,6 +309,8 @@ static void src_box(src_t *s, const float lo[3], const float hi[3])
 	memset(s, 0, sizeof(*s));
 	s->box = box_tree;
 	s->root = 0;
+	s->cp = box_tree;
+	chunk_view(s);
 }
 
 /* ---- segment walk (spec 3) -------------------------------------------------- */
@@ -284,21 +339,21 @@ static int walk_trace(src_t *s, const float p1[3], const float p2[3], col_trace_
 
 		while (ref >= 0)
 		{
-			const uint8_t *cp;
 			uint32_t li;
-			const w64_cnode_t *nd = node_of(s, ref, &cp, &li);
-			float t1 = plane_dist(cp, li, a), t2 = plane_dist(cp, li, b), frac;
+			const w64_cnode_t *nd = node_of(s, ref, &li);
+			float t1, t2, frac;
 			split_t *fr;
 			int side;
 
+			view_dist2(s, nd, li, a, b, &t1, &t2);
 			if (t1 >= 0 && t2 >= 0)
 			{
-				ref = child_ref(cp, s->ci, nd->child[0]);
+				ref = child_of(s, nd->child[0]);
 				continue;
 			}
 			if (t1 < 0 && t2 < 0)
 			{
-				ref = child_ref(cp, s->ci, nd->child[1]);
+				ref = child_of(s, nd->child[1]);
 				continue;
 			}
 			side = t1 < 0;
@@ -310,8 +365,8 @@ static int walk_trace(src_t *s, const float p1[3], const float p2[3], col_trace_
 			if (sp == COL_STACK)
 				sys_error("coll: hull walk deeper than %d splits", COL_STACK);
 			fr = &stack[sp++];
-			fr->far = child_ref(cp, s->ci, nd->child[side ^ 1]);
-			fr->cp = cp;
+			fr->far = child_of(s, nd->child[side ^ 1]);
+			fr->cp = s->cp;
 			fr->ci = s->ci;
 			fr->li = (uint16_t)li;
 			fr->side = (uint8_t)side;
@@ -320,7 +375,7 @@ static int walk_trace(src_t *s, const float p1[3], const float p2[3], col_trace_
 			fr->p2f = bf;
 			memcpy(fr->p1, a, sizeof(a));
 			memcpy(fr->p2, b, sizeof(b));
-			ref = child_ref(cp, s->ci, nd->child[side]);
+			ref = child_of(s, nd->child[side]);
 			bf = af + (bf - af) * frac;
 			lerp(b, fr->p1, fr->p2, frac);
 		}
@@ -361,6 +416,7 @@ static int walk_trace(src_t *s, const float p1[3], const float p2[3], col_trace_
 				return 0;		/* never left the solid */
 			s->cp = fr->cp;			/* the frame's chunk stays resident (used this frame) */
 			s->ci = fr->ci;
+			chunk_view(s);
 			plane_get(fr->cp, fr->li, tr->normal, &tr->dist);
 			t1 = plane_dist(fr->cp, fr->li, fr->p1);
 			t2 = plane_dist(fr->cp, fr->li, fr->p2);
