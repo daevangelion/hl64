@@ -230,8 +230,8 @@ mon_ai_work_t		mon_aiw;
  * the current frame's sum, the window's worst frame (monster think us)
  * and its worst think with what it ran. */
 static struct {
-	mon_ai_work_t	win, frame, wf, wt;
-	uint32_t	frame_thinks, wf_us, wf_thinks, wt_us;
+	mon_ai_work_t	win, frame, wf, wt, life;
+	uint32_t	frame_thinks, wf_us, wf_thinks, wt_us, life_thinks;
 	int		wt_e;
 	cls_t		wt_cls;
 	const char	*wt_s0, *wt_s1;	/* schedule at the think's start / end */
@@ -382,6 +382,15 @@ void game_mon_prof(void)
 		(unsigned long)s.local_moves, (unsigned long)live, (unsigned long)s.scripts,
 		(unsigned long)mem, (unsigned long)mon_mem_peak);
 	ai_prof_line(s.frames);
+}
+
+/* `stats N ai:` record (route `stats`): the think work since boot, exact
+ * sums of the per-think deltas. Work units: host and cart print the same. */
+void game_ai_stats(uint32_t id)
+{
+	log_printf("stats %lu ai: thinks=%lu", (unsigned long)id, (unsigned long)aip.life_thinks);
+	aiw_print("w", &aip.life);
+	log_printf("\n");
 }
 
 /* ---- animation helpers (CBaseAnimating, animating.cpp) -------------------- */
@@ -791,7 +800,9 @@ out:
 	aiw_now(&w1);
 	aiw_delta(&w0, &w1, &d);
 	aiw_add(&aip.frame, &d);
+	aiw_add(&aip.life, &d);
 	aip.frame_thinks++;
+	aip.life_thinks++;
 	if (ent_is_live(e) && MON(e) == m)
 	{
 		s_end = sched_name(m);

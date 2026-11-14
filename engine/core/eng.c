@@ -441,6 +441,7 @@ static int cmd_stats(const dbg_cmd_t *c)
 			(unsigned long)r.store_used, (unsigned long)r.store_peak,
 			(unsigned long)r.open_expired);
 	}
+	game_ai_stats(c->arg[0].u);
 	return 0;
 }
 

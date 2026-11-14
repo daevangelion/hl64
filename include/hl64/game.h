@@ -76,6 +76,8 @@ int	game_spawner_done(gid_t16 gid);
 void	game_start_frame(void);		/* step 4, after rec_run_timers */
 /* GameMon: the `prof mon_us` roll-up line (eng.c rollup, weak). */
 void	game_mon_prof(void);
+/* GameMon: the `stats N ai:` record (eng.c cmd_stats): AI work since boot. */
+void	game_ai_stats(uint32_t id);
 
 /* ---- player ---------------------------------------------------------------- */
 
