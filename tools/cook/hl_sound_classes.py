@@ -16,6 +16,7 @@ VADPCM, then to PCM; an output under 64 bytes is a failure.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import os
 import resource
 import shutil
@@ -118,18 +119,31 @@ def convert_one(audioconv: str, wav: Path, spec: str, resample: int,
                            stdin=subprocess.DEVNULL, capture_output=True,
                            preexec_fn=_no_core)
         if r.returncode == 0 and out.is_file() and out.stat().st_size >= MIN_WAV64:
+            # wav64 10: a loop end other than the length (a release tail
+            # after a sustain loop, from a WAV smpl chunk) has no GoldSrc
+            # meaning and the engine loops at the end only
+            if struct.unpack(">I", out.read_bytes()[20:24])[0]:
+                raise SoundError(f"{wav}: audioconv64 wrote a loop ending before the "
+                                 f"sample end (WAV smpl loop with a release tail)")
             return out, s
         out.unlink(missing_ok=True)
     raise SoundError(f"audioconv64 failed on {wav}: {r.stderr.decode(errors='replace')[-300:]}")
 
 
+def encoder_id() -> str:
+    """sha256 of the audioconv64 binary: converted samples are stale when it changes."""
+    return hashlib.sha256(Path(find_audioconv()).read_bytes()).hexdigest()
+
+
 def find_audioconv() -> str:
-    hit = shutil.which("audioconv64")
-    if hit:
-        return hit
+    # the SDK's own first: its libdragon reads only the wav64 version its
+    # audioconv64 writes
     inst = os.environ.get("N64_INST")
     if inst and os.access(Path(inst, "bin", "audioconv64"), os.X_OK):
         return str(Path(inst, "bin", "audioconv64"))
+    hit = shutil.which("audioconv64")
+    if hit:
+        return hit
     raise SoundError("audioconv64 not found (set N64_INST to the libdragon SDK)")
 
 

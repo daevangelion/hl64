@@ -121,9 +121,9 @@ ids), which the cook reads too.
 ### 3.1 Boot (N64)
 
 1. libdragon: ISViewer debug, DFS, timer, controllers, audio 22050 Hz,
-   rspq, tiny3d; display 320×240×16, two framebuffers, 16-bit Z; banked
-   libdragon (`~/sdks/libdragon-banked-bc24d3d5a7d2`, FB/Z in separate
-   RDRAM banks).
+   rspq, tiny3d; display 320×240×16, two framebuffers, 16-bit Z; our
+   libdragon fork (18.1: DragonMinded `preview` + the banked RDRAM
+   overlay, FB/Z in separate RDRAM banks).
 2. `mem_boot_carve`: every fixed region of 4.1 in a fixed order; the
    remaining heap is measured and checked against `HL64_HEAP_MIN_KB`.
 3. tiny3d strip-index self-check against the `.w64` header encoding
@@ -869,10 +869,14 @@ D6 (iv).
 
 ## 10. Audio
 
-libdragon mixer, 16 voices, 22050 Hz; wav64 (VADPCM) streamed from the
-cart (`WAV64_STREAMING_FULL`); ≤ 10 open waves with LRU close (never under a
-voice); wave reads in the `AUDIO` I/O class. GoldSrc channel semantics,
-attenuation and stereo model, loops, sentences: specs/sound.md. Sounds are
+libdragon mixer, 16 voices, 22050 Hz; wav64 version 10 (mono VADPCM,
+decoded by the mixer's RSP ucode) streamed from the cart
+(`WAV64_STREAMING_FULL`); ≤ 10 open waves with LRU close (never under a
+voice); wave reads in the `AUDIO` I/O class. The frame's pump is
+`mixer_try_play`, which queues the mixer's RSP rounds without waiting for
+them unless the AI is down to its last buffer (160 ms of AI buffers).
+GoldSrc channel semantics, attenuation and stereo model, loops,
+sentences: specs/sound.md. Sounds are
 `res_t`; sentences are cooked (word `res_t` lists with VOX modifiers),
 nothing is parsed at run time. Positions are global, so both open layers
 spatialise without conversion.
@@ -1123,18 +1127,21 @@ uses them (specs/README.md).
 ### 18.1 Build
 
 `Makefile` includes `$(N64_INST)/include/n64.mk` and `t3d.mk`; `N64_INST`
-= `~/sdks/n64-sdk`, libdragon replaced by the banked prefix (its MANIFEST
-rev must equal the SDK's `libdragon_rev`), toolchain
+= `~/sdks/n64-sdk-hl64-<rev12>`: libdragon from our fork
+(`~/src/libdragon-hl64`, branch `hl64`: DragonMinded `preview` plus the
+banked RDRAM overlay — `surface.c` / `display.c` / `rba_ld` /
+`rdram_bank`, FB / Z / stream in separate banks — and the debugcpp
+debloat) at the Makefile's `LIBDRAGON_REV`, its tools, and tiny3d at
+`TINY3D_REV`, built by `plat/n64/build_sdk.sh`; `make sdk-check` compares
+the prefix's `MANIFEST.json` with both pins. Toolchain
 `~/sdks/mips64-toolchain`, out-of-tree `BUILD_DIR` (scratch on
 `/scratch`). Targets: `rom`, `host` (`HOST_M32=1` default), `cook`
 (`HL64_DATA` → `HL64_CONTENT`), `routes`, `test-host`, `test-ares`,
 `provcheck`. `-std=c99 -O2 -Wall -Wextra -Werror` for `engine/` and
 `plat/`. Variants: `PROFILE=1`, `HL64_TEST=1` only. ROM ≤ 64 MiB
-(flashcart limit; Uplink + Hazard ≈ 58 MiB in the old tree).
-
-The user approved moving to a libdragon fork on the latest DragonMinded
-`preview` branch (LibdragonUp, in progress); the banked prefix above
-stays the build's libdragon until that fork lands and passes the gates.
+(flashcart limit; Uplink + Hazard ≈ 58 MiB in the old tree). Cooked
+sounds are keyed on the `audioconv64` binary, so a new SDK reconverts
+them (wav64 versions are not interchangeable).
 
 ### 18.2 Code conventions
 

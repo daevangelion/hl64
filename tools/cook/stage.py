@@ -378,6 +378,10 @@ def stage_sounds(data: Data, maps: List[str], ents, models: Dict[str, bytes],
     ct.put("titles.txt", hl_sound_refs.titles_txt(refs, titles).encode("latin-1"))
 
     rules = hl_sound_classes.parse_rules(hl_sound_classes.RULES)
+    try:
+        enc = hl_sound_classes.encoder_id() if have else ""
+    except hl_sound_classes.SoundError as e:
+        raise CookError(str(e)) from None
     sdir = staging / "sound"
     todo = []
     for s in have:
@@ -386,7 +390,7 @@ def stage_sounds(data: Data, maps: List[str], ents, models: Dict[str, bytes],
             cls, spec, resample, cue = hl_sound_classes.plan(rules, s, wav)
         except hl_sound_classes.SoundError as e:
             raise CookError(f"{data.where('sound/' + s)}: {e}") from None
-        key = f"{hashlib.sha256(wav).hexdigest()} {spec} {resample} {cue}\n"
+        key = f"{hashlib.sha256(wav).hexdigest()} {spec} {resample} {cue} {enc}\n"
         dest = sdir / s
         stamp = dest.with_suffix(".plan")
         if stamp.is_file() and stamp.read_text() == key and dest.with_suffix(".wav64").is_file():
