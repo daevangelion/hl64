@@ -25,6 +25,13 @@
  *   inv                     "inv weapons=0xW active=A ammo=A1,A2,..."
  *   live E                  "live E 0|1 CLASSNAME"
  *   rec LUMP                "rec LUMP state=S": MAP's record LUMP (REC_*)
+ *   vm B P Y [P Y ...]      per view angle pair (PITCH YAW): the player's
+ *                           view angles there, the view (ren_view_frame)
+ *                           and its view model at once (one animation
+ *                           frame): "vm B P Y cam CP CY CR M00 .. M23",
+ *                           bone B in the camera's frame
+ *                           (studio_view_bone_cam), "vm B none" without
+ *                           a posed view model
  * Engine and game log lines come in between. Exit 0; 2 on a usage or
  * content error.
  */
@@ -35,12 +42,15 @@
 #include "hl64/ent.h"
 #include "hl64/game.h"
 #include "hl64/rec.h"
+#include "hl64/studio.h"
 #include "engine/core/dbg.h"
 #include "engine/core/eng.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/in/in.h"
 #include "engine/phys/player.h"
+#include "engine/render/ren.h"
+#include "engine/view/view.h"
 #include "engine/world/wld.h"
 #include "game/hl/player.h"
 #include "plat/host/host.h"
@@ -223,6 +233,38 @@ static int line(char *s)
 		if (sscanf(s, "%d", &i) != 1)
 			return -1;
 		log_printf("rec %d state=%d\n", i, rec_state(GID_MAKE(slot, i)));
+	}
+	else if (!strcmp(cmd, "vm"))
+	{
+		ent_player_t *pl = phy_player();
+		float m[3][4];
+		int b, r, c;
+
+		if (sscanf(s, "%d%n", &b, &n) != 1)
+			return -1;
+		s += n;
+		/* each PITCH YAW: the view and its view model now (no frame runs,
+		 * the same animation frame) */
+		while (sscanf(s, "%f %f%n", &pl->view_angles[0], &pl->view_angles[1], &n) == 2)
+		{
+			char buf[256];
+			int k = 0;
+
+			s += n;
+			pl->view_angles[2] = 0;
+			ren_view_frame(eng_time(), 0);
+			if (studio_view_bone_cam(b, m))
+			{
+				log_printf("vm %d none\n", b);
+				continue;
+			}
+			for (r = 0; r < 3; r++)
+				for (c = 0; c < 4; c++)
+					k += snprintf(buf + k, sizeof(buf) - (size_t)k, " %.5f", (double)m[r][c]);
+			log_printf("vm %d %.1f %.1f cam %.1f %.1f %.1f%s\n", b,
+				(double)pl->view_angles[0], (double)pl->view_angles[1], (double)ren_cam.ang[0],
+				(double)ren_cam.ang[1], (double)ren_cam.ang[2], buf);
+		}
 	}
 	else
 		return -1;

@@ -27,6 +27,9 @@ weapons and items.
              vz = sqrt(2 * 800 * 56) less the move's two half-gravity steps,
              punch -5; ducked but standing, or running without duck, is a
              normal jump.
+  viewmodel  (cl_dll/view.cpp V_CalcGunAngle) hldemo1: the crowbar's and
+             the MP5's view model, in the camera's frame, is the same at
+             every view angle (it rides with the view).
 
 c3a2d is not in the Uplink content: it is cooked from the Valve data
 (--data) into --scratch unless --wb-content names a cooked c3a2d.
@@ -46,7 +49,7 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 IN_ATTACK, IN_JUMP, IN_DUCK, IN_FORWARD = 1, 2, 4, 8
 AMMO_9MM, AMMO_357, AMMO_BUCKSHOT, AMMO_ARGRENADES, AMMO_HANDGRENADE, AMMO_TRIPMINE = range(1, 7)
-WEAPON_TRIPMINE = 13
+WEAPON_CROWBAR, WEAPON_MP5, WEAPON_TRIPMINE = 1, 4, 13
 TRIPMINE_MAX_CARRY = 5
 GRAVITY = 800.0
 MSEC = 33                      # 1/30 s fixed frames: in_frame's round(33.333)
@@ -284,6 +287,63 @@ def test_pickup_keeps_records(binary, content):
           and recs == ["rec 1 state=0", "rec 2 state=0"], f"{recs}")
 
 
+# ---- view model -----------------------------------------------------------
+
+VM_ANGLES = [(0, 0), (-60, 90), (60, 200), (30, 315), (-85, 45), (85, 120), (-20, 270)]
+# the gun's origin less the camera's, in world axes: the gun 1 u down
+# ("shifting" effect looking up / down), the view nudged 1/32 off node lines
+VM_DROP = (-1 / 32, -1 / 32, -1 - 1 / 32)
+
+
+def cam_axes(p, y, r):
+    """GoldSrc AngleVectors (ren_angle_axes): forward, right, up."""
+    k = math.pi / 180
+    sp, cp, sy, cy = math.sin(p * k), math.cos(p * k), math.sin(y * k), math.cos(y * k)
+    sr, cr = math.sin(r * k), math.cos(r * k)
+    return ((cp * cy, cp * sy, -sp),
+            (-sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp),
+            (cr * sp * cy + sr * sy, cr * sp * sy - sr * cy, cr * cp))
+
+
+def test_viewmodel(binary, content):
+    """HLSDK cl_dll/view.cpp V_CalcNormalRefdef / V_CalcGunAngle: the view
+    model sits at the eye with the view's angles (its pitch negated as a
+    model's, StudioSetUpTransform negating it back), so in the camera's
+    frame it is the same at every view angle: the pose at view (0, 0),
+    where the camera's axes are the world's and the model's transform is
+    the identity, but for the gun's 1 u drop in world z (VM_DROP). Bone 0
+    of the crowbar and of the MP5, one animation frame per weapon,
+    standing still (no bob)."""
+    pairs = " ".join(f"{p} {y}" for p, y in VM_ANGLES)
+    script = ["give weapon_crowbar", "frames 45", "inv", f"vm 0 {pairs}",
+              "give weapon_9mmAR", "frames 45", "inv", f"vm 0 {pairs}"]
+    lines = run(binary, content, "hldemo1", script)
+    invs = [parse_inv(x) for x in grab(lines, "inv ")]
+    vms = grab(lines, "vm ")
+    for k, (name, wid) in enumerate((("crowbar", WEAPON_CROWBAR), ("mp5", WEAPON_MP5))):
+        rows = vms[k * len(VM_ANGLES):(k + 1) * len(VM_ANGLES)]
+        if not check(f"viewmodel {name} posed", invs[k][1] == wid and len(rows) == len(VM_ANGLES)
+                     and not any(r.endswith(" none") for r in rows),
+                     f"active {invs[k][1]}, {len(rows)} poses"):
+            continue
+        mats = []
+        for r in rows:
+            f = r.split()
+            m = [float(x) for x in f[8:20]]
+            for i, ax in enumerate(cam_axes(*(float(x) for x in f[5:8]))):
+                m[4 * i + 3] -= sum(ax[j] * VM_DROP[j] for j in range(3))
+            mats.append(m)
+        ref = mats[0]
+        worst_r = max(abs(m[i] - ref[i]) for m in mats for i in range(12) if i % 4 != 3)
+        worst_t = max(abs(m[i] - ref[i]) for m in mats for i in range(12) if i % 4 == 3)
+        bad = [f"{VM_ANGLES[j]}" for j, m in enumerate(mats)
+               if max(abs(m[i] - ref[i]) for i in range(12)) > 0.02]
+        dist = math.sqrt(sum(ref[i] ** 2 for i in (3, 7, 11)))
+        check(f"viewmodel {name} rides with the view", worst_r < 2e-3 and worst_t < 0.02
+              and dist < 64, f"rotation {worst_r:.5f}, position {worst_t:.4f} u off the"
+              f" (0, 0) pose (bone 0 {dist:.2f} u from the eye) {' '.join(bad)}")
+
+
 def cook_c3a2d(a):
     out = os.path.join(a.scratch, "c3a2d")
     log = os.path.join(a.scratch, "cook-c3a2d.log")
@@ -316,6 +376,7 @@ def main():
     test_weaponbox(a.bin, wb)
     test_longjump(a.bin, a.content)
     test_pickup_keeps_records(a.bin, a.content)
+    test_viewmodel(a.bin, a.content)
     good = all(results)
     print(f"items {'PASS' if good else 'FAIL'} ({sum(results)}/{len(results)} checks)")
     return 0 if good else 1

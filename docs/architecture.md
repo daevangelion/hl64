@@ -871,8 +871,12 @@ builds per-frame lists straight from components (no client entity copies).
    matrices from `game_studio_setup_bones` (D3) into a double-buffered
    pool and one block replay. Lighting: probe (base + one style term,
    lightstyles.md 4) + dlights. View model CPU-skinned (chrome needs
-   bone-space normals). STEP entities interpolated between think steps
-   (physics-movetypes.md 7), as GoldSrc's client does.
+   bone-space normals), posed at the eye with the view's angles (pitch
+   negated as a model's, HLSDK V_CalcGunAngle) and drawn last in the
+   front 3/10 of the depth range (GoldSrc's view model depth range): it
+   turns with the view and never goes into a wall. STEP entities
+   interpolated between think steps (physics-movetypes.md 7), as
+   GoldSrc's client does.
 5. **Particles**: one pool, TinyPX ucode, one call, s16 view-relative.
 6. **Translucent**: render modes/fx per render-fx.md; back to front; depth
    test without write; additive as unit colour × brightness through the

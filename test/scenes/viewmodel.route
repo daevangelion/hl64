@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# Scene viewmodel (test/README.md): the first-person weapon at several view
+# angles. hl1-start's intro to the start corridor, impulse 101, then the
+# crowbar (impulse 1) and the MP5 (impulse 3) each shot level, looking up
+# and down, and turned left / right: the view model rides with the view
+# (HLSDK cl_dll/view.cpp V_CalcGunAngle, the model at the eye with the view
+# angles), so every shot of one weapon frames it the same. Last, the MP5
+# held against the corridor's north wall (y 776: the 16 u hull + 1 u off
+# it), level and looking 30 down at it: the view model draws in front of
+# the world (GoldSrc's view model depth range), never into the wall.
+startmap hldemo1
+waitmap hldemo1 600
+waitnear -2048 744 36 48 60
+impulse 101
+wait 1
+impulse 1
+wait 2
+look 0 270
+wait 0.5
+shot crowbar-level
+look -70 270
+wait 0.5
+shot crowbar-up
+look 70 270
+wait 0.5
+shot crowbar-down
+look 0 225
+wait 0.5
+shot crowbar-left
+look -45 315
+wait 0.5
+shot crowbar-upright
+impulse 3
+wait 2
+look 0 270
+wait 0.5
+shot mp5-level
+look -70 270
+wait 0.5
+shot mp5-up
+look 70 270
+wait 0.5
+shot mp5-down
+look 45 315
+wait 0.5
+shot mp5-downright
+setpos -2048 759 36 0 90
+wait 0.5
+shot mp5-wall
+look 30 90
+wait 0.5
+shot mp5-wall-down
+pass

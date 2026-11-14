@@ -75,11 +75,14 @@ int		studio_hitboxes(const col_ent_t *e, const float start[3], const float end[3
 			const col_hitbox_t **out);
 
 /* View model (HUD / weapons slice; architecture.md 9.4): this frame's
- * first-person model, CPU-skinned with chrome, drawn after the entities.
- * org / ang: the view (game_calc_view) in the player's frame; the pose
- * is the server pose (game_studio_pose_draw) of (model, sequence, frame,
- * controller) placed at the eye. Call once per frame before the draw;
- * model RES_NONE = none. */
+ * first-person model, CPU-skinned with chrome, drawn after the entities
+ * in the front of the depth range (gpu_studio_draw_cpu). org: the view
+ * (game_calc_view) in the player's frame; ang: the model's angles there
+ * (an entity's: the pose negates the pitch, so a view model at the view
+ * angles has the pitch negated, HLSDK V_CalcGunAngle); the pose is the
+ * server pose (game_studio_pose_draw) of (model, sequence, frame,
+ * controller, org, ang). Call once per frame before the draw; model
+ * RES_NONE = none. */
 typedef struct {
 	res_t		model;
 	uint16_t	sequence;
@@ -90,6 +93,12 @@ typedef struct {
 	uint8_t		pad[2];
 } studio_view_t;
 void		studio_view_model(const studio_view_t *v);
+#ifdef HL64_TEST
+/* Test builds: the last studio_view_model's bone `bone` posed at the
+ * camera (ren_cam), in the camera's frame (rows forward, right, up;
+ * column 3 the position from the eye). 0, -1 none / not posed. */
+int		studio_view_bone_cam(int bone, float out[3][4]);
+#endif
 
 typedef struct {
 	uint32_t	models, pool_used, pool_peak, anims, sync_loads;

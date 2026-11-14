@@ -42,6 +42,11 @@ void		vid_init(void);
 /* Detach and show a frame left attached (error screen path). */
 void		vid_abort_frame(void);
 
+/* gpu.c: this frame's projection (gpu_begin) for the following matrix
+ * pushes: view 0 the world's, 1 the view model's (gpu_studio_draw_cpu),
+ * whose depth fills only the front of the depth range (gpu.c VIEW_DEPTH). */
+void		gpu_view_proj(int view);
+
 /* cart.c: mount the ROM's DFS (player content) once at boot; without one
  * (the M0 gate's ROM) sys_cart_addr finds no file. */
 void		cart_mount(void);

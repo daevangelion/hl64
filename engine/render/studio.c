@@ -1829,13 +1829,53 @@ void studio_view_model(const studio_view_t *v)
 
 	view_set = v && v->model != RES_NONE;
 	if (!view_set)
+	{
+		view.model = RES_NONE;
 		return;
+	}
 	view = *v;
 	/* the view model's sequences stay resident while it is held (a new
 	 * weapon animation never reads synchronously) */
 	if ((i = model_index(v->model)) >= 0)
 		want_all(i);
 }
+
+/* The view model's server pose at the eye (global): bones in world axes
+ * about the eye; the bone count, 0 when not posed. */
+static int view_pose(const float eye[3], float (*out)[3][4])
+{
+	game_pose_t p;
+	const float *gm = eng_layer_origin(ent_is_live(1) ? ent_idc(1)->layer : -1);
+	int k;
+
+	memset(&p, 0, sizeof(p));
+	p.model = view.model;
+	p.sequence = view.sequence;
+	p.frame = view.frame;
+	memcpy(p.angles, view.ang, sizeof(p.angles));
+	memcpy(p.controller, view.controller, sizeof(p.controller));
+	for (k = 0; k < 3; k++)
+		p.origin[k] = view.org[k] + gm[k] - eye[k];
+	return game_studio_pose_draw(&p, out, MAXBONES);
+}
+
+#ifdef HL64_TEST
+int studio_view_bone_cam(int bone, float out[3][4])
+{
+	float ax[3][3];
+	int r, c;
+
+	if (view.model == RES_NONE || !anim_ready(view.model, view.sequence)
+		|| bone < 0 || bone >= view_pose(ren_cam.org, bones))
+		return -1;
+	ren_angle_axes(ren_cam.ang, ax[0], ax[1], ax[2]);
+	for (r = 0; r < 3; r++)
+		for (c = 0; c < 4; c++)
+			out[r][c] = ax[r][0] * bones[bone][0][c] + ax[r][1] * bones[bone][1][c]
+				+ ax[r][2] * bones[bone][2][c];
+	return 0;
+}
+#endif
 
 static float	chrome_up[MAXBONES][3], chrome_right[MAXBONES][3];
 
@@ -1891,9 +1931,7 @@ static void draw_view(const float eye[3])
 	const w64_vert_t *src;
 	w64_vert_t *dst;
 	gpu_studio_ent_t ge;
-	game_pose_t p;
 	float f[3], rt[3], u[3];
-	const float *gm;
 	int n, ri, i, l, k, slot = 0, layer, skin;
 
 	if (!view_set)
@@ -1908,16 +1946,7 @@ static void draw_view(const float eye[3])
 		return;
 	}
 	layer = ent_is_live(1) ? ent_idc(1)->layer : -1;
-	gm = eng_layer_origin(layer);
-	memset(&p, 0, sizeof(p));
-	p.model = view.model;
-	p.sequence = view.sequence;
-	p.frame = view.frame;
-	memcpy(p.angles, view.ang, sizeof(p.angles));
-	memcpy(p.controller, view.controller, sizeof(p.controller));
-	for (k = 0; k < 3; k++)
-		p.origin[k] = view.org[k] + gm[k] - eye[k];
-	n = game_studio_pose_draw(&p, bones, MAXBONES);
+	n = view_pose(eye, bones);
 	if (n < m->info->numbones)
 		return;
 	b = (const uint8_t *)ms;
