@@ -28,7 +28,7 @@
 #        hldemo*), HL64_FIXTURES (default /scratch/hl64/fixtures),
 #        HL64_DATA (Valve data for ent.py's PVS oracle and m1.sh's W1,
 #        default /scratch/hl1/valve), W1_FIXTURES (default
-#        $HL64_FIXTURES/w1), ARES_BIN, ARES_TIMEOUT, DISPLAY_NUM.
+#        $HL64_FIXTURES/w1), HL64_ARES_HOST / ARES_BIN (test/run/ares.sh), ARES_TIMEOUT, DISPLAY_NUM.
 # Exit:  0 pass, 1 gate failure, 2 prerequisite missing.
 set -euo pipefail
 
@@ -148,8 +148,6 @@ if [[ $ARES -eq 0 ]]; then
 fi
 
 # ---- ares ----
-ARES_BIN="${ARES_BIN:-$HOME/src/products/ares/build/desktop-ui/ares}"
-[[ -x "$ARES_BIN" ]] || { echo "patched ares not found at $ARES_BIN (set ARES_BIN)" >&2; exit 2; }
 ROMDIR="$BUILD_DIR/m3-rom"
 BC="$ROMDIR/content"
 rm -rf "$BC"
@@ -163,16 +161,11 @@ make -C "$ROOT" --no-print-directory BUILD_DIR="$ROMDIR" HL64_TEST=1 PROFILE=1 \
 	|| { tail -40 "$OUT/rom-build.log" >&2; fail "PROFILE rom build"; }
 grep -E 'warning:' "$OUT/rom-build.log" && fail "rom build has warnings"
 
-# shellcheck source=xvfb.sh
-. "$ROOT/test/run/xvfb.sh"
-xvfb_start || exit 2
-trap '[[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null || true' EXIT
+# shellcheck source=ares.sh
+. "$ROOT/test/run/ares.sh"
+ares_setup || exit 2
 set +e
-(cd "$ROMDIR" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 \
-	timeout "${ARES_TIMEOUT:-1800}" "$ARES_BIN" --system "Nintendo 64" \
-	--setting Video/Driver=Vulkan --setting Audio/Driver=None \
-	--setting Input/Driver=SDL --setting General/HomebrewMode=true \
-	hl64.z64 >ares.log 2>&1)
+ares_run "$ROMDIR" hl64.z64 ares.log "${ARES_TIMEOUT:-1800}"
 CODE=$?
 set -e
 tr -d '\r' <"$ROMDIR/ares.log" >"$OUT/ares-a.log"

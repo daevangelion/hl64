@@ -30,7 +30,7 @@
 #        content with maps/hldemo1.w64 + maps/campaign.cwg; cook with
 #        HL64_REF_PALETTE=<old id1/gfx/palette.lmp> for the SSIM gate),
 #        M1_REF (old-cart shots start/dome/elevator-B.png), HL64_DATA and
-#        W1_FIXTURES for the cook's W1, ARES_BIN, ARES_TIMEOUT, DISPLAY_NUM.
+#        W1_FIXTURES for the cook's W1, HL64_ARES_HOST / ARES_BIN (test/run/ares.sh), ARES_TIMEOUT, DISPLAY_NUM.
 # Exit:  0 pass, 1 gate failure, 2 prerequisite missing.
 set -euo pipefail
 
@@ -129,25 +129,18 @@ if [[ $ARES -eq 0 ]]; then
 fi
 
 # ---- ares ----
-ARES_BIN="${ARES_BIN:-$HOME/src/products/ares/build/desktop-ui/ares}"
-[[ -x "$ARES_BIN" ]] || { echo "patched ares not found at $ARES_BIN (set ARES_BIN)" >&2; exit 2; }
 [[ -n "$M1_REF" && -f "$M1_REF/dome-B.png" ]] || { echo "set M1_REF to the old-cart shots" >&2; exit 2; }
 
-# shellcheck source=xvfb.sh
-. "$ROOT/test/run/xvfb.sh"
-xvfb_start || exit 2
-trap '[[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null || true' EXIT
+# shellcheck source=ares.sh
+. "$ROOT/test/run/ares.sh"
+ares_setup || exit 2
 
 # run_rom DIR: ares on DIR/hl64.z64 in DIR, log DIR/ares-clean.log
 run_rom() {
 	local dir="$1" code
 	rm -f "$dir"/ares-test-*.ppm
 	set +e
-	(cd "$dir" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 \
-		timeout "${ARES_TIMEOUT:-600}" "$ARES_BIN" --system "Nintendo 64" \
-		--setting Video/Driver=Vulkan --setting Audio/Driver=None \
-		--setting Input/Driver=SDL --setting General/HomebrewMode=true \
-		hl64.z64 >ares.log 2>&1)
+	ares_run "$dir" hl64.z64 ares.log "${ARES_TIMEOUT:-600}"
 	code=$?
 	set -e
 	tr -d '\r' <"$dir/ares.log" >"$dir/ares-clean.log"

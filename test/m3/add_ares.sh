@@ -12,7 +12,7 @@
 # smoke ones are viewed, not checked).
 #
 # Usage: test/m3/add_ares.sh
-# Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content), ARES_BIN,
+# Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content), HL64_ARES_HOST / ARES_BIN (test/run/ares.sh),
 #        ARES_TIMEOUT.
 # Exit:  0 pass, 1 failure, 2 prerequisite missing.
 set -euo pipefail
@@ -21,12 +21,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-build}"
 case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$ROOT/$BUILD_DIR" ;; esac
 CONTENT="${HL64_CONTENT:?set HL64_CONTENT to the cooked content directory}"
-ARES_BIN="${ARES_BIN:-$HOME/src/products/ares/build/desktop-ui/ares}"
 ROUTE="$ROOT/test/routes/addblend.route"
 ROMDIR="$BUILD_DIR/m3-add-rom"
 fail() { echo "ADD-ARES FAIL: $*" >&2; exit 1; }
 [[ -f "$CONTENT/campaign.rtb" ]] || { echo "no $CONTENT/campaign.rtb" >&2; exit 2; }
-[[ -x "$ARES_BIN" ]] || { echo "patched ares not found at $ARES_BIN" >&2; exit 2; }
 
 cd "$ROOT"
 make --no-print-directory BUILD_DIR="$BUILD_DIR" host >"$BUILD_DIR/add-host-build.log" 2>&1 \
@@ -46,17 +44,12 @@ make --no-print-directory BUILD_DIR="$ROMDIR" HL64_TEST=1 HL64_CONTENT="$ROMDIR/
 	>"$ROMDIR/rom-build.log" 2>&1 || { tail -40 "$ROMDIR/rom-build.log" >&2; fail "rom build"; }
 grep -E 'warning:' "$ROMDIR/rom-build.log" && fail "rom build has warnings"
 
-# shellcheck source=../run/xvfb.sh
-. "$ROOT/test/run/xvfb.sh"
-xvfb_start || exit 2
-trap '[[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null || true' EXIT
+# shellcheck source=../run/ares.sh
+. "$ROOT/test/run/ares.sh"
+ares_setup || exit 2
 rm -f "$ROMDIR"/ares-test-*.ppm
 set +e
-(cd "$ROMDIR" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 \
-	timeout "${ARES_TIMEOUT:-900}" "$ARES_BIN" --system "Nintendo 64" \
-	--setting Video/Driver=Vulkan --setting Audio/Driver=None \
-	--setting Input/Driver=SDL --setting General/HomebrewMode=true \
-	hl64.z64 >ares.log 2>&1)
+ares_run "$ROMDIR" hl64.z64 ares.log "${ARES_TIMEOUT:-900}"
 CODE=$?
 set -e
 tr -d '\r' <"$ROMDIR/ares.log" >"$ROMDIR/ares-clean.log"

@@ -10,7 +10,8 @@
 #
 # Usage: test/run/m0.sh [--ares]
 # Env:   BUILD_DIR (default build; put scratch on /scratch),
-#        ARES_BIN (default ~/src/products/ares/build/desktop-ui/ares),
+#        HL64_ARES_HOST / ARES_BIN (test/run/ares.sh; ARES_BIN default
+#        ~/src/products/ares/build/desktop-ui/ares),
 #        ARES_TIMEOUT seconds (default 300), DISPLAY_NUM (optional X server)
 # Exit:  0 pass, 1 gate failure, 2 prerequisite missing.
 set -euo pipefail
@@ -42,26 +43,17 @@ echo "host: boot ok, $(wc -l <"$OUT/host-carve.txt") carve lines, exit 0"
 [[ $ARES -eq 1 ]] || { echo "M0 PASS (host)"; exit 0; }
 
 # ---- ares ----
-ARES_BIN="${ARES_BIN:-$HOME/src/products/ares/build/desktop-ui/ares}"
-[[ -x "$ARES_BIN" ]] || { echo "patched ares not found at $ARES_BIN (set ARES_BIN)" >&2; exit 2; }
 ROMDIR="$BUILD_DIR/rom-test"
 make -C "$ROOT" --no-print-directory BUILD_DIR="$ROMDIR" HL64_TEST=1 rom >"$OUT/rom-build.log" 2>&1 \
 	|| { tail -40 "$OUT/rom-build.log" >&2; fail "rom build"; }
 grep -E 'warning:' "$OUT/rom-build.log" && fail "rom build has warnings"
 
-# shellcheck source=xvfb.sh
-. "$ROOT/test/run/xvfb.sh"
-xvfb_start || exit 2
-trap '[[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null || true' EXIT
+# shellcheck source=ares.sh
+. "$ROOT/test/run/ares.sh"
+ares_setup || exit 2
 
 set +e
-(cd "$OUT" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 \
-	timeout "${ARES_TIMEOUT:-300}" "$ARES_BIN" --system "Nintendo 64" \
-	--setting Video/Driver=Vulkan \
-	--setting Audio/Driver=None \
-	--setting Input/Driver=SDL \
-	--setting General/HomebrewMode=true \
-	"$ROMDIR/hl64.z64" >"$OUT/ares.log" 2>&1)
+ares_run "$OUT" "$ROMDIR/hl64.z64" "$OUT/ares.log" "${ARES_TIMEOUT:-300}"
 CODE=$?
 set -e
 tr -d '\r' <"$OUT/ares.log" >"$OUT/ares-clean.log"
