@@ -258,6 +258,12 @@ what a closing map keeps:
 
 ### 4.2 CPU per frame (33.3 ms at 30 fps)
 
+**Acceptance (user):** a steady 30 fps; dips to ≈ 17 fps (≈ 60 ms frames)
+are acceptable if infrequent. The measurable form is the M6 gate (17):
+frames > 50 ms ≤ 2% of a route's frames and never more than 5 in a row
+outside seam / teleport windows, no frame > 67 ms outside teleport /
+route-`SETPOS` windows, distribution reported per map.
+
 Measured (M3 gate, ares, route `m3-a`, 80 one-second windows): the frame
 holds the 30 fps VI cap (`frame` 33436 µs avg). Zones are independent
 roll-up timers and may nest (phys inside the ent pass, mon inside game),
@@ -500,6 +506,10 @@ Slot index u16, cap 495 (ceil(1.25 × measured host peak 396)). A handle
   run each entity's movetype step (specs/physics-movetypes.md). Entities
   created during the walk at a higher index join this frame, as in
   GoldSrc's ascending-index physics loop.
+  The order stays GoldSrc's ascending index; grouping entities by class
+  (for instruction-cache locality) is not done unless a measurement shows
+  a large icache win that is behaviour-neutral (same route results and
+  entity records).
 - Cost is O(active), typically 30–80 of ≈ 400 live entities [EST from the
   route's monster/mover counts], with no per-entity visit for static props,
   resting items or idle logic.
@@ -1104,7 +1114,7 @@ uses them (specs/README.md).
 | M3 | components, active sets, think heap, records, hydration (one layer), movetypes, resources, sound, studio, translucent/decals/sprites, HUD, game/ retargeted | compiled Uplink route segment A to the elevator `+use`, `WAIT_MOVED startele1`, changelevel fire logged; physics/think/sound/lightstyle/dlight/render-fx tests pass on their fixtures |
 | M4 | streaming crossings: CWG3, seams, twins, dehydrate/rehydrate, timers, async residency with change-driven recompute | route through hldemo1→2→3: PASS, 0 forced switches on host, `budget_over=0`, `open_fail=0`, 0 frames > 1 ms blocked I/O, pop-in only in teleport windows, entities continuous across seams |
 | M5 | full Uplink route (converted `uplink_route.cfg`) + Hazard routes | PASS on host and ares at the same checkpoints; any `WAIT_NEAR` radius widened versus the old route is listed with its GoldSrc-behaviour reason |
-| M6 | performance; code residency (7.4: TLB-mapped overlays, `tools/ovlx`, cook frame/entry proof) | ares median fps ≥ the old cart's at every stats step (same pacing); no frame > 50 ms within ±2 s of a seam switch (misses reported with zones); 4.1 and 4.2 [EST] rows replaced by measurements; flashcart run if available. Overlays: `test/m6/tlb` passes on ares (and the flashcart when available); on the Uplink route the resident code size, arena frame peak and TLB entry peak are reported and within 7.4's budget (≤ 192 KB, ≤ 30 entries), 0 frames > 1 ms blocked on overlay I/O, 0 calls into unmapped units (trap and TLB-exception count 0). **Starting point (M4, ares, main `f913147`):** route `m4` frame avg 46.6 ms, p90 93 ms; 245–384 ms frames from `monster_human_grunt` AI (`Mon_RunAI` walk-move traces, node-graph cover search, route triangulation) in hldemo2/3; cart image 1674 KB vs the 900 KB budget (4.1, 4.2) |
+| M6 | performance; code residency (7.4: TLB-mapped overlays, `tools/ovlx`, cook frame/entry proof) | **Frame rate (user acceptance, 4.2)** on the Uplink and Hazard routes in ares: frames > 50 ms ≤ 2% of the route's frames and never more than 5 in a row outside seam and teleport windows; frames > 67 ms = 0 outside teleport / route-`SETPOS` windows (seam windows included); the frame-time distribution reported per map (zones named for every frame > 50 ms). ares median fps ≥ the old cart's at every stats step (same pacing); 4.1 and 4.2 [EST] rows replaced by measurements; flashcart run if available. Overlays: `test/m6/tlb` passes on ares (and the flashcart when available); on the Uplink route the resident code size, arena frame peak and TLB entry peak are reported and within 7.4's budget (≤ 192 KB, ≤ 30 entries), 0 frames > 1 ms blocked on overlay I/O, 0 calls into unmapped units (trap and TLB-exception count 0). **Starting point (M4, ares, main `f913147`):** route `m4` frame avg 46.6 ms, p90 93 ms; 245–384 ms frames from `monster_human_grunt` AI (`Mon_RunAI` walk-move traces, node-graph cover search, route triangulation) in hldemo2/3; cart image 1674 KB vs the 900 KB budget (4.1, 4.2) |
 
 ---
 
@@ -1121,6 +1131,10 @@ rev must equal the SDK's `libdragon_rev`), toolchain
 `provcheck`. `-std=c99 -O2 -Wall -Wextra -Werror` for `engine/` and
 `plat/`. Variants: `PROFILE=1`, `HL64_TEST=1` only. ROM ≤ 64 MiB
 (flashcart limit; Uplink + Hazard ≈ 58 MiB in the old tree).
+
+The user approved moving to a libdragon fork on the latest DragonMinded
+`preview` branch (LibdragonUp, in progress); the banked prefix above
+stays the build's libdragon until that fork lands and passes the gates.
 
 ### 18.2 Code conventions
 
