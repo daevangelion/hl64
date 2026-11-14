@@ -83,7 +83,11 @@ satisfied when more than `timeout` µs have passed since it started;
   every other op except `PASS` completes in the frame it is reached.
   `BUTTONS`, `LOOK`, `SETPOS` and `IMPULSE` take effect in the next
   frame's usercmd / player state; `STATS` and `SHOT` run at the next
-  frame boundary.
+  frame boundary, so they capture the next frame. After a `STATS` /
+  `SHOT` the VM runs only further `STATS`, `SHOT` or `PASS` ops in that
+  frame; any other op starts in the next frame, after the capture (a
+  `SETPOS` or `LOOK` right after a `SHOT` would otherwise be in the
+  shot).
 - Entity and record ops never hydrate a pending record: a name's entities
   are its records' live entities (and, for a spawned name, the runtime
   holders once no record of the name is pending). A monstermaker "has
