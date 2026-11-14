@@ -11,8 +11,8 @@
  * a sprite whose data has not landed is skipped that frame. A model
  * unused for 90 frames, or the least recently used one when a new file
  * does not fit, is freed behind a two-frame fence (the RDP may still read
- * its texels). Each model's TLUT gets its additive ramp (addblend.h)
- * when the file lands.
+ * its texels). The file carries its additive ramp (render-fx.md 2a,
+ * docs/formats/sc4-format.md), fitted by the cook.
  */
 #include <math.h>
 #include <string.h>
@@ -29,7 +29,9 @@
 #include "engine/render/ren.h"
 
 #define SC4_MAGIC	0x53433431u	/* 'SC41' */
-#define SC4_HEADER	80
+#define SC4_VERSION	3
+#define SC4_HEADER	88
+#define SC4_RAMP	48		/* add_ramp_t, 8-aligned in the 8-aligned block */
 #define SC4_FRAME	16
 #define IDLE_FRAMES	90
 #define FENCE_FRAMES	2
@@ -48,9 +50,6 @@ typedef struct {
 } sent_t;
 
 static sent_t		ent[HL64_FX_SPRITE_MODELS];
-/* slot i's ramp; replaced only when the slot reloads, after its model went
- * unused for the two-frame fence */
-static add_ramp_t	ramps[HL64_FX_SPRITE_MODELS] __attribute__((aligned(8)));
 static mem_pool_t	pool;
 static mem_blk_t	desc[2 * HL64_FX_SPRITE_MODELS + 4];
 static sprite_stats_t	st;
@@ -89,10 +88,10 @@ static int parse(sent_t *e)
 	uint32_t size = e->size, i, gofs, eofs;
 	int n, ni;
 
-	if (size < SC4_HEADER || be32(b) != SC4_MAGIC || be16(b + 4) != 2)
+	if (size < SC4_HEADER || be32(b) != SC4_MAGIC || be16(b + 4) != SC4_VERSION)
 		return -1;
 	n = be16(b + 6);
-	ni = be16(b + 14);
+	ni = be16(b + 10);
 	gofs = SC4_HEADER + (uint32_t)ni * SC4_FRAME;
 	eofs = gofs + 4u * (uint32_t)n;
 	if (n < 1 || ni < n || eofs + 2u * (uint32_t)ni > size || b[8] > FX_SPR_PARALLEL_ORIENTED)
@@ -119,7 +118,8 @@ static int parse(sent_t *e)
 			return -5;
 	}
 #ifdef HL64_HOST
-	/* host: native order in place (the cart reads it big-endian as is) */
+	/* host: native order in place (the cart reads it big-endian as is):
+	 * the TLUT and the ramp's IA16 TLUT */
 	for (i = 0; i < 32; i++)
 	{
 		uint16_t v = be16(b + 16 + 2 * i);
@@ -157,9 +157,7 @@ static int parse(sent_t *e)
 	e->s.nimages = ni;
 	e->s.type = b[8];
 	e->s.texformat = b[9];
-	memcpy(e->s.tint, b + 10, 3);
-	add_ramp_make(&ramps[e - ent], e->s.tlut);
-	e->s.ramp = &ramps[e - ent];
+	e->s.ramp = (const add_ramp_t *)(b + SC4_RAMP);
 	return 0;
 }
 
@@ -460,15 +458,40 @@ void sprite_draw(const fx_sprite_t *s, int f, const float org[3], const float an
 void sprite_bind(const fx_sprite_t *s, const fx_sprframe_t *fr, int gpu_mode,
 	const uint8_t rgba[4])
 {
+	const add_ramp_t *r = s->ramp;
 	uint8_t prim[4], env[4];
+	int k;
 
-	gpu_fx_mode(gpu_mode, NULL);
-	if (gpu_fx_rdp[gpu_mode].combiner != GPU_FX_CC_RAMP)
+	if (s->texformat == FX_SPR_TEX_INDEXALPHA)
 	{
+		/* GoldSrc INDEXALPHA (render-fx.md 3): texel alpha = palette
+		 * index (the cooked level TLUT's A), colour = the palette's
+		 * last colour (the ramp's ends) x tint; additive draws add it
+		 * as unit colour x brightness (2a), the others alpha-blend it */
+		uint8_t c[3];
+
+		for (k = 0; k < 3; k++)
+			c[k] = (uint8_t)((r->hi[k] * rgba[k] + 127) / 255);
+		if (gpu_fx_rdp[gpu_mode].combiner == GPU_FX_CC_RAMP)
+			add_split(c, rgba[3], prim);
+		else
+		{
+			gpu_mode = GPU_FX_IALPHA;
+			memcpy(prim, c, 3);
+			prim[3] = rgba[3];
+		}
+		memcpy(env, prim, 3);
+		env[3] = 255;
+	}
+	else if (gpu_fx_rdp[gpu_mode].combiner == GPU_FX_CC_RAMP)
+		add_ramp_ends(r, rgba, rgba[3], prim, env);
+	else
+	{
+		gpu_fx_mode(gpu_mode, NULL);
 		gpu_fx_tex_ci4(s->tlut, s->base + fr->ci4, fr->tw, fr->th);
 		return;
 	}
-	add_ramp_ends(s->ramp, rgba, rgba[3], prim, env);
+	gpu_fx_mode(gpu_mode, NULL);
 	gpu_fx_ramp(prim, env);
-	gpu_fx_tex_ci4(s->ramp->ia, s->base + fr->ci4, fr->tw, fr->th);
+	gpu_fx_tex_ci4(r->ia, s->base + fr->ci4, fr->tw, fr->th);
 }

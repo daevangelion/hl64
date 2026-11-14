@@ -48,9 +48,9 @@ void	gpu_bind_page(const w64_texp_t *p, uint8_t *state);
 void	gpu_state_lost(void);
 /* Additive pages (render-fx.md 2a: brush and studio TransAdd / Glow):
  * tint_blend = rgb tint and blend; until gpu_page_ramp(NULL) every
- * gpu_bind_page also loads its page's IA16 ramp TLUT (addblend.h
- * add_ramp_page) and sets PRIM / ENV to its ends for the ramp combiner
- * the caller set; a page the ramp cache cannot hold draws with blend 0
+ * gpu_bind_page also loads its page's cooked IA16 ramp TLUT (addblend.h
+ * add_page_ramp) and sets PRIM / ENV to its ends for the ramp combiner
+ * the caller set; a page the cook gave no ramp draws with blend 0
  * (nothing added; add_stats counts it). */
 void	gpu_page_ramp(const uint8_t tint_blend[4]);
 /* Decal depth for the following draws (on: Z test against the coplanar

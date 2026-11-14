@@ -106,9 +106,8 @@
 /* Effects (docs/specs/render-fx.md 2-5): temp entities and the studio
  * temps drawn per frame, particles (the particles region holds them),
  * beams and their segments, decals, the decal placement queue, the
- * translucent list per frame, the additive page ramps cached (render-fx.md
- * 2a: brush / studio TransAdd pages), the sprite models the sprite cache
- * tracks. */
+ * translucent list per frame, the sprite models the sprite cache tracks.
+ * (Additive items have no blend cap: render-fx.md 2a.) */
 #define HL64_FX_TEMPS			48
 #define HL64_FX_TEMPS_STUDIO		6
 #define HL64_FX_PARTICLES		512
@@ -118,7 +117,6 @@
 #define HL64_FX_DECAL_VERTS		24
 #define HL64_FX_DECAL_QUEUE		16
 #define HL64_FX_TRANS_MAX		64
-#define HL64_FX_ADD_PAGES		16
 #define HL64_FX_SPRITE_MODELS		16
 
 /* ---- boot carve regions, KB (4.1) ------------------------------------ */

@@ -208,10 +208,11 @@ static void log_draw(const char *what, uint32_t label)
 	{
 		add_stats_t as;
 
+		/* render-fx.md 2a: cooked page ramps bound, pages drawn additive
+		 * without one (the cook missed them: not drawn) */
 		add_stats(&as);
-		log_printf("%s %lu add: fits=%lu fit_us=%lu fit_us_max=%lu hits=%lu full=%lu\n", what,
-			(unsigned long)label, (unsigned long)as.fits, (unsigned long)as.fit_us_sum,
-			(unsigned long)as.fit_us_max, (unsigned long)as.hits, (unsigned long)as.full);
+		log_printf("%s %lu add: pages=%lu miss=%lu\n", what, (unsigned long)label,
+			(unsigned long)as.pages, (unsigned long)as.miss);
 	}
 }
 

@@ -660,13 +660,15 @@ static void check_texp(wld_layer_t *L, int c, uint8_t *p)
 {
 	const w64_chunk_t *ck = &L->chunks[c];
 	w64_texp_t *t = (w64_texp_t *)p;
+	/* the CI4 texels follow the TLUT, or the ramp (W64_TEXF_RAMP) */
+	uint32_t first = t->flags & W64_TEXF_RAMP ? W64_TEXP_RAMP + 40 : 48;
 
 #if WLD_SWAP
 	S16(t, 2);
 	S32(&t->ci4_ofs, 1);
-	S16(p + 16, 16);
+	S16(p + 16, t->flags & W64_TEXF_RAMP ? 32 : 16);	/* TLUT, the ramp's IA16 TLUT */
 #endif
-	if (t->w < 8 || t->h < 1 || t->w > 1024 || t->h > 1024 || (t->w & 1) || t->ci4_ofs < 48
+	if (t->w < 8 || t->h < 1 || t->w > 1024 || t->h > 1024 || (t->w & 1) || t->ci4_ofs < first
 		|| (t->ci4_ofs & 7) || !inside(t->ci4_ofs, (uint32_t)t->w * t->h / 2, 1, ck->size))
 		bad(maps[L->map].name, ck->ofs, "TEXP header");
 }

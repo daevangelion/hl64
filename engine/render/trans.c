@@ -53,11 +53,12 @@ const gpu_fx_rdp_t gpu_fx_rdp[GPU_FX_MODES] = {
 	[GPU_FX_BRUSH_ADD]   = { GPU_FX_BL_ALPHA, GPU_FX_CC_RAMP,       1, 0, 0, 0, 3, GPU_FX_TLUT_IA16 },
 	[GPU_FX_BRUSH_COLOR] = { GPU_FX_BL_ALPHA, GPU_FX_CC_PRIM_A,     1, 0, 0, 0, 0, GPU_FX_TLUT_NONE },
 	[GPU_FX_SCREEN]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_SHADE,      0, 0, 0, 0, 0, GPU_FX_TLUT_NONE },
+	[GPU_FX_IALPHA]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_RAMP,       1, 0, 0, 0, 1, GPU_FX_TLUT_IA16 },
 };
 
 const char *const gpu_fx_mode_name[GPU_FX_MODES] = {
 	"cutout", "blend", "add", "glow", "decal", "point", "streak", "brush_blend", "brush_add",
-	"brush_color", "screen"
+	"brush_color", "screen", "ialpha"
 };
 
 typedef struct {
@@ -391,7 +392,9 @@ static void draw_sprite_ent(int e, uint8_t blend, int mode)
 	if (!s)
 		return;
 	d = sqrtf(ent_dist2(e, org));
-	if (cv->rendermode == FX_RM_TRANSCOLOR)
+	/* render-fx.md 3: rendercolor tints the sprite in every mode (the
+	 * red env_glows of hldemo1: glow02 x 238 30 46); 0 0 0 = untinted */
+	if (r->rendercolor[0] | r->rendercolor[1] | r->rendercolor[2])
 		memcpy(rgba, r->rendercolor, 3);
 	if (cv->rendermode == FX_RM_GLOW)
 	{
@@ -459,7 +462,6 @@ void fx_draw_begin(void)
 		a[k] = ren_cam.ang[k];
 	ren_angle_axes(a, fx_s.fwd, fx_s.right, fx_s.up);
 	fx_s.map = ren_cam.map;
-	add_frame();
 	gpu_fx_begin();
 }
 

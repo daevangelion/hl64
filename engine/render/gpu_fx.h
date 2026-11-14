@@ -47,6 +47,7 @@ enum {
 	GPU_FX_BRUSH_ADD,	/* brush TransAdd / Glow: page ramp TLUTs (2a), Z test */
 	GPU_FX_BRUSH_COLOR,	/* brush TransColor: flat rendercolor, alpha = blend */
 	GPU_FX_SCREEN,		/* screen fade: flat colour, no Z */
+	GPU_FX_IALPHA,		/* index-alpha sprite blended: level TLUT (ramp combiner), Z test */
 	GPU_FX_MODES
 };
 
@@ -64,7 +65,7 @@ enum {
 /* TLUT */
 #define GPU_FX_TLUT_NONE	0
 #define GPU_FX_TLUT_RGBA16	1
-#define GPU_FX_TLUT_IA16	2	/* the additive ramp TLUT (addblend.h) */
+#define GPU_FX_TLUT_IA16	2	/* the additive ramp / index-alpha level TLUT (addblend.h) */
 
 typedef struct {
 	uint8_t		blender, combiner;
@@ -135,9 +136,11 @@ void	gpu_fx_stats(gpu_fx_stats_t *s);
 
 #ifdef HL64_HOST
 /* Recorder: the vertices of the last gpu_fx_tris call and its mode (tests);
- * its gpu_fx_frame matrix (returns 0 when it was camera-relative). */
+ * its gpu_fx_frame matrix (returns 0 when it was camera-relative); the
+ * last gpu_fx_ramp ends and returns the last gpu_fx_tex_ci4 TLUT. */
 int	gpu_fx_host_last(gpu_fx_vert_t *out, int max, int *mode);
 int	gpu_fx_host_last_frame(ren_mat_t *m);
+const uint16_t *gpu_fx_host_last_ramp(uint8_t prim[4], uint8_t env[4]);
 #endif
 
 #endif

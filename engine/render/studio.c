@@ -373,17 +373,19 @@ static int fix_mesh(sfmt_mesh_t *m, uint32_t size, const sfmt_info_t *h)
 	sw32(b + m->tex_ofs, m->ntex);
 	for (i = 0; i < m->ntex; i++)
 	{
-		uint32_t o = ((const uint32_t *)(b + m->tex_ofs))[i];
+		uint32_t o = ((const uint32_t *)(b + m->tex_ofs))[i], first;
 		w64_texp_t *t = (w64_texp_t *)(b + o);
 
 		if ((o & 15) || !in(o, 48, size))
 			return -1;
 		sw16(&t->w, 2);
 		sw32(&t->ci4_ofs, 2);
-		if (t->ci4_ofs != 48 || !t->w || !t->h || (t->w & (t->w - 1)) || (t->h & (t->h - 1))
-			|| !in(o, 48u + (uint32_t)t->w * t->h / 2u, size))
+		/* CI4 after the TLUT, or after the cooked additive ramp */
+		first = t->flags & W64_TEXF_RAMP ? W64_TEXP_RAMP + 40 : 48;
+		if (t->ci4_ofs != first || !t->w || !t->h || (t->w & (t->w - 1)) || (t->h & (t->h - 1))
+			|| !in(o, first + (uint32_t)t->w * t->h / 2u, size))
 			return -1;
-		sw16(b + o + 16, 16);
+		sw16(b + o + 16, first == 48 ? 16 : 32);	/* TLUT, the ramp's IA16 TLUT */
 	}
 	return 0;
 }

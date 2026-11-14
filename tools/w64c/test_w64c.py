@@ -440,7 +440,7 @@ class TestHostileInput(unittest.TestCase):
                             str(out)], cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         b = out.read_bytes()
-        self.assertEqual(b[:6], b"W64L\x00\x02")
+        self.assertEqual(b[:6], b"W64L\x00\x03")
         self.assertEqual(struct.unpack_from(">I", b, 8)[0], len(b))
 
 

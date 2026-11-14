@@ -121,8 +121,9 @@ static void be32(uint8_t *p, uint32_t v)
 	be16(p + 2, v & 0xFFFF);
 }
 
-/* v2: entity frame 0 = image 0; frame 1 = a group of images 1-3 with
- * cumulative interval ends 100, 300, 600 ms; 16 x 16 units each */
+/* v3: entity frame 0 = image 0; frame 1 = a group of images 1-3 with
+ * cumulative interval ends 100, 300, 600 ms; 16 x 16 units each; images
+ * at 88, groups at 152, ends at 160, CI4 from 168 */
 static void make_sprite(int type)
 {
 	static const uint16_t ends[4] = { 0, 100, 300, 600 };
@@ -130,15 +131,15 @@ static void make_sprite(int type)
 
 	memset(sc4, 0, sizeof(sc4));
 	be32(sc4, 0x53433431u);
-	be16(sc4 + 4, 2);
+	be16(sc4 + 4, 3);
 	be16(sc4 + 6, 2);
 	sc4[8] = (uint8_t)type;
-	be16(sc4 + 14, 4);
+	be16(sc4 + 10, 4);
 	for (i = 0; i < 16; i++)
 		be16(sc4 + 16 + 2 * i, 0xFFFF);
 	for (i = 0; i < 4; i++)
 	{
-		uint8_t *f = sc4 + 80 + 16 * i;
+		uint8_t *f = sc4 + 88 + 16 * i;
 
 		be16(f, (unsigned)(uint16_t)-8);
 		be16(f + 2, 8);
@@ -146,16 +147,16 @@ static void make_sprite(int type)
 		be16(f + 6, 16);
 		f[8] = 16;
 		f[9] = 16;
-		be32(f + 12, 160 + 128 * (uint32_t)i);
-		be16(sc4 + 152 + 2 * i, ends[i]);
+		be32(f + 12, 168 + 128 * (uint32_t)i);
+		be16(sc4 + 160 + 2 * i, ends[i]);
 	}
-	be16(sc4 + 144, 0);
-	be16(sc4 + 146, 1);
-	be16(sc4 + 148, 1);
-	be16(sc4 + 150, 3);
+	be16(sc4 + 152, 0);
+	be16(sc4 + 154, 1);
+	be16(sc4 + 156, 1);
+	be16(sc4 + 158, 3);
 	/* a sprite id no cooked file uses: past the table's sprites */
 	test_spr = RES_MAKE(RES_K_SPRITE, 8000);
-	if (sprite_test_inject(test_spr, sc4, 160 + 4 * 128))
+	if (sprite_test_inject(test_spr, sc4, 168 + 4 * 128))
 	{
 		printf("setup FAIL sprite inject\n");
 		exit(1);
@@ -1463,50 +1464,60 @@ static int c8(unsigned v)
 	return (int)((v << 3) | (v >> 2));
 }
 
-static void test_add(void)
+/* A cooked sprite file into buf (bytes read; 0 when missing). */
+static size_t load_sc4(const char *name, uint8_t *buf, size_t max)
+{
+	char path[512];
+	FILE *f;
+	size_t n;
+
+	snprintf(path, sizeof(path), "%s/sprites/%s.sc4", root, name);
+	f = fopen(path, "rb");
+	n = f ? fread(buf, 1, max, f) : 0;
+	if (f)
+		fclose(f);
+	return n;
+}
+
+static unsigned rd16(const uint8_t *p)
+{
+	return (unsigned)(p[0] << 8 | p[1]);
+}
+
+/* The ramp each cooked sprite carries (sc4-format.md): no wrap through the
+ * RDP model for any framebuffer colour, tint and blend; its colours near
+ * the TLUT's. */
+static void add_cooked(unsigned long *cases, unsigned long *oldwrap, double *dev, double *devold)
 {
 	static const char *spr[] = { "glow01", "glow02", "glow03", "flare1", "zerogxplode", "fexplo",
 		"muzzleflash1", "muzzleflash3", "xffloor", "laserbeam" };
 	static const uint8_t tints[3][3] = { { 255, 255, 255 }, { 238, 30, 46 }, { 254, 248, 203 } };
-	static const int modes[3] = { GPU_FX_ADD, GPU_FX_GLOW, GPU_FX_BRUSH_ADD };
 	static uint8_t buf[1 << 16];
-	unsigned long cases = 0, oldwrap = 0;
-	double dev = 0, devold = 0;
 	int s, k, i, j;
 
-	begin();
-	/* every additive effects mode: alpha blender, ramp combiner + IA16
-	 * TLUT; streaks: alpha blender (unit shade colour) */
-	for (k = 0; k < 3; k++)
-		CHECK(gpu_fx_rdp[modes[k]].blender == GPU_FX_BL_ALPHA
-			&& gpu_fx_rdp[modes[k]].combiner == GPU_FX_CC_RAMP
-			&& gpu_fx_rdp[modes[k]].tlut == GPU_FX_TLUT_IA16, "mode %s", gpu_fx_mode_name[modes[k]]);
-	CHECK(gpu_fx_rdp[GPU_FX_STREAK].blender == GPU_FX_BL_ALPHA, "streak blender");
 	for (s = 0; s < (int)(sizeof(spr) / sizeof(spr[0])); s++)
 	{
-		char path[512];
-		FILE *f;
-		size_t n;
+		size_t n = load_sc4(spr[s], buf, sizeof(buf));
 		uint16_t tl[16];
 		add_ramp_t r;
 		double use[16] = { 0 }, err = 0, wsum = 0;
 		unsigned ni, im;
 
-		snprintf(path, sizeof(path), "%s/sprites/%s.sc4", root, spr[s]);
-		f = fopen(path, "rb");
-		n = f ? fread(buf, 1, sizeof(buf), f) : 0;
-		if (f)
-			fclose(f);
-		CHECK(n > 80, "%s: no sprite", path);
-		if (n <= 80)
+		CHECK(n > 88 && rd16(buf + 4) == 3, "%s: no v3 sprite", spr[s]);
+		if (n <= 88 || rd16(buf + 4) != 3)
 			continue;
 		for (i = 0; i < 16; i++)
-			tl[i] = (uint16_t)(buf[16 + 2 * i] << 8 | buf[17 + 2 * i]);
+		{
+			tl[i] = (uint16_t)rd16(buf + 16 + 2 * i);
+			r.ia[i] = (uint16_t)rd16(buf + 48 + 2 * i);
+		}
+		memcpy(r.lo, buf + 80, 3);
+		memcpy(r.hi, buf + 83, 3);
 		/* texel use of every entry over every image (the error's weights) */
-		ni = (unsigned)(buf[14] << 8 | buf[15]);
+		ni = rd16(buf + 10);
 		for (im = 0; im < ni; im++)
 		{
-			const uint8_t *fr = buf + 80 + 16 * im;
+			const uint8_t *fr = buf + 88 + 16 * im;
 			uint32_t ofs = (uint32_t)fr[12] << 24 | (uint32_t)fr[13] << 16 | fr[14] << 8 | fr[15];
 			uint32_t b, nb = (uint32_t)fr[8] * fr[9] / 2;
 
@@ -1516,7 +1527,6 @@ static void test_add(void)
 				use[buf[ofs + b] & 15]++;
 			}
 		}
-		add_ramp_fit(&r, tl);
 		for (i = 0; i < 16; i++)
 		{
 			int c[3] = { c8((tl[i] >> 11) & 31), c8((tl[i] >> 6) & 31), c8((tl[i] >> 1) & 31) };
@@ -1558,10 +1568,10 @@ static void test_add(void)
 							int ob = (cold * (old >> 3) + m * 32) >> 5;
 
 							CHECK(o >= 0 && o <= 255, "%s entry %d: out %d", spr[s], i, o);
-							oldwrap += ob > 255;
-							dev += fabs((double)o - sum);
-							devold += fabs((double)(ob & 255) - sum);
-							cases++;
+							*oldwrap += ob > 255;
+							*dev += fabs((double)o - sum);
+							*devold += fabs((double)(ob & 255) - sum);
+							(*cases)++;
 						}
 					}
 				}
@@ -1573,6 +1583,52 @@ static void test_add(void)
 		/* greys exact (8-bit rounding), the rest within two RGBA5551 steps */
 		CHECK(err <= (s < 3 ? 2.0 : 16.0), "%s ramp rms %.1f", spr[s], err);
 	}
+}
+
+/* One sprite entity of res r drawn alone: its mode and ramp ends. */
+static int add_draw_one(res_t r, int rm, int amt, const uint8_t col[3], uint8_t prim[4],
+	uint8_t env[4], const uint16_t **tlut)
+{
+	float g[3];
+	gpu_fx_vert_t v[4];
+	int e, k, mode = -1;
+
+	kill_all();
+	for (k = 0; k < 3; k++)
+		g[k] = L->start_org[k] + L->gofs[k] + (k == 0 ? 60 : 0);
+	e = sprite_ent(g, rm, amt);
+	ent_rnd(e)->model = r;
+	memcpy(ent_rnd(e)->rendercolor, col, 3);
+	for (k = 0; k < 3; k++)
+		g[k] = L->start_org[k] + L->gofs[k];
+	eye(g, 0, 0);
+	draw();
+	gpu_fx_host_last(v, 4, &mode);
+	*tlut = gpu_fx_host_last_ramp(prim, env);
+	kill_all();
+	return mode;
+}
+
+static void test_add(void)
+{
+	static const int modes[4] = { GPU_FX_ADD, GPU_FX_GLOW, GPU_FX_BRUSH_ADD, GPU_FX_IALPHA };
+	static uint8_t glow[1 << 12] __attribute__((aligned(16)));
+	static uint8_t steam[1 << 14] __attribute__((aligned(16)));
+	static const uint8_t red[3] = { 238, 30, 46 }, none[3] = { 0, 0, 0 }, grey[3] = { 100, 100, 100 };
+	unsigned long cases = 0, oldwrap = 0;
+	double dev = 0, devold = 0;
+	int k, i;
+
+	begin();
+	/* every additive effects mode (and the index-alpha blend): alpha
+	 * blender, ramp combiner + IA16 TLUT; streaks: alpha blender (unit
+	 * shade colour) */
+	for (k = 0; k < 4; k++)
+		CHECK(gpu_fx_rdp[modes[k]].blender == GPU_FX_BL_ALPHA
+			&& gpu_fx_rdp[modes[k]].combiner == GPU_FX_CC_RAMP
+			&& gpu_fx_rdp[modes[k]].tlut == GPU_FX_TLUT_IA16, "mode %s", gpu_fx_mode_name[modes[k]]);
+	CHECK(gpu_fx_rdp[GPU_FX_STREAK].blender == GPU_FX_BL_ALPHA, "streak blender");
+	add_cooked(&cases, &oldwrap, &dev, &devold);
 	printf("add rdp model: %lu cases, 0 wrapped (old capped adder: %lu wrapped, %.1f%%), mean "
 		"|out - saturating add| %.1f (old %.1f)\n", cases, oldwrap, cases ? 100.0
 		* (double)oldwrap / (double)cases : 0.0, cases ? dev / (double)cases : 0.0,
@@ -1589,40 +1645,63 @@ static void test_add(void)
 		for (k = 0; k < 3; k++)
 			CHECK(fabs(o[k] * o[3] / 255.0 - c[k] * a / 255.0) <= 2.0, "split %d ch %d", i, k);
 	}
-	/* page ramps: cached by content, never replaced within the fence */
+	/* the draws bind what the cook stored (render-fx.md 2a, 3): the
+	 * rendercolor tint of a glow (hldemo1's red glow02), untinted at
+	 * 0 0 0; an index-alpha sprite (steam1: alpha = palette index, colour
+	 * = its last palette colour) through its level TLUT */
 	{
-		uint16_t tl[16];
-		add_stats_t a0, a1;
-		const add_ramp_t *first;
+		size_t ng = load_sc4("glow02", glow, sizeof(glow)), ns = load_sc4("steam1", steam, sizeof(steam));
+		res_t rg = RES_MAKE(RES_K_SPRITE, 8001), rs = RES_MAKE(RES_K_SPRITE, 8002);
+		const fx_sprite_t *sg, *ss;
+		const uint16_t *tl;
+		uint8_t prim[4], env[4];
+		int m;
 
-		for (i = 0; i < 3; i++)
-			add_frame();
-		add_stats(&a0);
-		for (i = 0; i <= HL64_FX_ADD_PAGES; i++)
+		CHECK(ng > 88 && !sprite_test_inject(rg, glow, (uint32_t)ng), "glow02 inject");
+		CHECK(ns > 88 && !sprite_test_inject(rs, steam, (uint32_t)ns), "steam1 inject");
+		sg = sprite_get(rg);
+		ss = sprite_get(rs);
+		CHECK(sg && ss && ss->texformat == FX_SPR_TEX_INDEXALPHA, "cooked sprites");
+		if (sg && ss)
 		{
+			m = add_draw_one(rg, FX_RM_GLOW, 255, red, prim, env, &tl);
+			printf("add glow02 red: mode %s prim %d,%d,%d,%d\n", m >= 0 ? gpu_fx_mode_name[m] : "-",
+				prim[0], prim[1], prim[2], prim[3]);
+			CHECK(m == GPU_FX_GLOW && tl == sg->ramp->ia, "glow02 red: mode %d", m);
+			for (k = 0; k < 3; k++)
+				CHECK(prim[k] == (sg->ramp->hi[k] * red[k] + 127) / 255
+					&& env[k] == (sg->ramp->lo[k] * red[k] + 127) / 255, "glow02 red ch %d", k);
+			m = add_draw_one(rg, FX_RM_GLOW, 255, none, prim, env, &tl);
+			CHECK(m == GPU_FX_GLOW && prim[0] == sg->ramp->hi[0] && prim[1] == sg->ramp->hi[1]
+				&& prim[2] == sg->ramp->hi[2], "glow02 at 0 0 0 not untinted: %d,%d,%d", prim[0],
+				prim[1], prim[2]);
 			for (k = 0; k < 16; k++)
-				tl[k] = (uint16_t)(((i + k) & 31) << 11 | (k & 31) << 6 | 1);
-			if (i < HL64_FX_ADD_PAGES)
-				CHECK(add_ramp_page(tl) != NULL, "page %d refused", i);
-			else
-				CHECK(add_ramp_page(tl) == NULL, "page %d: a fenced entry was replaced", i);
+				CHECK(ss->ramp->ia[k] == (0xFF00 | 17 * k), "steam1 level %d: %04x", k,
+					ss->ramp->ia[k]);
+			/* smoke (fx_smoke: TransColor, grey): alpha-blended through the
+			 * level TLUT, colour = last palette colour x tint */
+			m = add_draw_one(rs, FX_RM_TRANSCOLOR, 200, grey, prim, env, &tl);
+			printf("add steam1 smoke: mode %s prim %d,%d,%d,%d\n", m >= 0 ? gpu_fx_mode_name[m] : "-",
+				prim[0], prim[1], prim[2], prim[3]);
+			CHECK(m == GPU_FX_IALPHA && tl == ss->ramp->ia && prim[3] == 200, "steam1 smoke: mode %d",
+				m);
+			for (k = 0; k < 3; k++)
+				CHECK(prim[k] == (ss->ramp->hi[k] * grey[k] + 127) / 255 && env[k] == prim[k],
+					"steam1 smoke ch %d: %d", k, prim[k]);
+			/* additive: unit colour, brightness x blend (2a) */
+			m = add_draw_one(rs, FX_RM_TRANSADD, 200, none, prim, env, &tl);
+			CHECK(m == GPU_FX_ADD && tl == ss->ramp->ia, "steam1 add: mode %d", m);
+			{
+				uint8_t o[4];
+
+				add_split(ss->ramp->hi, 200, o);
+				CHECK(!memcmp(prim, o, 4), "steam1 add ends %d,%d,%d,%d", prim[0], prim[1], prim[2],
+					prim[3]);
+			}
 		}
-		for (k = 0; k < 16; k++)
-			tl[k] = (uint16_t)((k & 31) << 11 | (k & 31) << 6 | 1);
-		first = add_ramp_page(tl);
-		add_stats(&a1);
-		CHECK(first != NULL && a1.hits == a0.hits + 1 && a1.full == a0.full + 1
-			&& a1.fits == a0.fits + HL64_FX_ADD_PAGES, "cache counts fits %lu hits %lu full %lu",
-			(unsigned long)(a1.fits - a0.fits), (unsigned long)(a1.hits - a0.hits),
-			(unsigned long)(a1.full - a0.full));
-		for (i = 0; i < 3; i++)
-			add_frame();
-		for (k = 0; k < 16; k++)
-			tl[k] = (uint16_t)(31 << 11 | (k & 31) << 1 | 1);
-		CHECK(add_ramp_page(tl) != NULL, "no slot after the fence");
 	}
-	finish("ADD", "additive ramp fit on cooked sprites, RDP blender model: no wrap, split, page "
-		"cache (render-fx.md 2a)");
+	finish("ADD", "cooked additive ramps, RDP blender model: no wrap, split; glow rendercolor tint, "
+		"index-alpha levels (render-fx.md 2a, 3)");
 }
 
 /* ---- PLACED: infodecal and env_glow of one map (w64-format.md "DECL") ---- */

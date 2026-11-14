@@ -13,27 +13,30 @@
  * instead of saturating.
  *
  * Textures are CI4 with a 16-entry RGBA5551 TLUT; the RDP can only take a
- * per-texel alpha from the texel, so the TLUT becomes an IA16 ramp TLUT:
- * A = the entry's brightness, I = its place between two unit colours lo
- * (ENV) and hi (PRIM) that the combiner interpolates
- * (rgb = (PRIM - ENV) x I + ENV, a = A x PRIM alpha).
+ * per-texel alpha from the texel, so an additive texture binds an IA16
+ * ramp TLUT: A = the entry's brightness, I = its place between two unit
+ * colours lo (ENV) and hi (PRIM) that the combiner interpolates
+ * (rgb = (PRIM - ENV) x I + ENV, a = A x PRIM alpha). The cook fits the
+ * ramp (tools/cook/addramp.py) and stores it in the sprite file, the
+ * additive brush pages and the additive studio skins
+ * (docs/formats/sc4-format.md, w64-format.md TEXP, studio-format.md); the
+ * cart only binds it.
  */
 #ifndef HL64_ADDBLEND_H
 #define HL64_ADDBLEND_H
 
 #include <stdint.h>
 
+#include "engine/world/w64.h"
+
 typedef struct {
 	uint16_t	ia[16];		/* IA16 TLUT (I high byte): ramp place, brightness */
 	uint8_t		lo[3], hi[3];	/* ramp ends: unit colours (ENV, PRIM) */
 	uint8_t		pad[2];
-} add_ramp_t;			/* 40; the GPU reads ia: keep it 8-aligned */
+} add_ramp_t;			/* 40, cooked layout; the GPU reads ia: 8-aligned */
 
-/* The ramp of a 16-entry RGBA5551 TLUT (native order): of the palette's
- * own unit colours, the pair (lo, hi) whose non-negative combinations
- * fit the lit entries best (squared error weighted by brightness, every
- * pair tried); entries with the alpha bit clear or black get A = 0. */
-void	add_ramp_fit(add_ramp_t *r, const uint16_t tlut[16]);
+_Static_assert(sizeof(add_ramp_t) == 40, "add_ramp_t");
+
 /* PRIM (hi x tint, alpha = blend) and ENV (lo x tint) for a ramp draw. */
 void	add_ramp_ends(const add_ramp_t *r, const uint8_t tint[3], uint8_t blend, uint8_t prim[4],
 		uint8_t env[4]);
@@ -42,22 +45,14 @@ void	add_ramp_ends(const add_ramp_t *r, const uint8_t tint[3], uint8_t blend, ui
  * same term. */
 void	add_split(const uint8_t rgb[3], uint8_t a, uint8_t out[4]);
 
-/* add_ramp_fit, timed and counted, the ramp's ia written back for the
- * GPU (sprites fit theirs when their file lands). */
-void	add_ramp_make(add_ramp_t *r, const uint16_t tlut[16]);
-/* Page ramps (brush and studio TransAdd draw world / skin pages): fitted
- * on first use and cached by TLUT content (HL64_FX_ADD_PAGES entries); an
- * entry the GPU may still read (used in this or the previous two frames)
- * is never replaced: NULL when none is free (the page is not drawn,
- * counted). The returned ramp's ia is written back for the GPU. */
-const add_ramp_t *add_ramp_page(const uint16_t tlut[16]);
-/* Frame boundary (the effects pass's start). */
-void	add_frame(void);
+/* The cooked ramp of a page bound for an additive draw (TEXP or studio
+ * skin, W64_TEXF_RAMP); NULL, counted, when the cook gave it none (the
+ * page then adds nothing). */
+const add_ramp_t *add_page_ramp(const w64_texp_t *p);
 
 typedef struct {
-	uint32_t	fits;		/* ramps fitted (sprites and pages), since boot */
-	uint32_t	fit_us_sum, fit_us_max;
-	uint32_t	hits, full;	/* page ramps found in the cache / refused */
+	uint32_t	pages;		/* additive page binds with a cooked ramp, since boot */
+	uint32_t	miss;		/* additive page binds without one (not drawn) */
 } add_stats_t;
 void	add_stats(add_stats_t *s);
 

@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: MIT
+# Additive regression route (docs/specs/render-fx.md 2a, 3), run on ares by
+# test/m3/add_ares.sh: hldemo1 env_glows over lit walls, each shot looking
+# straight at one glow from its height (the glow at the screen centre;
+# test/m3/add_shot.py checks its core for the RDP adder's wrap), the last
+# one a red glow02 (rendercolor 238 30 46: the tint), then an MP5 grenade
+# whose explosion leaves TE_SMOKE puffs (steam1, an index-alpha sprite).
+# Shot labels: g<glow>_d<distance>_k<pose>; `_red` = tinted glow; smoke_*
+# are viewed, not checked. Syntax: docs/formats/route-bytecode.md.
+startmap hldemo1
+wait 3
+god 1
+setpos -2457 -654 201 0 -45
+wait 0.5
+shot g0_d120_k3
+setpos -2528 -583 201 0 -45
+wait 0.5
+shot g0_d220_k3
+setpos -1901 -709 201 0 45
+wait 0.5
+shot g1_d120_k5
+setpos -1661 -469 201 0 -135
+wait 0.5
+shot g1_d220_k1
+setpos -489 -295 41 0 0
+wait 0.5
+shot g5_d120_k4
+setpos 1303 316 41 0 0
+wait 0.5
+shot g11_d120_k4
+setpos 1768 32 250 0 0
+wait 0.5
+shot g13_d220_k4_red
+# grenade at the wall under glow 0: the explosion, then the smoke
+setpos -2528 -583 201 0 -45
+drop weapon_9mmAR -2528 -583 201
+drop ammo_ARgrenades -2528 -583 201
+wait 2
+look 0 -45
+wait 0.5
++attack2
+wait 0.2
+-attack2
+wait 0.3
+shot smoke_a
+wait 0.4
+shot smoke_b
+wait 0.4
+shot smoke_c
+wait 0.6
+shot smoke_d
+pass

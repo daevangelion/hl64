@@ -201,9 +201,8 @@ void gpu_bind_page(const w64_texp_t *p, uint8_t *state)
 	}
 	if (ramp_on)
 	{
-		/* additive page: its ramp TLUT over the RGBA16 one, its ends */
-		const add_ramp_t *r = add_ramp_page((const uint16_t *)((const uint8_t *)p
-			+ sizeof(w64_texp_t)));
+		/* additive page: its cooked ramp TLUT over the RGBA16 one, its ends */
+		const add_ramp_t *r = add_page_ramp(p);
 		uint8_t prim[4] = { 0, 0, 0, 0 }, env[4] = { 0, 0, 0, 0 };
 
 		if (r)

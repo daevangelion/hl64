@@ -71,8 +71,8 @@ void gpu_bind_page(const w64_texp_t *p, uint8_t *state)
 	mix(tlut, 32);
 	if (ramp_on)
 	{
-		/* as the cart: the page's ramp TLUT and ends (render-fx.md 2a) */
-		const add_ramp_t *r = add_ramp_page(tlut);
+		/* as the cart: the page's cooked ramp TLUT and ends (render-fx.md 2a) */
+		const add_ramp_t *r = add_page_ramp(p);
 		uint8_t prim[4] = { 0, 0, 0, 0 }, env[4] = { 0, 0, 0, 0 };
 
 		if (r)

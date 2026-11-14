@@ -84,13 +84,18 @@ be at 255 already). No additive item uses the adder:
   burning to white;
 - textures (CI4 + 16-entry RGBA5551 TLUT: sprites, beams, brush and studio
   pages) draw through an IA16 ramp TLUT: A = the entry's brightness, I =
-  its place between two unit colours lo, hi of the palette (the best pair:
-  every pair of the palette's unit colours scored by brightness-weighted
-  squared error of the non-negative fit); combiner rgb = ENV + (PRIM − ENV)
-  × I, a = A × PRIM alpha; PRIM = hi × tint with alpha = blend, ENV = lo ×
-  tint. Sprites fit their ramp when the file lands; pages on first
-  additive use, cached by TLUT content (`HL64_FX_ADD_PAGES`, never
-  replaced within two frames of use);
+  its place between two unit colours lo, hi of the palette (the best pair
+  of the palette's unit colours by brightness-weighted squared error of
+  the non-negative fit); combiner rgb = ENV + (PRIM − ENV) × I, a = A ×
+  PRIM alpha; PRIM = hi × tint with alpha = blend, ENV = lo × tint. The
+  cook fits the ramp (`tools/cook/addramp.py`; fitting on the cart cost up
+  to 4 ms per sprite load on ares) and stores it in every sprite
+  ([sc4-format.md](../formats/sc4-format.md)), in the TEXP pages of the
+  movers some entity can draw Glow / TransAdd and in the skins of the
+  studio models some entity can draw so (keys `rendermode` 3 / 5, or
+  named by an env_render that sets one; w64-format.md TEXP,
+  studio-format.md). A page drawn additive without a cooked ramp adds
+  nothing (counted, `add: miss`);
 - untextured and I4 colours (tracer streaks, HUD additive pictures, text
   and fills) are split per vertex / per draw the same way;
 - the full blend applies (no cap).
@@ -106,6 +111,17 @@ be at 255 already). No additive item uses the adder:
 - Frames: the entity's `frame` selects; group frames pick by time within
   the group's cumulative intervals. env_sprite animation itself is game
   logic (HLSDK `CSprite::Animate`).
+- Colour: `rendercolor` tints the sprite (texture × rendercolor) in every
+  render mode; `0 0 0` leaves it untinted (map content relies on both:
+  hldemo1's red env_glows are glow02 × 238 30 46, its XFFloor fire is
+  TransAdd at `0 0 0`; HLSDK's turret eye glow is flare3 set to 255 0 0
+  in Glow mode, turret.cpp; TWHL "Tutorial: Render Properties", "env_sprite").
+- Texture formats (SPR `texformat`): normal / additive / alpha-test use the
+  palette; **index-alpha** (2) takes the texel's alpha from its palette
+  index and its colour from the palette's last colour (× tint); it
+  alpha-blends in Normal / TransColor / TransTexture / TransAlpha (alpha =
+  index × blend) and adds colour × index × blend in Glow / TransAdd
+  (the explosion and TE_SMOKE puffs, steam1). Cooked as 16 alpha levels.
 - Glow occlusion: a line trace (NOMONSTERS) from the eye to the sprite
   origin; blocked → blend × 0; otherwise blend × min(1, distance-based
   factor) so glows stay visible far away at constant screen size (fixture
