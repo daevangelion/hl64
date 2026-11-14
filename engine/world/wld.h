@@ -18,6 +18,8 @@
 #include <stdint.h>
 
 #include "engine/world/w64.h"
+#include "hl64/limits.h"
+#include <stddef.h>
 
 #define WLD_NO_MAP	0xFFFF
 
@@ -140,8 +142,14 @@ wld_layer_t	*wld_open_async(int map);
 int		wld_layer_ready(const wld_layer_t *L);
 void		wld_close(wld_layer_t *L);
 /* Ready layer of a slot: NULL when closed or while its async open is in
- * flight (every layer loop sees whole layers only). */
-wld_layer_t	*wld_layer(int slot);
+ * flight (every layer loop sees whole layers only). Inline: every
+ * subsystem asks it per entity / per frame. */
+extern wld_layer_t	wld_layers[HL64_WORLD_LAYERS];
+static inline wld_layer_t *wld_layer(int slot)
+{
+	return (unsigned)slot < HL64_WORLD_LAYERS && wld_layers[slot].open
+		&& wld_layers[slot].ready == 1 ? &wld_layers[slot] : NULL;
+}
 /* Layer holding map, ready or still opening; NULL when not open. */
 wld_layer_t	*wld_layer_of_map(int map);
 /* Bytes a layer takes of the layer region: the directory block plus the
