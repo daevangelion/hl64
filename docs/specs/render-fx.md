@@ -82,7 +82,9 @@ in the translucent pass below, even when nothing can move or fire them.
 Translucent items (every entity whose mode is not Normal, except studio models in TransAlpha, which draw as Normal) draw after the
 opaque world, movers, studio models and particles, sorted back to front by
 the distance of their origin (brushes: their box centre), with depth test
-and without depth write; at most 64 per frame (nearest kept, overflow
+and without depth write (TransAlpha brushes write depth, opaque texels
+only, and draw first, unsorted, with the cutout sprites: nothing blended
+lies under them yet); at most 64 per frame (nearest kept, overflow
 counted). Additive items follow 2a.
 
 ### 2a. Additive on the RDP
@@ -131,17 +133,13 @@ be at 255 already). No additive item uses the adder:
 - Frames: the entity's `frame` selects; group frames pick by time within
   the group's cumulative intervals. env_sprite animation itself is game
   logic (HLSDK `CSprite::Animate`).
-- Colour: `rendercolor` tints the sprite (texture × rendercolor) in every
-  render mode; `0 0 0` leaves it untinted (map content relies on both:
-  hldemo1's red env_glows are glow02 × 238 30 46, its XFFloor fire is
-  TransAdd at `0 0 0`; HLSDK's turret eye glow is flare3 set to 255 0 0
-  in Glow mode, turret.cpp; TWHL "Tutorial: Render Properties", "env_sprite").
 - Texture formats (SPR `texformat`): normal / additive / alpha-test use the
   palette; **index-alpha** (2) takes the texel's alpha from its palette
-  index and its colour from the palette's last colour (× tint); it
+  index and its colour from the palette's last colour (× tint, 2); it
   alpha-blends in Normal / TransColor / TransTexture / TransAlpha (alpha =
-  index × blend) and adds colour × index × blend in Glow / TransAdd
-  (the explosion and TE_SMOKE puffs, steam1). Cooked as 16 alpha levels.
+  index × blend, blend 1 in Normal and in a visible TransColor) and adds
+  colour × index × blend in Glow / TransAdd (the explosion and TE_SMOKE
+  puffs, steam1). Cooked as 16 alpha levels.
 - Glow occlusion: a line trace (NOMONSTERS) from the eye to the sprite
   origin; blocked → blend × 0; otherwise blend × min(1, distance-based
   factor) so glows stay visible far away at constant screen size (fixture

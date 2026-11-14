@@ -277,7 +277,11 @@ void tent_draw(int i, uint8_t blend, int mode)
 
 		if (!s)
 			return;
-		memcpy(rgba, t->color, 3);
+		/* render-fx.md 2: TransColor sprites keep their palette colours */
+		if (t->rendermode == FX_RM_TRANSCOLOR)
+			rgba[0] = rgba[1] = rgba[2] = 255;
+		else
+			memcpy(rgba, t->color, 3);
 		rgba[3] = blend;
 		sprite_draw(s, (int)t->frame, t->org, t->ang, t->scale, mode, rgba);
 	}

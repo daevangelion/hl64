@@ -36,8 +36,8 @@
 
 /* RDP state of each effects mode (render-fx.md 2 table, as the RDP does it). */
 enum {
-	GPU_FX_CUTOUT,		/* sprite Normal / TransAlpha: TLUT alpha compare, Z test + write */
-	GPU_FX_BLEND,		/* sprite TransTexture / TransColor / TransAlpha x blend */
+	GPU_FX_CUTOUT,		/* sprite Normal / TransColor / TransAlpha: TLUT alpha compare, Z test + write */
+	GPU_FX_BLEND,		/* sprite TransTexture x blend */
 	GPU_FX_ADD,		/* sprite / beam TransAdd: ramp TLUT, screen blend (2a), Z test */
 	GPU_FX_GLOW,		/* sprite Glow: as ADD, no Z test */
 	GPU_FX_DECAL,		/* I4 decal: rgb = tint, a = texel x a, decal Z */
@@ -48,6 +48,7 @@ enum {
 	GPU_FX_BRUSH_COLOR,	/* brush TransColor: flat rendercolor, alpha = blend */
 	GPU_FX_SCREEN,		/* screen fade: flat colour, no Z */
 	GPU_FX_IALPHA,		/* index-alpha sprite blended: level TLUT (ramp combiner), Z test */
+	GPU_FX_BRUSH_SOLID,	/* brush TransAlpha: lit page, its alpha compare, Z test + write */
 	GPU_FX_MODES
 };
 

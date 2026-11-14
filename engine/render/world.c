@@ -454,11 +454,12 @@ static int at_origin(const wld_mover_t *mv)
  *
  * A brush entity whose model is a MOVR submodel of this layer is drawn from
  * its components: origin, angles, render mode (render-fx.md 2, brush
- * column). Normal and TransAlpha draw in the opaque pass (at rest at the
- * map origin they join the world list); the other modes go to the
- * translucent pass (engine/render/trans.c), which calls ren_mover_draw
- * back to front. A layer without brush entities (no game, records not
- * spawned: the M1 free-camera view) draws the ENTS placements instead. */
+ * column). Normal draws in the opaque pass (at rest at the map origin it
+ * joins the world list); the other modes go to the translucent pass
+ * (engine/render/trans.c), which calls ren_mover_draw back to front
+ * (TransAlpha: lit, its page's alpha compare, Z write). A layer without
+ * brush entities (no game, records not spawned: the M1 free-camera view)
+ * draws the ENTS placements instead. */
 
 static uint16_t	mov_ent[HL64_MAX_ENTITIES];
 static int	nmov;
@@ -544,9 +545,7 @@ static int ent_visible(const wld_layer_t *L, int e, const uint16_t *list, int cn
 
 static int mover_opaque(int e)
 {
-	int m = ent_cv(e)->rendermode;
-
-	return m == 0 || m == 4;	/* Normal, TransAlpha (alpha compare) */
+	return ent_cv(e)->rendermode == 0;	/* Normal */
 }
 
 /* One mover under its own matrix (opaque pass or the translucent pass). */
@@ -591,7 +590,7 @@ void ren_mover_draw(int e, int gpu_mode, const uint8_t prim[4])
 	if (gpu_fx_rdp[gpu_mode].combiner == GPU_FX_CC_RAMP)
 		gpu_page_ramp(prim);
 	last_bind = NULL;
-	draw_mover(L, e, 0);
+	draw_mover(L, e, gpu_mode == GPU_FX_BRUSH_SOLID);
 	gpu_page_ramp(NULL);
 	last_bind = NULL;
 }

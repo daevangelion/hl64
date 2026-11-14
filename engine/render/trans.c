@@ -16,7 +16,9 @@
  * movers (world.c hands them over) and translucent studio entities
  * (studio_draw hands them over) go into one list per frame; the nearest
  * HL64_FX_TRANS_MAX are kept, drawn back to front with depth test and no
- * depth write. Cutout sprites (Normal / TransAlpha) draw first, unsorted.
+ * depth write. Cutout sprites (Normal / TransColor / TransAlpha) and
+ * TransAlpha brushes (Z write, the pages' alpha compare) draw first,
+ * unsorted.
  * Additive items draw through the alpha blender as a screen-like blend
  * (render-fx.md 2a, addblend.h): the RDP adder wraps.
  */
@@ -54,11 +56,12 @@ const gpu_fx_rdp_t gpu_fx_rdp[GPU_FX_MODES] = {
 	[GPU_FX_BRUSH_COLOR] = { GPU_FX_BL_ALPHA, GPU_FX_CC_PRIM_A,     1, 0, 0, 0, 0, GPU_FX_TLUT_NONE },
 	[GPU_FX_SCREEN]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_SHADE,      0, 0, 0, 0, 0, GPU_FX_TLUT_NONE },
 	[GPU_FX_IALPHA]      = { GPU_FX_BL_ALPHA, GPU_FX_CC_RAMP,       1, 0, 0, 0, 1, GPU_FX_TLUT_IA16 },
+	[GPU_FX_BRUSH_SOLID] = { GPU_FX_BL_NONE,  GPU_FX_CC_TEX_SHADE,  1, 1, 0, 0, 3, GPU_FX_TLUT_RGBA16 },
 };
 
 const char *const gpu_fx_mode_name[GPU_FX_MODES] = {
 	"cutout", "blend", "add", "glow", "decal", "point", "streak", "brush_blend", "brush_add",
-	"brush_color", "screen", "ialpha"
+	"brush_color", "screen", "ialpha", "brush_solid"
 };
 
 typedef struct {
@@ -233,19 +236,25 @@ int trans_gpu_mode(int rendermode, int kind, uint8_t *blend)
 		case FX_RM_GLOW:
 		case FX_RM_TRANSADD:
 			return GPU_FX_BRUSH_ADD;
+		case FX_RM_TRANSALPHA:
+			return GPU_FX_BRUSH_SOLID;
 		default:
-			return -1;	/* opaque world pass (TransAlpha: alpha compare) */
+			return -1;	/* opaque world pass */
 		}
 	}
 	switch (rendermode)	/* sprite */
 	{
-	case FX_RM_TRANSCOLOR:
 	case FX_RM_TRANSTEXTURE:
 		return GPU_FX_BLEND;
 	case FX_RM_GLOW:
 		return GPU_FX_GLOW;
 	case FX_RM_TRANSADD:
 		return GPU_FX_ADD;
+	case FX_RM_TRANSCOLOR:
+		/* drawn as Normal, untinted; the blend only switches it on */
+		if (*blend)
+			*blend = 255;
+		return GPU_FX_CUTOUT;
 	default:		/* Normal (blend forced 255), TransAlpha */
 		if (rendermode == FX_RM_NORMAL)
 			*blend = 255;
@@ -260,8 +269,10 @@ void trans_add(int kind, int id, float d2, uint8_t blend, uint8_t mode)
 	item_t *it;
 	int i;
 
-	/* cutout sprites (entity or temp; studio temps never come as mode 0) */
-	if ((kind == TK_SPRITE_ENT || kind == TK_TEMP) && mode == GPU_FX_CUTOUT)
+	/* cutout sprites (entity or temp; studio temps never come as mode 0)
+	 * and TransAlpha brushes: Z-writing, unblended, drawn first unsorted */
+	if (((kind == TK_SPRITE_ENT || kind == TK_TEMP) && mode == GPU_FX_CUTOUT)
+		|| (kind == TK_BRUSH_ENT && mode == GPU_FX_BRUSH_SOLID))
 	{
 		if (ncuts >= HL64_FX_TRANS_MAX)
 		{
@@ -392,9 +403,11 @@ static void draw_sprite_ent(int e, uint8_t blend, int mode)
 	if (!s)
 		return;
 	d = sqrtf(ent_dist2(e, org));
-	/* render-fx.md 3: rendercolor tints the sprite in every mode (the
-	 * red env_glows of hldemo1: glow02 x 238 30 46); 0 0 0 = untinted */
-	if (r->rendercolor[0] | r->rendercolor[1] | r->rendercolor[2])
+	/* render-fx.md 2: rendercolor tints the sprite in every mode but
+	 * TransColor (the red env_glows of hldemo1: glow02 x 238 30 46);
+	 * 0 0 0 = untinted */
+	if ((r->rendercolor[0] | r->rendercolor[1] | r->rendercolor[2])
+		&& cv->rendermode != FX_RM_TRANSCOLOR)
 		memcpy(rgba, r->rendercolor, 3);
 	if (cv->rendermode == FX_RM_GLOW)
 	{

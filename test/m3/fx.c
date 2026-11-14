@@ -180,12 +180,15 @@ static void test_x1(void)
 	static const char *kinds[3] = { "sprite", "studio", "brush" };
 	/* expected (render-fx.md 2, 2a): blender (0 none, 1 alpha, -1 opaque
 	 * pass; studio: the GPU_STUDIO mode), Z test, Z write, alpha compare,
-	 * flat colour; additive rows go through the alpha blender */
+	 * flat colour; additive rows go through the alpha blender. Sprite
+	 * TransColor draws as Normal; brush TransAlpha draws in the
+	 * translucent pass, opaque with Z write (its pages' fence flags set
+	 * the alpha compare) */
 	static const int want[3][6][5] = {
-		{ { 1, 1, 1, 1, 0 }, { 1, 1, 0, 0, 0 }, { 1, 1, 0, 0, 0 }, { 1, 0, 0, 0, 0 },
+		{ { 1, 1, 1, 1, 0 }, { 1, 1, 1, 1, 0 }, { 1, 1, 0, 0, 0 }, { 1, 0, 0, 0, 0 },
 		  { 1, 1, 1, 1, 0 }, { 1, 1, 0, 0, 0 } },
 		{ { -1 }, { 1 }, { 1 }, { 2 }, { -1 }, { 2 } },
-		{ { -1 }, { 1, 1, 0, 0, 1 }, { 1, 1, 0, 0, 0 }, { 1, 1, 0, 0, 0 }, { -1 },
+		{ { -1 }, { 1, 1, 0, 0, 1 }, { 1, 1, 0, 0, 0 }, { 1, 1, 0, 0, 0 }, { 0, 1, 1, 0, 0 },
 		  { 1, 1, 0, 0, 0 } },
 	};
 	float g[3];
@@ -232,6 +235,16 @@ static void test_x1(void)
 						"%s rm %d not the ramp", kinds[k], rm);
 			}
 		}
+	/* sprite TransColor: the blend only switches it on (full, or off) */
+	{
+		uint8_t b0 = 0, b1 = 60;
+
+		CHECK(trans_gpu_mode(FX_RM_TRANSCOLOR, 0, &b0) == GPU_FX_CUTOUT && b0 == 0
+			&& trans_gpu_mode(FX_RM_TRANSCOLOR, 0, &b1) == GPU_FX_CUTOUT && b1 == 255,
+			"sprite TransColor blend %d %d", b0, b1);
+		CHECK(gpu_fx_rdp[GPU_FX_BRUSH_SOLID].combiner == GPU_FX_CC_TEX_SHADE
+			&& gpu_fx_rdp[GPU_FX_BRUSH_SOLID].textured == 3, "brush TransAlpha: lit page");
+	}
 	/* recorder: one sprite per render mode, drawn in the pass */
 	make_sprite(FX_SPR_PARALLEL);
 	eye(L->start_org, 0, 0);
@@ -255,13 +268,47 @@ static void test_x1(void)
 		if (gs.calls[i])
 			printf("x1 recorder mode=%s calls=%lu\n", gpu_fx_mode_name[i],
 				(unsigned long)gs.calls[i]);
-	CHECK(gs.calls[GPU_FX_CUTOUT] == 2 && gs.calls[GPU_FX_BLEND] == 2 && gs.calls[GPU_FX_GLOW] == 1
+	CHECK(gs.calls[GPU_FX_CUTOUT] == 3 && gs.calls[GPU_FX_BLEND] == 1 && gs.calls[GPU_FX_GLOW] == 1
 		&& gs.calls[GPU_FX_ADD] == 1, "recorder calls cut %lu blend %lu glow %lu add %lu",
 		(unsigned long)gs.calls[GPU_FX_CUTOUT], (unsigned long)gs.calls[GPU_FX_BLEND],
 		(unsigned long)gs.calls[GPU_FX_GLOW], (unsigned long)gs.calls[GPU_FX_ADD]);
 	(void)e;
 	kill_all();
-	finish("X1", "render mode table + recorder");
+	/* brush TransAlpha joins the translucent pass (blend 0: not drawn) */
+	for (i = 0; i < L->dir->nsub; i++)
+		if (L->subs[i].kind == W64_SUB_MOVR)
+			break;
+	CHECK(i < L->dir->nsub, "no MOVR submodel");
+	if (i < L->dir->nsub)
+	{
+		static const int amt[2] = { 255, 0 };
+		fx_draw_stats_t ds;
+		float z[3] = { 0, 0, 0 };
+		int b = make_ent(z), j;
+
+		eng_set_frame_layer(L->slot);
+		ent_set_model(b, RES_SUBMODEL(L->slot, i));
+		eng_set_frame_layer(-1);
+		ent_cv(b)->rendermode = FX_RM_TRANSALPHA;
+		for (j = 0; j < 2; j++)
+		{
+			ent_rnd(b)->renderamt = (uint8_t)amt[j];
+			fx_draw_begin();
+			ren_trans_brush(b, 100.0f);
+			fx_draw_particles();
+			fx_draw_trans();
+			fx_draw_decals();
+			fx_draw_stats(&ds);
+			printf("x1 brush TransAlpha amt=%d first=%lu sorted=%lu brushes=%lu\n", amt[j],
+				(unsigned long)ds.cutouts, (unsigned long)ds.items, (unsigned long)ds.brushes);
+			/* drawn first, unsorted (Z write), before the blended items */
+			CHECK(ds.brushes == (amt[j] ? 1u : 0u) && ds.cutouts == ds.brushes && !ds.items,
+				"brush TransAlpha amt %d: %lu drawn, %lu first", amt[j],
+				(unsigned long)ds.brushes, (unsigned long)ds.cutouts);
+		}
+	}
+	kill_all();
+	finish("X1", "render mode table + recorder; brush TransAlpha in the translucent pass");
 }
 
 /* ---- X2 ordering, full additive blend, blend 0 ---------------------------------- */
@@ -1678,9 +1725,9 @@ static void test_add(void)
 			for (k = 0; k < 16; k++)
 				CHECK(ss->ramp->ia[k] == (0xFF00 | 17 * k), "steam1 level %d: %04x", k,
 					ss->ramp->ia[k]);
-			/* smoke (fx_smoke: TransColor, grey): alpha-blended through the
-			 * level TLUT, colour = last palette colour x tint */
-			m = add_draw_one(rs, FX_RM_TRANSCOLOR, 200, grey, prim, env, &tl);
+			/* smoke (fx_smoke: TransTexture, grey): alpha-blended through
+			 * the level TLUT, colour = last palette colour x tint */
+			m = add_draw_one(rs, FX_RM_TRANSTEXTURE, 200, grey, prim, env, &tl);
 			printf("add steam1 smoke: mode %s prim %d,%d,%d,%d\n", m >= 0 ? gpu_fx_mode_name[m] : "-",
 				prim[0], prim[1], prim[2], prim[3]);
 			CHECK(m == GPU_FX_IALPHA && tl == ss->ramp->ia && prim[3] == 200, "steam1 smoke: mode %d",
@@ -1688,6 +1735,22 @@ static void test_add(void)
 			for (k = 0; k < 3; k++)
 				CHECK(prim[k] == (ss->ramp->hi[k] * grey[k] + 127) / 255 && env[k] == prim[k],
 					"steam1 smoke ch %d: %d", k, prim[k]);
+			/* TransColor sprite (render-fx.md 2): as Normal, untinted,
+			 * renderamt only a visibility switch */
+			m = add_draw_one(rs, FX_RM_TRANSCOLOR, 60, red, prim, env, &tl);
+			printf("add steam1 transcolor: mode %s prim %d,%d,%d,%d\n",
+				m >= 0 ? gpu_fx_mode_name[m] : "-", prim[0], prim[1], prim[2], prim[3]);
+			CHECK(m == GPU_FX_IALPHA && tl == ss->ramp->ia && prim[3] == 255
+				&& prim[0] == ss->ramp->hi[0] && prim[1] == ss->ramp->hi[1]
+				&& prim[2] == ss->ramp->hi[2], "steam1 TransColor not untinted / full: mode %d", m);
+			{
+				gpu_fx_stats_t gs;
+
+				add_draw_one(rs, FX_RM_TRANSCOLOR, 0, red, prim, env, &tl);
+				gpu_fx_stats(&gs);
+				CHECK(!gs.calls[GPU_FX_IALPHA] && !gs.calls[GPU_FX_CUTOUT],
+					"TransColor at amount 0 drawn");
+			}
 			/* additive: unit colour, brightness x blend (2a) */
 			m = add_draw_one(rs, FX_RM_TRANSADD, 200, none, prim, env, &tl);
 			CHECK(m == GPU_FX_ADD && tl == ss->ramp->ia, "steam1 add: mode %d", m);
