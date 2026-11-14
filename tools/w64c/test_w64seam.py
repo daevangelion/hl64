@@ -276,6 +276,45 @@ class SpawnBasisTests(unittest.TestCase):
                 edict_classes(header)
 
 
+class MoverReachTests(unittest.TestCase):
+    """mover_reach: where stream.c's each_mover can find a brush entity."""
+
+    def reach(self, ents, kinds=(2, 2, 2)):
+        # submodel 0 is the world; 1..3 carry a MOVR (kind 2) chunk 10 + n,
+        # local bbox -8..8 X/Y, 0..64 Z
+        d = bytearray(16 * 4)
+        for n, kind in enumerate(kinds, 1):
+            struct.pack_into(">HH6h", d, 16 * n, kind, 10 + n, -8, -8, 0, 8, 8, 64)
+        w = SimpleNamespace(d=bytes(d), sub_ofs=0)
+        scene = SimpleNamespace(ents=ents, bsp=SimpleNamespace(models=[None] * 4))
+        return {chunk: (lo, hi) for chunk, lo, hi in w64seam.mover_reach(scene, w)}
+
+    def test_static_wall_is_its_placement_grown(self):
+        got = self.reach([{"classname": "func_wall", "model": "*1", "origin": "100 0 0"}])
+        np.testing.assert_allclose(got[11][0], [92 - 128, -8 - 128, -128])
+        np.testing.assert_allclose(got[11][1], [108 + 128, 8 + 128, 64 + 128])
+
+    def test_door_sweeps_its_travel_and_lead(self):
+        got = self.reach([{"classname": "func_door", "model": "*1", "angles": "0 -1 0",
+                           "lip": "4", "speed": "200"}])
+        pad = 128 + 200 * .5
+        np.testing.assert_allclose(got[11][0], [-8 - pad, -8 - pad, -pad])
+        np.testing.assert_allclose(got[11][1], [8 + pad, 8 + pad, 64 + 60 + pad])
+
+    def test_rotating_and_train_reach(self):
+        got = self.reach([
+            {"classname": "func_door_rotating", "model": "*1"},
+            {"classname": "func_train", "model": "*2", "target": "p1", "speed": "0"},
+            {"classname": "path_corner", "targetname": "p1", "target": "p2", "origin": "500 0 0"},
+            {"classname": "path_corner", "targetname": "p2", "target": "p1", "origin": "0 0 -300"},
+            {"classname": "func_wall", "model": "*3"}], kinds=(2, 2, 0))
+        r = np.linalg.norm([8, 8, 64])
+        np.testing.assert_allclose(got[11][0], [-r - 128, -r - 128, -r - 128])
+        np.testing.assert_allclose(got[12][0], [-8 - 128, -8 - 128, -300 - 32 - 128])
+        np.testing.assert_allclose(got[12][1], [500 + 8 + 128, 8 + 128, 64 + 128])
+        self.assertNotIn(13, got)
+
+
 class SeamCliTests(unittest.TestCase):
     """w64seam rejects malformed input before proving anything."""
 
