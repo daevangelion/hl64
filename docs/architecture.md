@@ -356,7 +356,10 @@ SA2 §4.2 as built):
   lapse after 3 s or on arrival.
 - **prefetch**: eye-leaf sets at eye + v·{0.25, 0.5, 1} s; collision window
   + v·0.5 s; cells of moving monsters/projectiles; hulls of brush entities
-  in the box spanned by thinking monsters and projectiles.
+  in the box spanned by thinking monsters and projectiles; cells of the
+  hydration candidates' spawn boxes and of the boxes the pending thinks of
+  spawner logic records will create entities in (`game_spawner_box`: a
+  monstermaker's child, possibly in a neighbour map far from the player).
 - **pinned**: world hull-0 COLL while the layer is open.
 
 Eviction: queued-not-started first, then LRU among chunks not wanted this

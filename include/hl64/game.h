@@ -70,6 +70,12 @@ int	game_end_section(void);
  * CMonsterMaker::MakeMonster clears its think and use when its count runs
  * out (route WAIT_GONE of a spawned name). 0 for any other record. */
 int	game_spawner_done(gid_t16 gid);
+/* A spawner logic record whose think will create an entity (a
+ * monstermaker with its think set): 1 and the map-local box the child
+ * spawns, falls and first moves in, else 0 (any other record). Pure (no
+ * game state read but the record's): rec names the box's collision as a
+ * prefetch spawn window while the think is pending. */
+int	game_spawner_box(gid_t16 gid, float box[6]);
 
 /* ---- frame (architecture.md 3.2) ------------------------------------------- */
 
