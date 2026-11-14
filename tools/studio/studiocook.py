@@ -27,6 +27,7 @@ import sys
 import zlib
 from typing import Callable, Dict, List, Optional, Tuple
 
+from tools.cook import addramp
 from tools.cook.bake_world_tex import build_ci4
 from tools.hlsdk import studio_mdl as mdl
 from tools.studio import s64
@@ -185,7 +186,7 @@ def tex_side(t: mdl.Texture) -> Tuple[int, int]:
     return p2(t.width), p2(t.height)
 
 
-def cook_mesh(m: mdl.Model) -> Tuple[bytes, List[int], int, Dict[str, int]]:
+def cook_mesh(m: mdl.Model, additive: bool = False) -> Tuple[bytes, List[int], int, Dict[str, int]]:
     if not m.textures:
         raise CookError("no textures")
     nskinref = len(m.skinref[0]) if m.skinref else 0
@@ -341,9 +342,14 @@ def cook_mesh(m: mdl.Model) -> Tuple[bytes, List[int], int, Dict[str, int]]:
         tx = m.textures[t]
         fence = bool(tx.flags & mdl.STUDIO_NF_MASKED)
         ci4, pw, ph, _, _, tlut = build_ci4(tx.pixels, tx.width, tx.height, tx.palette, fence)
-        blob = bytearray(struct.pack(">HHB3xII", pw, ph, 1 if fence else 0, 48,
-                                     tx.flags & 0xFFFFFFFF))
+        # a model some entity draws additive carries each skin's ramp
+        # (render-fx.md 2a, tools/cook/addramp.py): flag RAMP, CI4 at 88
+        flags = (s64.TEXF_FENCE if fence else 0) | (s64.TEXF_RAMP if additive else 0)
+        first = 48 + addramp.SIZE if additive else 48
+        blob = bytearray(struct.pack(">HHB3xII", pw, ph, flags, first, tx.flags & 0xFFFFFFFF))
         blob += struct.pack(">16H", *tlut)
+        if additive:
+            blob += addramp.ramp(tlut)
         blob += ci4
         pad16(blob)
         tex_blobs.append(bytes(blob))
@@ -381,11 +387,13 @@ def cook_mesh(m: mdl.Model) -> Tuple[bytes, List[int], int, Dict[str, int]]:
 
 # ---- model ---------------------------------------------------------------------------
 
-def cook_model(path_of: Callable[[str], Optional[bytes]], name: str):
+def cook_model(path_of: Callable[[str], Optional[bytes]], name: str, additive: bool = False):
+    """additive: an entity can draw the model Glow / TransAdd (its skins
+    carry the additive ramp)."""
     base = os.path.basename(name)[:-4]
     try:
         m = mdl.read(path_of, name)
-        mesh, sub_first, nsub, st = cook_mesh(m)
+        mesh, sub_first, nsub, st = cook_mesh(m, additive)
         anim, ranges, biggest = cook_anim(m)
         info = cook_info(m, ranges, sub_first, nsub)
     except (mdl.MdlError, CookError, struct.error) as e:

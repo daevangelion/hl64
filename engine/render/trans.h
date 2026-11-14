@@ -22,8 +22,9 @@ int	ren_blend(int e);
  * drawn by the translucent pass (studio_draw_trans) back to front among
  * the sprites, brushes and effects. dist2 = squared eye distance. */
 void	ren_trans_studio(int e, float dist2);
-/* A visible brush mover whose render mode is not Normal / TransAlpha;
- * the pass calls ren_mover_draw (engine/render/world.c). */
+/* A visible brush mover whose render mode is not Normal (TransAlpha too:
+ * lit, alpha compare, Z write); the pass calls ren_mover_draw
+ * (engine/render/world.c). */
 void	ren_trans_brush(int e, float dist2);
 void	ren_mover_draw(int e, int gpu_mode, const uint8_t prim[4]);
 

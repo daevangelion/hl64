@@ -17,7 +17,7 @@
 #include <stdint.h>
 
 #define W64_MAGIC		0x5736344Cu	/* 'W64L' */
-#define W64_VERSION		2
+#define W64_VERSION		3	/* 3: TEXP additive ramps (W64_TEXF_RAMP) */
 
 /* w64_header_t.flags */
 #define W64_HF_COLL		1	/* COLL chunks + model / leaf contents / grid tables */
@@ -35,11 +35,14 @@
 #define W64_SUB_FOLDED		1	/* static: baked into the sector meshlets */
 #define W64_SUB_MOVR		2	/* drawn from its MOVR chunk with the entity matrix */
 
-/* w64_tex_t.flags */
+/* w64_tex_t.flags; w64_texp_t.flags (TEXP pages, studio skins) use FENCE and RAMP */
 #define W64_TEXF_FENCE		1	/* '{' texture: TLUT[0] transparent, alpha compare */
 #define W64_TEXF_SKY		2
 #define W64_TEXF_ANIM		4	/* '+' animation / alternate sequence */
 #define W64_TEXF_MISSING	8	/* no texels: faces were not cooked */
+#define W64_TEXF_RAMP		16	/* page: the cooked additive ramp (addblend.h) at
+					 * W64_TEXP_RAMP, CI4 from 88 (render-fx.md 2a) */
+#define W64_TEXP_RAMP		48	/* page offset of the ramp: after header + TLUT */
 
 /* Strip index bits (tiny3d t3d_indexbuffer_convert encoding). */
 #define W64_IDX_RESTART		0x8000
@@ -232,10 +235,11 @@ typedef struct {
 	int16_t		stB[2];
 } w64_vert_t;			/* 32 */
 
-/* TEXP chunk: header, TLUT (16 x RGBA5551) at 16, CI4 texels at ci4_ofs. */
+/* TEXP chunk: header, TLUT (16 x RGBA5551) at 16, the additive ramp at 48
+ * when W64_TEXF_RAMP, CI4 texels at ci4_ofs. */
 typedef struct {
 	uint16_t	w, h;
-	uint8_t		flags;		/* W64_TEXF_FENCE */
+	uint8_t		flags;		/* W64_TEXF_FENCE, W64_TEXF_RAMP */
 	uint8_t		pad[3];
 	uint32_t	ci4_ofs;
 	uint32_t	pad2;

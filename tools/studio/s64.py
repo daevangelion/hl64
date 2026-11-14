@@ -13,8 +13,9 @@ MODEL_MAGIC = 0x5336344D     # S64M
 INFO_MAGIC = 0x53494E46      # SINF
 MESH_MAGIC = 0x534D5348      # SMSH
 ANIM_MAGIC = 0x41363441      # A64A
-VERSION = 1
+VERSION = 2                  # 2: textures may carry the additive ramp (TEXF_RAMP)
 F_CHROME, F_VIEW = 1, 2
+TEXF_FENCE, TEXF_RAMP = 1, 16   # texture flags (w64_texp_t.flags; w64-format.md TEXP)
 INFO_HDR = 128
 MESH_HDR = 64
 SEQ_SIZE = 96
@@ -162,10 +163,11 @@ def read_model(b: bytes) -> Info:
     for k in range(ntex):
         to = struct.unpack_from(">I", b, m + tx_o + 4 * k)[0]
         _need(to % 16 == 0, "texture alignment")
-        w, hh, _, ci4o = struct.unpack_from(">HHB3xI", b, m + to)
-        _need(w and hh and not (w & (w - 1)) and not (hh & (hh - 1)) and ci4o == 48,
+        w, hh, tf, ci4o = struct.unpack_from(">HHB3xI", b, m + to)
+        first = 88 if tf & TEXF_RAMP else 48     # after the TLUT, or the 40-byte ramp
+        _need(w and hh and not (w & (w - 1)) and not (hh & (hh - 1)) and ci4o == first,
               f"texture {k} shape")
-        minside(to, 48 + w * hh // 2, f"texture {k}")
+        minside(to, first + w * hh // 2, f"texture {k}")
     if flags & F_CHROME:
         minside(nbn_o, nslots, "normal bones")
     return Info(io, nb, nseq, nsub, labels, frames, anim, events, blends)

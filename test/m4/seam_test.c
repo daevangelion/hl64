@@ -22,7 +22,8 @@
  *                                      swept-eye / late / settle / leave /
  *                                      open_fail / USEONLY crossing with
  *                                      twins, carried entities, the player
- *                                      re-base and continuity
+ *                                      re-base, continuity and approach
+ *                                      ghosts
  * Each test prints "seamtest ok" or FAIL lines; exit status 0 = pass.
  */
 #include <math.h>
@@ -903,6 +904,128 @@ static void test_continuity_bad(void)
 		"continuity_bad %u", st.continuity_bad - st0.continuity_bad);
 }
 
+/* a point entity of layer `slot` at org, class cls */
+static int make_in(int slot, const float org[3], int cls, gid_t16 gid)
+{
+	int e;
+
+	eng_set_frame_layer(slot);
+	e = make_ent(org, 0, gid);
+	eng_set_frame_layer(-1);
+	if (e >= 0)
+		ent_idc(e)->cls = (cls_t)cls;
+	return e;
+}
+
+/* approach ghosts (architecture.md 5.4 item 6), the hldemo1 -> hldemo2
+ * USEONLY seam: a B entity that walked into B's carry box before the
+ * switch (AddBlend3's hldemo2 roach) shows in A's view at its place - T,
+ * is in the continuity check's 'before' set and matches itself after the
+ * switch though it walked on (extra=0); a B entity an A one of its class
+ * stands for at the mapped place, a twin's B copy and a B entity outside
+ * the carry box are no ghosts; after the switch none is. Positive
+ * control: a B entity that comes into the carry box only after the switch
+ * is still an extra. */
+static void test_ghost(void)
+{
+	seam_info_t s;
+	seam_stats_t st0, st;
+	float org[3], p[3], off[3];
+	int16_t list[SEAM_GHOSTS];
+	int a, sa, sb, k, ghost, a_own, b_own, twin, far, n;
+
+	if (find_seam("hldemo1", "hldemo2", "hldemo1to2", &s) < 0)
+	{
+		CHECK(0, "no hldemo1->hldemo2 seam");
+		return;
+	}
+	for (k = 0; k < 3; k++)
+		org[k] = 0.5f * (s.carry_mins[k] + s.carry_maxs[k]);
+	org[2] = s.carry_mins[2] + 40;
+	if ((a = start("hldemo1", org)) < 0)
+	{
+		CHECK(0, "start hldemo1");
+		return;
+	}
+	sa = slot_of(a);
+	step();				/* approach: B open and ready */
+	sb = slot_of(s.to);
+	CHECK(sb >= 0 && sb != sa, "B not open (slot %d)", sb);
+	if (sb < 0)
+		return;
+	/* B's roach in B's carry box (B frame) */
+	for (k = 0; k < 3; k++)
+		p[k] = org[k] + s.delta[k];
+	p[0] += 12;
+	ghost = make_in(sb, p, 51, GID_NONE);
+	/* an A entity and B's own copy of it at the mapped place */
+	p[0] = org[0] - 20;
+	p[1] = org[1];
+	p[2] = org[2];
+	a_own = make_in(sa, p, 7, GID_MAKE(sa, 600));
+	for (k = 0; k < 3; k++)
+		p[k] += s.delta[k];
+	b_own = make_in(sb, p, 7, GID_MAKE(sb, 601));
+	/* a twin's B copy, and a B entity outside the carry box */
+	for (k = 0; k < 3; k++)
+		p[k] = org[k] + s.delta[k];
+	p[1] += 12;
+	twin = make_in(sb, p, 9, GID_MAKE(sb, s.twins[1]));
+	p[0] = s.carry_maxs[0] + s.delta[0] + 200;
+	far = make_in(sb, p, 51, GID_NONE);
+	CHECK(ghost >= 0 && a_own >= 0 && b_own >= 0 && twin >= 0 && far >= 0, "entities");
+	step();
+	CHECK(seam_ghost(ghost, a, off) == 1, "B's roach in the carry box is no ghost");
+	for (k = 0; k < 3; k++)
+		CHECK(off[k] == -s.T[k], "ghost offset[%d] %g, -T %g", k, (double)off[k],
+			(double)-s.T[k]);
+	CHECK(seam_ghost(ghost, s.to, off) == 0, "a ghost for B's own view");
+	CHECK(seam_ghost(b_own, a, off) == 0, "B's copy of an A entity is a ghost");
+	CHECK(seam_ghost(a_own, a, off) == 0, "an A entity is a ghost");
+	CHECK(seam_ghost(twin, a, off) == 0, "a twin's B copy is a ghost");
+	CHECK(seam_ghost(far, a, off) == 0, "a B entity outside the carry box is a ghost");
+	n = seam_ghosts(a, list, off);
+	CHECK(n == 1 && list[0] == ghost, "ghost list n=%d", n);
+	/* aliased twins' B copies are not live on their own before a switch */
+	ent_destroy(twin);
+
+	st0 = stats();
+	CHECK(seam_changelevel(GID_MAKE(sa, s.trigger), 1) == 1, "use not taken");
+	step();
+	CHECK(phy_player_map() == s.to, "USEONLY did not switch");
+	CHECK(seam_ghost(ghost, a, off) == 0 && seam_ghosts(a, list, off) == 0,
+		"ghosts after the switch");
+	/* the roach walks on 5 u in the frame after the switch */
+	memcpy(p, ent_cv(ghost)->origin, sizeof(p));
+	p[1] += 5;
+	eng_set_frame_layer(sb);
+	ent_set_origin(ghost, p);
+	eng_set_frame_layer(-1);
+	step();
+	st = stats();
+	CHECK(st.continuity_bad == st0.continuity_bad, "continuity_bad +%u with a ghost",
+		st.continuity_bad - st0.continuity_bad);
+
+	/* positive control: a B entity new in the carry box after the switch */
+	if ((a = start("hldemo1", org)) < 0)
+		return;
+	sa = slot_of(a);
+	step();
+	st0 = stats();
+	seam_changelevel(GID_MAKE(sa, s.trigger), 1);
+	step();
+	CHECK(phy_player_map() == s.to, "USEONLY did not switch (control)");
+	for (k = 0; k < 3; k++)
+		p[k] = org[k] + s.delta[k];
+	p[0] += 12;
+	make_in(slot_of(s.to), p, 51, GID_NONE);
+	step();
+	st = stats();
+	CHECK(st.continuity_bad == st0.continuity_bad + 1,
+		"control: an entity new in the carry box after the switch: continuity_bad +%u",
+		st.continuity_bad - st0.continuity_bad);
+}
+
 /* hldemo1's rafter_fall_1 (lump 40, model *13: mins -1 -5 -1, maxs 559 3
  * 39, func_door_rotating about x, 43 deg open) hinged 12 u east of and
  * 47 u above the carry box: its linked cube (+-560) meets the box, the
@@ -955,6 +1078,7 @@ static void selftest(void)
 	test_continuity_bad();
 	rafter(0);
 	rafter(1);
+	test_ghost();
 }
 
 /* ---- dump ---------------------------------------------------------------------- */

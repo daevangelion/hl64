@@ -40,6 +40,15 @@ void		seam_frame(void);
 /* Hydration anchors (global positions): the player, and the player mapped
  * through the selected approached seam (p + T) while one is approached. */
 int		seam_anchors(float (*out)[3], int max);
+/* Approach ghosts (architecture.md 5.4 item 6): while a seam of `map` is
+ * approached and its B is ready, B's live entities drawn into B's carry
+ * box that no twin and no A entity of the same class within 1 u stands
+ * for show in A's view, at their global position + off (off = -T).
+ * seam_ghost: 1 when entity e is one for a view in map `map` this frame;
+ * seam_ghosts: this frame's ones for map `map` into ents, the count. */
+#define SEAM_GHOSTS	64
+int		seam_ghost(int e, int map, float off[3]);
+int		seam_ghosts(int map, int16_t ents[SEAM_GHOSTS], float off[3]);
 
 typedef struct {
 	uint32_t	approaches;	/* approach boxes entered */

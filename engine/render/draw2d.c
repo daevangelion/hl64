@@ -21,6 +21,7 @@
 #include "engine/core/sys.h"
 #include "engine/io/io.h"
 #include "engine/mem/carve.h"
+#include "engine/render/addblend.h"
 #include "engine/render/gpu_2d.h"
 
 enum {
@@ -235,6 +236,10 @@ void d2_pic(int sheet, int sx, int sy, int w, int h, int x, int y, uint8_t r, ui
 	if (y + h > 240) h = 240 - y;
 	if (w <= 0 || h <= 0)
 		return;
+	/* additive (SPR_DrawAdditive): unit colour x brightness through the
+	 * alpha blender, no RDP wrap (render-fx.md 2a) */
+	if (mode == D2_ADD)
+		add_split(c, a, c);
 	gpu_2d_pic(sheet, sx, sy, w, h, x, y, c, mode);
 	D.draws++;
 }
@@ -249,6 +254,8 @@ void d2_fill(int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b, uint8_
 	if (y + h > 240) h = 240 - y;
 	if (w <= 0 || h <= 0)
 		return;
+	if (mode == D2_ADD)
+		add_split(c, a, c);
 	gpu_2d_fill(x, y, w, h, c, mode);
 	D.draws++;
 }
