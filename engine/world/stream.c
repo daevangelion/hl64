@@ -71,7 +71,8 @@
 #define EW_REQUERY	30		/* frames between a window's model queries */
 #define GOAL_SPAN	1024.0f		/* a route span is prefetched this far at most */
 #define GOAL_MARGIN	40.0f		/* ... around the hull (a step up and down: 2 x 18 u) */
-#define SPAWN_WANTS	24		/* hydration windows per layer (wld_stream_spawns) */
+#define SPAWN_WANTS	26		/* hydration windows per layer (wld_stream_spawns: rec's
+					   16 candidates, 6 ring, 4 pending spawners) */
 #define SPAWN_MARGIN	32.0f		/* around a record's spawn box */
 #define TELE_PINS	4		/* teleport destinations pinned at once */
 #define SEEN_MODELS	64		/* brush entities' hulls named in the eye's sectors */
