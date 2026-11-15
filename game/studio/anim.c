@@ -126,18 +126,56 @@ int gs_lookup_activity_heaviest(res_t model, int activity)
 	return seq;
 }
 
+/* The sequences gs_want_activities requests, per model and activity list
+ * (every monster think asks for the same lists: the scan, numseq x n
+ * compares, was ~9 % of the m4 route's monster think time on the cart).
+ * A model's sequence table never changes (res_t is campaign-wide), so an
+ * entry stays valid; a list of more than WANT_SEQS sequences is scanned
+ * each time. The requests are the scan's, in its order. */
+#define WANT_MEMO	16
+#define WANT_SEQS	24
+static struct {
+	res_t		model;
+	uint8_t		n, nseq;
+	const int	*acts;
+	uint16_t	seq[WANT_SEQS];
+} want_memo[WANT_MEMO];
+static int want_next;
+
 void gs_want_activities(res_t model, const int *acts, int n)
 {
-	const sfmt_info_t *h = gs_info(model);
-	int i, k;
+	const sfmt_info_t	*h = gs_info(model);
+	uint16_t		seq[WANT_SEQS];
+	int			i, k, m, nseq = 0;
 
-	for (i = 0; h && i < h->numseq; i++)
+	if (!h)
+		return;
+	for (m = 0; m < WANT_MEMO; m++)
+		if (want_memo[m].model == model && want_memo[m].acts == acts && want_memo[m].n == n)
+		{
+			for (i = 0; i < want_memo[m].nseq; i++)
+				studio_want(model, want_memo[m].seq[i]);
+			return;
+		}
+	for (i = 0; i < h->numseq; i++)
 		for (k = 0; k < n; k++)
 			if (SFMT_SEQS(h)[i].activity == acts[k])
 			{
 				studio_want(model, i);
+				if (nseq < WANT_SEQS)
+					seq[nseq] = (uint16_t)i;
+				nseq++;
 				break;
 			}
+	if (nseq > WANT_SEQS || n > 255)
+		return;
+	m = want_next;
+	want_next = (m + 1) % WANT_MEMO;
+	want_memo[m].model = model;
+	want_memo[m].acts = acts;
+	want_memo[m].n = (uint8_t)n;
+	want_memo[m].nseq = (uint8_t)nseq;
+	memcpy(want_memo[m].seq, seq, (size_t)nseq * sizeof(seq[0]));
 }
 
 void gs_eye_position(res_t model, float out[3])

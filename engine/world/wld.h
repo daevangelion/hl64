@@ -166,6 +166,8 @@ uint32_t	wld_layer_bytes(uint32_t dir_size, uint32_t nchunks, uint32_t npages,
 
 /* BSP leaf of a map-local point (hull 0, grid start node). */
 int		wld_point_leaf(const wld_layer_t *L, const float p[3]);
+/* wld_point_leaf calls since boot (game/hl's AI work units count them) */
+extern uint32_t	wld_point_leaves;
 /* Sectors visible from a leaf (vis list: count, then sector indices). */
 const uint16_t	*wld_leaf_sectors(const wld_layer_t *L, int leaf, int *count);
 /* The decoded PVS row of BSP leaf `leaf` (bit i = visleaf i + 1) from the

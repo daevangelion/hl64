@@ -28,6 +28,7 @@
 
 #include "engine/core/dbg.h"
 #include "engine/core/sys.h"
+#include "engine/world/wld.h"
 #include "engine/phys/player.h"
 #include "game/hl/monster.h"
 #include "game/hl/player.h"
@@ -267,6 +268,8 @@ static void aiw_now(mon_ai_work_t *w)
 	mon_aiw.btests = game_studio_cull_tests;
 	mon_aiw.hboxes = game_studio_hitboxes_kept;
 	mon_aiw.sounds = snd_emit_count();
+	mon_aiw.leaves = wld_point_leaves;
+	mon_aiw.queries = ent_grid_queries();
 	*w = mon_aiw;
 }
 
@@ -294,45 +297,55 @@ static void aiw_add(mon_ai_work_t *s, const mon_ai_work_t *d)
 /* Budget units of think work (Mon_FrameUnits, ai_budget), 1 unit ~ 1 us
  * of cart CPU: a think begun (schedule, conditions, StudioFrameAdvance),
  * RunAI's sensing (Look / Listen / GetEnemy), a Look box candidate, an
- * FVisible test, a collision trace, a BSP node a trace visited, an entity
- * candidate of a move's box, a CheckLocalMove and each of its walk steps
- * (their hull traces count among the traces), a FindNearestNode search,
- * a Dijkstra node expanded, an anim event, a sound start, a decal, a bone
+ * FVisible test, a collision trace, 4 BSP nodes a trace visited, an
+ * entity candidate of a move's box, a CheckLocalMove (its walk steps are
+ * their traces, contents / leaf lookups and box queries), a BuildRoute, a
+ * cover candidate, a FindNearestNode search and each of its traces, a
+ * Dijkstra node expanded, an anim event, a sound start, a decal, a bone
  * of a server pose (hitboxes, attachments), a server pose begun (its
- * frame, controllers and root transform), a hitbox pose cull test, a
- * hitbox a line trace walks. Fitted to the `ai: frame` lines of ares
- * PROFILE runs of the 17 test/scenes scenes (m5-gruntai e4136a1 + these
- * counters; 4043 frames with the cart's own counts: non-negative least
- * squares, r2 0.985, rms 0.9 ms), rounded up ~4 %: cart us / units
- * p50 0.96, p90 1.06, p99 1.20 over the frames above 10000 units
- * (docs/specs/think-and-time.md 2.1). */
-#define AI_UNIT_START	340
-#define AI_UNIT_SENSE	580
-#define AI_UNIT_LCAND	5
-#define AI_UNIT_FVIS	160
-#define AI_UNIT_TRACE	50
-#define AI_UNIT_BSP	2
-#define AI_UNIT_CAND	16
-#define AI_UNIT_LM	140
-#define AI_UNIT_STEP	175
-#define AI_UNIT_NN	760
-#define AI_UNIT_DJPOP	23
-#define AI_UNIT_EVENT	1150
-#define AI_UNIT_SOUND	1040
-#define AI_UNIT_DECAL	580
-#define AI_UNIT_BONE	55
-#define AI_UNIT_POSE	70
-#define AI_UNIT_BTEST	26
-#define AI_UNIT_HBOX	62
+ * frame, controllers and root transform), a hitbox pose cull test, a BSP
+ * point -> leaf lookup (contents, PVS), an entity box query, a paused
+ * think continued (its slice starts cold). Fitted per slice (one run of a
+ * think between pause points, timed alone: no zone straddles a frame) to
+ * ares PROFILE runs of routes m4 and uplink (47215 slices, the cart's own
+ * counts; non-negative least squares), rounded up ~5 %. Cart us / units
+ * over the frames above 12000 units, ares m4 / uplink: p50 0.94 / 0.88,
+ * p90 1.04 / 0.98, p99 1.12 / 1.10 (the earlier fit to the 17 test/scenes
+ * scenes without the leaf, query and resume counts: 1.07 / 1.04, 1.21 /
+ * 1.18, 1.39 / 1.36; docs/specs/think-and-time.md 2.1). */
+#define AI_UNIT_START	160
+#define AI_UNIT_SENSE	520
+#define AI_UNIT_LCAND	12
+#define AI_UNIT_FVIS	135
+#define AI_UNIT_TRACE	36
+#define AI_UNIT_BSP4	5	/* per 4 nodes */
+#define AI_UNIT_CAND	30
+#define AI_UNIT_LM	410
+#define AI_UNIT_ROUTE	25
+#define AI_UNIT_COVER	33
+#define AI_UNIT_NN	380
+#define AI_UNIT_NNT	39
+#define AI_UNIT_DJPOP	35
+#define AI_UNIT_EVENT	730
+#define AI_UNIT_SOUND	1105
+#define AI_UNIT_DECAL	1280
+#define AI_UNIT_BONE	83
+#define AI_UNIT_POSE	65
+#define AI_UNIT_BTEST	42
+#define AI_UNIT_LEAF	43
+#define AI_UNIT_QUERY	70
+#define AI_UNIT_RESUME	365
 
 static uint32_t aiw_units(const mon_ai_work_t *w)
 {
 	return w->starts * AI_UNIT_START + w->looks * AI_UNIT_SENSE + w->lcand * AI_UNIT_LCAND +
-		w->fvis * AI_UNIT_FVIS + w->traces * AI_UNIT_TRACE + w->bsp * AI_UNIT_BSP +
-		w->cands * AI_UNIT_CAND + w->lm * AI_UNIT_LM + w->steps * AI_UNIT_STEP +
-		w->nn * AI_UNIT_NN + w->djpop * AI_UNIT_DJPOP + w->events * AI_UNIT_EVENT +
-		w->sounds * AI_UNIT_SOUND + w->decals * AI_UNIT_DECAL + w->bones * AI_UNIT_BONE +
-		w->poses * AI_UNIT_POSE + w->btests * AI_UNIT_BTEST + w->hboxes * AI_UNIT_HBOX;
+		w->fvis * AI_UNIT_FVIS + w->traces * AI_UNIT_TRACE + w->bsp * AI_UNIT_BSP4 / 4 +
+		w->cands * AI_UNIT_CAND + w->lm * AI_UNIT_LM + w->routes * AI_UNIT_ROUTE +
+		w->cover * AI_UNIT_COVER + w->nn * AI_UNIT_NN + w->nnt * AI_UNIT_NNT +
+		w->djpop * AI_UNIT_DJPOP + w->events * AI_UNIT_EVENT + w->sounds * AI_UNIT_SOUND +
+		w->decals * AI_UNIT_DECAL + w->bones * AI_UNIT_BONE + w->poses * AI_UNIT_POSE +
+		w->btests * AI_UNIT_BTEST + w->leaves * AI_UNIT_LEAF + w->queries * AI_UNIT_QUERY +
+		w->resumes * AI_UNIT_RESUME;
 }
 
 static void aiw_print(const char *tag, const mon_ai_work_t *w);
@@ -466,7 +479,8 @@ static void aiw_print(const char *tag, const mon_ai_work_t *w)
 {
 	log_printf(" %s=lm:%lu,steps:%lu,traces:%lu,bsp:%lu,routes:%lu,tri:%lu,cover:%lu,nn:%lu,"
 		"nnt:%lu,dj:%lu,djpop:%lu,lmhit:%lu,starts:%lu,looks:%lu,nopvs:%lu,lcand:%lu,fvis:%lu,"
-		"events:%lu,cands:%lu,bones:%lu,sounds:%lu,decals:%lu,poses:%lu,btests:%lu,hboxes:%lu",
+		"events:%lu,cands:%lu,bones:%lu,sounds:%lu,decals:%lu,poses:%lu,btests:%lu,hboxes:%lu,"
+		"leaves:%lu,queries:%lu,resumes:%lu",
 		tag,
 		(unsigned long)w->lm, (unsigned long)w->steps, (unsigned long)w->traces,
 		(unsigned long)w->bsp, (unsigned long)w->routes, (unsigned long)w->tri,
@@ -476,7 +490,8 @@ static void aiw_print(const char *tag, const mon_ai_work_t *w)
 		(unsigned long)w->lcand, (unsigned long)w->fvis, (unsigned long)w->events,
 		(unsigned long)w->cands, (unsigned long)w->bones, (unsigned long)w->sounds,
 		(unsigned long)w->decals, (unsigned long)w->poses, (unsigned long)w->btests,
-		(unsigned long)w->hboxes);
+		(unsigned long)w->hboxes, (unsigned long)w->leaves, (unsigned long)w->queries,
+		(unsigned long)w->resumes);
 }
 
 /* `prof ai` (after `prof mon_us`): the window's AI work per frame (avg),

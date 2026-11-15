@@ -1151,6 +1151,9 @@ typedef struct {
 	uint32_t	poses;		/* server poses begun (game_studio_poses) */
 	uint32_t	btests;		/* hitbox pose cull tests (game_studio_cull_tests) */
 	uint32_t	hboxes;		/* hitboxes walked by line traces (game_studio_hitboxes_kept) */
+	uint32_t	leaves;		/* BSP point -> leaf lookups (wld_point_leaves: contents, PVS) */
+	uint32_t	queries;	/* entity box queries (ent_grid_queries) */
+	uint32_t	resumes;	/* paused thinks continued (aithink.c Ai_Pause) */
 } mon_ai_work_t;
 extern mon_ai_work_t	mon_aiw;
 void	mon_stats_script(void);

@@ -489,6 +489,11 @@ int col_ents_box(const float mins[3], const float maxs[3], const col_ent_t **out
 	return n;
 }
 
+uint32_t ent_grid_queries(void)
+{
+	return g.st.queries;
+}
+
 /* Counters, plus the longest bucket now (walks every bucket). */
 void ent_grid_stats(ent_grid_stats_t *s)
 {

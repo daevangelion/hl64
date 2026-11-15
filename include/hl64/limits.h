@@ -212,8 +212,9 @@
 /* The frame's monster-think work budget (settings ai_budget default), in
  * work units (game/hl/monsters.c aiw_units, 1 unit ~ 1 us of cart CPU):
  * 18 ms of AI a frame, so that with the units' fit error (cart us / units
- * <= 1.15 in 99 % of frames) and one pause point's item past the budget
- * a frame's monster thinks stay under ~24 ms. */
+ * <= 1.10-1.12 in 99 % of frames, routes m4 / uplink) and one pause
+ * point's item past the budget a frame's monster thinks stay under
+ * ~25 ms. */
 #define HL64_AI_BUDGET			18000
 /* A held (queued) monster think's lateness (settings ai_hold default,
  * seconds of game time): queued ai_hold, it may start over the frame's

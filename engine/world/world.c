@@ -1896,6 +1896,8 @@ wld_layer_t *wld_layer_of_map(int map)
 
 /* ---- point -> leaf (architecture.md 5.5, w64-format.md COLL / grid) ------- */
 
+uint32_t wld_point_leaves;
+
 int wld_point_leaf(const wld_layer_t *L, const float p[3])
 {
 	const w64_grid_t *g = L->grid;
@@ -1906,6 +1908,7 @@ int wld_point_leaf(const wld_layer_t *L, const float p[3])
 	const w64_cnode_t *nodes = NULL;
 	const w64_cplane_t *planes = NULL;
 
+	wld_point_leaves++;
 	/* cell = floor((p - origin) / 256); points outside walk from the root.
 	 * The format's cell is a power of two: times its exact reciprocal
 	 * rounds as the division does, without a 29-cycle divide per axis. */

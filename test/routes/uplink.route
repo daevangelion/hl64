@@ -591,7 +591,12 @@ wait 0.3
 setpos 1986 1100 -60 0 180
 wait 0.5
 # south through the (start-open) warehouse gate into the warehouse
-setpos 1700 1100 -60 0 270
+# M5: set at 1700 1060, not 1700 1100: a grunt of vort_grunt_battle_2
+# taking cover east along y ~1120 (TakeCover via 1718 1122) can stand on
+# 1700 1100 when the player is set there (its thinks run at other frames
+# since the AI work-unit recalibration); a player set inside its box is
+# stuck there for good, as GoldSrc's would be
+setpos 1700 1060 -60 0 270
 +forward
 waitnear 1700 960 -60 40 8
 -forward
