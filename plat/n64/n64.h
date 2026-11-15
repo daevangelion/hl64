@@ -48,6 +48,19 @@ int		vid_gpu_busy(void);
  * pushes: view 0 the world's, 1 the view model's (gpu_studio_ent_t.view),
  * whose depth fills only the front of the depth range (gpu.c VIEW_DEPTH). */
 void		gpu_view_proj(int view);
+/* gpu.c: this frame is night vision (gpu_view_t.nvg, engine/render/gpu.h). */
+int		gpu_nvg(void);
+/* gpu.c: the world pass's combiner, colours, fog and tiny3d flags, set by
+ * gpu_begin and put back by the studio and effects passes when they end:
+ * texel x vertex shade, or under night vision N64_CC_NVG with the
+ * GPU_NVG_* colours and the RDP / tiny3d distance fog to black. */
+void		gpu_world_state(void);
+/* Night vision: rgb = texel x PRIM + ENV, alpha = the texel's (the world's
+ * fence cutouts; shade alpha carries the fog), one cycle. The studio form
+ * keeps the entity's PRIM alpha (its blend) as CC_TEX_PRIM does. Expand
+ * to an rdpq_combiner_t: include <libdragon.h> where used. */
+#define N64_CC_NVG	RDPQ_COMBINER1((TEX0, 0, PRIM, ENV), (0, 0, 0, TEX0))
+#define N64_CC_NVG_STUDIO	RDPQ_COMBINER1((TEX0, 0, PRIM, ENV), (TEX0, 0, PRIM, 0))
 
 /* cart.c: mount the ROM's DFS (player content) once at boot; without one
  * (the M0 gate's ROM) sys_cart_addr finds no file. */

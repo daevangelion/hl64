@@ -179,7 +179,7 @@ static void log_draw(const char *what, uint32_t label)
 	log_printf("%s %lu ren: map=%s eye=%.9g,%.9g,%.9g ang=%.9g,%.9g,%.9g leaf=%lu r10=%lu "
 		"sectors=%lu movers=%lu meshlets=%lu verts=%lu tris=%lu binds=%lu relit=%lu "
 		"dlit=%lu missing=%lu dropped=%lu world_us=%lu oseam=%lu oseam_ents=%lu "
-		"other_ents=%lu\n", what,
+		"other_ents=%lu nvg=%lu\n", what,
 		(unsigned long)label,
 		wld_map_name(ren_cam.map), (double)ren_cam.org[0], (double)ren_cam.org[1],
 		(double)ren_cam.org[2], (double)ren_cam.ang[0], (double)ren_cam.ang[1],
@@ -189,7 +189,7 @@ static void log_draw(const char *what, uint32_t label)
 		(unsigned long)r.relit, (unsigned long)r.dlit, (unsigned long)r.missing,
 		(unsigned long)r.dropped, (unsigned long)r.world_us,
 		(unsigned long)r.oseam_meshlets, (unsigned long)r.oseam_ents,
-		(unsigned long)r.other_ents);
+		(unsigned long)r.other_ents, (unsigned long)r.nvg);
 	log_printf("%s %lu gpu: binds=%lu meshlets=%lu verts=%lu tris=%lu hash=%08lx\n", what,
 		(unsigned long)label, (unsigned long)g.binds, (unsigned long)g.meshlets,
 		(unsigned long)g.verts, (unsigned long)g.tris, (unsigned long)g.hash);

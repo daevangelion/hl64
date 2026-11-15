@@ -15,7 +15,7 @@ The N64 pad (controller port 1) in play. The binding is one table,
 | B | use | `+use` |
 | L | duck | `+duck` |
 | D-down | reload (held) | `+reload` |
-| D-up | flashlight on / off | `impulse 100` |
+| D-up | night vision on / off (the flashlight) | `impulse 100` |
 | D-left | previous weapon | `invprev` (hl64 impulse 7) |
 | D-right | next weapon | `invnext` (hl64 impulse 6) |
 | Start | pause menu (Start again resumes) | Esc (the menu) |
@@ -28,6 +28,11 @@ The N64 pad (controller port 1) in play. The binding is one table,
 - The game handles impulses as HLSDK `ImpulseCommands`
   (`game/hl/player.c`): they wait while the weapon's attack delay runs,
   and the flashlight needs the HEV suit.
+- The flashlight is night vision (user decision D12, architecture.md 19;
+  a deliberate departure from GoldSrc): D-up toggles it like Half-Life's
+  flashlight (same battery drain and recharge, HUD icon and sound), but
+  instead of a light beam the view turns green Opposing Force-style
+  goggle vision, fading to black with distance (docs/specs/dlights.md 2).
 - Weapon order for previous / next is the HUD's: bucket, then position,
   usable weapons only, wrapping.
 - There is no walk (`+speed`) button: walking speed comes from the stick.

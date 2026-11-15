@@ -175,7 +175,7 @@
  * c2a1 16816 B) x 1.25 = 108160 B; Uplink need 76672 B. */
 #define HL64_DECAL_TEXELS_KB		106
 #define HL64_PARTICLES_KB		12
-#define HL64_DLIGHT_KB			48	/* dlight scratch + flashlight pool */
+#define HL64_DLIGHT_KB			32	/* dlight scratch: 2 x 512 vertex pairs x 32 B */
 #define HL64_HUD_KB			128	/* [EST] HUD sheets + font */
 
 /* Spread monster thinks (game/hl/aithink.c, engine/core/co.c): a think

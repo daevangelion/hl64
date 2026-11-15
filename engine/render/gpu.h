@@ -25,7 +25,26 @@ typedef struct {
 	float		fwd[3], right[3], up[3];	/* view axes, world space */
 	float		fov_y;			/* degrees */
 	float		znear, zfar;
+	uint8_t		nvg;			/* night vision (below) */
 } gpu_view_t;
+
+/* Night vision (architecture.md D12, the local player's EF_DIMLIGHT):
+ * from gpu_begin to the next gpu_begin the world, its movers (opaque and
+ * TransAlpha) and the opaque / TransTexture studio models draw rgb =
+ * texel x GPU_NVG_PRIM + GPU_NVG_ENV in the same one-cycle RDP mode
+ * (vertex shade and model light ignored; alpha = the texel's, so fence
+ * cutouts stay, or a studio model's blend alpha); the opaque world and
+ * opaque models darken to black with eye depth over [GPU_NVG_NEAR,
+ * GPU_NVG_FAR] (RDP fog). Additive and effect passes and the HUD draw as
+ * without it. */
+#define GPU_NVG_PRIM_R	56
+#define GPU_NVG_PRIM_G	255
+#define GPU_NVG_PRIM_B	56
+#define GPU_NVG_ENV_R	0
+#define GPU_NVG_ENV_G	28
+#define GPU_NVG_ENV_B	0
+#define GPU_NVG_NEAR	64.0f
+#define GPU_NVG_FAR	1024.0f
 
 /* Index encoding self-check (w64-format.md "Runtime requirements"):
  * nonzero when the running tiny3d encodes strip indices differently from
@@ -46,6 +65,16 @@ void	gpu_bind_page(const w64_texp_t *p, uint8_t *state);
 /* Another renderer (the effects pass) set the RDP alpha compare: the next
  * gpu_bind_page applies its page's fence state whatever it was. */
 void	gpu_state_lost(void);
+/* Alpha-compare threshold of fence pages (W64_TEXF_FENCE: TLUT[0] alpha 0,
+ * the rest 1, bilinear-filtered): GPU_FENCE_REF, half coverage, while the
+ * combiner's alpha is the texel's alpha x 255 (the world, TransAlpha
+ * brushes, Normal studio models), so a pixel draws only where the opaque
+ * texels outweigh the transparent slot; a caller whose combiner scales the
+ * texel alpha by a constant k sets (k + 1) / 2, or 1 when the texel alpha
+ * does not take part (clamped to 1..255). gpu_begin resets it; a change
+ * applies at once to a bound fence page. */
+#define GPU_FENCE_REF	128
+void	gpu_fence_ref(int ref);
 /* Additive pages (render-fx.md 2a: brush and studio TransAdd / Glow):
  * tint_blend = rgb tint and blend; until gpu_page_ramp(NULL) every
  * gpu_bind_page also loads its page's cooked IA16 ramp TLUT (addblend.h
@@ -53,9 +82,6 @@ void	gpu_state_lost(void);
  * the caller set; a page the cook gave no ramp draws with blend 0
  * (nothing added; add_stats counts it). */
 void	gpu_page_ramp(const uint8_t tint_blend[4]);
-/* Decal depth for the following draws (on: Z test against the coplanar
- * base, no Z write; off: the world's opaque state). */
-void	gpu_decal_depth(int on);
 /* One meshlet: vertex pairs (nv vertices) and its encoded strip. v and idx
  * are 8-byte aligned: the cart's RSP DMAs both and drops the address's
  * low 3 bits (a shifted strip draws wrong triangles and can run past its
