@@ -769,6 +769,7 @@ void phy_player_frame(const in_cmd_t *cmd, double time)
 	int i, k, layer;
 	uint16_t done[HL64_PM_TOUCH];
 	int ndone = 0;
+	float vel[3];
 
 	if (!P.active)
 		return;
@@ -808,8 +809,13 @@ void phy_player_frame(const in_cmd_t *cmd, double time)
 		pl->basevelocity[k] = 0;
 
 	/* step 7: link with trigger touches, then the impact touches of the
-	 * touch list, each entity once */
+	 * touch list, each entity once. During an impact the player's
+	 * velocity is the one it hit with (the touch entry's deltavelocity,
+	 * not the clipped result: a crate walked into head-on is pushed);
+	 * afterwards it is the move's again, whatever the touch wrote
+	 * [probe:measured P-botpush] */
 	phy_link_touch(P.e);
+	memcpy(vel, pl->velocity, sizeof(vel));
 	for (i = 0; i < phy_pm.ntouch; i++)
 	{
 		int pe = phy_pm.touch[i].ent, j;
@@ -826,8 +832,12 @@ void phy_player_frame(const in_cmd_t *cmd, double time)
 		done[ndone++] = idx;
 		other = ent_get(idx);
 		if (other && ent_get(ENT_PLAYER) == P.e)
+		{
+			memcpy(pl->velocity, phy_pm.touchvel[i], sizeof(vel));
 			phy_impact(P.e, other);
+		}
 	}
+	memcpy(pl->velocity, vel, sizeof(vel));
 	/* HLSDK PlayerPostThink: weapons, use, impulses, fall damage */
 	game_player_postthink(pl);
 	if (dbg_trace())

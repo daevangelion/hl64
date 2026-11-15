@@ -3,7 +3,9 @@
 """Physics tests against the GoldSrc probe fixtures (docs/specs/physics-movetypes.md 8, K4).
 
 Every scenario of P-toss, P-bounce, P-step, P-push, P-rotate, P-pushable,
-P-walkmove, K-pusher and W-water (toss / step into a func_water) is rebuilt
+P-walkmove, K-pusher, W-water (toss / step into a func_water) and the
+P-botpush slides (a map func_pushable sent off its world ledge; its bot
+runs need the game and are scene-checked, test/m5/crate-pit.route) is rebuilt
 on the cooked map from its records and replayed through the real movetype
 steps (test/m3/phys.c): the map's brush entities in their spawn state
 (`brush_ents`), the scenario's entities (`ents`) with their frame-0
@@ -54,9 +56,10 @@ TEST_OF = {
     ("W-water", "func_water_toss"): "P14", ("W-water", "func_water_step"): "P14",
 }
 DEFAULT_TEST = {"P-bounce": "P2", "P-push": "P6", "P-rotate": "P7", "P-pushable": "P9",
-                "P-walkmove": "P10", "K-pusher": "K4"}
+                "P-botpush": "P9", "P-walkmove": "P10", "K-pusher": "K4"}
 CAPTURES = [("physics-movetypes", c) for c in
-            ("P-toss", "P-bounce", "P-step", "P-push", "P-rotate", "P-pushable", "P-walkmove")]
+             ("P-toss", "P-bounce", "P-step", "P-push", "P-rotate", "P-pushable", "P-walkmove",
+              "P-botpush")]
 CAPTURES += [("think-and-time", "K-pusher"), ("trace-and-hulls", "W-water")]
 FL_ONGROUND = 512
 
@@ -160,7 +163,7 @@ def extras(cap, sc, i):
         return (0.5 if sc.name == "grenade_g05_f08" else 0.0), f32(fr.get(sc.name, 0.0))
     if cap == "P-step" and sc.name == "water_bounce":
         return 0.0, f32(0.8)
-    if cap == "P-pushable":
+    if cap in ("P-pushable", "P-botpush"):
         if sc.name == "pushstep_f1":
             return 0.0, 1.0
         for s in sc.setup:
@@ -469,6 +472,8 @@ def main():
                 if "skipped" in sc.hdr:
                     continue
                 if cap == "W-water" and sc.name not in ("func_water_toss", "func_water_step"):
+                    continue
+                if cap == "P-botpush" and not sc.name.startswith("slide"):
                     continue
                 test = TEST_OF.get((cap, sc.name), DEFAULT_TEST.get(cap))
                 tag = f"{cap} {mp} {k} {sc.name}"

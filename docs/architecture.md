@@ -1041,7 +1041,7 @@ line for the highlighted button, the menu sounds of the player's
 ## 14. Save and level state
 
 Level state is the dehydrate store (6.4). A saved game (D4, `engine/save/`,
-`include/hl64/save.h`) is a 128 B header (magic, format 4, layout id,
+`include/hl64/save.h`) is a 128 B header (magic, format 5, layout id,
 logical slot, sequence, its sectors, sizes, CRC-32 of the image, display
 info, the open layers with their directory CRCs), on the flash a 384 B
 settings block (its own CRC), and a compressed image of the sections every
@@ -1064,16 +1064,22 @@ its statics, the work area unchanged (24 KB; `test/save/svbench.c`
 measures it on raw state dumps).
 
 **Placed decals** (`engine/render/decal.c`) are saved as their
-placements, not their pieces: per live pool entry its index, order,
+placements, not their pieces: per live decal, oldest first, its order,
 mover, layer, map, chunk, texture, the point and normal in the model's
-frame (quantized: quarter units, normal × 16384) and the winding (28 B),
-plus the pending placements and each layer slot's map. A load restores
-them at their own pool indices; each is rebuilt (`walk_chunk` on its one
-chunk) once that chunk is resident and its sheet read, under its own work
-cap (175 units a frame), never the placement budget, so the game's
-placements and infodecal's retries go as in the run that saved. A full
-pool (96) is 2702 B → ≈ 850 B coded; after the late-Uplink load all 96
-rebuild within 100 frames (host).
+frame (quantized: quarter units, normal × 16384) and the winding (27 B),
+plus the pending placements in request order (each with its request
+number) and each layer slot's map. A decal's order is its placement
+request's number (the game's request, not the frame residency let it
+land: a queued placement that waits for a cold chunk after a load keeps
+its place, a world placement commits nothing until every chunk it needs
+is resident, one older than every decal of a full pool is not placed),
+so the saved decals and queue are the same whether the run was loaded or
+not. A load puts them at pool / queue indices 0.. in that order; each is
+rebuilt (`walk_chunk` on its one chunk) once that chunk is resident and
+its sheet read, under its own work cap (175 units a frame), never the
+placement budget, so the game's placements and infodecal's retries go as
+in the run that saved. A full pool (96) is 2606 B; after the late-Uplink
+load all 96 rebuild within 100 frames (host).
 
 **Media** (user decisions 2026-11-15):
 

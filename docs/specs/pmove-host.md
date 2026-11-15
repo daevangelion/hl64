@@ -45,7 +45,10 @@ here).
    airborne) **[probe:measured PM-bot]**.
 7. Link the player with trigger touch (area-links-and-touch.md 3), then
    run impact touches for every entry of the pmove touch list in order
-   (each pair once per frame: player.touch(other), other.touch(player)).
+   (each pair once per frame: player.touch(other), other.touch(player)),
+   the player's velocity during each being the entry's `deltavelocity`
+   (its velocity when it hit), restored to the move's result afterwards
+   **[probe:measured P-botpush walk_0]** (area-links-and-touch.md 4).
 8. `game_player_postthink` (weapons, use, fall damage from the game's
    `m_flFallVelocity` of step 2: pmove's `flFallVelocity` is already 0
    after a landing move, PM_CheckFalling zeroes it; single-player damage

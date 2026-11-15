@@ -19,7 +19,12 @@ Recomputed on every link:
    **[probe:measured A-touch]** (rotated brush entities on all 10 maps).
 2. Otherwise `origin + mins … origin + maxs`. Only SOLID_BSP entities use
    rule 1: a trigger (SOLID_TRIGGER) with angles keeps its unrotated box
-   **[probe:measured A-shape]**.
+   **[probe:measured A-shape]**. A brush entity's `mins` / `maxs` (set
+   with its model) are the BSP file's model bounds widened by 1 u on every
+   side (348 / 348 unrotated brush entities of the fixtures' `brush_ents`
+   on t0a0a, t0a0b1, hldemo3): a func_pushable (SOLID_BBOX) collides with
+   that box, HLSDK's func_door travel subtracts the 2 u again
+   **[probe:measured P-botpush]** (`engine/coll` `col_model_bounds`).
 3. Every linked box is then widened by 1 u on every axis, whatever its
    solid type and flags **[probe:measured A-touch]**. There is no item
    widening: HLSDK has no FL_ITEM, and bit 256 (FL_SKIPLOCALHOST) gets no
@@ -193,7 +198,13 @@ that removes itself in its own touch gets no B.touch(A)
 **[probe:measured A-touch]**. A SOLID_NOT mover passes through box
 entities without stopping and without any impact touch (its moves ignore
 monsters, physics-movetypes.md 2) **[probe:measured A-touch]**. A caller
-checks A's liveness before continuing.
+checks A's liveness before continuing. The player's impact touches (the
+pmove touch list, pmove-host.md 1 step 7) see the player's velocity as it
+was when it hit B (the touch entry's `deltavelocity`), not the move's
+clipped result; after the touches the velocity is the move's again,
+whatever a touch wrote (CPushable::Move's `pevToucher->velocity`): a
+crate walked into head-on gets the player's impact speed (clamped to its
+`m_maxSpeed`) and the player stops **[probe:measured P-botpush walk_0]**.
 
 ## 5. Tests
 

@@ -96,7 +96,7 @@ Captures owed before the milestone that needs them:
 |---|---|---|
 | T-points, T-segments, T-entities, T-rotated, T-hitbox, T-allsolid | probe | trace-and-hulls.md (M2) |
 | A-touch, A-shape, A-order (taken: creation order of runtime triggers; map-trigger placements validate the geometry-computed `touchrank` cell model) | probe | area-links-and-touch.md (M2) |
-| P-toss, P-bounce, P-step, P-push, P-rotate, P-pushable, P-walkmove (taken) | probe | physics-movetypes.md (M3) |
+| P-toss, P-bounce, P-step, P-push, P-rotate, P-pushable, P-walkmove, P-botpush (taken) | probe | physics-movetypes.md (M3), area-links-and-touch.md 4 |
 | K-think, K-pusher, K-alloc, K-settle (taken); W-water: `func_water` contents (taken); L-illum (taken: no server-side light observable, below) | probe | think-and-time.md, trace-and-hulls.md, lightstyles.md (M3) |
 | PM-bot runs (walk, run, jump, duck, ladder, water, stairs) | probe | pmove-host.md (M2) |
 | X-fx, X-glow, S-mix, L-anim, D-flash, W-texanim | retail client | render-fx, sound, lightstyles, dlights, world-surfaces (M3) |
@@ -131,6 +131,7 @@ on line 2). Inputs come from a generator seeded by (map, capture).
 | K-think, K-pusher | probe entities thinking at frame times 0.01, 1/30 and 0.1 s (`host_framerate`), thinks set by other entities, the `nextthink` boundary, `multi_manager` / `trigger_relay` delays; probe pushers (copies of map brush models) moving with `nextthink` on `ltime`, blocked, sub-frame, idle |
 | K-alloc, K-settle | raw edict allocation and reuse read from the edict array; map-load time and the first 40 StartFrames with every item's state |
 | P-toss … P-walkmove | scenarios on a level world floor spot: drops, an arc, landing on a monster, a conveyor, base velocity; BOUNCE at friction 0 / 0.55 / 0.8 / 1, a grenade, BOUNCEMISSILE; STEP falls, slides, ledges, water; a lift, doors, blocked doors with riders, a corpse, a monster; a rotating pusher with riders and the fake client; PUSHSTEP boxes and the maps' `func_pushable`s; `pfnWalkMove` (flat, probe steps, ledges, world stairs, fly, swim), `pfnDropToFloor`, `pfnMoveToOrigin` |
+| P-botpush | the last M3 capture: per map `func_pushable` with a world ledge in reach (t0a0a, t0a0b, t0a0b1; hldemo3's dish crate for the slides only), the fake client running into it toward the ledge (`walk_k`; `use_k` holding +use), and the crate given 400 u/s toward the ledge with groundentity the world or a map SOLID_BSP entity (`slide_k`, `slidebsp_k`); each scenario from the crate's spawn state |
 | W-water | a `func_water` spawned by the game DLL (none in these maps): `pfnPointContents` and pmove contents on a lattice, toss / step / fake client inside it, contents after it moved; probe brush entities with each contents skin and solid type |
 | L-illum | `pfnGetEntityIllum` at 48 floor points every frame, with light style 0 changed and next to an EF_BRIGHTLIGHT entity: 128 everywhere (the client 0), so light styles, dlights, sound and render fx have no server-side observable on HLDS and stay with the retail client oracle |
 

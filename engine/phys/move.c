@@ -471,15 +471,19 @@ static int corner_in_world(const col_ent_t *v)
 }
 
 /* The moving part of STEP / PUSHSTEP: ground friction when the entity
- * was on the ground at the frame start and check_bottom holds there, the
- * slide (a BSP floor sets FL_ONGROUND), else the corner test after the
- * move decides FL_ONGROUND; link with touch. */
+ * was on the ground at the frame start and stands there on the world (a
+ * bottom corner in world SOLID: a box pushed over a world ledge brakes
+ * until its last corner leaves it [probe:measured P-botpush slide_0,
+ * slidebsp_0: whatever its groundentity]) or check_bottom holds (a brush
+ * entity's top, which the corner test does not see), the slide (a BSP
+ * floor sets FL_ONGROUND), else the corner test after the move decides
+ * FL_ONGROUND; link with touch. */
 static void ground_move(int e, double dt, int was)
 {
 	col_ent_t *v = &ent_c.cv[e];
 	uint16_t serial = ent_c.id[e].serial;
 
-	ground_friction(e, dt, was && phy_check_bottom(e));
+	ground_friction(e, dt, was && (corner_in_world(v) || phy_check_bottom(e)));
 	v->flags &= ~FL_ONGROUND;
 	check_velocity(e);
 	slide(e, dt);

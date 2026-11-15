@@ -127,8 +127,10 @@ typedef struct {
 	 * index 0 (the world) */
 	col_ent_t	pe[HL64_PM_PHYSENTS];
 	col_ent_t	me[HL64_PM_MOVEENTS];	/* ladders */
-	/* pmove touch list, in order: tr.ent = physent index */
+	/* pmove touch list, in order: tr.ent = physent index; touchvel =
+	 * the player's velocity at that impact (pmtrace deltavelocity) */
 	col_trace_t	touch[HL64_PM_TOUCH];
+	float		touchvel[HL64_PM_TOUCH][3];
 } phy_pm_t;
 
 /* The move being run (engine-owned; valid during game_pm_move). */
