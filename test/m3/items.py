@@ -30,6 +30,12 @@ weapons and items.
   viewmodel  (cl_dll/view.cpp V_CalcGunAngle) hldemo1: the crowbar's and
              the MP5's view model, in the camera's frame, is the same at
              every view angle (it rides with the view).
+  fall       (player.cpp PreThink / PostThink, singleplay_gamerules.cpp
+             FlPlayerFallDamage, pm_shared PM_CheckFalling) hldemo3: drops
+             of 64..620 u from rest onto GoldSrc PM-fall's floor spot: the
+             health after each equals GoldSrc's (measured) and the formula;
+             fall pain (CHAN_VOICE) above 580 u/s and the landing step
+             (CHAN_BODY) from 350 u/s, in the landing frame.
 
 c3a2d is not in the Uplink content: it is cooked from the Valve data
 (--data) into --scratch unless --wb-content names a cooked c3a2d.
@@ -344,6 +350,70 @@ def test_viewmodel(binary, content):
               f" (0, 0) pose (bone 0 {dist:.2f} u from the eye) {' '.join(bad)}")
 
 
+# GoldSrc PM-fall (test/oracle/probe/probe_fall.cpp, `test/oracle/run.sh
+# PM-fall`): the fake client's health after a drop from rest onto level
+# world floor, command msec 33, health 100 before each drop. Identical on
+# the three maps that have the room (hldemo2, hldemo3, t0a0)
+# [probe:measured PM-fall hldemo3].
+FALL_GOLDSRC_33 = {64: 100, 128: 100, 200: 100, 256: 88, 300: 77, 350: 65, 400: 53, 444: 47,
+                   500: 35, 560: 23, 620: 11}
+FALL_FLOOR = ("hldemo3", (-159.0, -1106.0, -512.0))  # the PM-fall floor spot on hldemo3
+PLAYER_MAX_SAFE_FALL_SPEED, PLAYER_FATAL_FALL_SPEED = 580.0, 1024.0
+PLAYER_FALL_PUNCH_THRESHHOLD = 350.0
+FL_ONGROUND = 1 << 9
+
+
+def player_snd_starts(lines):
+    """(pl index, channel, name) of every "snd F start vV e1 cC sR NAME ..."
+    (a sound the player started): pl index = the pl line printed after it,
+    i.e. the frame that started it when the script runs "frames 1", "pl"."""
+    out, n = [], 0
+    for ln in lines:
+        f = ln.split()
+        if f and f[0] == "pl":
+            n += 1
+        elif len(f) > 7 and f[0] == "snd" and f[2] == "start" and f[4] == "e1":
+            out.append((n, int(f[5][1:]), f[7]))
+    return out
+
+
+def test_fall(binary, content):
+    """HLSDK player.cpp PreThink (m_flFallVelocity = -velocity.z off the
+    ground) / PostThink (CHalfLifeRules::FlPlayerFallDamage: (fall - 580) *
+    100 / (1024 - 580), TakeDamage DMG_FALL), pm_shared PM_CheckFalling (the
+    fall pain sound above 580, the landing step at 350 and above): drops from
+    rest onto level floor; the health equals GoldSrc's after the same drop
+    and the formula over the speed the player had before the landing move;
+    no damage after the landing frame."""
+    mapname, floor = FALL_FLOOR
+    for h, gs_hp in sorted(FALL_GOLDSRC_33.items()):
+        start = (floor[0], floor[1], floor[2] + 36 + h)
+        script = [f"setpos {fmt(start)} 0 0"] + ["frames 1", "pl"] * 60
+        lines = run(binary, content, mapname, script)
+        pls = [parse_pl(ln) for ln in grab(lines, "pl ")]
+        land = next((i for i, p in enumerate(pls) if p["flags"] & FL_ONGROUND), None)
+        if land is None or land == 0:
+            check(f"fall {h}: lands", False, f"landing pl index {land}")
+            continue
+        v = -pls[land - 1]["vel"][2]
+        dmg = int((v - PLAYER_MAX_SAFE_FALL_SPEED) * 100.0 /
+                  (PLAYER_FATAL_FALL_SPEED - PLAYER_MAX_SAFE_FALL_SPEED)) if v > PLAYER_MAX_SAFE_FALL_SPEED else 0
+        hp = [p["health"] for p in pls]
+        check(f"fall {h}: health {hp[-1]:g} = GoldSrc {gs_hp} = 100 - int(({v:.3f} - 580) * 100 / 444)",
+              hp[-1] == gs_hp == 100 - dmg and hp[land - 1] == 100 and all(x == hp[land] for x in hp[land:]),
+              f"health before landing {hp[land - 1]:g}, at {hp[land]:g}, after {hp[-1]:g}")
+        snd = player_snd_starts(lines)
+        pain = [i for i, c, s in snd if s == "player/pl_fallpain3.wav"]
+        steps = [i for i, c, s in snd if c == 4 and i == land and s.startswith("player/pl_")]
+        want_pain = [land] if v > PLAYER_MAX_SAFE_FALL_SPEED else []
+        want_steps = [land] if v >= PLAYER_FALL_PUNCH_THRESHHOLD else []
+        check(f"fall {h}: fall pain {'once' if want_pain else 'none'}, landing step"
+              f" {'once' if want_steps else 'none'} (CHAN_VOICE / CHAN_BODY)",
+              pain == want_pain and steps == want_steps
+              and all(c == 2 for i, c, s in snd if s == "player/pl_fallpain3.wav"),
+              f"landing frame {land}, fallpain3 frames {pain}, landing-frame steps {steps}")
+
+
 def cook_c3a2d(a):
     out = os.path.join(a.scratch, "c3a2d")
     log = os.path.join(a.scratch, "cook-c3a2d.log")
@@ -377,6 +447,7 @@ def main():
     test_longjump(a.bin, a.content)
     test_pickup_keeps_records(a.bin, a.content)
     test_viewmodel(a.bin, a.content)
+    test_fall(a.bin, a.content)
     good = all(results)
     print(f"items {'PASS' if good else 'FAIL'} ({sum(results)}/{len(results)} checks)")
     return 0 if good else 1

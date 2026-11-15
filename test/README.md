@@ -58,6 +58,7 @@ a09abb2 + m5-remote (ares-host) and 30f8f01 (build-vm).
 | `hazard-start` | t0a0 | Hazard New Game: the spawn's collision window resident before frame 1 (io blkmax), the start room through the hologram intro | (hazard.route 15-20, then 3 s) | 4 | 5 | |
 | `addglow` | hldemo1 | additive env_glow poses, TransTexture strips, MP5 grenade smoke ([addblend.route](routes/addblend.route)'s poses) | whole scene | 14 | 20 | 482 |
 | `alpha-edge` | hldemo2 | '{' fence textures close up: shotgun-room door #659 window ({fence2), east walkway railing #230 ({rail2); shots door-near/far, rail-near/far (blue alpha-edge fringes) | whole scene (off-route poses) | 3 | 5 | |
+| `player-fall` | hldemo3 | fall damage on GoldSrc PM-fall's floor spot: 444 u and 256 u drops, HUD health 100 → 47 → 35, `player: fall` log lines; shots standing-100, landed-444, landed-256 | whole scene (off-route) | 4 | 7 | |
 
 Deviations from the whole route inside a window: `hl2-return-battle` puts
 the player past the tripmine corridor (its barriers stand on New Game) and

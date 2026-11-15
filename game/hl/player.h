@@ -225,6 +225,9 @@ typedef struct {
 	float		dmg_take, dmg_save;
 	ent_h		dmg_inflictor;
 	float		m_flRespawnTimer, m_fDeadTime;
+	/* -velocity.z while in the air, set in PreThink (pmove's own
+	 * flFallVelocity is zeroed when it lands, before PostThink) */
+	float		m_flFallVelocity;
 	/* suit */
 	res_t		m_rgSuitPlayList[CSUITPLAYLIST];
 	res_t		m_rgiSuitNoRepeat[CSUITNOREPEAT];

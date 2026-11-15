@@ -17,8 +17,8 @@
  * only the grid query and residency translate to global positions.
  *
  * Not before M3: conveyor ground entities (their speed / movedir belong
- * to the M3 components), the game's player prethink / think / postthink
- * around the move, and audio for pm_shared's footstep sounds (counted).
+ * to the M3 components) and the game's player prethink / think /
+ * postthink around the move.
  */
 #include <math.h>
 #include <string.h>
@@ -27,6 +27,7 @@
 #include "hl64/game.h"
 #include "hl64/grid.h"
 #include "hl64/rec.h"
+#include "hl64/snd.h"
 #include "engine/core/dbg.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
@@ -77,16 +78,12 @@ void phy_pm_print(const char *msg)
 	log_printf("pmove: %s%s", msg, msg[0] && msg[strlen(msg) - 1] == '\n' ? "" : "\n");
 }
 
-void phy_pm_sound(int channel, const char *sample, float volume, float attenuation,
+void phy_pm_sound(int channel, res_t sound, float volume, float attenuation,
 	int flags, int pitch)
 {
-	(void)channel;
-	(void)sample;
-	(void)volume;
-	(void)attenuation;
-	(void)flags;
-	(void)pitch;
 	P.prof.sounds++;
+	if (sound != RES_NONE)
+		snd_emit(ENT_PLAYER, channel, sound, volume, attenuation, flags, pitch);
 }
 
 /* Physics info string: GoldSrc info-string form, "\key\value" pairs. */

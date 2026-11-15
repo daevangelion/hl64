@@ -27,6 +27,7 @@
 #include <string.h>
 
 #include "hl64/game.h"
+#include "hl64/rec.h"
 #include "hl64/settings.h"
 #include "game/hl/savegame.h"
 
@@ -230,10 +231,73 @@ static float svc_trace_model(physent_t *pEnt, float *start, float *end, trace_t 
 	return t.frac;
 }
 
+/* PM_PlaySound's sample names (every one is "player/pl_<rest>"): <rest>
+ * in strcmp order -> res.def line (pmove-host.md 3) */
+enum {
+#define RES(kind, id, name)	PMR_##id,
+#include "game/defs/res.def"
+#undef RES
+	PMR_COUNT
+};
+
+static const struct {
+	char		rest[14];
+	uint16_t	line;
+} pm_sounds[] = {
+	{ "dirt1.wav", PMR_PL_DIRT1 }, { "dirt2.wav", PMR_PL_DIRT2 },
+	{ "dirt3.wav", PMR_PL_DIRT3 }, { "dirt4.wav", PMR_PM_DIRT4 },
+	{ "duct1.wav", PMR_PL_DUCT1 }, { "duct2.wav", PMR_PM_DUCT2 },
+	{ "duct3.wav", PMR_PM_DUCT3 }, { "duct4.wav", PMR_PM_DUCT4 },
+	{ "fallpain3.wav", PMR_PM_FALLPAIN3 },
+	{ "grate1.wav", PMR_PL_GRATE1 }, { "grate2.wav", PMR_PM_GRATE2 },
+	{ "grate3.wav", PMR_PM_GRATE3 }, { "grate4.wav", PMR_PL_GRATE4 },
+	{ "ladder1.wav", PMR_PM_LADDER1 }, { "ladder2.wav", PMR_PM_LADDER2 },
+	{ "ladder3.wav", PMR_PM_LADDER3 }, { "ladder4.wav", PMR_PM_LADDER4 },
+	{ "metal1.wav", PMR_PL_METAL1 }, { "metal2.wav", PMR_PL_METAL2 },
+	{ "metal3.wav", PMR_PM_METAL3 }, { "metal4.wav", PMR_PM_METAL4 },
+	{ "slosh1.wav", PMR_PL_SLOSH1 }, { "slosh2.wav", PMR_PL_SLOSH2 },
+	{ "slosh3.wav", PMR_PL_SLOSH3 }, { "slosh4.wav", PMR_PL_SLOSH4 },
+	{ "step1.wav", PMR_PL_STEP1 }, { "step2.wav", PMR_PL_STEP2 },
+	{ "step3.wav", PMR_PM_STEP3 }, { "step4.wav", PMR_PM_STEP4 },
+	{ "tile1.wav", PMR_PL_TILE1 }, { "tile2.wav", PMR_PL_TILE2 },
+	{ "tile3.wav", PMR_PL_TILE3 }, { "tile4.wav", PMR_PL_TILE4 },
+	{ "tile5.wav", PMR_PM_TILE5 },
+	{ "wade1.wav", PMR_PL_WADE1 }, { "wade2.wav", PMR_PL_WADE2 },
+	{ "wade3.wav", PMR_PM_WADE3 }, { "wade4.wav", PMR_PM_WADE4 },
+};
+#define PM_SOUNDS	((int)(sizeof(pm_sounds) / sizeof(pm_sounds[0])))
+
+/* the res_t of a pm_shared sample name; RES_NONE for one not listed */
+static res_t pm_sound_res(const char *sample)
+{
+	static const char pre[] = "player/pl_";
+	int lo = 0, hi = PM_SOUNDS - 1;
+
+	if (strncmp(sample, pre, sizeof(pre) - 1))
+		return RES_NONE;
+	sample += sizeof(pre) - 1;
+	while (lo <= hi)
+	{
+		int mid = (lo + hi) / 2, c = strcmp(sample, pm_sounds[mid].rest);
+
+		if (!c)
+			return res_def(pm_sounds[mid].line);
+		if (c < 0)
+			hi = mid - 1;
+		else
+			lo = mid + 1;
+	}
+	return RES_NONE;
+}
+
 static void svc_play_sound(int channel, const char *sample, float volume, float attenuation,
 	int fFlags, int pitch)
 {
-	phy_pm_sound(channel, sample, volume, attenuation, fFlags, pitch);
+	res_t r = pm_sound_res(sample);
+
+	if (r == RES_NONE)
+		svc_print("no sound %s\n", sample);
+	phy_pm_sound(channel, r, volume, attenuation, fFlags, pitch);
 }
 
 /* the texture-type character under the player on the ground physent */

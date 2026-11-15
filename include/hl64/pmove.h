@@ -28,6 +28,7 @@
 
 #include "hl64/coll.h"
 #include "hl64/limits.h"
+#include "hl64/types.h"
 
 /* ---- usercmd (architecture.md 11; HLSDK usercmd_t meaning) ------------- */
 
@@ -162,9 +163,10 @@ void		phy_pm_trace_ent(const col_ent_t *pe, int usehull, const float start[3],
  * layer's map coordinates + that layer's g_M - the home g_M); 0 for a bad
  * model. */
 int		phy_pm_model_bounds(uint16_t model, float mins[3], float maxs[3]);
-/* PM_PlaySound: the player's footstep / ladder / wade / jump-land sounds
- * (literal HLSDK sample names). */
-void		phy_pm_sound(int channel, const char *sample, float volume, float attenuation,
+/* PM_PlaySound: the player's footstep / ladder / wade / landing / fall
+ * pain sounds, emitted on the player entity (sound RES_NONE: counted,
+ * not played); the game maps pm_shared's literal names to res_t. */
+void		phy_pm_sound(int channel, res_t sound, float volume, float attenuation,
 			int flags, int pitch);
 /* Engine random stream (one stream, HLSDK RandomLong / RandomFloat
  * ranges: [lo, hi] inclusive). */

@@ -764,6 +764,8 @@ void game_player_spawn(int e)
 	p->m_flNextAttack = 0;	/* UTIL_WeaponTimeBase() */
 	p->m_iFlashBattery = 99;
 	p->m_flFlashLightTime = 1;	/* force first message */
+	/* dont let uninitialized value here hurt the player */
+	p->m_flFallVelocity = 0;
 	pl->fall_velocity = 0;
 	pl->dead = 0;
 	ent_rnd(e)->model = RESID(MON_PLAYER_MDL);
@@ -1089,6 +1091,8 @@ void game_player_prethink(ent_player_t *pl)
 		PlayerDeathThink(pl);
 		return;
 	}
+	if (!(pl->flags & FL_ONGROUND))
+		p->m_flFallVelocity = -pl->velocity[2];
 	if (p->m_afPhysicsFlags & PFLAG_ONBARNACLE)
 		VecSet(pl->velocity, 0, 0, 0);
 }
@@ -1279,33 +1283,42 @@ void game_player_postthink(ent_player_t *pl)
 		ImpulseCommands(pl);
 		W_ItemPostFrame();
 	}
-	/* check to see if player landed hard enough to make a sound */
+	/* check to see if player landed hard enough to make a sound: falling
+	 * farther than the maximum safe distance does damage based on how far
+	 * the player fell (the fall pain sound and the landing step are
+	 * pm_shared's PM_CheckFalling) */
 	if ((pl->flags & FL_ONGROUND) && m->health > 0 &&
-		pl->fall_velocity >= PLAYER_FALL_PUNCH_THRESHHOLD)
+		p->m_flFallVelocity >= PLAYER_FALL_PUNCH_THRESHHOLD)
 	{
 		if (pl->watertype == CONTENTS_WATER)
 			;	/* HLSDK: no wade sound (commented out) */
-		else if (pl->fall_velocity > PLAYER_MAX_SAFE_FALL_SPEED)
+		else if (p->m_flFallVelocity > PLAYER_MAX_SAFE_FALL_SPEED)
 		{
-			/* CHalfLifeRules::FlPlayerFallDamage */
+			/* after this point, we start doing damage:
+			 * CHalfLifeRules::FlPlayerFallDamage */
 			float flFallDamage;
 
-			pl->fall_velocity -= PLAYER_MAX_SAFE_FALL_SPEED;
-			flFallDamage = pl->fall_velocity * DAMAGE_FOR_FALL_SPEED;
+			p->m_flFallVelocity -= PLAYER_MAX_SAFE_FALL_SPEED;
+			flFallDamage = p->m_flFallVelocity * DAMAGE_FOR_FALL_SPEED;
 			if (flFallDamage > m->health)
+				/* splat; on the item channel: the landing step is on the body's */
 				EMIT_SOUND(ENT_PLAYER, CHAN_ITEM, RESID(MON_BODYSPLAT), 1, ATTN_NORM);
 			if (flFallDamage > 0)
 			{
 				TakeDamage(ENT_PLAYER, -1, -1, flFallDamage, DMG_FALL);
 				pl->punchangle[0] = 0;
+				log_printf("player: fall %.9g u/s damage %d health %.9g\n",
+					(double)(p->m_flFallVelocity + PLAYER_MAX_SAFE_FALL_SPEED),
+					(int)flFallDamage, (double)m->health);
 			}
 		}
 	}
 	if (pl->flags & FL_ONGROUND)
 	{
-		if (pl->fall_velocity > 64)
-			CSoundEnt_InsertSound(bits_SOUND_PLAYER, pl->origin, (int)pl->fall_velocity, 0.2f);
-		pl->fall_velocity = 0;
+		if (p->m_flFallVelocity > 64)
+			CSoundEnt_InsertSound(bits_SOUND_PLAYER, pl->origin, (int)p->m_flFallVelocity,
+				0.2f);
+		p->m_flFallVelocity = 0;
 	}
 	/* the weapon entities' thinks (crowbar Smack / SwingAgain) */
 	for (i = 1; i < WPN_SLOTS; i++)

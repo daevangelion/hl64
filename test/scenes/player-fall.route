@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Scene player-fall: fall damage (HLSDK player.cpp PreThink / PostThink,
+# CHalfLifeRules::FlPlayerFallDamage) on GoldSrc PM-fall's hldemo3 floor
+# spot (-159 -1106 -512, level world floor; the oracle's drops there:
+# test/m3/items.py fall). With the suit the HUD shows the health: 100,
+# then 47 after a 444 u drop (818.4 u/s: int((818.4 - 580) * 100 / 444) =
+# 53), then 35 after a 256 u drop (633.6 u/s: 12). Log: `player: fall`
+# lines with the speed, damage and health. No route window (off-route).
+startmap hldemo3
+waitmap hldemo3 60
+god 0
+drop item_suit -159 -1106 -500
+setpos -159 -1106 -476 10 90
+wait 1
+stats begin
+shot standing-100
+setpos -159 -1106 -32 10 90
+wait 1.5
+shot landed-444
+setpos -159 -1106 -220 10 90
+wait 1.2
+shot landed-256
+stats end
+wait 0.2
+pass
