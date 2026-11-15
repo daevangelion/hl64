@@ -39,8 +39,8 @@ fail() { echo "paktest: FAIL $*"; exit 1; }
 
 # 1. fresh image
 "$BIN" roundtrip fresh.pak
-"$CPAK" test fresh.pak | grep -qx 'No issues found' || fail "cpaktool test fresh.pak"
-"$CPAK" list fresh.pak | grep -Eq '^HL64 +HL +HL64SAVE +0 +5000$' || fail "cpaktool list fresh.pak"
+"$CPAK" test fresh.pak | grep -x 'No issues found' >/dev/null || fail "cpaktool test fresh.pak"
+"$CPAK" list fresh.pak | grep -E '^HL64 +HL +HL64SAVE +0 +5000$' >/dev/null || fail "cpaktool list fresh.pak"
 mkdir x && (cd x && "$CPAK" extract ../fresh.pak >/dev/null)
 "$BIN" put want.pak 0 5000 1 >/dev/null 2>&1
 (mkdir y && cd y && "$CPAK" extract ../want.pak >/dev/null)
@@ -94,7 +94,7 @@ issues=0
 for c in cuts/cut-*.pak; do
 	r="$("$CPAK" test "$c" 2>&1 || true)"
 	if [[ "$r" != 'No issues found' ]]; then
-		grep -v '^Found' <<<"$r" | grep -vq 'Orphaned chain\|rphan' && { echo "$r"; fail "cpaktool: $c"; }
+		grep -v '^Found' <<<"$r" | grep -v 'Orphaned chain\|rphan' >/dev/null && { echo "$r"; fail "cpaktool: $c"; }
 		issues=$((issues + 1))
 	fi
 done
