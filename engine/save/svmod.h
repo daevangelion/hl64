@@ -54,6 +54,10 @@ int	in_load(void);
 /* engine/render/trans.c: renderfx fade remainders (they write renderamt) */
 void	trans_save(void);
 int	trans_load(void);
+/* engine/render/decal.c: placed decals (their placements: a load rebuilds
+ * their pieces when their chunks are resident) and pending placements */
+void	decal_save(void);
+int	decal_load(void);
 /* engine/world/style.c: lightstyle letters by value + the tick */
 void	wld_style_save(void);
 int	wld_style_load(void);

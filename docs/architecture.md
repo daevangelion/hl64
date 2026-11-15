@@ -206,7 +206,7 @@ information only.
 | HLE slots | 240 | M3: 77.9 KB for **one** map (m3-a, before infodecal/env_glow); **M4**: 151244 B (62%) with hldemo1 + hldemo2 open, 132716 B at hldemo2→hldemo3 (hldemo1 frozen: 2780 B) | 72 KB text + 13–19 KB keys per map | **measured** (cook5, infodecal and env_glow kept): hldemo1 chunk 52000 B, resident slot 67344 B, 72512 B while opening, plus 20016 B shared tables; cook-checked need below (M4 cook: 165440 B) |
 | dehydrate store | 64 | M4: 14364 B (22%) at hldemo2→hldemo3 (host route end 15300 B) | similar | **measured**; closing maps store every entity, released pristine records store nothing |
 | resource table + pattern table | 56 | 43.5 KB (78%) | precache name tables, sfx names | **measured** (the earlier 12 KB counted the 12 B entries only) |
-| saved games (`HL64_SAVE_KB`, 14) | 128 | largest staged state 36722 B (seam-2to3, host), image ≤ 30848 B | — (no saves) | by construction: header + 30720 B image cap (written over frames) + 24 KB coder match heads + the staged state (≤ 75648 B); replaces the unused 24 KB sentence-table carve |
+| saved games (`HL64_SAVE_KB`, 14) | 160 | largest staged state 70418 B (Uplink route, hldemo2 → hldemo1 autosave, host), image ≤ 32256 B | — (no saves) | by construction: header + settings block + 32256 B image cap (2 flash sectors, written over frames) + 24 KB coder work area + the staged state (≤ 106496 B); replaces the unused 24 KB sentence-table carve |
 | lightstyle patterns + state | 4 | not reported | strings + 96 × value | lightstyles.md |
 | think heap, active bitsets, grid tables | 12 | 6.3 KB (52%) | area tree + leaf lists | **measured** |
 | sound (16 voice buffers, 10 wav64, loops) | 104 | 76.1 KB (79% of 96) | M5 hazard route 80.9 KB (82832 B) × 1.25 > 100 KB → 104 | **measured** (route, m5-int2 `eb47299`; uplink 82080 B; the earlier `snd_ares.sh` peak was 78144 B) |
@@ -956,46 +956,85 @@ Load/Save (D4), Options (settings subset), Quit to title.
 ## 14. Save and level state
 
 Level state is the dehydrate store (6.4). A saved game (D4, `engine/save/`,
-`include/hl64/save.h`) is a 128 B header (magic, format 3, layout id,
-logical slot, sequence, sectors, sizes, CRC-32 of the image, display info,
-the open layers with their directory CRCs) and a compressed image of the
-sections every engine module writes (`engine/save/svmod.h`, in
-`save.c` order: clock, engine frame, rng, settings; records with HLE
-slots, timers, uses, frozen maps and the dehydrate store; entity
-components, sets, grid and private blocks; contents brushes, player,
-input, conveyors, render fades, seam state, lightstyles, looping
-sounds), then the game's globals (`game/hl/savegame.c`) and, in test
-builds, the route VM's position. Entity rows are stored as differences
-from their cooked records; empty slots, capacity-sized tables, grid query
-stamps and timing stats are not saved. Coder: hash chains + Huffman
-(`engine/save/sv.c`).
+`include/hl64/save.h`) is a 128 B header (magic, format 4, layout id,
+logical slot, sequence, its sectors, sizes, CRC-32 of the image, display
+info, the open layers with their directory CRCs), on the flash a 384 B
+settings block (its own CRC), and a compressed image of the sections every
+engine module writes (`engine/save/svmod.h`, in `save.c` order: clock,
+engine frame, rng, settings; records with HLE slots, timers, uses, frozen
+maps and the dehydrate store; entity components, sets, grid and private
+blocks; contents brushes, player, input, conveyors, render fades, decals,
+seam state, lightstyles, looping sounds), then the game's globals
+(`game/hl/savegame.c`) and, in test builds, the route VM's position.
+Entity rows are stored as differences from their cooked records; empty
+slots, capacity-sized tables, grid query stamps and timing stats are not
+saved. Coder (`engine/save/sv.c`): LZ with 4-byte hash chains (depth 16,
+8 KB window) and a price-driven lazy parse, then an adaptive binary range
+coder with LZMA-style token models (literals, matches, 4 repeat
+distances), integer-only so host and cart write the same bytes; 10.7 %
+smaller than the previous LZ + static Huffman coder over the Uplink and
+Hazard routes' autosaves (late Uplink 31795 → 28687 B), host CPU ×1.8 to
+code and ×2.0 to decode, still in 8 ms steps; 3.3 KB of model tables in
+its statics, the work area unchanged (24 KB; `test/save/svbench.c`
+measures it on raw state dumps).
 
-**Media** (user decision 2026-11-15):
+**Placed decals** (`engine/render/decal.c`) are saved as their
+placements, not their pieces: per live pool entry its index, order,
+mover, layer, map, chunk, texture, the point and normal in the model's
+frame (quantized: quarter units, normal × 16384) and the winding (28 B),
+plus the pending placements and each layer slot's map. A load restores
+them at their own pool indices; each is rebuilt (`walk_chunk` on its one
+chunk) once that chunk is resident and its sheet read, under its own work
+cap (175 units a frame), never the placement budget, so the game's
+placements and infodecal's retries go as in the run that saved. A full
+pool (96) is 2702 B → ≈ 850 B coded; after the late-Uplink load all 96
+rebuild within 100 frames (host).
 
-- **FlashRAM** 128 KB, 16 KB sectors. Sector 0: the settings block.
-  Sectors 1–7: a pool shared by the autosave and 2 manual slots; a save
-  takes whole contiguous sectors. A logical slot is its newest copy whose
-  header and image check out. A new save goes to sectors no current copy
-  holds, so the copy it replaces stays good until the new one is complete
-  (a manual slot with no such room writes over its own copy; an autosave
-  never does: it is skipped and logged).
+**Media** (user decisions 2026-11-15):
+
+- **FlashRAM** 128 KB, 16 KB sectors, all eight a pool shared by the
+  autosave, 2 manual slots and the settings. A save takes 1 or 2 whole
+  sectors (any two: its header names them), so its image is at most
+  32256 B (`SAVE_IMAGE_MAX`). A logical slot is its newest copy whose
+  header and image check out. A new save goes to sectors no slot's
+  current copy holds, so the copy it replaces stays good until the new
+  one is complete; of 2 sectors the second is written first, the header's
+  last. Settings: every Flash save carries the settings block of its
+  time; `settings_store` writes a settings-only copy (header + block, one
+  sector) to a sector no slot holds, never over the current settings
+  copy. The newest good settings block of any build is the settings
+  (`settings_load`). **Worst case** (checked by `test/save/flashcut.sh`):
+  three 2-sector saves (6 sectors) and a settings copy (1): a new
+  2-sector save takes the free sector and, as its header's sector, the
+  settings copy's (it carries the settings itself): the other slots
+  hold 4 sectors and its own old copy 2, so 2 are always left and no save
+  is ever blocked or written over; a settings copy always finds 1 (6
+  held by the slots, 1 by the current settings copy). A power cut while
+  that save writes its header's sector loses only the latest settings
+  change (the settings fall back to the newest save's), never a save.
+  The old layout (settings in sector 0, saves in a 7-sector pool) could
+  not do this: 2 + 2 + 2 + 2 > 7.
 - **Controller Pak** (controller 1): one save per note
-  (`HL64`/`HL`/`HL64SAVE.<id>`), up to 4 entries listed after the Flash
-  slots. The image is written first and the header last; the replaced
-  note is deleted after the new one is closed. With no room for both
-  notes the old note is deleted first and the new one created in its
-  place: from that delete until the header write (one frame per 256 B,
-  ≤ 121 frames for the largest image) a power cut or a Pak pull loses
-  the slot (the headerless note lists as corrupt and can be written
-  over); a delete that succeeds followed by a failed create loses it at
-  once (logged `no room`). Any Pak failure, and any change of accessory
-  between frames, forces an unmount, a remount and a rescan; an
-  operation whose Pak changed fails.
-- An image is at most 30720 B (`SAVE_IMAGE_MAX`) so every save fits one
-  Pak note. Measured (host, c19 cook, state → image): hl2-yard 27942 →
-  11435 B, hazard-seam 12399 → 4943 B, seam-2to3 36908 → 15993 B,
-  hl2-return-battle 34902 → 14492 B (one sector each; return-battle at
-  frame 700: ≈ 22.9 KB, two sectors).
+  (`HL64`/`HL`/`HL64SAVE.<id>`, header + image, no settings block), up to
+  4 entries listed after the Flash slots. The image is written first and
+  the header last; the replaced note is deleted after the new one is
+  closed. With no room for both notes the old note is deleted first and
+  the new one created in its place: from that delete until the header
+  write (one frame per 256 B, ≤ 121 frames for the largest image) a power
+  cut or a Pak pull loses the slot (the headerless note lists as corrupt
+  and can be written over); a delete that succeeds followed by a failed
+  create loses it at once (logged `no room`). Any Pak failure, and any
+  change of accessory between frames, forces an unmount, a remount and a
+  rescan; an operation whose Pak changed fails. A note's image is at most
+  30720 B (`SAVE_PAK_IMAGE_MAX`); a bigger one fails before the Pak is
+  touched with `SAVE_ERR_PAK_SIZE` (the menu: "Save too large for
+  Controller Pak."; `SAVE_ERR_SIZE`: too large for any save).
+- Measured (host, c19 cook, state → image): hl2-yard 600 28040 → 10137 B,
+  hazard-seam 12469 → 4454 B, seam-2to3 39563 → 15402 B,
+  hl2-return-battle 37604 → 14066 B; the routes' autosaves: Uplink 7, the
+  largest at the hldemo2 → hldemo1 return 70418 → 29573 B (2 sectors; it
+  also fits a Pak note), Hazard 7, largest 38607 → 13275 B. The save
+  region (`HL64_SAVE_KB` 160) stages up to 104 KB of state.
 
 **Save** (`save_write`, `save_autosave`): at the next frame boundary
 (`save_frame`, first in `eng_frame`) what is in flight settles (paused
@@ -1029,8 +1068,9 @@ over 3 held frames, the saved layers reopen in their saved slots and
 every section is read back: entities into their own slots with their
 serials, private blocks at their own handles, HLE slots at their own
 blocks, the clock (before the engine frame) and the random stream exactly.
-No spawn function runs; the game resumes at the next frame. The menu
-shows "Saving..." / "Loading..." over the held frames (`SAVE_HOLD`).
+No spawn function runs; the game resumes at the next frame (placed decals
+rebuild over the next frames as their chunks land). The menu shows
+"Saving..." / "Loading..." over the held frames (`SAVE_HOLD`).
 
 **Gate** (`test/save/determinism.sh [--ares] [--pak] SCENE:T:N[:report]`,
 run by `test/run/m5.sh`): run S saves at T and quits; A saves at T and
@@ -1049,10 +1089,18 @@ its completion frame follows the render pool's state, so hydration and
 AI-think drops land at other frames. Cost: every autosave ok and every
 frame it holds or step it takes ≤ 67 ms (gated); a manual save's and a
 load's frames and whole time are reported (the game is paused behind the
-menu, the sound muted). Known gaps: placed static decals are not saved
-(an infodecal is gone once placed); at the Uplink route's hldemo2 ->
-hldemo1 return the state (≈ 65.7 KB) codes to 30748 B, 28 B over
-`SAVE_IMAGE_MAX`, and that autosave fails.
+menu, the sound muted). `test/save/pakfail.sh`: the Pak's no-room,
+failed-transfer and too-large (`SAVE_ERR_PAK_SIZE`, the cap lowered by
+`HL64_HOST_PAK_IMAGE_MAX`) paths. `test/save/flashcut.sh`: the pool's
+worst case above (every save forced to 2 sectors by
+`HL64_HOST_SAVE_SECTORS`), then a manual save and an autosave cut by a
+power cut in the middle of each of their 130 flash operations
+(`HL64_HOST_FLASH_CUT`, `plat/host/flash_host.c`): after every cut a
+fresh boot lists all three slots good (the cut slot's old or new copy)
+and a settings block. Known gap: test builds' `restore_check` stages the
+re-save beside the loaded state, so states over half the staging room
+(52 KB, the late Uplink route) log `no room` instead of comparing; the
+gate scenes are ≤ 40 KB.
 
 ## 15. Test and profiling
 

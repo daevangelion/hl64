@@ -29,6 +29,15 @@
  * meshlets and triangles so host and cart place the same decals in the
  * same frames, K10); one whose sector is not resident waits (4 retried per
  * frame) and is dropped after 2 s.
+ *
+ * Saved games (decal_save / decal_load, docs/architecture.md 14): every
+ * placed decal is saved as its placement (pool index, order, model, layer,
+ * chunk, texture, the point and normal in the model's frame quantized,
+ * the winding), not its pieces, and the pending placements as they are. A
+ * loaded decal is rebuilt from it (walk_chunk on its one chunk) once that
+ * chunk is resident and its sheet read, under its own work cap
+ * (REBUILD_WORK), never the placement budget, so the game's placements
+ * (and infodecal's retries) go as in the run that saved.
  */
 #include <math.h>
 #include <string.h>
@@ -44,6 +53,8 @@
 #include "engine/render/fx_int.h"
 #include "engine/render/ren.h"
 #include "engine/render/trans.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/world/wld.h"
 
 #define SHEET_MAGIC	0x44493402u	/* 'DI4' 2: HLSDK decals.h order */
@@ -65,6 +76,11 @@
 #define RETRIES		4
 #define QUEUE_LIFE	2.0
 #define MAX_CHUNKS	16		/* chunks one placement may touch */
+#define REBUILD_WORK	175		/* loaded decals' rebuild work a frame (as BUDGET_WORK) */
+#define NORM_SCALE	16384.0f	/* a saved normal's unit */
+#define DF_FACING	0x01		/* hit normal known */
+#define DF_NEG		0x02		/* winding sign -1 */
+#define DF_STALE	0x04		/* loaded: pieces not rebuilt yet (never saved) */
 
 typedef struct {
 	uint8_t		tw, th, ww, wh;		/* texels, world units */
@@ -82,11 +98,13 @@ typedef struct {
 	ent_h		owner;		/* mover; 0 = world */
 	uint16_t	chunk;		/* REND / MOVR chunk the pieces lie on */
 	uint8_t		live, layer, tex, nverts;
-	uint8_t		npieces, pad;
+	uint8_t		npieces, flags;	/* DF_* */
 	uint8_t		piece[PIECES];	/* vertices per piece (fans) */
 	uint16_t	map;
 	int16_t		cen[3];		/* bounding sphere, model frame, quarter units */
 	uint16_t	rad;
+	int16_t		q[3], n[3];	/* the placement, model frame: point in quarter units,
+					 * normal x NORM_SCALE (saved; a load rebuilds from it) */
 } fxdecal_t;
 
 typedef struct {
@@ -101,6 +119,7 @@ static dtex_t		tex[TEXES];
 static int		ntex;			/* global sheet entries */
 static struct {
 	int		map;			/* layer map the slot follows; -1 none */
+	int		keep;			/* a load's map: its decals stay at the next sync */
 	uint32_t	due;			/* frame its sheet may be read */
 	uint8_t		loaded, n;
 	uint8_t		reading;		/* req queued (an async read, SEAM class) */
@@ -175,7 +194,7 @@ void decal_init(void)
 		if (slots[s].reading)
 			io_cancel(&slots[s].req);
 		slots[s].reading = 0;
-		slots[s].map = -1;
+		slots[s].map = slots[s].keep = -1;
 		slots[s].loaded = slots[s].n = 0;
 		slots[s].peak = 0;
 	}
@@ -229,12 +248,17 @@ static void slot_sync(int s)
 
 	if (slots[s].map != map)
 	{
-		for (i = 0; i < HL64_FX_DECALS; i++)
-			if (pool[i].live && pool[i].tex >= lo && pool[i].tex < lo + SHEET_MAX)
-				pool[i].live = 0;
-		for (i = 0; i < HL64_FX_DECAL_QUEUE; i++)
-			if (queue[i].live && queue[i].decal >= lo && queue[i].decal < lo + SHEET_MAX)
-				queue[i].live = 0;
+		/* a load's restored decals and placements belong to the map */
+		if (map < 0 || map != slots[s].keep)
+		{
+			for (i = 0; i < HL64_FX_DECALS; i++)
+				if (pool[i].live && pool[i].tex >= lo && pool[i].tex < lo + SHEET_MAX)
+					pool[i].live = 0;
+			for (i = 0; i < HL64_FX_DECAL_QUEUE; i++)
+				if (queue[i].live && queue[i].decal >= lo && queue[i].decal < lo + SHEET_MAX)
+					queue[i].live = 0;
+		}
+		slots[s].keep = -1;
 		memset(&tex[lo], 0, SHEET_MAX * sizeof(tex[0]));
 		if (slots[s].reading)
 			io_cancel(&slots[s].req);
@@ -650,7 +674,7 @@ static void bound(fxdecal_t *d, const dvert_t *v, int n)
 static int commit(place_t *P, int layer, int map, int chunk, ent_h owner)
 {
 	fxdecal_t *d;
-	int i;
+	int i, k;
 
 	if (!P->nv)
 		return 0;
@@ -667,6 +691,12 @@ static int commit(place_t *P, int layer, int map, int chunk, ent_h owner)
 	d->nverts = (uint8_t)P->nv;
 	d->npieces = (uint8_t)P->np;
 	memcpy(d->piece, P->piece, sizeof(d->piece));
+	for (k = 0; k < 3; k++)
+	{
+		d->q[k] = q16(P->q[k]);
+		d->n[k] = (int16_t)lrintf(P->n[k] * NORM_SCALE);
+	}
+	d->flags = (uint8_t)((P->facing ? DF_FACING : 0) | (P->sign < 0 ? DF_NEG : 0));
 	memcpy(&verts[i * HL64_FX_DECAL_VERTS], P->v, sizeof(dvert_t) * (size_t)P->nv);
 	bound(d, P->v, P->nv);
 	if (P->nv > st.verts_max)
@@ -920,6 +950,176 @@ static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
 	return placed;
 }
 
+/* ---- saved games -------------------------------------------------------------------- */
+
+static uint32_t		rebuilt;		/* rebuild work this frame (REBUILD_WORK) */
+
+/* A loaded decal's pieces from its placement, once its chunk is resident
+ * and its texture read; the placement budget is left as it was. */
+static void rebuild(int i)
+{
+	fxdecal_t *d = &pool[i];
+	wld_layer_t *L = wld_layer(d->layer);
+	const uint8_t *ch;
+	uint32_t w = work;
+	place_t P;
+	float r;
+	int k;
+
+	if (!L || L->map != d->map || L->reencode || d->chunk >= L->dir->nchunks
+		|| !(ch = landed(L, d->chunk)) || !tex[d->tex].tw)
+		return;
+	memset(&P, 0, sizeof(P));
+	P.t = &tex[d->tex];
+	P.tex = d->tex;
+	for (k = 0; k < 3; k++)
+	{
+		P.q[k] = (float)d->q[k] / GPU_FX_POS_SCALE;
+		P.n[k] = (float)d->n[k] / NORM_SCALE;
+	}
+	P.facing = (d->flags & DF_FACING) != 0;
+	P.sign = (d->flags & DF_NEG) ? -1 : 1;
+	r = 0.5f * sqrtf((float)P.t->ww * P.t->ww + (float)P.t->wh * P.t->wh) + REACH;
+	P.reach2 = r * r;
+	work = 0;
+	walk_chunk(&P, L, ch, L->chunks[d->chunk].size);
+	rebuilt += work;
+	work = w;
+	d->nverts = (uint8_t)P.nv;
+	d->npieces = (uint8_t)P.np;
+	memcpy(d->piece, P.piece, sizeof(d->piece));
+	memcpy(&verts[i * HL64_FX_DECAL_VERTS], P.v, sizeof(dvert_t) * (size_t)P.nv);
+	if (P.nv)
+		bound(d, P.v, P.nv);
+	d->flags &= (uint8_t)~DF_STALE;
+#ifdef HL64_TEST
+	log_printf("fx: decal %d rebuilt: %d pieces, %d verts (frame %lu)\n", i, P.np, P.nv,
+		(unsigned long)frames);
+#endif
+}
+
+void decal_save(void)
+{
+	int i, n = 0, s;
+
+	sv_tag(SV_TAG('D', 'C', 'L', '1'));
+	sv_u32(seq);
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)	/* a load's slot keeps its map until synced */
+		sv_u16((uint16_t)(slots[s].map >= 0 ? slots[s].map : slots[s].keep));
+	for (i = 0; i < HL64_FX_DECALS; i++)
+		n += pool[i].live;
+	sv_u8((uint32_t)n);
+	for (i = 0; i < HL64_FX_DECALS; i++)
+	{
+		const fxdecal_t *d = &pool[i];
+		int k;
+
+		if (!d->live)
+			continue;
+		sv_u8((uint32_t)i);
+		sv_u32(d->seq);
+		sv_u32(d->owner);
+		sv_u16(d->chunk);
+		sv_u16(d->map);
+		sv_u8(d->layer);
+		sv_u8(d->tex);
+		sv_u8(d->flags & (DF_FACING | DF_NEG));
+		for (k = 0; k < 3; k++)
+			sv_u16((uint16_t)d->q[k]);
+		for (k = 0; k < 3; k++)
+			sv_u16((uint16_t)d->n[k]);
+	}
+	for (i = n = 0; i < HL64_FX_DECAL_QUEUE; i++)
+		n += queue[i].live;
+	sv_u8((uint32_t)n);
+	for (i = 0; i < HL64_FX_DECAL_QUEUE; i++)
+	{
+		const pend_t *q = &queue[i];
+
+		if (!q->live)
+			continue;
+		sv_u8((uint32_t)i);
+		sv_put(q->p, sizeof(q->p));
+		sv_put(q->n, sizeof(q->n));
+		sv_f64(q->t0);
+		sv_u32(q->owner);
+		sv_u16((uint16_t)q->decal);
+		sv_u8(q->tries);
+	}
+}
+
+/* After decal_init (the session's drop): the pool and the queue at their
+ * own indices; each slot keeps the decals of the map it followed when the
+ * game saved (slot_sync then reads that map's sheet again). */
+int decal_load(void)
+{
+	uint32_t n, i, k;
+	int s;
+
+	if (sv_expect(SV_TAG('D', 'C', 'L', '1')))
+		return -1;
+	seq = sv_get_u32();
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+		slots[s].keep = (int16_t)sv_get_u16();
+	n = sv_get_u8();
+	for (i = 0; i < n && !sv_failed(); i++)
+	{
+		uint32_t at = sv_get_u8();
+		fxdecal_t *d;
+
+		if (at >= HL64_FX_DECALS || pool[at].live)
+		{
+			sv_fail("decal index");
+			return -1;
+		}
+		d = &pool[at];
+		memset(d, 0, sizeof(*d));
+		d->live = 1;
+		d->seq = sv_get_u32();
+		d->owner = sv_get_u32();
+		d->chunk = (uint16_t)sv_get_u16();
+		d->map = (uint16_t)sv_get_u16();
+		d->layer = (uint8_t)sv_get_u8();
+		d->tex = (uint8_t)sv_get_u8();
+		d->flags = (uint8_t)((sv_get_u8() & (DF_FACING | DF_NEG)) | DF_STALE);
+		for (k = 0; k < 3; k++)
+			d->q[k] = (int16_t)sv_get_u16();
+		for (k = 0; k < 3; k++)
+			d->n[k] = (int16_t)sv_get_u16();
+		if (d->layer >= HL64_WORLD_LAYERS || d->tex >= TEXES)
+		{
+			sv_fail("decal");
+			return -1;
+		}
+	}
+	n = sv_get_u8();
+	for (i = 0; i < n && !sv_failed(); i++)
+	{
+		uint32_t at = sv_get_u8();
+		pend_t *q;
+
+		if (at >= HL64_FX_DECAL_QUEUE || queue[at].live)
+		{
+			sv_fail("decal queue index");
+			return -1;
+		}
+		q = &queue[at];
+		sv_get(q->p, sizeof(q->p));
+		sv_get(q->n, sizeof(q->n));
+		q->t0 = sv_get_f64();
+		q->owner = sv_get_u32();
+		q->decal = (int16_t)sv_get_u16();
+		q->tries = (uint8_t)sv_get_u8();
+		q->live = 1;
+		if (q->decal < 0 || q->decal >= TEXES)
+		{
+			sv_fail("decal queue");
+			return -1;
+		}
+	}
+	return sv_failed() ? -1 : 0;
+}
+
 /* ---- API ----------------------------------------------------------------------------------- */
 
 void decal_queue(const float p_g[3], const float n[3], int e, int decal)
@@ -1030,6 +1230,17 @@ void decal_frame(void)
 	frames++;
 	for (i = 0; i < HL64_WORLD_LAYERS; i++)
 		slot_sync(i);
+	/* a mover's decals go with it; loaded decals are rebuilt */
+	rebuilt = 0;
+	for (i = 0; i < HL64_FX_DECALS; i++)
+	{
+		fxdecal_t *d = &pool[i];
+
+		if (d->live && d->owner && ent_of(d->owner) < 0)
+			d->live = 0;
+		else if (d->live && (d->flags & DF_STALE) && rebuilt < REBUILD_WORK)
+			rebuild(i);
+	}
 	for (i = 0; i < HL64_FX_DECAL_QUEUE; i++)
 	{
 		pend_t *q = &queue[i];
@@ -1114,7 +1325,7 @@ static int frame_of(const fxdecal_t *d, float org[3], float ax[3][3])
 		const float *gm;
 
 		if (e < 0)
-			return -1;	/* the mover is gone: so is the decal */
+			return -1;	/* the mover is gone (decal_frame drops the decal) */
 		gm = eng_layer_origin(ent_idc(e)->layer);
 		ren_angle_axes(ent_cv(e)->angles, f, r, u);
 		for (k = 0; k < 3; k++)
@@ -1182,16 +1393,12 @@ void decal_draw(uint32_t *ndecals, uint32_t *nverts)
 		uint8_t idx[3 * HL64_FX_DECAL_VERTS];
 		float org[3], ax[3][3], a[3];
 		ren_mat_t mt;
-		int k, j, ni = 0, b = 0, f;
+		int k, j, ni = 0, b = 0;
 
 		if (!d->live)
 			continue;
-		if ((f = frame_of(d, org, ax)) <= 0)
-		{
-			if (f < 0)
-				d->live = 0;
+		if (frame_of(d, org, ax) <= 0 || (d->flags & DF_STALE))
 			continue;
-		}
 		if (d->map != fx_s.map || culled(d, org, ax))
 			continue;
 		world_of(&dv[0], org, ax, a);

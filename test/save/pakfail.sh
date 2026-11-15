@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Controller Pak fallbacks of engine/save/save.c (docs/architecture.md 14)
-# on hl64-host, scene hl2-yard, on a Pak holding a 12000 B foreign note
+# on hl64-host, scene hl2-yard, on a Pak holding a 13000 B foreign note
 # (cpaktool), so one save fits beside it and two do not:
 #   1. no room for a second note: save slot 3 at T, again at T+150: the
 #      second one deletes the old note first and writes over it (`no room
@@ -13,6 +13,8 @@
 #      the first save's transfer fails): that save FAILED, the Pak mounted
 #      and listed again, the second save ok over the headerless note, a
 #      fresh run loads it, cpaktool finds no issue
+#   3. too large: with the note cap lowered (HL64_HOST_PAK_IMAGE_MAX) the
+#      save fails with SAVE_ERR_PAK_SIZE, the Pak unchanged; Flash takes it
 #
 #   test/save/pakfail.sh      (BUILD_DIR, HL64_CONTENT as determinism.sh)
 # Out: $BUILD_DIR/save/pakfail/. Exit 0 pass, 1 fail, 2 prerequisite.
@@ -38,7 +40,7 @@ HOST="$BUILD_DIR/sh/host/hl64-host"
 cd "$OUT"
 fail() { echo "pakfail: FAIL $*"; exit 1; }
 
-head -c 12000 /dev/urandom >NSME.01-MARIO.A
+head -c 13000 /dev/urandom >NSME.01-MARIO.A
 "$CPAK" format base.pak >/dev/null
 "$CPAK" add base.pak NSME.01-MARIO.A >/dev/null
 mkdir x0 && (cd x0 && "$CPAK" extract ../base.pak >/dev/null)
@@ -92,4 +94,16 @@ sed -n '/^pak: injected write failure/,$p' fail-save.log | grep -q '^pak: mounte
 sed -n '/^pak: injected write failure/,$p' fail-save.log | grep -q '^save: Controller Pak: [0-9]* of our notes' \
 	|| fail "fail: the Pak not listed again"
 echo "pakfail: failed transfer: save FAILED, Pak remounted and listed again, next save ok over the headerless note, reload seq $(seq_loaded fail-load.log) ok"
+
+# 3. too large for a note (the cap lowered to 1000 B, HL64_HOST_PAK_IMAGE_MAX):
+# the save fails with SAVE_ERR_PAK_SIZE (-3, the menu's "Save too large for
+# Controller Pak"), the Pak untouched; a Flash save of the same state is ok
+cp base.pak big.pak
+HL64_HOST_PAK_IMAGE_MAX=1000 host big.pak big-save.log "@$T save 3" "@$((T + 60)) save 1" \
+	"@$((T + 120)) quit 0" || fail "big: hl64-host exit $?"
+grep -q '^save: slot 3: too big for the Controller Pak' big-save.log || fail "big: no too-big line"
+grep -q '^save: save slot 3 FAILED (-3)' big-save.log || fail "big: not SAVE_ERR_PAK_SIZE"
+grep -q '^save: save slot 1 ok' big-save.log || fail "big: the Flash save"
+cmp base.pak big.pak || fail "big: the Pak changed"
+echo "pakfail: too large for a note: save FAILED (-3, SAVE_ERR_PAK_SIZE), Pak unchanged, Flash save ok"
 echo "pakfail: PASS"

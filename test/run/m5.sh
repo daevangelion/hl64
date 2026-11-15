@@ -27,9 +27,10 @@
 #          every live entity (`stepall 1`) gives identical route ops and
 #          player / entity / seam / rec records. Saved games
 #          (test/save/determinism.sh, FlashRAM and --pak, on the save
-#          scenes; test/save/pakfail.sh): A/B streams and stats equal,
-#          every autosave ok with every frame <= 67 ms, the Pak's no-room
-#          and failed-transfer paths.
+#          scenes; test/save/pakfail.sh; test/save/flashcut.sh): A/B
+#          streams and stats equal, every autosave ok with every frame
+#          <= 67 ms, the Pak's no-room, too-large and failed-transfer
+#          paths, FlashRAM power cuts in every flash operation of a save.
 #   ares:  each route (uplink, hazard and m4: the M5 AI acceptance's
 #          routes are uplink and m4; m4 is checked as by test/run/m4.sh,
 #          with no old-tree oracle) on a PROFILE HL64_TEST ROM (PASS runs
@@ -207,8 +208,10 @@ done
 # ---- saved games (host; architecture.md 14): test/save/determinism.sh on
 # the save scenes, FlashRAM and Controller Pak (A/B streams and stats
 # equal, every autosave ok with every frame <= 67 ms; manual saves' and
-# loads' frames reported), and test/save/pakfail.sh (the Pak's no-room and
-# failed-transfer paths). seam-2to3 saves at 810, right after the
+# loads' frames reported), test/save/pakfail.sh (the Pak's no-room and
+# failed-transfer paths) and test/save/flashcut.sh (FlashRAM power cuts in
+# every erase / program of a save in the pool's worst case: no save lost,
+# at worst the latest settings change). seam-2to3 saves at 810, right after the
 # hldemo2 -> hldemo3 switch, with room for the cart's ~41-frame save before
 # T+N; earlier windows meet residency-dependent game rules (infodecal
 # retries, the hitbox pose memo) that differ warm (A) / cold (B) ----
@@ -225,6 +228,11 @@ BUILD_DIR="$BUILD_DIR/save-gate" HL64_CONTENT="$CONTENT" "$ROOT/test/save/pakfai
 	>"$OUT/save-pakfail.log" 2>&1 || CODE=$?
 grep '^pakfail: ' "$OUT/save-pakfail.log" | tee -a "$GATE_LOG" || true
 [[ $CODE -eq 0 ]] || fail "Pak fallbacks (host): pakfail.sh exit $CODE"
+CODE=0
+BUILD_DIR="$BUILD_DIR/save-gate" HL64_CONTENT="$CONTENT" "$ROOT/test/save/flashcut.sh" \
+	>"$OUT/save-flashcut.log" 2>&1 || CODE=$?
+grep '^flashcut: ' "$OUT/save-flashcut.log" | tee -a "$GATE_LOG" || true
+[[ $CODE -eq 0 ]] || fail "FlashRAM power cuts (host): flashcut.sh exit $CODE"
 
 # ---- routes (host) ----
 # the lines two runs must agree on: route ops and stats records of <kinds>

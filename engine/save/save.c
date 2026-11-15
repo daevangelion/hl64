@@ -3,18 +3,25 @@
  * save.c -- saved games and the settings block (include/hl64/save.h,
  * docs/architecture.md 14, decision D4).
  *
- * FlashRAM (128 KB, 8 sectors of 16 KB): sector 0 the settings block,
- * sectors 1..7 a pool. A save is a 128-byte header (magic, format, layout
- * id, logical slot, sequence, sectors, sizes, CRC-32 of the image, display
- * info, the open layers) and the LZ image of the sections every module
- * writes (engine/save/svmod.h order, then the game's); on the flash it
- * takes whole sectors of the pool, contiguous. A logical slot (the
- * autosave, the manual slots) is its newest copy whose header and image
- * check out; a new save goes to sectors no slot's current copy holds, so
- * the copy it replaces stays good until the new one is complete (a manual
- * slot with no such room writes over its own copy; an autosave never does:
- * it is dropped). The directory is read at boot and updated from the
- * read-back of every write.
+ * FlashRAM (128 KB, 8 sectors of 16 KB): all eight sectors are one pool.
+ * A copy on the flash is a 128-byte header (magic, format, layout id,
+ * logical slot, sequence, its sectors, sizes, CRC-32 of the image, display
+ * info, the open layers), the settings block (384 B, its own CRC) and the
+ * image: the LZ-coded sections every module writes (engine/save/svmod.h
+ * order, then the game's). A copy takes 1 or 2 whole sectors of the pool
+ * (any two: the header names them), so its image is at most
+ * SAVE_IMAGE_MAX. A logical slot (the autosave, the manual slots) is its
+ * newest copy whose header and image check out; a new copy goes to
+ * sectors no slot's current copy holds, so the copy it replaces stays
+ * good until the new one is complete. A settings-only copy (settings_store:
+ * a header and the settings block, one sector) is kept while it is the
+ * newest settings block; a save carries the settings too, so it may take
+ * that sector. Worst case: the other two slots hold 4 sectors, the slot's
+ * own copy 2, leaving 2 for the new copy (with the settings copy's sector
+ * among them at most); a settings copy finds 1 (6 held by the slots, 1 by
+ * the current settings copy). The directory is read at boot and updated
+ * from the read-back of every write. A Controller Pak note is the header
+ * and the image (at most SAVE_PAK_IMAGE_MAX), no settings block.
  *
  * Save (save_write, save_autosave): the next frame boundary (save_frame,
  * first thing in eng_frame) settles what is in flight -- paused monster
@@ -32,6 +39,9 @@
  * exactly. No spawn function runs. The game resumes at the next frame.
  */
 #include <string.h>
+#if defined(HL64_HOST) && defined(HL64_TEST)
+#include <stdlib.h>	/* getenv: test/save/flashcut.sh */
+#endif
 
 #include "hl64/ent.h"
 #include "hl64/fx.h"
@@ -60,43 +70,50 @@
 #include "engine/world/wld.h"
 #include "engine/world/wld_int.h"
 
-#define SAVE_FORMAT	3
+#define SAVE_FORMAT	4
 #define SLOT_MAGIC	0x484C5356u	/* 'HLSV' */
 #define SET_MAGIC	0x484C5354u	/* 'HLST' */
-#define HDR_BYTES	128u
-#define SET_BYTES	512u
+#define HDR_BYTES	128u		/* the slot header */
+#define SET_BYTES	384u		/* the settings block after it (flash copies) */
+#define FLASH_HDR	(HDR_BYTES + SET_BYTES)	/* a flash copy's image starts here */
 #define FLASH_PAGE	128u
-#define POOL_FIRST	1u		/* the pool's first sector */
 #define FLASH_SLOTS	(1 + SAVE_FLASH_MANUAL)	/* logical slots on the flash, 0 the autosave */
-#define SAVE_BYTES	(HDR_BYTES + SAVE_IMAGE_MAX)
+#define SAVE_BYTES	(FLASH_HDR + SAVE_IMAGE_MAX)
 #define DROP_FRAMES	3		/* world frames for the closed layers' fenced frees */
 #define FLASH_BUDGET_US	4000u		/* flash writer time per frame */
 #define CODE_BUDGET_US	8000u		/* coder / decoder time per frame */
 #define PAK_SLOT	0xFFu		/* slot_hdr_t slot of a Pak note */
+#define SET_SLOT	0xFEu		/* slot_hdr_t slot of a settings-only copy */
 #define PAK_NOTES	16		/* note ids 0..15 (sys.h) */
 #define PAK_STEP	256u		/* Pak bytes read / written per frame (ares: ~6 ms) */
 #define PAK_ROOM_MIN	(16u * 1024u)	/* free bytes for the Pak's empty entry */
 
 _Static_assert(SAVE_BYTES <= HL64_SAVE_KB * 1024u, "save region holds a save");
-_Static_assert(SAVE_SECTOR_BYTES * (POOL_FIRST + SAVE_POOL_SECTORS) <= SAVE_FLASH_BYTES,
-	"pool fits the flash");
-_Static_assert(SAVE_BYTES <= SAVE_POOL_SECTORS * SAVE_SECTOR_BYTES, "a save fits the pool");
+_Static_assert(SAVE_SECTOR_BYTES * SAVE_POOL_SECTORS == SAVE_FLASH_BYTES, "pool is the flash");
+_Static_assert(SAVE_BYTES == SAVE_COPY_SECTORS * SAVE_SECTOR_BYTES, "a copy's largest image");
+_Static_assert(SAVE_POOL_SECTORS >= (1 + FLASH_SLOTS) * SAVE_COPY_SECTORS,
+	"every slot at its largest and a new copy fit the pool");
+_Static_assert(SAVE_PAK_IMAGE_MAX <= SAVE_IMAGE_MAX, "a Pak image codes in the region");
+_Static_assert(12u + 8u * SET_COUNT <= SET_BYTES, "settings block holds every field");
+_Static_assert(HL64_WORLD_LAYERS == 2, "slot_hdr_t keeps sect[] at offset 92");
 
 typedef struct {
 	uint32_t	magic;
 	uint32_t	hdr_crc;		/* bytes [8, HDR_BYTES) */
-	uint16_t	format, hdr_bytes;
+	uint16_t	format, hdr_bytes;	/* hdr_bytes: FLASH_HDR (flash), HDR_BYTES (Pak) */
 	uint32_t	layout;
 	uint32_t	seq;
 	uint32_t	raw_bytes, img_bytes, img_crc;
 	float		game_time;
 	uint8_t		skill, nlayers;
-	uint8_t		slot;			/* logical slot (flash), PAK_SLOT on a Pak */
+	uint8_t		slot;			/* logical slot (flash), PAK_SLOT, SET_SLOT */
 	uint8_t		nsect;			/* pool sectors it takes (flash), 0 on a Pak */
 	uint16_t	layer_map[HL64_WORLD_LAYERS];	/* WLD_NO_MAP: closed */
 	uint32_t	layer_crc[HL64_WORLD_LAYERS];	/* the package's directory CRC */
 	char		map[16];
 	char		title[24];
+	uint8_t		sect[SAVE_COPY_SECTORS];	/* its pool sectors in image order (sect[0]
+						 * holds this header) */
 } slot_hdr_t;
 _Static_assert(sizeof(slot_hdr_t) <= HDR_BYTES, "slot header");
 
@@ -122,7 +139,7 @@ enum {
 /* A directory entry: the slot's current copy. */
 typedef struct {
 	save_info_t	info;
-	uint8_t		sect, nsect;		/* flash: pool sectors (sect from 0) */
+	uint8_t		sect[SAVE_COPY_SECTORS], nsect;	/* flash: its pool sectors */
 	int8_t		note;			/* Pak: note id, -1 the empty entry */
 	uint32_t	bytes;			/* Pak: the note's size */
 } dirent_t;
@@ -138,9 +155,13 @@ static struct {
 	uint8_t		mute_left;	/* frames until the mute's silence fills the queue */
 	uint8_t		next;		/* ST_MUTE: the state after it */
 	uint8_t		open_wait;	/* ST_SNAP: held frames spent on a layer open */
-	uint8_t		wsect, wnsect;	/* the write's pool run */
+	uint8_t		wsect[SAVE_COPY_SECTORS], wnsect;	/* the write's pool sectors */
+	uint8_t		wpart;		/* ST_WRITE: the header's sector is still to write */
+	uint32_t	wlen;		/* the write's bytes (header, settings, image) */
+	int8_t		set_src;	/* sector of the newest settings block, -1 none */
+	int8_t		set_copy;	/* set_src when it is a settings-only copy (held), else -1 */
 	uint32_t	seq;		/* newest sequence seen */
-	uint8_t		*img;		/* SAVE region: header + image */
+	uint8_t		*img;		/* SAVE region: header, settings block, image */
 	dirent_t	flash[FLASH_SLOTS];
 	/* Controller Pak (controller 1) */
 	uint8_t		pak_acc;	/* SYS_PAK_* last seen, 0xFF before the first poll */
@@ -172,7 +193,7 @@ static uint8_t set_buf[SET_BYTES] __attribute__((aligned(16)));
 
 static uint32_t sect_off(uint32_t sect)
 {
-	return SAVE_SECTOR_BYTES * (POOL_FIRST + sect);
+	return SAVE_SECTOR_BYTES * sect;
 }
 
 static uint32_t fnv(uint32_t h, uint32_t v)
@@ -229,6 +250,15 @@ static void info_of(const slot_hdr_t *h, save_info_t *o, int state, int source, 
 	memcpy(o->title, h->title, sizeof(o->title) - 1);
 }
 
+/* The header at buf is ours and whole (any build): magic, format, size,
+ * CRC. */
+static int hdr_sound(const uint8_t *buf, const slot_hdr_t *h)
+{
+	return h->magic == SLOT_MAGIC && h->format == SAVE_FORMAT
+		&& (h->hdr_bytes == HDR_BYTES || h->hdr_bytes == FLASH_HDR)
+		&& h->hdr_crc == sv_crc32(0, buf + 8, HDR_BYTES - 8);
+}
+
 /* The header at buf: SAVE_OK, SAVE_CORRUPT (another format / build, a bad
  * header), SAVE_EMPTY (erased or no header at all). */
 static int hdr_check(const uint8_t *buf, slot_hdr_t *h)
@@ -236,56 +266,101 @@ static int hdr_check(const uint8_t *buf, slot_hdr_t *h)
 	memcpy(h, buf, sizeof(*h));
 	if (h->magic != SLOT_MAGIC)
 		return SAVE_EMPTY;
-	if (h->format != SAVE_FORMAT || h->hdr_bytes != HDR_BYTES
-		|| h->hdr_crc != sv_crc32(0, buf + 8, HDR_BYTES - 8)
-		|| h->img_bytes == 0 || h->img_bytes > SAVE_IMAGE_MAX
-		|| h->layout != layout_id())
+	if (!hdr_sound(buf, h) || h->layout != layout_id())
 		return SAVE_CORRUPT;
-	return SAVE_OK;
+	if (h->slot == PAK_SLOT)
+		return h->hdr_bytes == HDR_BYTES && h->img_bytes && h->img_bytes <= SAVE_PAK_IMAGE_MAX
+			? SAVE_OK : SAVE_CORRUPT;
+	if (h->hdr_bytes != FLASH_HDR || h->nsect < 1 || h->nsect > SAVE_COPY_SECTORS
+		|| h->sect[0] >= SAVE_POOL_SECTORS
+		|| (h->nsect > 1 && (h->sect[1] >= SAVE_POOL_SECTORS || h->sect[1] == h->sect[0])))
+		return SAVE_CORRUPT;
+	if (h->slot == SET_SLOT)
+		return h->img_bytes == 0 && h->nsect == 1 ? SAVE_OK : SAVE_CORRUPT;
+	return h->slot < FLASH_SLOTS && h->img_bytes
+		&& FLASH_HDR + h->img_bytes <= h->nsect * SAVE_SECTOR_BYTES ? SAVE_OK : SAVE_CORRUPT;
 }
 
-/* The image after a good header, read into SV.img + HDR_BYTES. */
+/* The image after a good header, read into SV.img + FLASH_HDR (flash
+ * copies and Pak notes alike). */
 static int img_check(const slot_hdr_t *h)
 {
-	return sv_crc32(0, SV.img + HDR_BYTES, h->img_bytes) == h->img_crc ? SAVE_OK : SAVE_CORRUPT;
+	return sv_crc32(0, SV.img + FLASH_HDR, h->img_bytes) == h->img_crc ? SAVE_OK : SAVE_CORRUPT;
 }
 
-/* Read the save at pool sector sect into the save region and check it. */
+/* A settings block (magic, field count, CRC) that checks out. */
+static int set_ok(const uint8_t *b)
+{
+	uint32_t magic, n, crc;
+
+	memcpy(&magic, b, 4);
+	memcpy(&n, b + 4, 4);
+	memcpy(&crc, b + 8, 4);
+	return magic == SET_MAGIC && n <= (SET_BYTES - 12) / 8 && crc == sv_crc32(0, b + 12, n * 8);
+}
+
+/* Read the copy whose header is at pool sector sect into the save region
+ * as it lies (header, settings block, image: the second sector's part at
+ * SV.img + SAVE_SECTOR_BYTES) and check it. */
 static int read_flash(uint32_t sect, slot_hdr_t *h)
 {
+	uint32_t a, b;
 	int st;
 
-	if (flq_read(SV.img, sect_off(sect), HDR_BYTES))
+	if (flq_read(SV.img, sect_off(sect), FLASH_HDR))
 		return SAVE_EMPTY;
 	if ((st = hdr_check(SV.img, h)) != SAVE_OK)
 		return st;
-	if (h->slot >= FLASH_SLOTS || h->nsect == 0 || sect + h->nsect > SAVE_POOL_SECTORS
-		|| HDR_BYTES + h->img_bytes > h->nsect * SAVE_SECTOR_BYTES)
+	if (h->sect[0] != sect)
 		return SAVE_CORRUPT;
-	if (flq_read(SV.img + HDR_BYTES, sect_off(sect) + HDR_BYTES, (h->img_bytes + 1) & ~1u))
+	if (h->slot == SET_SLOT)
+		return set_ok(SV.img + HDR_BYTES) ? SAVE_OK : SAVE_CORRUPT;
+	a = h->img_bytes < SAVE_SECTOR_BYTES - FLASH_HDR ? h->img_bytes : SAVE_SECTOR_BYTES - FLASH_HDR;
+	b = h->img_bytes - a;
+	if (flq_read(SV.img + FLASH_HDR, sect_off(sect) + FLASH_HDR, (a + 1) & ~1u)
+		|| (b && flq_read(SV.img + SAVE_SECTOR_BYTES, sect_off(h->sect[1]), (b + 1) & ~1u)))
 		return SAVE_CORRUPT;
 	return img_check(h);
 }
 
-static void flash_entry(int slot, const slot_hdr_t *h, int st, uint32_t sect)
+static void flash_entry(int slot, const slot_hdr_t *h, int st)
 {
 	dirent_t *d = &SV.flash[slot];
 
 	info_of(h, &d->info, st, SAVE_SRC_FLASH, slot == 0 ? SAVE_F_AUTO : 0);
-	d->sect = (uint8_t)sect;
+	memcpy(d->sect, h->sect, sizeof(d->sect));
 	d->nsect = st == SAVE_OK ? h->nsect : 0;
 }
 
-/* Boot: every pool sector that starts a save; per logical slot the newest
- * good copy (a slot with only bad ones shows SAVE_CORRUPT). */
+/* The settings source after a write that failed: the newest good slot
+ * copy's header (every flash copy carries the settings), -1 none. */
+static void set_src_slots(void)
+{
+	uint32_t seq = 0;
+	int k;
+
+	SV.set_src = SV.set_copy = -1;
+	for (k = 0; k < FLASH_SLOTS; k++)
+		if (SV.flash[k].info.state == SAVE_OK && SV.flash[k].info.seq >= seq)
+		{
+			seq = SV.flash[k].info.seq;
+			SV.set_src = (int8_t)SV.flash[k].sect[0];
+		}
+}
+
+/* Boot: every pool sector that starts a copy; per logical slot the newest
+ * good copy (a slot with only bad ones shows SAVE_CORRUPT); the newest
+ * settings block of any build (a save's or a settings copy's). */
 static void flash_scan(void)
 {
 	slot_hdr_t h;
-	uint32_t s;
+	uint32_t s, set_seq = 0;
 	int k;
 
+	memset(&h, 0, sizeof(h));
 	for (k = 0; k < FLASH_SLOTS; k++)
-		flash_entry(k, &h, SAVE_EMPTY, 0);
+		flash_entry(k, &h, SAVE_EMPTY);
+	SV.set_src = SV.set_copy = -1;
 	for (s = 0; s < SAVE_POOL_SECTORS; s++)
 	{
 		int st = read_flash(s, &h);
@@ -293,44 +368,64 @@ static void flash_scan(void)
 
 		if (st == SAVE_EMPTY)
 			continue;
-		if (h.magic == SLOT_MAGIC && h.seq > SV.seq)
+		if (h.seq > SV.seq)
 			SV.seq = h.seq;
+		if (hdr_sound(SV.img, &h) && h.hdr_bytes == FLASH_HDR && h.sect[0] == s
+			&& set_ok(SV.img + HDR_BYTES) && (SV.set_src < 0 || h.seq > set_seq))
+		{
+			set_seq = h.seq;
+			SV.set_src = (int8_t)s;
+			SV.set_copy = h.slot == SET_SLOT ? (int8_t)s : -1;
+		}
+		if (h.slot == SET_SLOT)
+			continue;
 		if (st != SAVE_OK)
 		{
 			if (h.slot < FLASH_SLOTS && SV.flash[h.slot].info.state == SAVE_EMPTY)
-				flash_entry(h.slot, &h, SAVE_CORRUPT, s);
+				flash_entry(h.slot, &h, SAVE_CORRUPT);
 			continue;
 		}
 		d = &SV.flash[h.slot];
 		if (d->info.state != SAVE_OK || h.seq > d->info.seq)
-			flash_entry(h.slot, &h, SAVE_OK, s);
+			flash_entry(h.slot, &h, SAVE_OK);
 	}
 }
 
-/* A run of n pool sectors no slot's current copy holds (except slot's own
- * when own): its first sector, -1 none. */
-static int flash_room(uint32_t n, int slot, int own)
+/* n pool sectors no slot's current copy holds (a new copy never takes its
+ * own slot's: the copy it replaces stays good until it is complete) into
+ * out, lowest first; the current settings copy's sector only as the last
+ * resort of a save (save: it carries the settings too), never for a new
+ * settings copy, and then as the header's sector (out[0], written last:
+ * the settings copy stays good while the other sector is written). 0
+ * found, -1 none (cannot happen for n <= SAVE_COPY_SECTORS: see the
+ * pool's worst case at the top). */
+static int flash_room(uint32_t n, uint8_t *out, int save)
 {
 	uint8_t used[SAVE_POOL_SECTORS];
-	uint32_t s, k, run = 0;
+	uint32_t s, k, got = 0;
 
 	memset(used, 0, sizeof(used));
 	for (k = 0; k < FLASH_SLOTS; k++)
 	{
 		const dirent_t *d = &SV.flash[k];
 
-		if (d->info.state != SAVE_OK || ((int)k == slot && own))
-			continue;
-		for (s = d->sect; s < (uint32_t)d->sect + d->nsect; s++)
-			used[s] = 1;
+		if (d->info.state == SAVE_OK)
+			for (s = 0; s < d->nsect; s++)
+				used[d->sect[s]] = 1;
 	}
-	for (s = 0; s < SAVE_POOL_SECTORS; s++)
-	{
-		run = used[s] ? 0 : run + 1;
-		if (run == n)
-			return (int)(s + 1 - n);
-	}
-	return -1;
+	if (SV.set_copy >= 0 && !used[SV.set_copy])
+		used[SV.set_copy] = 2;
+	for (s = 0; s < SAVE_POOL_SECTORS && got < n; s++)
+		if (!used[s])
+			out[got++] = (uint8_t)s;
+	for (s = 0; s < SAVE_POOL_SECTORS && got < n && save; s++)
+		if (used[s] == 2)
+		{
+			for (k = got++; k > 0; k--)
+				out[k] = out[k - 1];
+			out[0] = (uint8_t)s;
+		}
+	return got == n ? 0 : -1;
 }
 
 /* ---- Controller Pak directory --------------------------------------------------- */
@@ -473,6 +568,11 @@ static int pak_begin(int k)
 	return 0;
 }
 
+/* A Pak note is the header and the image; in the save region the image
+ * lies at FLASH_HDR (as a flash copy's), so note byte off >= HDR_BYTES is
+ * at SV.img + SET_BYTES + off. */
+#define PAK_IMG(off)	(SV.img + SET_BYTES + (off))
+
 /* One frame of the Pak write: 1 still running, 0 done, -1 failed. */
 static int pak_write_step(void)
 {
@@ -481,7 +581,7 @@ static int pak_write_step(void)
 	if (SV.poff < SV.plen)
 	{
 		n = SV.plen - SV.poff < PAK_STEP ? SV.plen - SV.poff : PAK_STEP;
-		if (sys_pak_write(SV.img + SV.poff, SV.poff, n))
+		if (sys_pak_write(PAK_IMG(SV.poff), SV.poff, n))
 			return -1;
 		SV.poff += n;
 		return 1;
@@ -509,7 +609,7 @@ static int pak_read_step(void)
 		return 1;
 	}
 	n = SV.plen - SV.poff < PAK_STEP ? SV.plen - SV.poff : PAK_STEP;
-	if (sys_pak_read(SV.pnew, SV.img + SV.poff, SV.poff, n))
+	if (sys_pak_read(SV.pnew, PAK_IMG(SV.poff), SV.poff, n))
 		return -1;
 	SV.poff += n;
 	return SV.poff < SV.plen ? 1 : img_check(&SV.hdr) == SAVE_OK ? 0 : -1;
@@ -553,19 +653,55 @@ static void field_set(settings_t *s, int id, float v)
 		memcpy(p, &v, sizeof(v));
 }
 
+/* The settings block of s's persistent fields into b (SET_BYTES). */
+static void set_block(uint8_t *b, const settings_t *s)
+{
+	uint32_t n = 0, magic = SET_MAGIC, crc;
+	int id;
+
+	memset(b, 0xFF, SET_BYTES);
+	for (id = 0; id < SET_COUNT; id++)
+	{
+		uint32_t h;
+		float v;
+
+		if (!settings_desc[id].persist)
+			continue;
+		h = name_hash(settings_desc[id].name);
+		v = field_get(s, id);
+		memcpy(b + 12 + 8 * n, &h, 4);
+		memcpy(b + 16 + 8 * n, &v, 4);
+		n++;
+	}
+	crc = sv_crc32(0, b + 12, n * 8);
+	memcpy(b, &magic, 4);
+	memcpy(b + 4, &n, 4);
+	memcpy(b + 8, &crc, 4);
+}
+
+/* A new copy's header in SV.img: the fields every copy has, the next
+ * sequence, then its CRC (the caller filled the rest first). */
+static void hdr_seal(slot_hdr_t *h, uint32_t slot, uint32_t hdr_bytes)
+{
+	h->magic = SLOT_MAGIC;
+	h->format = SAVE_FORMAT;
+	h->hdr_bytes = (uint16_t)hdr_bytes;
+	h->layout = layout_id();
+	h->seq = ++SV.seq;
+	h->slot = (uint8_t)slot;
+	h->hdr_crc = sv_crc32(0, (const uint8_t *)h + 8, HDR_BYTES - 8);
+}
+
 int settings_load(settings_t *s)
 {
-	uint32_t magic, n, crc, i;
+	uint32_t n, i;
 	settings_t t;
 
-	if (!SV.chip || flq_read(set_buf, 0, SET_BYTES))
+	if (!SV.chip || SV.set_src < 0
+		|| flq_read(set_buf, sect_off((uint32_t)SV.set_src) + HDR_BYTES, SET_BYTES)
+		|| !set_ok(set_buf))
 		return -1;
-	memcpy(&magic, set_buf, 4);
 	memcpy(&n, set_buf + 4, 4);
-	memcpy(&crc, set_buf + 8, 4);
-	if (magic != SET_MAGIC || n > (SET_BYTES - 12) / 8
-		|| crc != sv_crc32(0, set_buf + 12, n * 8))
-		return -1;
 	t = *s;
 	for (i = 0; i < n; i++)
 	{
@@ -583,37 +719,48 @@ int settings_load(settings_t *s)
 	return 0;
 }
 
+/* A settings-only copy (header + block, one sector) in a sector no slot
+ * holds, never over the current settings copy (it stays the newest block
+ * until the new one reads back). */
 int settings_store(const settings_t *s)
 {
-	uint32_t n = 0, magic = SET_MAGIC, crc;
-	int id;
+	slot_hdr_t *h = (slot_hdr_t *)SV.img;
+	uint8_t at;
 
-	if (!SV.chip || SV.st != ST_IDLE)
+	if (!SV.chip || SV.st != ST_IDLE || flash_room(1, &at, 0))
 		return -1;
-	memset(set_buf, 0xFF, sizeof(set_buf));
-	for (id = 0; id < SET_COUNT && n < (SET_BYTES - 12) / 8; id++)
-	{
-		uint32_t h;
-		float v;
-
-		if (!settings_desc[id].persist)
-			continue;
-		h = name_hash(settings_desc[id].name);
-		v = field_get(s, id);
-		memcpy(set_buf + 12 + 8 * n, &h, 4);
-		memcpy(set_buf + 16 + 8 * n, &v, 4);
-		n++;
-	}
-	crc = sv_crc32(0, set_buf + 12, n * 8);
-	memcpy(set_buf, &magic, 4);
-	memcpy(set_buf + 4, &n, 4);
-	memcpy(set_buf + 8, &crc, 4);
-	if (flq_write(0, set_buf, (12 + n * 8 + FLASH_PAGE - 1) & ~(FLASH_PAGE - 1)))
+	memset(SV.img, 0, HDR_BYTES);
+	h->nsect = 1;
+	h->sect[0] = at;
+	set_block(SV.img + HDR_BYTES, s);
+	hdr_seal(h, SET_SLOT, FLASH_HDR);
+	if (flq_write(sect_off(at), SV.img, FLASH_HDR))
 		return -1;
 	SV.st = ST_SETTINGS;
 	SV.slot = -1;
+	SV.wsect[0] = at;
+	SV.wnsect = 1;
 	SV.us_max = SV.us_sum = SV.frames = SV.frame_max = SV.held_max = 0;
 	SV.t0 = sys_time_us();
+	return 0;
+}
+
+/* The settings copy's write ended: read it back; it is the settings
+ * source only if it checks out. */
+static int settings_done(void)
+{
+	slot_hdr_t h;
+	uint32_t seq = SV.seq;
+
+	if (flq_result())
+		return -1;
+	if (read_flash(SV.wsect[0], &h) != SAVE_OK || h.slot != SET_SLOT || h.seq != seq)
+	{
+		log_printf("save: settings: read-back of sector %u does not check out\n",
+			(unsigned)SV.wsect[0]);
+		return -1;
+	}
+	SV.set_src = SV.set_copy = (int8_t)SV.wsect[0];
 	return 0;
 }
 
@@ -737,6 +884,8 @@ static void sections_save(void)
 	phy_conv_save();
 	sv_part("trans");
 	trans_save();
+	sv_part("decal");
+	decal_save();
 	sv_part("seam");
 	seam_save();
 	sv_part("style");
@@ -756,7 +905,7 @@ static int sections_load(void)
 	if (sv_expect(SV_TAG('H', 'L', '6', '4')) || eng_clock_load() || eng_load_state()
 		|| rng_load() || settings_section_load() || rec_load() || ent_load()
 		|| col_contents_load() || phy_player_load() || in_load() || phy_conv_load()
-		|| trans_load() || seam_load() || wld_style_load() || snd_load()
+		|| trans_load() || decal_load() || seam_load() || wld_style_load() || snd_load()
 		|| sv_expect(SV_TAG('G', 'A', 'M', 'E')) || game_load_globals() || rt_load_state()
 		|| sv_expect(SV_TAG('E', 'N', 'D', '!')) || ent_priv_fixup())
 		return -1;
@@ -789,7 +938,7 @@ static int snapshot(int slot)
 		log_printf("save: slot %d: %s: %lu B of state (staging %lu B)\n", slot,
 			sv_fail_reason() ? sv_fail_reason() : "too big", (unsigned long)sv_write_pos(),
 			(unsigned long)SV.raw_cap);
-		return -1;
+		return sv_fail_reason() ? SAVE_ERR : SAVE_ERR_SIZE;
 	}
 	SV.raw_len = raw;
 	log_printf("save: slot %d snapshot: settle %lu us, staging %lu us", slot,
@@ -812,85 +961,125 @@ static int snapshot(int slot)
 	strncpy(h->map, wld_map_name(phy_player_map()), sizeof(h->map) - 1);
 	strncpy(h->title, title_of(h->map), sizeof(h->title) - 1);
 	memcpy(SV.org, phy_player()->origin, sizeof(SV.org));
-	sv_code_begin(SV.img + HDR_BYTES, SAVE_IMAGE_MAX, SV.work);
+	sv_code_begin(SV.img + FLASH_HDR, SAVE_IMAGE_MAX, SV.work);
 	return 0;
 }
 
+/* The flash write of the copy in SV.img: the second sector's part first,
+ * the header's sector last (wpart), so a header on the flash always has
+ * its whole image behind it. */
+static int write_part(void)
+{
+	uint32_t first = SV.wlen < SAVE_SECTOR_BYTES ? SV.wlen : SAVE_SECTOR_BYTES;
+
+	if (SV.wnsect > 1 && !SV.wpart)
+	{
+		SV.wpart = 1;
+		return flq_write(sect_off(SV.wsect[1]), SV.img + SAVE_SECTOR_BYTES,
+			SV.wlen - SAVE_SECTOR_BYTES);
+	}
+	SV.wpart = 2;
+	return flq_write(sect_off(SV.wsect[0]), SV.img, first);
+}
+
 /* The image is coded: the rest of its header (the snapshot wrote what
- * describes the state), then the write to list index slot. */
+ * describes the state), the settings block (flash), then the write to
+ * list index slot. 0 started, else SAVE_ERR_*. */
 static int seal(int slot)
 {
 	slot_hdr_t *h = (slot_hdr_t *)SV.img;
-	uint32_t raw = SV.raw_len, n = sv_code_end(), nsect;
-	int at;
+	uint32_t raw = SV.raw_len, n = sv_code_end(), nsect, pak_max = SAVE_PAK_IMAGE_MAX;
+	int flash = slot < FLASH_SLOTS;
 
 	if (!n)
 	{
 		log_printf("save: slot %d: too big: %lu B of state -> %lu B image (at most %lu B)\n",
 			slot, (unsigned long)raw, (unsigned long)sv_code_need(),
 			(unsigned long)SAVE_IMAGE_MAX);
-		return -1;
+		return SAVE_ERR_SIZE;
 	}
-	nsect = (HDR_BYTES + n + SAVE_SECTOR_BYTES - 1) / SAVE_SECTOR_BYTES;
-	at = slot < FLASH_SLOTS ? flash_room(nsect, slot, 0) : 0;
-	if (at < 0 && slot != 0)
+#if defined(HL64_HOST) && defined(HL64_TEST)
+	/* test/save/pakfail.sh: a smaller note cap, so a scene's save is too big */
+	if (getenv("HL64_HOST_PAK_IMAGE_MAX"))
+		pak_max = (uint32_t)strtoul(getenv("HL64_HOST_PAK_IMAGE_MAX"), NULL, 10);
+#endif
+	if (!flash && n > pak_max)
 	{
-		/* a manual slot with no free run: over its own copy */
-		at = flash_room(nsect, slot, 1);
-		if (at >= 0)
-		{
-			log_printf("save: slot %d: no free run of %lu sectors: over its own copy\n", slot,
-				(unsigned long)nsect);
-			SV.flash[slot].info.state = SAVE_EMPTY;
-		}
+		log_printf("save: slot %d: too big for the Controller Pak: %lu B of state -> %lu B "
+			"image (a note holds %lu B)\n", slot, (unsigned long)raw, (unsigned long)n,
+			(unsigned long)pak_max);
+		return SAVE_ERR_PAK_SIZE;
 	}
-	if (at < 0)
+	nsect = (FLASH_HDR + n + SAVE_SECTOR_BYTES - 1) / SAVE_SECTOR_BYTES;
+#if defined(HL64_HOST) && defined(HL64_TEST)
+	/* test/save/flashcut.sh: every Flash save at its largest (2 sectors) */
+	if (flash && getenv("HL64_HOST_SAVE_SECTORS"))
+		nsect = SAVE_COPY_SECTORS;
+#endif
+	if (flash && flash_room(nsect, h->sect, 1))
 	{
-		log_printf("save: slot %d: no free run of %lu sectors\n", slot, (unsigned long)nsect);
-		return -1;
+		log_printf("save: slot %d: no room for %lu sectors\n", slot, (unsigned long)nsect);
+		return SAVE_ERR;
 	}
-	h->magic = SLOT_MAGIC;
-	h->format = SAVE_FORMAT;
-	h->hdr_bytes = HDR_BYTES;
-	h->layout = layout_id();
-	h->seq = ++SV.seq;
 	h->raw_bytes = raw;
 	h->img_bytes = n;
-	h->img_crc = sv_crc32(0, SV.img + HDR_BYTES, n);
-	h->slot = (uint8_t)(slot < FLASH_SLOTS ? (uint32_t)slot : PAK_SLOT);
-	h->nsect = (uint8_t)(slot < FLASH_SLOTS ? nsect : 0);
-	h->hdr_crc = sv_crc32(0, SV.img + 8, HDR_BYTES - 8);
-	log_printf("save: slot %d seq %lu: %lu B state -> %lu B image (%lu%%, crc %08lx), %s %d+%lu, "
-		"%s t=%.3f org %.1f %.1f %.1f\n", slot, (unsigned long)h->seq, (unsigned long)raw,
-		(unsigned long)n, (unsigned long)(100u * n / (raw ? raw : 1)), (unsigned long)h->img_crc,
-		slot < FLASH_SLOTS ? "sectors" : "Pak entry",
-		slot < FLASH_SLOTS ? at + (int)POOL_FIRST : slot - FLASH_SLOTS,
-		(unsigned long)(slot < FLASH_SLOTS ? nsect : 1), h->map, (double)h->game_time,
+	h->img_crc = sv_crc32(0, SV.img + FLASH_HDR, n);
+	h->nsect = (uint8_t)(flash ? nsect : 0);
+	if (flash)
+		set_block(SV.img + HDR_BYTES, &settings);
+	else
+		memset(h->sect, 0, sizeof(h->sect));
+	hdr_seal(h, flash ? (uint32_t)slot : PAK_SLOT, flash ? FLASH_HDR : HDR_BYTES);
+	log_printf("save: slot %d seq %lu: %lu B state -> %lu B image (%lu%%, crc %08lx), ", slot,
+		(unsigned long)h->seq, (unsigned long)raw, (unsigned long)n,
+		(unsigned long)(100u * n / (raw ? raw : 1)), (unsigned long)h->img_crc);
+	if (flash && nsect > 1)
+		log_printf("sectors %u,%u", (unsigned)h->sect[0], (unsigned)h->sect[1]);
+	else if (flash)
+		log_printf("sector %u", (unsigned)h->sect[0]);
+	else
+		log_printf("Pak entry %d", slot - FLASH_SLOTS);
+	log_printf(", %s t=%.3f org %.1f %.1f %.1f\n", h->map, (double)h->game_time,
 		(double)SV.org[0], (double)SV.org[1], (double)SV.org[2]);
-	if (slot >= FLASH_SLOTS)
-		return pak_begin(slot - FLASH_SLOTS);
-	SV.wsect = (uint8_t)at;
+	if (!flash)
+		return pak_begin(slot - FLASH_SLOTS) ? SAVE_ERR : 0;
+	memcpy(SV.wsect, h->sect, sizeof(SV.wsect));
 	SV.wnsect = (uint8_t)nsect;
-	return flq_write(sect_off((uint32_t)at), SV.img, HDR_BYTES + n);
+	SV.wlen = FLASH_HDR + n;
+#if defined(HL64_HOST) && defined(HL64_TEST)
+	if (nsect > 1 && SV.wlen <= SAVE_SECTOR_BYTES)
+	{
+		memset(SV.img + SV.wlen, 0xA5, SAVE_SECTOR_BYTES + FLASH_PAGE - SV.wlen);
+		SV.wlen = SAVE_SECTOR_BYTES + FLASH_PAGE;
+	}
+#endif
+	SV.wpart = 0;
+	return write_part() ? SAVE_ERR : 0;
 }
 
 /* The write ended: read it back; the slot's directory entry is the new
- * copy only if that checks out. */
+ * copy only if that checks out, and its settings block is then the
+ * newest (a settings copy it replaces is free). */
 static int write_done(void)
 {
 	slot_hdr_t h;
 	uint32_t seq = SV.seq;
+	int k;
 
-	if (flq_result())
-		return -1;
-	if (read_flash(SV.wsect, &h) != SAVE_OK || h.seq != seq || h.slot != (uint32_t)SV.slot)
+	if (!flq_result() && read_flash(SV.wsect[0], &h) == SAVE_OK && h.seq == seq
+		&& h.slot == (uint32_t)SV.slot)
 	{
-		log_printf("save: slot %d: read-back of sector %u does not check out\n", SV.slot,
-			(unsigned)(SV.wsect + POOL_FIRST));
-		return -1;
+		flash_entry(SV.slot, &h, SAVE_OK);
+		SV.set_src = (int8_t)SV.wsect[0];
+		SV.set_copy = -1;
+		return 0;
 	}
-	flash_entry(SV.slot, &h, SAVE_OK, SV.wsect);
-	return 0;
+	log_printf("save: slot %d: the write to sector %u does not check out\n", SV.slot,
+		(unsigned)SV.wsect[0]);
+	for (k = 0; k < SV.wnsect; k++)
+		if (SV.wsect[k] == (uint8_t)SV.set_copy || SV.wsect[k] == (uint8_t)SV.set_src)
+			set_src_slots();
+	return SAVE_ERR;
 }
 
 /* ---- load --------------------------------------------------------------------- */
@@ -1137,7 +1326,7 @@ static int autosave_due(void)
 /* The image in SV.img read and checked: decode it over the next frames. */
 static void load_begin(void)
 {
-	sv_decode_begin(SV.img + HDR_BYTES, SV.hdr.img_bytes, SV.raw, SV.raw_cap);
+	sv_decode_begin(SV.img + FLASH_HDR, SV.hdr.img_bytes, SV.raw, SV.raw_cap);
 	SV.st = ST_DECODE;
 }
 
@@ -1202,10 +1391,13 @@ int save_frame(void)
 	switch (SV.st)
 	{
 	case ST_END:
-		log_printf("save: %s slot %d %s: %lu frames, worst step %lu us, longest held frame %lu us, "
-			"longest frame %lu us, %lu ms\n", SV.what, SV.slot, SV.result ? "FAILED" : "ok",
-			(unsigned long)SV.frames, (unsigned long)SV.us_max, (unsigned long)SV.held_max,
-			(unsigned long)SV.frame_max, (unsigned long)((t0 - SV.t0) / 1000u));
+		log_printf("save: %s slot %d %s", SV.what, SV.slot, SV.result ? "FAILED" : "ok");
+		if (SV.result)
+			log_printf(" (%d)", SV.result);
+		log_printf(": %lu frames, worst step %lu us, longest held frame %lu us, longest frame %lu us, "
+			"%lu ms\n", (unsigned long)SV.frames, (unsigned long)SV.us_max,
+			(unsigned long)SV.held_max, (unsigned long)SV.frame_max,
+			(unsigned long)((t0 - SV.t0) / 1000u));
 		SV.st = ST_IDLE;
 		if (SV.muted)
 		{
@@ -1228,16 +1420,16 @@ int save_frame(void)
 			open_wait_step();
 			break;
 		}
-		if (snapshot(SV.slot))
-			op_end(-1, "save");
+		if ((r = snapshot(SV.slot)) != 0)
+			op_end(r, "save");
 		else
 			SV.st = ST_CODE;
 		break;
 	case ST_CODE:
 		if (sv_code_step(CODE_BUDGET_US))
 			break;
-		if (seal(SV.slot))
-			op_end(-1, "save");
+		if ((r = seal(SV.slot)) != 0)
+			op_end(r, "save");
 		else
 			SV.st = SV.slot < FLASH_SLOTS ? ST_WRITE : ST_PAK_WRITE;
 		break;
@@ -1274,11 +1466,18 @@ int save_frame(void)
 			SV.st = SV.next;
 		break;
 	case ST_WRITE:
+		flq_step(FLASH_BUDGET_US);
+		if (flq_busy())
+			break;
+		/* the second sector is written: the header's next */
+		if (SV.wpart == 1 && !flq_result() && !write_part())
+			break;
+		op_end(write_done(), "save");
+		break;
 	case ST_SETTINGS:
 		flq_step(FLASH_BUDGET_US);
 		if (!flq_busy())
-			op_end(SV.st == ST_WRITE ? write_done() : flq_result(),
-				SV.st == ST_WRITE ? "save" : "settings");
+			op_end(settings_done(), "settings");
 		break;
 	case ST_PAK_WRITE:
 		r = SV.pgen == SV.pak_gen ? pak_write_step() : -1;
@@ -1292,7 +1491,7 @@ int save_frame(void)
 	case ST_LOAD_READ:
 		hold = 1;
 		SV.auto_ask = 0;
-		if (read_flash(SV.flash[SV.slot].sect, &SV.hdr) != SAVE_OK)
+		if (read_flash(SV.flash[SV.slot].sect[0], &SV.hdr) != SAVE_OK)
 		{
 			SV.flash[SV.slot].info.state = SAVE_CORRUPT;
 			op_end(-1, "load");
@@ -1366,8 +1565,19 @@ static int cmd_load(const dbg_cmd_t *c)
 	return save_load((int)c->arg[0].u) ? 1 : 0;
 }
 
+/* `flash N`: 0 the probe, 1 the self-test (flq.c); 2 stores the settings
+ * (a settings-only copy; busy: the command comes back next frame). */
 static int cmd_flash(const dbg_cmd_t *c)
 {
+	if (c->arg[0].u == 2)
+	{
+		dbg_cmd_t q = *c;
+
+		if (!save_busy())
+			return settings_store(&settings) ? 1 : 0;
+		q.frame = dbg_trace_frame() + 1;
+		return dbg_push(&q) ? 1 : 0;
+	}
 	return flq_dbg_flash(c->arg[0].u) ? 1 : 0;
 }
 
@@ -1377,6 +1587,7 @@ void save_init(void)
 
 	memset(&SV, 0, sizeof(SV));
 	SV.slot = -1;
+	SV.set_src = SV.set_copy = -1;
 	SV.pak_acc = 0xFF;
 	SV.pak_st = SAVE_PAK_ABSENT;
 	SV.img = mem_region(MEM_SAVE);
@@ -1395,7 +1606,8 @@ void save_init(void)
 		for (s = 0; s < FLASH_SLOTS; s++)
 			log_printf(" %s", SV.flash[s].info.state == SAVE_OK ? SV.flash[s].info.map
 				: SV.flash[s].info.state == SAVE_EMPTY ? "empty" : "corrupt");
-		log_printf("\n");
+		log_printf(", settings %s\n", SV.set_src < 0 ? "none" : SV.set_copy >= 0
+			? "copy" : "in a save");
 	}
 	else
 		log_printf("save: no FlashRAM: Flash slots and autosaves off\n");

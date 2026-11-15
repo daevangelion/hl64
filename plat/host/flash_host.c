@@ -17,6 +17,11 @@
  * here, HL64_HOST_FLASH_BUSY=E,P makes the chip report busy for the first
  * E polls of an erase and P polls of a program (counted, not timed, so a
  * run stays deterministic). Default 0,0: every poll reports the end.
+ *
+ * Power-cut tests (test/save/flashcut.sh): HL64_HOST_FLASH_CUT=N applies
+ * the Nth erase or program since boot only halfway (the first half of the
+ * sector or page) and exits at once with status 3, as a power cut in the
+ * middle of that operation.
  */
 #include <fcntl.h>
 #include <stdio.h>
@@ -118,6 +123,29 @@ int sys_flash_read(void *dst, uint32_t off, uint32_t len)
 	return pread(fl_fd, dst, len, off) == (ssize_t)len ? 0 : -1;
 }
 
+static unsigned	fl_ops;
+
+/* Operation HL64_HOST_FLASH_CUT: half of it lands (n bytes at off), then
+ * the power goes. */
+static void power_cut(const void *src, uint32_t n, uint32_t off)
+{
+	static long cut = -1;
+
+	if (cut < 0)
+	{
+		const char *c = getenv("HL64_HOST_FLASH_CUT");
+
+		cut = c ? strtol(c, NULL, 10) : 0;
+	}
+	if (cut <= 0 || ++fl_ops < (unsigned long)cut)
+		return;
+	if (pwrite(fl_fd, src, n / 2, (off_t)off) != (ssize_t)(n / 2))
+		log_printf("flash: power cut: half write failed\n");
+	log_printf("flash: power cut in operation %u\n", fl_ops);
+	log_flush();
+	_exit(3);
+}
+
 int sys_flash_erase(uint32_t sector)
 {
 	static uint8_t blank[FL_SECTOR];
@@ -125,6 +153,7 @@ int sys_flash_erase(uint32_t sector)
 	if (fl_fd < 0 || fl_op || sector >= FL_SECTORS)
 		return -1;
 	memset(blank, 0xFF, sizeof(blank));
+	power_cut(blank, sizeof(blank), sector * FL_SECTOR);
 	if (pwrite(fl_fd, blank, sizeof(blank), (off_t)sector * FL_SECTOR) != (ssize_t)sizeof(blank))
 		return -1;
 	fl_op = 1;
@@ -143,6 +172,7 @@ int sys_flash_program(uint32_t page, const void *src)
 		return -1;
 	for (i = 0; i < FL_PAGE; i++)
 		cur[i] &= ((const uint8_t *)src)[i];
+	power_cut(cur, sizeof(cur), page * FL_PAGE);
 	if (pwrite(fl_fd, cur, sizeof(cur), (off_t)page * FL_PAGE) != (ssize_t)sizeof(cur))
 		return -1;
 	fl_op = 1;
