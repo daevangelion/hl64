@@ -132,8 +132,18 @@ align16(largest `DECL`) + `HL64_FX_DECALS` × `HL64_FX_DECAL_VERTS` × 10 B
 
 - Classes: only `hle_classes[]` (what the native game spawns); others are
   dropped (`info_node`, `env_beam`, `env_bubbles`, `env_sound`,
-  `trigger_autosave`, `func_tank*`, `func_tracktrain`, …). `infodecal`
+  `trigger_autosave`, `func_tank*`, …). `infodecal`
   and `env_glow` are kept: GoldSrc shows placed decals and glows.
+  - `func_tracktrain` (HLSDK `CFuncTrackTrain`, game/hl/trains.c): physical
+    record. Keys: `wheels`, `height`, `startspeed`, `sounds`, `volume`,
+    `bank`, `speed` as the map sets them, and the cook-made `#trackorigin`
+    (`HLE_KV`, hl_entcook.h `hle_trackorigin`): the origin of the
+    `path_track` its `target` names, raised by `height`, where its Find
+    puts it 0.1 s after spawn. The record's wake box is that point ± the
+    model's largest extent (engine/ent/rec.c `cooked_bounds`), not the
+    model's storage place; a fresh one is spared the distance release for
+    `REC_TRACK_HOLD` (0.5 s), else the release pass would dehydrate it at
+    the storage place before its Find, out of reach of its wake box.
   - `infodecal` (HLSDK `CDecal`): physical record (class flags 0), every
     one kept. Keys: `texture` (`HLE_KS`, keys.def `TEXTURE`; id = decal id,
     above; `rec_key_decal`), `origin` (`HLE_KV`); the targetname is the

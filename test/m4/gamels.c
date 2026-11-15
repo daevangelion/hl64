@@ -187,6 +187,8 @@ static const struct { const char *name; int carry; } hlsdk_carry[] = {
 	{ "info_landmark", 0 }, { "info_player_start", 0 }, { "info_teleport_destination", 0 },
 	{ "scripted_sequence", 0 }, { "aiscripted_sequence", 0 }, { "grenade", 1 },
 	{ "weaponbox", 1 },
+	/* CFuncTrackTrain: (CBaseEntity & ~FCAP_ACROSS_TRANSITION) | FCAP_DIRECTIONAL_USE */
+	{ "func_tracktrain", 0 },
 };
 
 static int expect_carry(const char *n)
@@ -709,6 +711,18 @@ static void quiesce(int e)
 		*(int32_t *)((uint8_t *)ent_priv(e) + sv_table_of(e)->f[3].ofs) = 0;	/* m_iOn */
 	if (ent_cv(e)->movetype == MOVETYPE_FOLLOW)
 		ent_set_movetype(e, MOVETYPE_NONE);
+	if (ent_idc(e)->cls == CLS_PATH_TRACK)
+	{
+		/* a path_track waits for its map's track trains to stop
+		 * (trains.c CPathTrack_quiet) */
+		static const float z[3];
+
+		for (r = -1; (r = ent_next_class(r, CLS_FUNC_TRACKTRAIN, ent_idc(e)->layer)) >= 0;)
+		{
+			PRIV(CBaseEntity, r)->speed = 0;
+			ent_set_velocity(r, z);
+		}
+	}
 	for (r = ENT_PLAYER; r < HL64_MAX_ENTITIES; r++)
 		if (r != e && ent_is_live(r))
 		{

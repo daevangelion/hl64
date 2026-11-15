@@ -196,6 +196,9 @@ suite ai_layer.c ai-layer bash -c 'make --no-print-directory BUILD_DIR="$1" aila
 suite brushbox.py brushbox bash -c 'make --no-print-directory BUILD_DIR="$1" brushboxtest >/dev/null \
 	&& python3 test/m5/brushbox.py "$1/host/hl64-brushbox" --root "$2" --fixtures "$3"' \
 	_ "$BUILD_DIR" "$CONTENT" "$FIX"
+# the Hazard Course end tram (test/m5/tram-ride.route at GoldSrc's 0.01 s
+# frames): controls, speed notches, dead end and rider as P-tracktrain's
+suite tram.py tram python3 test/m5/tram.py "$B/hl64-host" --root "$CONTENT" --fixtures "$FIX"
 for f in "$ROOT"/test/m5/*.py "$ROOT"/test/m5/*.sh; do
 	[[ -e "$f" ]] || continue
 	[[ "$RAN" == *" $(basename "$f") "* ]] || die "test/m5/$(basename "$f") is not wired into test/run/m5.sh"

@@ -550,6 +550,41 @@ waitmap t0a0d 300
 -duck
 god 1
 stats t0a0d
+# The end tram (hl64, not in the old walk; no checkpoint verbs, so the
+# old-tree checkpoint oracle still applies): func_tracktrain *23
+# (trainingtrain) waits on path_track train1 (184 -1076 -104, height 40).
+# The player stands on the platform until the tram is there, boards it,
+# takes the controls (+use), pushes forward four times (50, 100, 150,
+# 200 u/s) and rides to the dead end, train1a at y -2524 (GoldSrc: fixture
+# physics-movetypes/P-tracktrain t0a0d `drive`, whose 0.01 s frames stop
+# it 18 u short: test/m5/tram-ride.route), through the donemm
+# trigger_once (its end section fires 10 s later, after this visit's
+# pass). test/scenes/hazard-tram.route is this ride with shots.
+setpos 176 -808 -23 0 270
+wait 1
+setpos 184 -1076 -27 0 270
+wait 0.5
++use
+wait 0.1
+-use
+wait 0.2
++forward
+wait 0.1
+-forward
+wait 0.2
++forward
+wait 0.1
+-forward
+wait 0.2
++forward
+wait 0.1
+-forward
+wait 0.2
++forward
+wait 0.1
+-forward
+waitnear 184 -2524 -28 1 15
+wait 0.5
 -duck
 setpos 187 -2446 -43 0 0
 wait 0.4

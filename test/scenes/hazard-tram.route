@@ -8,8 +8,9 @@
 # controls`, the HUD's train indicator at stop), pushes forward four
 # times (50, 100, 150, 200 u/s, HLSDK CFuncTrackTrain::Use USE_SET) and
 # rides south to the dead end (GoldSrc: fixture physics-movetypes/
-# P-tracktrain t0a0d `drive`: 200 u/s, 100 u every 0.5 s, stop at
-# 184 -2506 -64, the rider at the train's origin + 36.03 u). Shots
+# P-tracktrain t0a0d `drive`: 200 u/s, 100 u every 0.5 s, the rider at
+# the train's origin + 36.03 u; at its 0.01 s frames the tram stops 18 u
+# short of train1a, at 1/30 s on it: 184 -2524 -64). Shots
 # `aboard` (on the tram at train1, looking down at its deck), `moving-1`
 # .. `moving-3` (along the ride, looking ahead and down at the deck), `end`
 # (at the dead end).
@@ -51,7 +52,7 @@ waitnear 184 -1800 -28 120 10
 shot moving-2
 waitnear 184 -2300 -28 120 10
 shot moving-3
-waitnear 184 -2506 -28 4 15
+waitnear 184 -2524 -28 1 15
 wait 0.5
 shot end
 stats end

@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# Regression scene (test/run/m5.sh "scenes"; test/m5/tram.py runs it at
+# the fixture's 0.01 s frames against GoldSrc): the Hazard Course end tram.
+# t0a0d's func_tracktrain *23 (trainingtrain) waits at path_track train1
+# (184 -1076 -104, height 40: origin 184 -1076 -64, yaw 450). The player
+# put on its deck stands there (origin + 36.03), takes the controls with
+# +use and pushes forward four times on the fixture's schedule (GoldSrc:
+# physics-movetypes/P-tracktrain t0a0d `drive`, use at frame 20, forward
+# at 50, 150, 170, 190: 50, 100, 150, 200 u/s); the tram carries them
+# south to the dead end, train1a (184 -2524 -104). At 0.01 s frames it
+# stops 18 u short, at 184 -2506 -64 (the Next whose 20 u look-ahead
+# lands exactly on train1a sets the path there; the next one finds no
+# next node and stops in place), at 1/30 s on train1a. Before
+# engine/ent/rec.c held a fresh #trackorigin record, the release pass
+# dehydrated *23 at its storage place (1341 -848 476) before its Find
+# put it on the track: the player fell through onto the rail, never took
+# the controls, and the tram never left.
+startmap t0a0d
+waitmap t0a0d 60
+god 1
+setpos 176 -808 -23 0 270
+wait 1
+setpos 184 -1076 -27 0 270
+wait 0.2
+stats aboard
++use
+wait 0.01
+-use
+wait 0.27
++forward
+wait 0.01
+-forward
+wait 0.97
++forward
+wait 0.01
+-forward
+wait 0.17
++forward
+wait 0.01
+-forward
+wait 0.17
++forward
+wait 0.01
+-forward
+waitclass func_tracktrain 184 -2515 -64 10 15
+wait 0.5
+stats end
+waitnear 184 -2515 -28 10 1
+pass

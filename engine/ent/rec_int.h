@@ -51,6 +51,10 @@ enum {
 #define REC_PUSH_HOLD		1.0	/* s release leaves an entity a pusher woke
 					   that found no floor (rec_hold_falling):
 					   a 256 u fall at sv_gravity 800 is 0.8 s */
+#define REC_TRACK_HOLD		0.5	/* s release leaves a fresh `#trackorigin`
+					   record's entity (a func_tracktrain): its
+					   Find moves it from the model's storage
+					   place onto its track 0.1 s after spawn */
 #define REC_BUDGET_US		2000u	/* playable builds: pump wall time per frame */
 #define REC_BUDGET_HOST		8	/* HL64_TEST builds (host and cart): records
 					   per frame, deterministic (K10) */

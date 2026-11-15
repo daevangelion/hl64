@@ -11,12 +11,13 @@ its submodel `*N`):
 
   box     mins / maxs equal (the model's bounds 1 u wider on every side:
           col_model_bounds), absmin / absmax - origin equal (the link's
-          own 1 u);
+          own 1 u; a func_tracktrain's after 3 s, turned onto its track);
   spawn   the origin before the first frame equal (a START_OPEN door at
           its open end: HLSDK's travel size - 2 - lip), func_pushable
-          excepted (it spawns 1 u up and drops);
+          (it spawns 1 u up and drops) and func_tracktrain (its Find moves
+          it onto its track 0.1 s later) excepted;
   settled the origin after 3 s equal for every one still live (the
-          pushables on the floor).
+          pushables on the floor, the track trains on their track).
 
 Brush classes the engine does not spawn (cooked into the world or not
 ported) are listed, not failed.
@@ -35,6 +36,9 @@ import sys
 MAPS = "hldemo1,hldemo2,hldemo3,t0a0,t0a0a,t0a0b,t0a0b1,t0a0b2,t0a0c,t0a0d"
 CAPTURE = "area-links-and-touch/A-shape"
 TOL = 0.01
+# spawned elsewhere, moved by the first frames: func_pushable 1 u up and
+# dropped, func_tracktrain onto its track by its Find (0.1 s)
+MOVE_AT_START = ("func_pushable", "func_tracktrain")
 
 
 def ours(binary, root, m):
@@ -92,18 +96,23 @@ def main():
             for k in ("mins", "maxs"):
                 if d[k] != [float(x) for x in g[k]]:
                     fails.append(f"{m} *{sub} {c}: {k} {d[k]} vs GoldSrc {g[k]}")
+            # a track train's Find puts it on its track (turned) 0.1 s
+            # after spawn: its abs box as GoldSrc's after the settle
+            ab = last.get(sub) if c == "func_tracktrain" else d
             for k in ("absmin", "absmax"):
-                if differs([x - o for x, o in zip(d[k], d["o"])], [x - o for x, o in zip(g[k], g["o"])]):
-                    fails.append(f"{m} *{sub} {c}: {k} - origin {d[k]} - {d['o']} vs GoldSrc "
+                if ab is None:
+                    break
+                if differs([x - o for x, o in zip(ab[k], ab["o"])], [x - o for x, o in zip(g[k], g["o"])]):
+                    fails.append(f"{m} *{sub} {c}: {k} - origin {ab[k]} - {ab['o']} vs GoldSrc "
                                  f"{g[k]} - {g['o']}")
-            if c != "func_pushable" and differs(d["o"], g["o"]):
+            if c not in MOVE_AT_START and differs(d["o"], g["o"]):
                 fails.append(f"{m} *{sub} {c}: spawn origin {d['o']} vs GoldSrc {g['o']}")
             e = last.get(sub)
             if e is not None:
                 settled += 1
                 if differs(e["o"], g["o"]):
                     fails.append(f"{m} *{sub} {c}: origin after 3 s {e['o']} vs GoldSrc {g['o']}")
-            elif c == "func_pushable":
+            elif c in MOVE_AT_START:
                 fails.append(f"{m} *{sub} {c}: not live after 3 s")
     for c in sorted(per):
         print(f"brushbox class {c}: {per[c]}")

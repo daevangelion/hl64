@@ -491,6 +491,11 @@ static int hydrate(rmap_t *m, int ri, int reserve)
 	/* 6.4: a released record respawns, then takes its delta */
 	if (dry && ent_is_live(e))
 		rehydrate_from_store(e, m->map, r->lump, 0);
+	/* a fresh tracktrain's linked box is still its model's storage place
+	 * (its Find puts it on the track 0.1 s later): the release pass would
+	 * dehydrate it there, beyond its #trackorigin wake box */
+	else if (ent_is_live(e) && rkey(m, ri, RK_TRACKORIGIN))
+		R.retry[e] = (float)(eng_time() + REC_TRACK_HOLD);
 	twin_mark_live(gid);
 	R.st.hydrated++;
 	return e;
@@ -1603,7 +1608,8 @@ static void cooked_bounds(const rmap_t *m, int ri, int16_t lo[3], int16_t hi[3])
 {
 	const wld_layer_t *L = wld_layer(m->slot);
 	const hle_key_t *so = rkey(m, ri, RK_TRACKORIGIN);
-	const hle_key_t *key = so && rkind(m, so) == HLE_KV ? so : rkey(m, ri, RK_ORIGIN);
+	int track = so && rkind(m, so) == HLE_KV;
+	const hle_key_t *key = track ? so : rkey(m, ri, RK_ORIGIN);
 	const hle_key_t *mk = rkey(m, ri, RK_MODEL);
 	float org[3] = { 0, 0, 0 }, l[3], h[3];
 	int k;
@@ -1624,8 +1630,8 @@ static void cooked_bounds(const rmap_t *m, int ri, int16_t lo[3], int16_t hi[3])
 			r = fmaxf(r, fmaxf(fabsf(mn[k]), fabsf(mx[k])));
 		for (k = 0; k < 3; k++)
 		{
-			l[k] += (key == so ? -r : mn[k]) - 1;
-			h[k] += (key == so ? r : mx[k]) + 1;
+			l[k] += (track ? -r : mn[k]) - 1;
+			h[k] += (track ? r : mx[k]) + 1;
 		}
 	}
 	for (k = 0; k < 3; k++)

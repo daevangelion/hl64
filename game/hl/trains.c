@@ -30,7 +30,7 @@
  * path_track its own name. Link wakes nothing: a path_track that
  * hydrates takes its m_pprevious from the live path_tracks linking to it
  * (the GoldSrc map-start order: the one latest in the map wins), and the
- * path_tracks of a map stay while one of its track trains lives
+ * path_tracks of a map stay while one of its track trains moves
  * (CPathTrack_quiet). CFuncTrackTrain::NearestPath / OverrideReset
  * (GoldSrc level transitions), SetTrack / SetControls (func_trackchange,
  * func_traincontrols) are not ported: no Uplink / Hazard Course map has
@@ -61,7 +61,8 @@ typedef struct {
 typedef struct {
 	CBASEENTITY_FIELDS
 	name_t		m_ppath;		/* targetname (above) */
-	uint16_t	pad;
+	uint16_t	m_sentSound;		/* hl64: the last train event's pitch |
+						   volume << 6 bits (UpdateSound; not saved) */
 	float		m_length;
 	float		m_height;
 	float		m_speed;
@@ -361,11 +362,16 @@ static int LookAhead(int self, float origin[3], float dist, int move)
 	return pcurrent;
 }
 
-/* a path_track stays while a track train of its map lives: the train
- * holds it by name and would wake it every frame */
+/* a path_track stays while a track train of its map moves: the train
+ * holds it by name, and its Next (every frame) would wake it again */
 static int CPathTrack_quiet(int e)
 {
-	return ent_next_class(-1, CLS_FUNC_TRACKTRAIN, ent_idc(e)->layer) < 0;
+	int t = -1;
+
+	while ((t = ent_next_class(t, CLS_FUNC_TRACKTRAIN, ent_idc(e)->layer)) >= 0)
+		if (Train(t)->speed != 0)
+			return 0;
+	return 1;
 }
 
 static int CPathTrack_ObjectCaps(int e)
@@ -470,15 +476,23 @@ static void UpdateSound(int e)
 		EMIT_SOUND_DYN(e, CHAN_ITEM, RESID(TTRAIN_START1), p->m_flVolume, ATTN_NORM, 0, 100);
 		EMIT_SOUND_DYN(e, CHAN_STATIC, p->noise, p->m_flVolume, ATTN_NORM, 0, (int)flpitch);
 		p->m_soundPlaying = 1;
+		p->m_sentSound = 0xFFFF;
 	}
 	else
 	{
 		/* the client's train event: pitch in 6 bits of tens, volume in
-		 * 6 bits of 1/40 */
-		int pitch = 10 * ((int)(flpitch / 10.0f) & 0x3f);
-		float vol = (float)((int)(p->m_flVolume * 40.0f) & 0x3f) / 40.0f;
+		 * 6 bits of 1/40. GoldSrc sends it every Next (every frame while
+		 * moving); hl64 changes the loop only when the bits differ from
+		 * the last event's (the same bits set the same pitch / volume) */
+		int pbits = (int)(flpitch / 10.0f) & 0x3f;
+		int vbits = (int)(p->m_flVolume * 40.0f) & 0x3f;
+		uint16_t sent = (uint16_t)(pbits | vbits << 6);
 
-		EMIT_SOUND_DYN(e, CHAN_STATIC, p->noise, vol, ATTN_NORM, SND_CHANGE_PITCH, pitch);
+		if (sent == p->m_sentSound)
+			return;
+		p->m_sentSound = sent;
+		EMIT_SOUND_DYN(e, CHAN_STATIC, p->noise, (float)vbits / 40.0f, ATTN_NORM,
+			SND_CHANGE_PITCH, 10 * pbits);
 	}
 }
 
@@ -519,7 +533,8 @@ void CFuncTrackTrain_Use(int e, int activator, int caller, int use_type, float v
 			delta = 0;
 		p->speed = p->m_speed * delta;
 		CFuncTrackTrain_Next(e);
-		log_printf("game: train %d speed %.2f\n", e, (double)p->speed);
+		log_printf("game: train %d speed %.2f lt=%.2f\n", e, (double)p->speed,
+			(double)ent_tm(e)->ltime);
 	}
 }
 
@@ -674,7 +689,7 @@ void CFuncTrackTrain_DeadEnd(int e)
 	}
 	ent_set_velocity(e, g_vecZero);
 	ent_set_avelocity(e, g_vecZero);
-	log_printf("game: train %d dead end\n", e);
+	log_printf("game: train %d dead end lt=%.2f\n", e, (double)ent_tm(e)->ltime);
 	if (pTrack >= 0 && CBase(pTrack)->netname != NAME_NONE)
 		FireTargets(CBase(pTrack)->netname, e, e, USE_TOGGLE, 0);
 }
