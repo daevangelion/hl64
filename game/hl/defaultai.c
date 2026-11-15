@@ -288,6 +288,16 @@ const Schedule_t slTakeCoverFromEnemy[] = {
 	SCHED(tlTakeCoverFromEnemy, bits_COND_NEW_ENEMY, 0, "tlTakeCoverFromEnemy")
 };
 
+/* saved games: append only (monster.h sched_list_t) */
+SCHED_LIST(sched_defaultai, slFail, slIdleStand, slIdleTrigger, slIdleWalk, slAmbush, slActiveIdle,
+	slWakeAngry, slAlertFace, slAlertSmallFlinch, slAlertStand, slInvestigateSound,
+	slCombatStand, slCombatFace, slStandoff, slArmWeapon, slReload, slRangeAttack1,
+	slRangeAttack2, slPrimaryMeleeAttack, slSecondaryMeleeAttack, slSpecialAttack1,
+	slSpecialAttack2, slChaseEnemy, slChaseEnemyFailed, slSmallFlinch, slDie, slVictoryDance,
+	slBarnacleVictimGrab, slBarnacleVictimChomp, slError, slWalkToScript, slRunToScript,
+	slWaitScript, slFaceScript, slCower, slTakeCoverFromOrigin, slTakeCoverFromBestSound,
+	slTakeCoverFromEnemy);
+
 const Schedule_t *Mon_ScheduleError(void) { return &slError[0]; }
 
 const Schedule_t *CBaseMonster_GetScheduleOfType(int e, int type)

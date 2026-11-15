@@ -20,6 +20,7 @@
  * animations).
  */
 #include "game/hl/player.h"
+#include "game/hl/savegame.h"
 
 enum {
 	CROWBAR_IDLE = 0, CROWBAR_DRAW, CROWBAR_HOLSTER, CROWBAR_ATTACK1HIT, CROWBAR_ATTACK1MISS,
@@ -33,6 +34,11 @@ enum {
 #define THINK_SWINGAGAIN	2
 
 static int g_iSwing;	/* the client event's swing counter */
+
+uint32_t W_CrowbarSaveState(int op)
+{
+	return sg_io(op, &g_iSwing, sizeof(g_iSwing));
+}
 
 static int Deploy(int id)
 {

@@ -38,6 +38,9 @@ static const Schedule_t slHCRangeAttack1[] = {
 	SCHED(tlHCRangeAttack1, bits_COND_ENEMY_OCCLUDED | bits_COND_NO_AMMO_LOADED, 0, "HCRangeAttack1")
 };
 
+/* saved games: append only (monster.h sched_list_t) */
+SCHED_LIST(sched_headcrab, slHCRangeAttack1);
+
 static const int16_t hcIdle[] = { R_HC_IDLE1, R_HC_IDLE2, R_HC_IDLE3 };
 static const int16_t hcAlert[] = { R_HC_ALERT1 };
 static const int16_t hcPain[] = { R_HC_PAIN1, R_HC_PAIN2, R_HC_PAIN3 };

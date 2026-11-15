@@ -30,12 +30,34 @@
 #include "engine/io/io.h"
 #include "plat/n64/n64.h"
 
+/* libdragon's PI queue starts a DMA at enqueue only while the PI is idle,
+ * else it waits for a completion interrupt (dma.c pi_enqueue). A CPU write
+ * to the PI bus (ISViewer and flashcart USB log writes, libdragon's own
+ * debugf, a FlashRAM command) leaves PI_STATUS IO_BUSY set until the bus
+ * cycle ends, and the PI raises no interrupt then: a DMA enqueued in that
+ * window is never started, and every wait on its ticket spins for good.
+ * ares clears IO_BUSY at once for ISViewer and harness writes (pi/bus.hpp
+ * writeForceFinish) but holds it 400 cycles for other bus addresses.
+ * Every DMA this file enqueues waits for IO_BUSY to clear first. DMA_BUSY
+ * is left alone: a transfer in flight raises its completion interrupt,
+ * which starts what was queued behind it (and waiting for it here would
+ * turn the chain's async launch into a blocking read). */
+#define CART_PI_STATUS	((volatile uint32_t *)0xA4600010)
+#define CART_PI_IO_BUSY	0x2u
+
+static void pi_io_settle(void)
+{
+	while (*CART_PI_STATUS & CART_PI_IO_BUSY)
+		;
+}
+
 /* libdragon's DFS lookups dereference its file table unchecked: with no
  * DFS mounted, dfs_rom_addr reads through NULL. */
 static int cart_dfs;
 
 void cart_mount(void)
 {
+	pi_io_settle();
 	cart_dfs = dfs_init(DFS_DEFAULT_LOCATION) == DFS_ESUCCESS;
 	if (!cart_dfs)
 		log_printf("io: no DFS in this ROM\n");
@@ -63,6 +85,7 @@ uint32_t sys_cart_addr(const char *path, uint32_t *out_size)
 	if (!cart_dfs || !rel || !rel[0])
 		return 0;
 	io_hold(1);
+	pi_io_settle();
 	rom = dfs_rom_addr(rel);
 	sz = rom ? dfs_rom_size(rel) : 0;
 	io_hold(0);
@@ -97,6 +120,7 @@ int sys_cart_read(void *dst, size_t dst_cap, uint32_t rom, uint32_t rom_size,
 	if ((((uintptr_t)dst) & 0x20000000u) == 0)
 		data_cache_hit_writeback_invalidate(dst, dma_len);
 	io_hold(1);
+	pi_io_settle();
 #ifdef HL64_PROFILE
 	{
 		uint32_t t0 = TICKS_READ();
@@ -154,6 +178,7 @@ void sys_pi_launch(void *dst, uint32_t rom, uint32_t len)
 {
 	/* invalidate before, not after: stale dirty lines would land on the DMA */
 	data_cache_hit_writeback_invalidate(dst, (len + 15) & ~15u);
+	pi_io_settle();
 	pi_ticket = dma_read_raw_async(dst, pi_addr(rom), len);
 }
 
@@ -182,6 +207,7 @@ uint32_t sys_pi_read(void *dst, uint32_t rom, uint32_t len)
 	uint32_t t0 = TICKS_READ();
 
 	data_cache_hit_writeback_invalidate(dst, (len + 15) & ~15u);
+	pi_io_settle();
 	dma_wait_finished(dma_read_raw_async(dst, pi_addr(rom), len));
 	return (uint32_t)TICKS_TO_US(TICKS_DISTANCE(t0, TICKS_READ()));
 }

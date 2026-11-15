@@ -102,8 +102,9 @@ GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO
 ENGINE_SRC += engine/world/stream.c
 # M6 Menu: the front end (title, pause, settings, save / load screens)
 ENGINE_SRC += engine/ui/menu.c
-# PLACEHOLDER for m6-savegame's backend (save.h): its merge deletes this line
-ENGINE_SRC += engine/ui/save_stub.c
+# M6 SaveGame: saved games and settings on FlashRAM (architecture.md 14)
+ENGINE_SRC += engine/save/save.c engine/save/sv.c engine/save/flq.c
+GAME_SRC += game/hl/savegame.c
 # HLSDK sources kept as Valve wrote them: their unused locals, MSVC
 # pragmas and array-parameter styles are not ours to fix; HLSDK builds
 # them without strict aliasing (mathlib.h IS_NAN)
@@ -112,9 +113,9 @@ HLSDK_CFLAGS := -fno-strict-aliasing -Wno-unused-variable -Wno-unused-but-set-va
 ENGINE_SRC += $(GAME_SRC)
 N64_SRC := plat/n64/cart.c plat/n64/fpu_shim.c plat/n64/gpu.c plat/n64/gpu_studio.c plat/n64/main.c \
 	plat/n64/sys.c \
-	plat/n64/vid.c
+	plat/n64/vid.c plat/n64/flash.c
 HOST_SRC := plat/host/gpu.c plat/host/gpu_studio.c plat/host/heap_host.c plat/host/io_host.c plat/host/main.c \
-	plat/host/sys.c
+	plat/host/sys.c plat/host/flash_host.c
 # the Snd slice's audio backends (engine/snd/snd_hw.h)
 N64_SRC += plat/n64/audio.c
 HOST_SRC += plat/host/audio_host.c
@@ -123,6 +124,9 @@ N64_SRC += plat/n64/gpu_fx.c
 HOST_SRC += plat/host/gpu_fx.c
 N64_SRC += plat/n64/gpu_2d.c
 HOST_SRC += plat/host/gpu_2d.c
+# M6 SaveGame: the Controller Pak (plat/pakfs.h: one file system, two backends)
+N64_SRC += plat/n64/pak.c plat/pakfs.c
+HOST_SRC += plat/host/pak_host.c plat/pakfs.c
 
 # Directories built without -ffast-math on the cart (18.2): host and cart
 # must agree bit for bit on collision and physics, on the world draw list
@@ -132,7 +136,7 @@ HOST_SRC += plat/host/gpu_2d.c
 # engine/in (the usercmd), engine/view (the drawn eye: residency input,
 # flashlight) and engine/test (route conditions) feed the simulation too.
 NOFASTMATH_DIRS := engine/coll engine/phys engine/render engine/world engine/ent engine/res \
-	engine/snd engine/core engine/in engine/view engine/test game/pm game/hl game/studio game/hud
+	engine/snd engine/core engine/in engine/view engine/test engine/save game/pm game/hl game/studio game/hud
 
 HL64_WARN := -Wall -Wextra -Werror
 HL64_DEFS :=
@@ -232,6 +236,9 @@ $(BUILD_DIR)/hl64.dfs: FORCE
 
 # Explicit ROM rule (n64.mk's %.z64 writes into the working directory).
 $(ROM): N64_ROM_TITLE = "hl64"
+# The ROM header's save type: ares and flashcarts give a flashram ROM the
+# 128 KB FlashRAM (D4); n64.mk applies it with ed64romconfig after n64tool.
+$(ROM): N64_ROM_SAVETYPE = flashram
 $(ROM): $(ELF) $(DFS)
 	@echo "    [Z64] $@"
 	$(N64_SYM) --all $< $<.sym
@@ -241,6 +248,7 @@ $(ROM): $(ELF) $(DFS)
 	@rm -f $@
 	$(N64_TOOL) $(N64_TOOLFLAGS) --output $@.tmp --align 256 $<.stripped $<.sym $(DFS) \
 		$(N64_TOOLFILES)
+	$(N64_ED64ROMCONFIG) $(N64_ED64ROMCONFIGFLAGS) $@.tmp
 	@mv $@.tmp $@
 
 rom: $(ROM)
@@ -472,6 +480,15 @@ INTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(INTEST_BIN): $(INTEST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) -Wl,--wrap=sys_pad_read
 intest: $(INTEST_BIN)
+# Controller Pak driver (test/save/paktest.c, run by test/save/paktest.sh):
+# plat/pakfs.c over the host image backend, the log, nothing else; the
+# driver cuts the power between Pak transfers (pakfs_dev_write --wrap).
+PAKTEST_BIN := $(BUILD_DIR)/host/hl64-paktest
+$(PAKTEST_BIN): $(addprefix $(BUILD_DIR)/host/,plat/pakfs.o plat/host/pak_host.o engine/core/log.o \
+		test/save/paktest.o)
+	$(HOST_CC) -o $@ $^ $(HOST_ARCH) -Wl,--wrap=pakfs_dev_write
+.PHONY: paktest
+paktest: $(PAKTEST_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 

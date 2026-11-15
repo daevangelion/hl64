@@ -29,6 +29,7 @@
 #include "game/hl/monster.h"
 #include "game/hl/grenade.h"
 #include "game/hl/player.h"
+#include "game/hl/savegame.h"
 
 #define GRUNT_CLIP_SIZE			36
 #define GRUNT_ATTN			ATTN_NORM
@@ -128,6 +129,18 @@ typedef struct {
 
 /* true if an idle grunt asked a question; cleared when someone answers */
 static int g_fGruntQuestion;
+
+uint32_t Grunt_SaveState(int op)
+{
+	uint32_t n = sg_io(op, &g_fGruntQuestion, sizeof(g_fGruntQuestion));
+
+	if (op == SG_GET && (g_fGruntQuestion < 0 || g_fGruntQuestion > 2))
+	{
+		sv_fail("game: g_fGruntQuestion out of range");
+		g_fGruntQuestion = 0;
+	}
+	return n;
+}
 
 /* pGruntSentences[] ("HG_MONSTER" is no group in sentences.txt) */
 static const int16_t hgSentences[] = {
@@ -333,6 +346,14 @@ static const Schedule_t slGruntRepelLand[] = {
 		bits_COND_HEAVY_DAMAGE | bits_COND_HEAR_SOUND,
 		bits_SOUND_DANGER | bits_SOUND_COMBAT | bits_SOUND_PLAYER, "Repel Land")
 };
+
+/* saved games: append only (monster.h sched_list_t) */
+SCHED_LIST(sched_grunt, slGruntFail, slGruntCombatFail, slGruntVictoryDance,
+	slGruntEstablishLineOfFire, slGruntFoundEnemy, slGruntCombatFace, slGruntSignalSuppress,
+	slGruntSuppress, slGruntWaitInCover, slGruntTakeCover, slGruntGrenadeCover,
+	slGruntTossGrenadeCover, slGruntTakeCoverFromBestSound, slGruntHideReload, slGruntSweep,
+	slGruntRangeAttack1A, slGruntRangeAttack1B, slGruntRangeAttack2, slGruntRepel,
+	slGruntRepelAttack, slGruntRepelLand);
 
 /* ---- entvars of a client or an entity ------------------------------------------------ */
 
@@ -1412,7 +1433,7 @@ void CHGruntRepel_RepelUse(int e, int activator, int caller, int useType, float 
 	VecCopy(ent_cv(e)->origin, top);
 	top[2] += 112;
 	life = -4096.0f * tr.frac / v[2] + 0.5f;
-	fx_beam(-1, top, g, NULL, RESID(MON_ROPE_SPR), 10, 0, 255, 255, 255, 255, 0,
+	fx_beam(-1, -1, top, g, NULL, RESID(MON_ROPE_SPR), 10, 0, 255, 255, 255, 255, 0,
 		(int)(life * 10 + 0.5f));
 	UTIL_Remove(e);
 }

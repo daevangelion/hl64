@@ -17,6 +17,8 @@
 #include "engine/core/sys.h"
 #include "engine/ent/ent.h"
 #include "engine/phys/phys.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 
 ent_pass_t	ent_pass;
 
@@ -284,4 +286,30 @@ void phy_ent_stats(phy_ent_stats_t *s, int reset)
 	*s = P.st;
 	if (reset)
 		memset(&P.st, 0, sizeof(P.st));
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+void eng_clock_save(void)
+{
+	sv_tag(SV_TAG('C', 'L', 'K', '1'));
+	sv_f64(clk.time);
+	sv_f64(clk.dt);
+	sv_f64(clk.now);
+	sv_f64(clk.ft);
+	sv_u32((uint32_t)clk.settle);
+}
+
+int eng_clock_load(void)
+{
+	if (sv_expect(SV_TAG('C', 'L', 'K', '1')))
+		return -1;
+	clk.time = sv_get_f64();
+	clk.dt = sv_get_f64();
+	clk.now = sv_get_f64();
+	clk.ft = sv_get_f64();
+	clk.settle = (int)sv_get_u32();
+	if (!(clk.time >= 1.0) || clk.settle < 0 || clk.settle > 2)
+		sv_fail("clock");
+	return sv_failed() ? -1 : 0;
 }

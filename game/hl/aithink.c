@@ -95,6 +95,7 @@
 #include "hl64/co.h"
 #include "hl64/settings.h"
 #include "game/hl/monster.h"
+#include "game/hl/savegame.h"
 
 #define AI_MAX_AGE	2.0f
 #define AI_MIN_START	2.5f
@@ -149,6 +150,7 @@ static ai_ctx_t		*cur;		/* the running context */
 static mon_shared_t	main_sh;
 static uint32_t		order_seq, frame_no;
 static int		aged_starts;	/* this frame's over-budget starts past AI_HOLD */
+static int		settling;	/* Ai_Settle: no pause point pauses */
 
 static int ai_index(const ai_ctx_t *c) { return (int)(c - ctx); }
 
@@ -442,6 +444,8 @@ int Ai_PauseDue(int e, uint32_t reserve)
 
 	if (!c || c->e != e || co_running() != ai_index(c))
 		return 0;
+	if (settling)
+		return 0;
 	if (c->slice_points++ == 0)
 		return 0;
 	if (settings.ai_spread == 1)
@@ -589,6 +593,93 @@ void Ai_FrameStart(void)
 		ai_begin(c, h.e, 1);
 	}
 	eng_set_frame_layer(layer);
+}
+
+/* game_save_settle (a saved game, at a frame boundary): what the next
+ * frame start would do with the paused and the queued thinks, with no
+ * budget. Paused thinks continue oldest first as Ai_FrameStart orders and
+ * checks them (one an earlier one invalidated ends as there), each to its
+ * end; then the queued thinks start oldest first, as the engine dispatches
+ * a think (nextthink := 0), and run whole. The order and every decision
+ * come from the saved state alone, so a run that saves and goes on and a
+ * boot that loads the save continue from the same state. Nothing paused or
+ * queued: nothing happens. ai_spread != 1: the next frame start would drop
+ * them (Ai_DropAll), so this does. */
+void Ai_Settle(void)
+{
+	ai_ctx_t	*c, *order[HL64_AI_CONTEXTS];
+	int		i, j, n = 0, live, layer;
+
+	if (settings.ai_spread != 1)
+	{
+		Ai_DropAll();
+		return;
+	}
+	for (i = 0; i < HL64_AI_CONTEXTS; i++)
+	{
+		c = &ctx[i];
+		if (c->state != AC_PAUSED)
+			continue;
+		if (!ai_valid(c, &live))
+		{
+			ai_drop(c);
+			continue;
+		}
+		for (j = n; j > 0 && order[j - 1]->order > c->order; j--)
+			order[j] = order[j - 1];
+		order[j] = c;
+		n++;
+	}
+	if (!n && !nheld)
+		return;
+	layer = eng_frame_layer();
+	settling = 1;
+	for (i = 0; i < n; i++)
+	{
+		c = order[i];
+		if (c->state != AC_PAUSED || !ai_valid(c, &live))
+		{
+			if (c->state == AC_PAUSED)
+				ai_drop(c);
+			continue;
+		}
+		eng_set_frame_layer(c->layer);
+		ai_slice(c);
+	}
+	while (nheld > 0)
+	{
+		ai_held_t h = held[0];
+
+		/* every context is free (none pauses while settling) */
+		if (!(c = ai_free_ctx()))
+			break;
+		held_remove(0);
+		if (!held_valid(&h))
+		{
+			ac.held_drops++;
+			continue;
+		}
+		held_late(&h);
+		ac.held_runs++;
+		ent_think_at(h.e, 0);
+		eng_set_frame_layer(ent_idc(h.e)->layer);
+		ai_begin(c, h.e, 1);
+	}
+	settling = 0;
+	eng_set_frame_layer(layer);
+}
+
+/* Ai_Settle would do something: a think paused or queued. */
+int Ai_Pending(void)
+{
+	int i;
+
+	if (nheld > 0)
+		return 1;
+	for (i = 0; i < HL64_AI_CONTEXTS; i++)
+		if (ctx[i].state == AC_PAUSED)
+			return 1;
+	return 0;
 }
 
 void Ai_Drop(int e)

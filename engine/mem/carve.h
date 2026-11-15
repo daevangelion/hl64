@@ -15,7 +15,7 @@
 #define MEM_REGIONS(X) \
 	X(SCRATCH, "scratch", HL64_SCRATCH_KB, 0) \
 	X(RESTAB, "restab", HL64_RESTAB_KB, 0) \
-	X(SENTENCES, "sentences", HL64_SENTENCES_KB, 1) \
+	X(SAVE, "save", HL64_SAVE_KB, 0) \
 	X(LIGHTSTYLE, "lightstyle", HL64_LIGHTSTYLE_KB, 0) \
 	X(CAMPAIGN, "campaign", HL64_CAMPAIGN_KB, 0) \
 	X(LAYER_DIRS, "layerdirs", HL64_LAYER_DIRS_KB, 0) \

@@ -130,6 +130,10 @@ typedef struct {
  * finishing an async open of it); sys_error on a bad package or no room.
  * Boot / New Game / setpos only (load I/O). */
 wld_layer_t	*wld_open(int map);
+/* wld_open into layer slot `slot` (a load restores every layer in its
+ * saved slot: entity gids, names and style slots carry it); NULL when
+ * that slot is taken by another map. */
+wld_layer_t	*wld_open_in(int map, int slot);
 /* Seam open (M4, architecture.md 5.4 req. 1): never blocks. Takes a free
  * layer slot and queues the header, directory, tables, pinned hull-0 COLL
  * and ENTS reads at OPEN priority (stepped by wld_stream_frame); returns

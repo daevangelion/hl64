@@ -27,11 +27,15 @@
 #include "engine/in/in.h"
 #include "engine/io/io.h"
 #include "engine/phys/player.h"
+#include "engine/save/sv.h"
+#include "engine/save/sv_int.h"
+#include "engine/save/svmod.h"
 #include "engine/test/route.h"
 #include "engine/world/wld.h"
 #include "hl64/ent.h"
 #include "hl64/game.h"
 #include "hl64/rec.h"
+#include "hl64/save.h"
 
 #define RBC_MAGIC	0x52424331u
 #define RBC_HDR		48
@@ -914,6 +918,9 @@ void rt_frame(double time)
 			 * boundary */
 			if (time == rt.t0)
 				return;
+			/* a save in flight finishes first (as a quit waits) */
+			if (save_busy())
+				return;
 			log_printf("route PASS\n");
 			log_flush();
 			rt.done = 1;
@@ -924,4 +931,55 @@ void rt_frame(double time)
 		rt.op++;
 		rt.started = 0;
 	}
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* Test builds: a route that saves goes on from its current op after the
+ * load (the same route file must be loaded: its size and checksum). */
+void rt_save(void)
+{
+	sv_tag(SV_TAG('R', 'T', 'E', '1'));
+	sv_u8(rt.loaded);
+	if (!rt.loaded)
+		return;
+	sv_u32(rt.size);
+	sv_u32(sv_crc32(0, rt.buf, rt.size));
+	sv_u8(rt.done);
+	sv_u32(rt.pc);
+	sv_u16(rt.op);
+	sv_u8(rt.started);
+	sv_f64(rt.t0);
+	sv_put(&rt.tg, sizeof(rt.tg));
+}
+
+int rt_load_state(void)
+{
+	uint32_t size, crc;
+
+	if (sv_expect(SV_TAG('R', 'T', 'E', '1')))
+		return -1;
+	if (!sv_get_u8())
+		return 0;
+	size = sv_get_u32();
+	crc = sv_get_u32();
+	if (!rt.loaded || size != rt.size || crc != sv_crc32(0, rt.buf, rt.size))
+	{
+		/* another route (or none): the load keeps it where it is */
+		uint8_t skip[1 + 4 + 2 + 1 + 8 + sizeof(rt.tg)];
+
+		sv_get(skip, sizeof(skip));
+		log_printf("route: the save was made by another route: not resumed\n");
+		return sv_failed() ? -1 : 0;
+	}
+	rt.done = (uint8_t)sv_get_u8();
+	rt.pc = sv_get_u32();
+	rt.op = (uint16_t)sv_get_u16();
+	rt.started = (uint8_t)sv_get_u8();
+	rt.t0 = sv_get_f64();
+	sv_get(&rt.tg, sizeof(rt.tg));
+	if (rt.pc < rt.code_ofs || rt.pc >= rt.code_end)
+		sv_fail("route position");
+	log_printf("route: resumed at op %u\n", rt.op);
+	return sv_failed() ? -1 : 0;
 }

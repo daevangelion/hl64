@@ -297,6 +297,20 @@ uint32_t mem_pool_largest(const mem_pool_t *p)
 	return best;
 }
 
+uint32_t mem_pool_largest_fenced(const mem_pool_t *p)
+{
+	const mem_blk_t *b;
+	uint32_t best = 0, run = 0;
+
+	for (b = p->head; b; b = b->next)
+	{
+		run = b->state == MEM_BLK_FREE || b->state == MEM_BLK_FENCED ? run + b->size : 0;
+		if (run > best)
+			best = run;
+	}
+	return best;
+}
+
 uint32_t mem_pool_free_bytes(const mem_pool_t *p)
 {
 	return p->size - p->used;

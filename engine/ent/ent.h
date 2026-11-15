@@ -51,6 +51,10 @@ typedef struct {
 	uint8_t		*contents;	/* handed to col_contents_add */
 	uint32_t	seq;		/* allocation counter (runtime trigger order) */
 	uint16_t	top;		/* highest slot ever allocated + 1 */
+	/* every slot from here up is as boot left it (ent_init's clear, serial
+	 * and free time 0): no create since boot, not even before a New Game
+	 * (ent_reset keeps serials), nor a load's restore (ent_save) */
+	uint16_t	touched;
 	uint16_t	live;		/* live slots */
 	uint16_t	live_peak;
 	uint32_t	region_bytes;	/* components region used */

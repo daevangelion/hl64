@@ -37,6 +37,9 @@ void		seam_new_game(int map);
 /* Frame step 7 (after the active-set pass): approach, layer / HLE opens,
  * pins, switch, crossing, leave and close. */
 void		seam_frame(void);
+/* 1 when no seam is approached, armed or switching (no seam window): an
+ * autosave may be taken (engine/save/save.c). */
+int		seam_quiet(void);
 /* Hydration anchors (global positions): the player, and the player mapped
  * through the selected approached seam (p + T) while one is approached. */
 int		seam_anchors(float (*out)[3], int max);

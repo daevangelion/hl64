@@ -206,7 +206,7 @@ information only.
 | HLE slots | 240 | M3: 77.9 KB for **one** map (m3-a, before infodecal/env_glow); **M4**: 151244 B (62%) with hldemo1 + hldemo2 open, 132716 B at hldemo2→hldemo3 (hldemo1 frozen: 2780 B) | 72 KB text + 13–19 KB keys per map | **measured** (cook5, infodecal and env_glow kept): hldemo1 chunk 52000 B, resident slot 67344 B, 72512 B while opening, plus 20016 B shared tables; cook-checked need below (M4 cook: 165440 B) |
 | dehydrate store | 64 | M4: 14364 B (22%) at hldemo2→hldemo3 (host route end 15300 B) | similar | **measured**; closing maps store every entity, released pristine records store nothing |
 | resource table + pattern table | 56 | 43.5 KB (78%) | precache name tables, sfx names | **measured** (the earlier 12 KB counted the 12 B entries only) |
-| sentence table (cooked) | 24 | not reported | parsed text | [EST] |
+| saved games (`HL64_SAVE_KB`, 14) | 160 | largest staged state 70418 B (Uplink route, hldemo2 → hldemo1 autosave, host), image ≤ 32256 B | — (no saves) | by construction: header + settings block + 32256 B image cap (2 flash sectors, written over frames) + 24 KB coder work area + the staged state (≤ 106496 B); replaces the unused 24 KB sentence-table carve |
 | lightstyle patterns + state | 4 | not reported | strings + 96 × value | lightstyles.md |
 | think heap, active bitsets, grid tables | 12 | 6.3 KB (52%) | area tree + leaf lists | **measured** |
 | sound (16 voice buffers, 10 wav64, loops) | 104 | 76.1 KB (79% of 96) | M5 hazard route 80.9 KB (82832 B) × 1.25 > 100 KB → 104 | **measured** (route, m5-int2 `eb47299`; uplink 82080 B; the earlier `snd_ares.sh` peak was 78144 B) |
@@ -373,7 +373,12 @@ SA2 §4.2 as built):
 - **pinned**: world hull-0 COLL while the layer is open.
 
 Eviction: queued-not-started first, then LRU among chunks not wanted this
-frame; prefetch never evicts a chunk used in the last 30 frames. The target
+frame; prefetch never evicts a chunk used in the last 30 frames. Evicted
+REND / TEXP bytes free behind a two-frame fence (4.3); a request waits for
+them only while a run of adjacent free and fenced blocks would make its
+hole, and otherwise evicts on: fences elsewhere in a fragmented pool never
+make it and new ones are fenced every frame (a seam's B open waited 60
+frames for its 52 KB ENTS chunk on a 51712 B hole). The target
 set is recomputed only when one of its inputs changed (eye leaf, player
 cell, velocity bucket, pins, layer set); otherwise the previous frame's
 wants are re-asserted by generation number (no rebuild).
@@ -1014,13 +1019,159 @@ line for the highlighted button, the menu sounds of the player's
 
 ## 14. Save and level state
 
-Level state is the dehydrate store (6.4). A saved game (D4) = clock and
-rng, home map and layer set, every live entity's components, game private
-blocks (by class, versioned), dehydrate stores, record states, timers,
-lightstyle patterns, player block, settings. Load = New Game shell, open the
-saved layers, restore without spawn functions, relink, resume. Size
-40–90 KB [EST]; components and ids are position-independent, so saving is
-mostly block copies.
+Level state is the dehydrate store (6.4). A saved game (D4, `engine/save/`,
+`include/hl64/save.h`) is a 128 B header (magic, format 4, layout id,
+logical slot, sequence, its sectors, sizes, CRC-32 of the image, display
+info, the open layers with their directory CRCs), on the flash a 384 B
+settings block (its own CRC), and a compressed image of the sections every
+engine module writes (`engine/save/svmod.h`, in `save.c` order: clock,
+engine frame, rng, settings; records with HLE slots, timers, uses, frozen
+maps and the dehydrate store; entity components, sets, grid and private
+blocks; contents brushes, player, input, conveyors, render fades, decals,
+seam state, lightstyles, looping sounds), then the game's globals
+(`game/hl/savegame.c`) and, in test builds, the route VM's position.
+Entity rows are stored as differences from their cooked records; empty
+slots, capacity-sized tables, grid query stamps and timing stats are not
+saved. Coder (`engine/save/sv.c`): LZ with 4-byte hash chains (depth 16,
+8 KB window) and a price-driven lazy parse, then an adaptive binary range
+coder with LZMA-style token models (literals, matches, 4 repeat
+distances), integer-only so host and cart write the same bytes; 10.7 %
+smaller than the previous LZ + static Huffman coder over the Uplink and
+Hazard routes' autosaves (late Uplink 31795 → 28687 B), host CPU ×1.8 to
+code and ×2.0 to decode, still in 8 ms steps; 3.3 KB of model tables in
+its statics, the work area unchanged (24 KB; `test/save/svbench.c`
+measures it on raw state dumps).
+
+**Placed decals** (`engine/render/decal.c`) are saved as their
+placements, not their pieces: per live pool entry its index, order,
+mover, layer, map, chunk, texture, the point and normal in the model's
+frame (quantized: quarter units, normal × 16384) and the winding (28 B),
+plus the pending placements and each layer slot's map. A load restores
+them at their own pool indices; each is rebuilt (`walk_chunk` on its one
+chunk) once that chunk is resident and its sheet read, under its own work
+cap (175 units a frame), never the placement budget, so the game's
+placements and infodecal's retries go as in the run that saved. A full
+pool (96) is 2702 B → ≈ 850 B coded; after the late-Uplink load all 96
+rebuild within 100 frames (host).
+
+**Media** (user decisions 2026-11-15):
+
+- **FlashRAM** 128 KB, 16 KB sectors, all eight a pool shared by the
+  autosave, 2 manual slots and the settings. A save takes 1 or 2 whole
+  sectors (any two: its header names them), so its image is at most
+  32256 B (`SAVE_IMAGE_MAX`). A logical slot is its newest copy whose
+  header and image check out. A new save goes to sectors no slot's
+  current copy holds, so the copy it replaces stays good until the new
+  one is complete; of 2 sectors the second is written first, the header's
+  last. Settings: every Flash save carries the settings block of its
+  time; `settings_store` writes a settings-only copy (header + block, one
+  sector) to a sector no slot holds, never over the current settings
+  copy. The newest good settings block of any build is the settings
+  (`settings_load`). **Worst case** (checked by `test/save/flashcut.sh`):
+  three 2-sector saves (6 sectors) and a settings copy (1): a new
+  2-sector save takes the free sector and, as its header's sector, the
+  settings copy's (it carries the settings itself): the other slots
+  hold 4 sectors and its own old copy 2, so 2 are always left and no save
+  is ever blocked or written over; a settings copy always finds 1 (6
+  held by the slots, 1 by the current settings copy). A power cut while
+  that save writes its header's sector loses only the latest settings
+  change (the settings fall back to the newest save's), never a save.
+  The old layout (settings in sector 0, saves in a 7-sector pool) could
+  not do this: 2 + 2 + 2 + 2 > 7.
+- **Controller Pak** (controller 1): one save per note
+  (`HL64`/`HL`/`HL64SAVE.<id>`, header + image, no settings block), up to
+  4 entries listed after the Flash slots. The image is written first and
+  the header last; the replaced note is deleted after the new one is
+  closed. With no room for both notes the old note is deleted first and
+  the new one created in its place: from that delete until the header
+  write (one frame per 256 B, ≤ 121 frames for the largest image) a power
+  cut or a Pak pull loses the slot (the headerless note lists as corrupt
+  and can be written over); a delete that succeeds followed by a failed
+  create loses it at once (logged `no room`). Any Pak failure, and any
+  change of accessory between frames, forces an unmount, a remount and a
+  rescan; an operation whose Pak changed fails. A note's image is at most
+  30720 B (`SAVE_PAK_IMAGE_MAX`); a bigger one fails before the Pak is
+  touched with `SAVE_ERR_PAK_SIZE` (the menu: "Save too large for
+  Controller Pak."; `SAVE_ERR_SIZE`: too large for any save).
+- Measured (host, c19 cook, state → image): hl2-yard 600 28040 → 10137 B,
+  hazard-seam 12469 → 4454 B, seam-2to3 39563 → 15402 B,
+  hl2-return-battle 37604 → 14066 B; the routes' autosaves: Uplink 7, the
+  largest at the hldemo2 → hldemo1 return 70418 → 29573 B (2 sectors; it
+  also fits a Pak note), Hazard 7, largest 38607 → 13275 B. The save
+  region (`HL64_SAVE_KB` 160) stages up to 104 KB of state.
+
+**Save** (`save_write`, `save_autosave`): at the next frame boundary
+(`save_frame`, first in `eng_frame`) what is in flight settles (paused
+monster thinks finish, layer / HLE slot opens complete, precache holds
+land; the same settle runs in every load of it), the snapshot frame copies
+the state into the save region and writes the header's description of it
+(layers, map, time), then the coder runs in 8 ms steps over the following
+frames and the flash writer programs it (4 ms per frame) or the Pak writer
+writes 256 B per frame (≈ 6 ms on ares, 0.72 ms per 32 B block). The
+directory is updated from the read-back of every write. A manual save
+mutes the sound (`snd_mute`: gains 0, no sound's state changes) and holds
+10 shown frames first, so the 160 ms output queue is silence when the
+long snapshot frame lets it run dry; a layer open in flight finishes in
+held frames before the snapshot (a synchronous open in a running game
+cannot wait for its pools' fenced frees). Staging: entity rows from
+`ent_s.touched` down (every slot above it is as boot left it), one pass;
+delta rows with word loads; private blocks with an owner map and each
+class's converted reference kept in the coder's idle work area
+(`sv_work_area`). **Autosave**: `trigger_autosave` and every finished
+seam crossing ask for one; it is taken at the first frame boundary that
+is quiet (a player, no seam window or crossing) and settled (no paused
+or queued think, no open in flight: the autosave changes nothing and
+holds one frame, `SAVE_HOLD_QUIET`, which shows nothing new); a load
+drops the request.
+
+**Load** (`save_load`, works from the title): the sound is muted, the
+image read and checked first (a bad one leaves the session alone),
+decoded in 8 ms steps, then (at least 10 frames after the mute) the
+session is dropped as at an end section, the world's fenced frees retire
+over 3 held frames, the saved layers reopen in their saved slots and
+every section is read back: entities into their own slots with their
+serials, private blocks at their own handles, HLE slots at their own
+blocks, the clock (before the engine frame) and the random stream exactly.
+No spawn function runs; the game resumes at the next frame (placed decals
+rebuild over the next frames as their chunks land). The menu shows
+"Saving..." / "Loading..." over the held frames (`SAVE_HOLD`).
+
+**Gate** (`test/save/determinism.sh [--ares] [--pak] SCENE:T:N[:report]`,
+run by `test/run/m5.sh`): run S saves at T and quits; A saves at T and
+goes on; B is a fresh boot (host process / ares launch) with S's FlashRAM
+or Pak image that loads at frame 1; C never saves. (a) Restore: B's load
+stages the restored game again at once (test builds' `restore_check`)
+and it must equal S's saved state byte for byte, every scene. (b)
+Continuation: A's and B's save streams at T+N equal byte for byte and
+their `stats` player / entity lines at T+1 and T+N equal — required for
+hl2-yard (600:150), hazard-seam (85:150) and seam-2to3 (810:90). A
+manual save on the cart takes 28–72 frames (the coder's 8 ms steps), and
+an autosave asked meanwhile waits for it, so in A (which saved at T) the
+autosaves come later than in B: T+N lies after them and after A's own
+save (hazard-seam: after the return crossing's autosave; seam-2to3:
+after the switch, room for the 72-frame save at T); on the cart the T+N
+save may queue behind an autosave, so ares runs quit 90 frames later.
+Earlier seam-2to3 windows (before the switch) meet game rules that
+follow residency, warm in A, cold
+after B's load: infodecal retries change free times, the hitbox pose
+memo forgets entries whose animation is not resident. Reported only for
+hl2-return-battle (`:report`), where a map opens inside the window and
+its completion frame follows the render pool's state, so hydration and
+AI-think drops land at other frames. Cost: every autosave ok and every
+frame it holds or step it takes ≤ 67 ms (gated); a manual save's and a
+load's frames and whole time are reported (the game is paused behind the
+menu, the sound muted). `test/save/pakfail.sh`: the Pak's no-room,
+failed-transfer and too-large (`SAVE_ERR_PAK_SIZE`, the cap lowered by
+`HL64_HOST_PAK_IMAGE_MAX`) paths. `test/save/flashcut.sh`: the pool's
+worst case above (every save forced to 2 sectors by
+`HL64_HOST_SAVE_SECTORS`), then a manual save and an autosave cut by a
+power cut in the middle of each of their 130 flash operations
+(`HL64_HOST_FLASH_CUT`, `plat/host/flash_host.c`): after every cut a
+fresh boot lists all three slots good (the cut slot's old or new copy)
+and a settings block. Known gap: test builds' `restore_check` stages the
+re-save beside the loaded state, so states over half the staging room
+(52 KB, the late Uplink route) log `no room` instead of comparing; the
+gate scenes are ≤ 40 KB.
 
 ## 15. Test and profiling
 
@@ -1299,7 +1450,7 @@ campaign graph's chapter boundaries; sizing is redone with the retail data.
 | D1 | Entity representation (M0) | (a) typed components in parallel arrays (220 B per slot), active sets, think heap, ids, HLSDK field names via accessors (6); (b) HLSDK `edict_t` + `entvars_t` verbatim (≈ 800 B per slot, scanned per frame) | (a): ≈ 329 KB less than the old edicts at the 495 cap, O(active) frame loops, exact host/cart sizes, saves by block copy |
 | D2 | Player movement (M2) | (a) HLSDK `pm_shared` in `game/pm/` (HLSDK licence), caps 64 physents / 8 ladders / 32 touches; (b) a new clean engine movement from a GoldSrc behaviour spec | (a): it is GoldSrc's movement, allowed by PROVENANCE; probe bots verify the adapter |
 | D3 | Studio animation (M3) | (a) HLSDK `StudioModelRenderer` pose maths in `game/studio/` over whole MDL animation data resident in the studio pool (as the old tree does); (b) the same pose maths over cooked per-sequence animation chunks (the MDL's run-length values regrouped per sequence, 16-aligned, streamed individually) so only the sequences in use are resident | (b): identical poses (same values), ≈ 60 KB instead of 93–142 KB per NPC model, so ≈ 500 KB less studio pool [EST, SA2 §3.6]; costs one cook tool and a format doc in M3 |
-| D4 | Saved games (after M5) | none; FlashRAM 128 KB; SRAM 32 KB; Controller Pak 32 KB | FlashRAM: 40–90 KB [EST] does not fit 32 KB |
+| D4 | Saved games (after M5) | none; FlashRAM 128 KB; SRAM 32 KB; Controller Pak 32 KB | **accepted 2026-11-15**: FlashRAM sector 0 settings + 7-sector pool for the autosave and 2 manual slots, Controller Pak notes for extra manual slots; autosave at `trigger_autosave` and after seam crossings. Measured images 4.9–16 KB (≤ 30 KB cap, one Pak note each); 14 |
 | D5 | Host renderer output (M1) | draw-list recorder only; plus a host software rasteriser | recorder; rasteriser only if ares turnaround blocks iteration |
 | D6 | Behaviour target | **settled by the user: GoldSrc as observed.** Remaining sub-decisions: (i) frame-time clamp 0.1 s (stability on the cart) vs GoldSrc's 0.25 s; (ii) hitbox traces for line traces vs bbox only (cost ≈ 0.1 ms on firing frames); (iii) model lighting following animated lightstyles via the probe style term (cook format v3) vs static; (iv) vertex lighting instead of lightmaps (SA2 decision 1) | (i) 0.1 s; (ii) hitboxes; (iii) style term; (iv) keep vertex lighting |
 | D7 | Console requirement | Expansion Pak required; also 4 MB | Expansion Pak |

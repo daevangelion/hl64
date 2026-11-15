@@ -43,7 +43,10 @@
 	X(SOUND, "sound", "uuu", 1)		/* res_t (SOUND / SENTENCE), entity (0 = the listener), pitch (0 = 100) */ \
 	X(SEAMPROF_MARK, "seamprof_mark", "", 1)	/* open a seam-window profile at this frame (engine/test/seamprof, PROFILE) */ \
 	X(TRACE, "trace", "uu", 1)		/* K10 triage: frames FIRST..LAST log `trace F` decision lines (dbg_trace) */ \
-	X(PAD, "pad", "uff", 1)			/* port 1 held as SYS_PAD_* buttons, stick x, y (-128..127) until the next pad command (engine/in) */
+	X(PAD, "pad", "uff", 1)			/* port 1 held as SYS_PAD_* buttons, stick x, y (-128..127) until the next pad command (engine/in) */ \
+	X(SAVE, "save", "u", 0)			/* slot: save the game at this frame boundary (engine/save) */ \
+	X(LOAD, "load", "u", 0)			/* slot: load it at the next frame boundary */ \
+	X(FLASH, "flash", "u", 1)		/* FlashRAM self-test: 0 probe + directory, 1 write / read back the last sector */
 
 enum {
 #define DBG_ENUM(id, name, args, test) DBG_##id,

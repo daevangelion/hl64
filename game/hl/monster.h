@@ -342,6 +342,22 @@ extern const Schedule_t	slTakeCoverFromBestSound[];
 extern const Schedule_t	slTakeCoverFromEnemy[];
 const Schedule_t *Mon_ScheduleError(void);
 
+/* Saved games (game/hl/savegame.c): every Schedule_t a monster's
+ * m_pSchedule can point at (each element of a schedule array that has
+ * more than one), one list per file that defines schedules. A saved
+ * schedule is the id (list, index): lists and their entries are
+ * append-only (a retired schedule leaves NULL in its place), so an id
+ * names the same schedule in every later build. */
+typedef struct {
+	const Schedule_t *const	*s;
+	int			n;
+} sched_list_t;
+#define SCHED_LIST(name, ...) \
+	static const Schedule_t *const name##_s[] = { __VA_ARGS__ }; \
+	const sched_list_t name = { name##_s, ARRAYSIZE(name##_s) }
+extern const sched_list_t sched_defaultai, sched_talkmonster, sched_barney, sched_garg,
+	sched_grunt, sched_headcrab, sched_houndeye, sched_islave, sched_scientist;
+
 /* ---- soundent.h ------------------------------------------------------------ */
 
 #define MAX_WORLD_SOUNDS	64

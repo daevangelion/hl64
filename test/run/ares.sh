@@ -24,6 +24,23 @@
 # run. SIGTERM / SIGINT to that background ares_run stops ares (remote: on
 # the host) and still copies the results back.
 #
+# Saved games (FlashRAM; the ROM's header save type flashram, Makefile
+# N64_ROM_SAVETYPE): a run starts from an erased chip, never from a save a
+# previous run left. ARES_FLASH_IN=<file> seeds the chip from that 128 KB raw
+# image before boot; ARES_FLASH_OUT=<file> gets the chip's image when the
+# guest exits (quit through the harness; a timeout or kill leaves none --
+# the stale file is removed before the run, and a run that wrote none says
+# so on stderr). Relative paths: to DIR; remote runs stage the IN file and
+# fetch the OUT file like every other result. The patched ares does the
+# work (test/ares-flash.patch): its harness device loads the image at cart
+# connect and dumps it at the guest's exit, which skips ares' own save.
+#
+# Controller Pak (controller 1; ares gives our ROM one): a run starts from a
+# formatted Pak, never from a <rom>.pak a previous run left.
+# ARES_PAK_IN=<file> loads that raw 32 KB image (hl64-host --pak writes the
+# same layout) before boot; ARES_PAK_OUT=<file> gets the Pak's image when the
+# guest exits through the harness, like ARES_FLASH_* (test/ares-pak.patch).
+#
 # Where: HL64_ARES_HOST unset / empty / local: on this machine, holding one
 # of ARES_SLOTS (default 2) slot locks /tmp/hl64-ares.slot<i> while ares
 # runs (every ares user on the machine takes one). HL64_ARES_HOST=<host>
@@ -34,6 +51,38 @@
 # ares reads (ARES_TEST_INPUT, ARES_HOST_SCREENSHOT, ARES_HOST_SHOT_EVERY_MS,
 # ARES_HOST_SHOT_MAX, ARES_HOST_SHOT_DIR, ARES_HOST_PRINTF, ARES_TRACE_CPU),
 # passed through (remote: forwarded).
+
+# ares_flash_check DIR: ARES_FLASH_IN must be a file (else 2); ARES_FLASH_OUT's
+# directory is made and a stale file there removed.
+ares_flash_check() {
+	local dir=$1 f
+	if [[ -n "${ARES_FLASH_IN:-}" ]]; then
+		f=$(ares_abs "$dir" "$ARES_FLASH_IN")
+		[[ -f "$f" ]] || { echo "ares: ARES_FLASH_IN $f is not a file" >&2; return 2; }
+	fi
+	if [[ -n "${ARES_FLASH_OUT:-}" ]]; then
+		f=$(ares_abs "$dir" "$ARES_FLASH_OUT")
+		mkdir -p "$(dirname "$f")" && rm -f "$f"
+	fi
+}
+
+# ares_pak_check DIR: ARES_PAK_IN must be a file (else 2); ARES_PAK_OUT's
+# directory is made and a stale file there removed.
+ares_pak_check() {
+	local dir=$1 f
+	if [[ -n "${ARES_PAK_IN:-}" ]]; then
+		f=$(ares_abs "$dir" "$ARES_PAK_IN")
+		[[ -f "$f" ]] || { echo "ares: ARES_PAK_IN $f is not a file" >&2; return 2; }
+	fi
+	if [[ -n "${ARES_PAK_OUT:-}" ]]; then
+		f=$(ares_abs "$dir" "$ARES_PAK_OUT")
+		mkdir -p "$(dirname "$f")" && rm -f "$f"
+	fi
+}
+
+ares_abs() {	# ares_abs DIR PATH: PATH, relative ones to DIR
+	case "$2" in /*) echo "$2" ;; *) echo "$1/$2" ;; esac
+}
 
 ARES_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=xvfb.sh
@@ -131,6 +180,7 @@ ares_exec() {
 ares_run() {
 	local dir=$1 rom=$2 log=$3 to=${4:-${ARES_TIMEOUT:-1800}} c=0
 	ARES_STOP=0
+	{ ares_flash_check "$dir" && ares_pak_check "$dir"; } || { ARES_WALL=0; ARES_LOAD=-; return 2; }
 	ARES_RAN_ON=$(ares_host)
 	if [[ $ARES_RAN_ON != local ]]; then
 		local st
@@ -154,5 +204,11 @@ ares_run() {
 	[[ $c -eq 0 ]] || { ARES_WALL=0; ARES_LOAD=-; return "$c"; }
 	ares_exec "$dir" "$rom" "$log" "$to" || c=$?
 	ares_slot_drop
+	if [[ -n "${ARES_FLASH_OUT:-}" && ! -f "$(ares_abs "$dir" "$ARES_FLASH_OUT")" ]]; then
+		echo "ares: the run left no flash image $ARES_FLASH_OUT (ROM without save type flashram, or no exit through the harness)" >&2
+	fi
+	if [[ -n "${ARES_PAK_OUT:-}" && ! -f "$(ares_abs "$dir" "$ARES_PAK_OUT")" ]]; then
+		echo "ares: the run left no Pak image $ARES_PAK_OUT (no exit through the harness)" >&2
+	fi
 	return "$c"
 }

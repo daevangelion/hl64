@@ -39,6 +39,7 @@
 #include "hl64/grid.h"
 #include "hl64/limits.h"
 #include "hl64/rec.h"
+#include "hl64/save.h"
 #include "hl64/seam.h"
 #include "engine/core/eng.h"
 #include "engine/core/hlmath.h"
@@ -49,6 +50,8 @@
 #include "engine/mem/carve.h"
 #include "engine/phys/phys.h"
 #include "engine/phys/player.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/world/wld.h"
 
 #define CWG_MAGIC	0x43574733u	/* 'CWG3' */
@@ -103,7 +106,7 @@ typedef struct {
 	float		pos[3];		/* B frame */
 } cont_t;
 
-static struct {
+static struct seam_state {
 	uint8_t		loaded;
 	int		home;			/* CWG map, -1 */
 	int		near;			/* selected seam, -1 */
@@ -135,6 +138,9 @@ static struct {
 	int		ghost_n, ghost_map, ghost_slot;
 	int16_t		ghost[CONT_MAX];
 	float		ghost_off[3], ghost_mins[3], ghost_maxs[3];
+	/* a crossing finished: an autosave once out of every seam window
+	 * (where GoldSrc saved at its changelevel) */
+	uint8_t		autosave;
 	seam_stats_t	st;
 	uint32_t	frames, us_sum, us_max;
 } S;
@@ -1384,6 +1390,7 @@ void seam_new_game(int map)
 	S.near = S.armed = S.pending = S.aliased = S.pinned = -1;
 	S.why = NULL;
 	S.settle = S.have_eye = S.ready = S.near_failed = S.near_dead = S.cont_pending = 0;
+	S.autosave = 0;
 	S.wait_frame = 0;
 	S.ghost_n = 0;
 	memset(S.hle_open, 0, sizeof(S.hle_open));
@@ -1454,11 +1461,17 @@ void seam_frame(void)
 		{
 			cross(S.pending);
 			player_local(org, eye);
+			S.autosave = 1;
 		}
 		else
 			S.st.late++;
 	}
 	leave(org);
+	if (S.autosave && seam_quiet())
+	{
+		S.autosave = 0;
+		save_autosave();
+	}
 	ghost_frame();
 	memcpy(S.prev_eye, eye, sizeof(eye));
 	S.have_eye = 1;
@@ -1469,6 +1482,11 @@ void seam_frame(void)
 	S.us_sum += us;
 	if (us > S.us_max)
 		S.us_max = us;
+}
+
+int seam_quiet(void)
+{
+	return !S.loaded || (S.near < 0 && S.armed < 0 && S.pending < 0);
 }
 
 int seam_ghost(int e, int map, float off[3])
@@ -1522,4 +1540,62 @@ int seam_anchors(float (*out)[3], int max)
 		n = 2;
 	}
 	return n;
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* The state machine as it is (seam, map and slot numbers, game times,
+ * frame numbers), the pending switch's reason by index. The seam pin is
+ * residency: a load leaves it to the next approach step. */
+static const char *const why_names[] = {
+	"use", "touch", "forced: left the trigger outside the switch box",
+	"forced: in the trigger outside the switch box"
+};
+#define NWHY	((int)(sizeof(why_names) / sizeof(why_names[0])))
+
+void seam_save(void)
+{
+	static struct seam_state t;
+	int w;
+
+	t = S;
+	t.why = NULL;
+	/* the stats are this run's (wall times), not the game's */
+	memset(&t.st, 0, sizeof(t.st));
+	t.frames = t.us_sum = t.us_max = 0;
+	/* the pin is residency (this run's pools), not the game's: a load
+	 * pins B's seam again (seam_load) */
+	t.pinned = -1;
+	for (w = 0; w < NWHY && S.why && strcmp(S.why, why_names[w]); w++)
+		;
+	sv_tag(SV_TAG('S', 'E', 'A', 'M'));
+	sv_u32((uint32_t)sizeof(t));
+	sv_put(&t, sizeof(t));
+	sv_u8(S.why && w < NWHY ? (uint32_t)w + 1 : 0);
+}
+
+int seam_load(void)
+{
+	static struct seam_state t;
+	uint8_t loaded = S.loaded;
+	uint32_t w;
+
+	if (sv_expect(SV_TAG('S', 'E', 'A', 'M')) || sv_get_u32() != sizeof(t))
+	{
+		sv_fail("seam layout");
+		return -1;
+	}
+	sv_get(&t, sizeof(t));
+	w = sv_get_u8();
+	if (sv_failed() || w > NWHY)
+		return -1;
+	t.st = S.st;
+	t.frames = S.frames;
+	t.us_sum = S.us_sum;
+	t.us_max = S.us_max;
+	S = t;
+	S.loaded = loaded;
+	S.why = w ? why_names[w - 1] : NULL;
+	S.pinned = -1;
+	return 0;
 }

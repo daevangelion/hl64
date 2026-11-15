@@ -26,6 +26,7 @@
  * multi_managers firing it).
  */
 #include "game/hl/util.h"
+#include "game/hl/savegame.h"
 
 /* SUB_UseTargets of a logic record (CBaseDelay semantics): delay -> a
  * delayed fire (the DelayedUse entity's work); else killtarget, target. */
@@ -272,6 +273,22 @@ void game_logic_reset(void)
 
 	for (i = 0; i < MM_CLONES; i++)
 		mm_clones[i].gid = GID_NONE;
+}
+
+uint32_t MM_SaveState(int op)
+{
+	uint32_t n = sg_io(op, mm_clones, sizeof(mm_clones));
+	int i;
+
+	if (op == SG_GET)
+		for (i = 0; i < MM_CLONES; i++)
+			if (mm_clones[i].gid != GID_NONE && mm_clones[i].m_index > MAX_MULTI_TARGETS)
+			{
+				sv_fail("game: multi_manager clone index out of range");
+				game_logic_reset();
+				break;
+			}
+	return n;
 }
 
 /* ---- trigger_relay -------------------------------------------------------- */

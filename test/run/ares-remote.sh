@@ -27,9 +27,17 @@
 #       HL64_ARES_REMOTE_ICD (the host's Vulkan ICD file for parallel-RDP,
 #       default /usr/share/vulkan/icd.d/nvidia_icd.json),
 #       ARES_TIMEOUT, ARES_STAT_FILE (written: "<wall s> <load> <host>").
+#       ARES_FLASH_IN / ARES_FLASH_OUT (ares.sh: the saved-game chip image
+#       before / after the run; IN is staged to <id>/flash/in.fla, OUT
+#       fetched from <id>/flash/out.fla).
+#       ARES_PAK_IN / ARES_PAK_OUT (ares.sh: controller 1's Controller Pak
+#       image before / after; IN staged to <id>/pak/in.pak, OUT fetched
+#       from <id>/pak/out.pak).
 # Host setup (once): the patched ares at ~/hl64-ares/build/desktop-ui/ares
-# (test/ares-testharness.patch, test/ares-large-rom-isviewer.patch; same
-# CMake options as the local build), its settings in ~/hl64-ares/xdg/ares
+# (test/ares-testharness.patch, test/ares-large-rom-isviewer.patch,
+# test/ares-flash.patch, test/ares-pak.patch; same CMake options as the
+# local build), its
+# settings in ~/hl64-ares/xdg/ares
 # (XDG_DATA_HOME of every remote run), Xvfb, a Vulkan ICD. Measured on
 # ares-host (hl2-yard scene ROM): the NVIDIA ICD and Mesa lavapipe (what a
 # GPU-less machine like build-vm runs) give the same log and shots;
@@ -58,6 +66,10 @@ if [[ "${1:-}" == --remote-side ]]; then
 	export VK_ICD_FILENAMES="${HL64_ARES_REMOTE_ICD:-/usr/share/vulkan/icd.d/nvidia_icd.json}"
 	[[ -n "${ARES_TEST_INPUT:-}" ]] && export ARES_TEST_INPUT="$R/input/$ARES_TEST_INPUT"
 	[[ -n "${ARES_HOST_SHOT_DIR:-}" ]] && { mkdir -p "$R/shots"; export ARES_HOST_SHOT_DIR="$R/shots"; }
+	[[ -n "${ARES_FLASH_IN:-}" ]] && export ARES_FLASH_IN="$R/$ARES_FLASH_IN"
+	[[ -n "${ARES_FLASH_OUT:-}" ]] && { mkdir -p "$R/flash"; export ARES_FLASH_OUT="$R/$ARES_FLASH_OUT"; }
+	[[ -n "${ARES_PAK_IN:-}" ]] && export ARES_PAK_IN="$R/$ARES_PAK_IN"
+	[[ -n "${ARES_PAK_OUT:-}" ]] && { mkdir -p "$R/pak"; export ARES_PAK_OUT="$R/$ARES_PAK_OUT"; }
 	mkdir -p "$R/run"
 	c=0
 	if ares_slot_take "$HOME/hl64-runs/.slot" "${HL64_ARES_REMOTE_SLOTS:-8}"; then
@@ -127,6 +139,30 @@ if [[ -n "${ARES_HOST_SHOT_DIR:-}" ]]; then
 	SHOTS="$(abs "$ARES_HOST_SHOT_DIR")"
 	FWD+=(ARES_HOST_SHOT_DIR=1)
 fi
+FLASH_OUT=
+if [[ -n "${ARES_FLASH_IN:-}" ]]; then
+	FIN="$(abs "$ARES_FLASH_IN")"
+	[[ -f "$FIN" ]] || { echo "ares-remote: no ARES_FLASH_IN file $FIN" >&2; exit 2; }
+	mkdir -p "$ST/flash"
+	ln -s "$FIN" "$ST/flash/in.fla"
+	FWD+=(ARES_FLASH_IN=flash/in.fla)
+fi
+if [[ -n "${ARES_FLASH_OUT:-}" ]]; then
+	FLASH_OUT="$(abs "$ARES_FLASH_OUT")"
+	FWD+=(ARES_FLASH_OUT=flash/out.fla)
+fi
+PAK_OUT=
+if [[ -n "${ARES_PAK_IN:-}" ]]; then
+	PIN="$(abs "$ARES_PAK_IN")"
+	[[ -f "$PIN" ]] || { echo "ares-remote: no ARES_PAK_IN file $PIN" >&2; exit 2; }
+	mkdir -p "$ST/pak"
+	ln -s "$PIN" "$ST/pak/in.pak"
+	FWD+=(ARES_PAK_IN=pak/in.pak)
+fi
+if [[ -n "${ARES_PAK_OUT:-}" ]]; then
+	PAK_OUT="$(abs "$ARES_PAK_OUT")"
+	FWD+=(ARES_PAK_OUT=pak/out.pak)
+fi
 # shellcheck source=ares.sh
 . "$HERE/ares.sh"
 for v in "${ARES_FWD_VARS[@]}"; do
@@ -190,6 +226,22 @@ if [[ "$(cat "$ST/back/exit")" != 143 ]] || "${SSH[@]}" -n "$SSH_TO" "test -f $R
 	if [[ -n "$SHOTS" ]]; then
 		mkdir -p "$SHOTS"
 		rsync -rtz "$SSH_TO:$RR/shots/" "$SHOTS/" || { echo "ares-remote: copy back of the shots failed" >&2; exit 255; }
+	fi
+	if [[ -n "$FLASH_OUT" ]]; then
+		mkdir -p "$(dirname "$FLASH_OUT")"
+		if "${SSH[@]}" -n "$SSH_TO" "test -f $RR/flash/out.fla"; then
+			rsync -tz "$SSH_TO:$RR/flash/out.fla" "$FLASH_OUT" || { echo "ares-remote: copy back of the flash image failed" >&2; exit 255; }
+		else
+			echo "ares-remote: the run left no flash image (ROM without save type flashram, or no exit through the harness)" >&2
+		fi
+	fi
+	if [[ -n "$PAK_OUT" ]]; then
+		mkdir -p "$(dirname "$PAK_OUT")"
+		if "${SSH[@]}" -n "$SSH_TO" "test -f $RR/pak/out.pak"; then
+			rsync -tz "$SSH_TO:$RR/pak/out.pak" "$PAK_OUT" || { echo "ares-remote: copy back of the Pak image failed" >&2; exit 255; }
+		else
+			echo "ares-remote: the run left no Pak image (no exit through the harness)" >&2
+		fi
 	fi
 fi
 [[ -z "${ARES_STAT_FILE:-}" ]] || cp "$ST/back/wall" "$ARES_STAT_FILE"

@@ -26,6 +26,7 @@
 #include "hl64/settings.h"
 #include "game/hl/monster.h"
 #include "game/hl/player.h"
+#include "game/hl/savegame.h"
 
 #define ISLAVE_AE_CLAW		1
 #define ISLAVE_AE_CLAWRAKE	2
@@ -63,6 +64,7 @@ typedef struct {
 } CISlave;
 
 #define SLV(e)	((CISlave *)ent_priv(e))
+_Static_assert(ISLAVE_MAX_BEAMS <= FX_BEAM_KEYS_PER_ENT, "a slave's beams have keys");
 
 static const int16_t slvAttackHit[] = { R_ZO_CLAW_STRIKE1, R_ZO_CLAW_STRIKE2, R_ZO_CLAW_STRIKE3 };
 static const int16_t slvAttackMiss[] = { R_ZO_CLAW_MISS1, R_MON_CLAW_MISS2 };
@@ -78,6 +80,9 @@ static const Schedule_t slSlaveAttack1[] = {
 	SCHED(tlSlaveAttack1, bits_COND_CAN_MELEE_ATTACK1 | bits_COND_HEAR_SOUND |
 		bits_COND_HEAVY_DAMAGE, bits_SOUND_DANGER, "Slave Range Attack1")
 };
+
+/* saved games: append only (monster.h sched_list_t) */
+SCHED_LIST(sched_islave, slSlaveAttack1);
 
 static int Slv_Classify(int e) { (void)e; return CLASS_ALIEN_MILITARY; }
 
@@ -147,10 +152,14 @@ static int Slv_ISoundMask(int e)
 	return bits_SOUND_WORLD | bits_SOUND_COMBAT | bits_SOUND_DANGER | bits_SOUND_PLAYER;
 }
 
-static void beam_issue(slv_beam_t *b)
+/* beam n of slave e: its key is FX_BEAM_KEY(e, n), game state (never an
+ * fx pool slot: the block saves with the game) */
+static void beam_issue(int e, int n)
 {
-	b->id = (int16_t)fx_beam(-1, b->p0, -1, b->p1, RESID(SLV_LGTNING_SPR), b->width, b->noise,
-		b->rgb[0], b->rgb[1], b->rgb[2], b->bright, 0, 0);
+	slv_beam_t *b = &SLV(e)->m_pBeam[n];
+
+	b->id = (int16_t)fx_beam(FX_BEAM_KEY(e, n), -1, b->p0, -1, b->p1, RESID(SLV_LGTNING_SPR),
+		b->width, b->noise, b->rgb[0], b->rgb[1], b->rgb[2], b->bright, 0, 0);
 }
 
 /* a beam from p0 to the hand (end attachment side < 0 ? 2 : 1) */
@@ -168,7 +177,7 @@ static void beam_add(int e, int side, const float p0[3], int width, int noise, i
 	bm->rgb[1] = (uint8_t)g;
 	bm->rgb[2] = (uint8_t)b;
 	bm->bright = (uint8_t)bright;
-	beam_issue(bm);
+	beam_issue(e, s->m_iBeams);
 	s->m_iBeams++;
 }
 
@@ -231,9 +240,7 @@ static void Slv_BeamGlow(int e)
 		if (s->m_pBeam[i].bright == 255)
 			continue;
 		s->m_pBeam[i].bright = (uint8_t)b;
-		if (s->m_pBeam[i].id >= 0)
-			fx_beam_kill(s->m_pBeam[i].id);
-		beam_issue(&s->m_pBeam[i]);
+		beam_issue(e, i);	/* replaces the beam of its key */
 	}
 }
 
@@ -513,6 +520,20 @@ static const sv_field_t f_CISlave[] = {
 };
 static const sv_table_t sv_CISlave = SV_TABLE(&sv_CSquadMonster, f_CISlave,
 	.released = Slv_ClearBeams);
+
+/* After a saved game's load (frame layer: the slave's): its zap beams
+ * (until killed) issued again from what the block keeps of them, so the
+ * kills of its next ClearBeams / BeamGlow name its own beams. */
+void CISlave_LoadDone(int e)
+{
+	CISlave *s = SLV(e);
+	int i;
+
+	if (s->m_iBeams < 0 || s->m_iBeams > ISLAVE_MAX_BEAMS)
+		s->m_iBeams = 0;
+	for (i = 0; i < s->m_iBeams; i++)
+		beam_issue(e, i);
+}
 
 const game_class_t gc_MONSTER_ALIEN_SLAVE = {
 	.size = sizeof(CISlave),

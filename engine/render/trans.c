@@ -37,6 +37,8 @@
 #include "engine/render/gpu_studio.h"
 #include "engine/render/ren.h"
 #include "engine/render/trans.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/world/wld.h"
 
 #define PI2		6.2831853f
@@ -571,3 +573,20 @@ int trans_last_order(uint8_t *kind, uint16_t *id, uint8_t *blend, int max)
 	return nitems;
 }
 #endif
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* The renderfx fade remainders: trans_frame writes renderamt with them. */
+void trans_save(void)
+{
+	sv_tag(SV_TAG('T', 'R', 'N', '1'));
+	sv_put_delta(frac, NULL, sizeof(frac));
+}
+
+int trans_load(void)
+{
+	if (sv_expect(SV_TAG('T', 'R', 'N', '1')))
+		return -1;
+	sv_get_delta(frac, NULL, sizeof(frac), NULL);
+	return sv_failed() ? -1 : 0;
+}

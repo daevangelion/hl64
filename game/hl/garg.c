@@ -35,6 +35,7 @@
 #include "game/hl/breakable.h"
 #include "game/hl/gib.h"
 #include "game/hl/monster.h"
+#include "game/hl/savegame.h"
 
 #define GARG_ATTACKDIST		80.0f
 #define GARG_AE_SLASH_LEFT	1
@@ -66,7 +67,7 @@ typedef struct {
 	CBASEANIMATING_FIELDS
 	CBASETOGGLE_FIELDS
 	CBASEMONSTER_FIELDS
-	int16_t		m_pFlame[4];	/* fx beam ids, -1 none */
+	int16_t		m_pFlame[4];	/* fx beam keys, -1 none */
 	uint8_t		m_flameOn;
 	uint8_t		m_eyeOn;	/* the eye glow exists (until Killed) */
 	uint8_t		m_eyeRenderamt;	/* m_pEyeGlow->pev->renderamt */
@@ -107,6 +108,9 @@ static const Task_t tlGargSwipe[] = {
 static const Schedule_t slGargSwipe[] = {
 	SCHED(tlGargSwipe, bits_COND_CAN_MELEE_ATTACK2, 0, "GargSwipe")
 };
+
+/* saved games: append only (monster.h sched_list_t) */
+SCHED_LIST(sched_garg, slGargFlame, slGargSwipe);
 
 /* TE_STREAK_SPLASH */
 static void StreakSplash(const float org[3], const float dir[3], int color, int count)
@@ -356,12 +360,15 @@ static void Ga_StompAttack(int e)
 		UTIL_DecalTrace(&tr, DECAL_GARGSTOMP1);
 }
 
-/* one flame beam: from the flame end to the gun */
-static int flame_beam(int i, const float from[3], const float gun[3])
+/* flame beam i of gargantua e: from the flame end to the gun (key
+ * FX_BEAM_KEY(e, i): a new one replaces it) */
+static int flame_beam(int e, int i, const float from[3], const float gun[3])
 {
 	if (i < 2)
-		return fx_beam(-1, from, -1, gun, RESID(GA_BEAM_SPR), 240, 0, 255, 130, 90, 190, 20, 2);
-	return fx_beam(-1, from, -1, gun, RESID(GA_BEAM_SPR), 140, 0, 0, 120, 255, 190, 20, 2);
+		return fx_beam(FX_BEAM_KEY(e, i), -1, from, -1, gun, RESID(GA_BEAM_SPR), 240, 0, 255,
+			130, 90, 190, 20, 2);
+	return fx_beam(FX_BEAM_KEY(e, i), -1, from, -1, gun, RESID(GA_BEAM_SPR), 140, 0, 0, 120,
+		255, 190, 20, 2);
 }
 
 static void Ga_FlameCreate(int e)
@@ -377,7 +384,7 @@ static void Ga_FlameCreate(int e)
 		gs_attachment(e, i % 2 + 1, gun);
 		VecMA(gun, GARG_FLAME_LENGTH, gpGlobals.v_forward, end);
 		UTIL_TraceLine(gun, end, dont_ignore_monsters, e, &tr);
-		g->m_pFlame[i] = (int16_t)flame_beam(i, tr.end, gun);
+		g->m_pFlame[i] = (int16_t)flame_beam(e, i, tr.end, gun);
 		CSoundEnt_InsertSound(bits_SOUND_COMBAT, gun, 384, 0.3f);
 	}
 	g->m_flameOn = 1;
@@ -479,14 +486,10 @@ static void Ga_FlameUpdate(int e)
 		gs_attachment(e, i + 1, start);
 		VecMA(start, GARG_FLAME_LENGTH, gpGlobals.v_forward, end);
 		UTIL_TraceLine(start, end, dont_ignore_monsters, e, &tr);
-		if (g->m_pFlame[i] >= 0)
-			fx_beam_kill(g->m_pFlame[i]);
-		if (g->m_pFlame[i + 2] >= 0)
-			fx_beam_kill(g->m_pFlame[i + 2]);
-		g->m_pFlame[i] = (int16_t)flame_beam(i, tr.end, start);
+		g->m_pFlame[i] = (int16_t)flame_beam(e, i, tr.end, start);
 		VecScale(start, 0.6f, inner);
 		VecMA(inner, 0.4f, tr.end, inner);
-		g->m_pFlame[i + 2] = (int16_t)flame_beam(i + 2, inner, start);
+		g->m_pFlame[i + 2] = (int16_t)flame_beam(e, i + 2, inner, start);
 		if (tr.frac != 1.0f && gtime() > g->m_streakTime)
 		{
 			StreakSplash(tr.end, tr.normal, 6, 20);
@@ -969,6 +972,19 @@ static void CGargantua_restored(int e)
 	for (i = 0; i < 4; i++)
 		g->m_pFlame[i] = -1;
 	g->m_flameOn = 0;
+}
+
+/* After a saved game's load: the flame beams (0.2 s each, made again by
+ * every FlameUpdate) are gone with the effects; their ids name nothing,
+ * and killing them would kill another beam. m_flameOn stays: the next
+ * FlameUpdate makes them, as the saving game's would. */
+void CGargantua_LoadDone(int e)
+{
+	CGargantua *g = GARG(e);
+	int i;
+
+	for (i = 0; i < 4; i++)
+		g->m_pFlame[i] = -1;
 }
 
 static const sv_field_t f_CGargantua[] = {

@@ -21,12 +21,17 @@
 
 #include "hl64/settings.h"
 
-/* FlashRAM: 128 KB in 16 KB sectors; sector 0 the settings block, sectors
- * 1..7 a pool the saves take whole sectors of. */
+/* FlashRAM: 128 KB in 16 KB sectors, all a pool the copies take whole
+ * sectors of: a save takes 1 or 2 (its header, the settings block and the
+ * image), a settings-only copy 1. */
 #define SAVE_FLASH_BYTES	(128u * 1024u)
 #define SAVE_SECTOR_BYTES	(16u * 1024u)
-#define SAVE_POOL_SECTORS	7
-#define SAVE_IMAGE_MAX		(30u * 1024u)	/* a save's image at most (a Pak note fits) */
+#define SAVE_POOL_SECTORS	8
+#define SAVE_COPY_SECTORS	2		/* sectors a save takes at most */
+/* a save's image at most: two sectors less the 128 B header and the 384 B
+ * settings block (a Flash save) */
+#define SAVE_IMAGE_MAX		(SAVE_COPY_SECTORS * SAVE_SECTOR_BYTES - 512u)
+#define SAVE_PAK_IMAGE_MAX	(30u * 1024u)	/* a Controller Pak save's image (one note) */
 #define SAVE_FLASH_MANUAL	2		/* manual Flash slots beside the autosave */
 #define SAVE_PAK_SLOTS		4		/* Pak entries listed at most */
 #define SAVE_SLOTS_MAX		(1 + SAVE_FLASH_MANUAL + SAVE_PAK_SLOTS)
@@ -75,28 +80,38 @@ int	save_load(int slot);
 /* 1 while a write or a load is in flight (draw "Saving..." / "Loading..."
  * and keep running frames), else 0. */
 int	save_busy(void);
-/* Result of the last finished operation: 0 ok, -1 failed. */
+/* Result of the last finished operation: 0 ok, else SAVE_ERR_* (< 0). */
+#define SAVE_ERR		(-1)	/* failed (I/O, a bad image, no room) */
+#define SAVE_ERR_SIZE		(-2)	/* the game's state is too large for a save */
+#define SAVE_ERR_PAK_SIZE	(-3)	/* too large for the Controller Pak: Flash fits it */
 int	save_result(void);
 /* SAVE_PAK_* for controller 1, polled by save_frame. */
 int	save_pak_status(void);
 
 /* Autosave (game: trigger_autosave; engine: a finished seam crossing):
- * asked now, taken at the next frame boundary where nothing is in flight
- * (not in a seam window or crossing); dropped if a save or load is busy.
- * Writes the autosave slot; the previous autosave stays until the new one
- * is committed. */
+ * asked now, taken at the first frame boundary with nothing else of ours
+ * running and no seam window or crossing; a load drops the request.
+ * Writes the autosave slot to free pool sectors; the previous autosave
+ * stays until the new one is committed (the pool always has the room). */
 void	save_autosave(void);
 
-/* The persistent settings (settings_desc persist = 1), by field id. */
+/* The persistent settings (settings_desc persist = 1), by field id: the
+ * newest settings block on the flash (a settings-only copy's or a Flash
+ * save's: every Flash save carries the settings of its time). */
 int	settings_load(settings_t *s);		/* 0 ok, -1 none / corrupt (s untouched) */
 int	settings_store(const settings_t *s);	/* async (save_busy); 0 started, -1 busy */
 
 /* Boot: probe the flash and the Pak, read the directory (eng_boot). */
 void	save_init(void);
 /* eng_frame, first thing every frame: steps the writers, applies a
- * scheduled load or autosave, polls the Pak. Returns 1 while a snapshot or
- * a load holds the frame (the caller runs no game step, no route, no debug
- * commands that frame), else 0. */
+ * scheduled load or autosave, polls the Pak. Returns SAVE_HOLD while a
+ * manual save or a load holds the frame (the caller runs no game step, no
+ * route, no debug commands that frame; it shows the progress and runs
+ * the sound, which is muted around such holds), SAVE_HOLD_QUIET for an
+ * autosave's snapshot frame (as SAVE_HOLD, but nothing is drawn or
+ * shown: the last frame stays on screen), else 0. */
+#define SAVE_HOLD	1
+#define SAVE_HOLD_QUIET	2
 int	save_frame(void);
 
 #endif

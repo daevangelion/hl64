@@ -53,6 +53,8 @@
 #include "engine/io/io.h"
 #include "engine/mem/carve.h"
 #include "engine/phys/phys.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/world/wld.h"
 
 /* record runtime flags */
@@ -241,6 +243,7 @@ static struct {
 	uint32_t	live_peak;
 	uint8_t		*store;		/* DEHYDRATE region */
 	uint32_t	store_used, store_cap, store_peak;
+	uint32_t	restore_at[REC_SLOTS];	/* a load's saved block offset, ~0u: heap_find */
 } R;
 
 static const float zero3[3] = { 0, 0, 0 };
@@ -1697,7 +1700,8 @@ static void header_done(rmap_t *m, const wld_layer_t *L)
 	}
 	need = ((len + 15) & ~15u) + nrecs * (uint32_t)sizeof(rrt_t)
 		+ nrecs * (uint32_t)sizeof(rec_logic_t) + 2 * nrecs + 16;
-	if ((at = heap_find(need)) == ~0u)
+	at = R.restore_at[m->slot] != ~0u ? R.restore_at[m->slot] : heap_find(need);
+	if (at == ~0u || at > R.heap_len || need > R.heap_len - at)
 		sys_error("%s: ENTS: %lu B do not fit the HLE region (%u KB)", file,
 			(unsigned long)need, (unsigned)HL64_HLE_BLOBS_KB);
 	m->block = at;
@@ -3395,6 +3399,7 @@ void rec_init(void)
 	R.heap_len = total - fixed;
 	R.store = mem_region(MEM_DEHYDRATE);
 	R.store_cap = mem_region_bytes(MEM_DEHYDRATE);
+	memset(R.restore_at, 0xFF, sizeof(R.restore_at));
 	rec_reset();
 }
 
@@ -3541,4 +3546,618 @@ void rec_mem_line(void)
 		(unsigned long)R.store_cap, (unsigned long)R.store_peak, (unsigned long)R.live_peak,
 		(unsigned long)R.st.released_total, (unsigned long)R.close_dropped,
 		(unsigned long)R.store_full);
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* Before a snapshot: an HLE slot whose open is in flight finishes now
+ * (its layer is ready: save.c settled the layers first), and a map's
+ * precache hold lands its infos now, as a map load does. The same in a
+ * run that saves and goes on as in the save. */
+void rec_settle(void)
+{
+	int s;
+
+	for (s = 0; s < REC_SLOTS; s++)
+	{
+		rmap_t *m = &R.map[s];
+
+		if (m->phase != PH_CLOSED && m->phase != PH_READY)
+		{
+			const wld_layer_t *L = wld_layer_of_map(m->map);
+
+			if (L && L->slot == s && wld_layer_ready(L) == 1)
+				rec_map_finish(s);
+		}
+		else if (m->phase == PH_READY && m->pre_wait)
+		{
+			io_set_load(1);
+			studio_preload();
+			io_set_load(0);
+			m->pre_wait = 0;
+			wld_stream_spawn_gate(m->slot, 0);
+		}
+	}
+}
+
+int rec_settled(void)
+{
+	int s;
+
+	for (s = 0; s < REC_SLOTS; s++)
+	{
+		const rmap_t *m = &R.map[s];
+
+		if ((m->phase != PH_CLOSED && m->phase != PH_READY) || (m->phase == PH_READY && m->pre_wait))
+			return 0;
+	}
+	return 1;
+}
+
+/* ---- saved games (architecture.md 14) --------------------------------------------- */
+
+void rec_slot_records(uint32_t *out)
+{
+	int s, e;
+	uint32_t i;
+
+	for (e = 0; e < HL64_MAX_ENTITIES; e++)
+		out[e] = GID_NONE;
+	for (s = 0; s < REC_SLOTS; s++)
+	{
+		const rmap_t *m = &R.map[s];
+
+		if (m->phase != PH_READY)
+			continue;
+		for (i = 0; i < m->h->numrecs; i++)
+		{
+			const rrt_t *t = &m->rt[i];
+
+			if (t->state == REC_LIVE && (t->flags & RT_PHYS) && (t->h & 0xFFFFu) < HL64_MAX_ENTITIES)
+				out[t->h & 0xFFFFu] = (uint32_t)gid_of(m, (int)i) | (t->h & 0xFFFF0000u);
+		}
+	}
+}
+
+int rec_entity_ref(gid_t16 gid, ent_id_t *id, uint32_t *rank, float org[3], float ang[3])
+{
+	rmap_t *m;
+	int ri = rec_index(gid, &m);
+	const hle_rec_t *r;
+
+	if (ri < 0 || !(m->rt[ri].flags & RT_PHYS))
+		return -1;
+	r = &m->recs[ri];
+	id->layer = (int8_t)m->slot;
+	id->gid = gid;
+	id->cls = m->cls[r->cls].id;
+	id->targetname = r->tname == HLE_NONE ? NAME_NONE : NAME_MAKE(m->slot, r->tname);
+	if (r->trank != HLE_NONE)
+		*rank = (uint32_t)m->slot << 16 | r->trank;
+	rec_origin(gid, org);
+	rec_angles(gid, ang);
+	return 0;
+}
+
+/* The reference a record's runtime row is saved against: the row
+ * chunk_done gives a fresh slot before any thaw (state PENDING, the kind,
+ * the cooked bounds, the logic block or pending position, the pending
+ * grid built in record order: pend_add's huge rule and bucket). Rows
+ * come in record order; sim holds the grid built so far. */
+typedef struct {
+	uint16_t	head[PG_BUCKETS];
+	uint16_t	huge, nlog, npend;
+} rt_sim_t;
+
+static void rt_sim_begin(rt_sim_t *s)
+{
+	memset(s->head, 0xFF, sizeof(s->head));
+	s->huge = HLE_NONE;
+	s->nlog = s->npend = 0;
+}
+
+static void rt_ref(const rmap_t *m, int ri, rrt_t *t, rt_sim_t *s)
+{
+	const hle_rec_t *r = &m->recs[ri];
+
+	memset(t, 0, sizeof(*t));
+	t->state = REC_PENDING;
+	cooked_bounds(m, ri, t->lo, t->hi);
+	if (r->flags & HLE_CF_LOGIC)
+	{
+		t->flags = RT_LOGIC;
+		t->aux = s->nlog++;
+	}
+	else if (r->flags & HLE_CF_POINT)
+		t->flags = RT_POINT;
+	else
+	{
+		t->flags = RT_PHYS;
+		t->aux = s->npend++;
+		if ((float)(t->hi[0] - t->lo[0]) > 2 * PG_HALF || (float)(t->hi[1] - t->lo[1]) > 2 * PG_HALF
+			|| (float)(t->hi[2] - t->lo[2]) > 2 * PG_HALF)
+		{
+			t->flags |= RT_HUGE;
+			t->pnext = s->huge;
+			s->huge = (uint16_t)ri;
+		}
+		else
+		{
+			uint32_t b = pg_bucket(ifloor(0.5f * (t->lo[0] + t->hi[0]) / PG_CELL),
+				ifloor(0.5f * (t->lo[1] + t->hi[1]) / PG_CELL),
+				ifloor(0.5f * (t->lo[2] + t->hi[2]) / PG_CELL));
+
+			t->pnext = s->head[b];
+			s->head[b] = (uint16_t)ri;
+		}
+	}
+}
+
+/* A record row against its reference, field by field: a byte of the
+ * fields that differ (RTF_*) with the state (0..3) in its bits 5-6, then
+ * those fields. */
+#define RTF_FLAGS	0x01
+#define RTF_AUX		0x02
+#define RTF_H		0x04
+#define RTF_BOX		0x08
+#define RTF_PNEXT	0x10
+#define RTF_PAD		0x80
+_Static_assert(REC_DRY <= 3, "record states fit two bits");
+
+static void rt_put(const rrt_t *t, const rrt_t *ref)
+{
+	uint32_t m = (uint32_t)(t->state & 3u) << 5;
+
+	m |= t->flags != ref->flags ? RTF_FLAGS : 0;
+	m |= t->aux != ref->aux ? RTF_AUX : 0;
+	m |= t->h != ref->h ? RTF_H : 0;
+	m |= memcmp(t->lo, ref->lo, sizeof(t->lo) + sizeof(t->hi)) ? RTF_BOX : 0;
+	m |= t->pnext != ref->pnext ? RTF_PNEXT : 0;
+	m |= t->pad != ref->pad ? RTF_PAD : 0;
+	sv_u8(m);
+	if (m & RTF_FLAGS)
+		sv_u8(t->flags);
+	if (m & RTF_AUX)
+		sv_u16(t->aux);
+	if (m & RTF_H)
+		sv_u32(t->h);
+	if (m & RTF_BOX)
+	{
+		sv_put(t->lo, sizeof(t->lo));
+		sv_put(t->hi, sizeof(t->hi));
+	}
+	if (m & RTF_PNEXT)
+		sv_u16(t->pnext);
+	if (m & RTF_PAD)
+		sv_u16(t->pad);
+}
+
+static void rt_get(rrt_t *t, const rrt_t *ref)
+{
+	uint32_t m = sv_get_u8();
+
+	*t = *ref;
+	t->state = (uint8_t)(m >> 5 & 3u);
+	if (m & RTF_FLAGS)
+		t->flags = (uint8_t)sv_get_u8();
+	if (m & RTF_AUX)
+		t->aux = (uint16_t)sv_get_u16();
+	if (m & RTF_H)
+		t->h = sv_get_u32();
+	if (m & RTF_BOX)
+	{
+		sv_get(t->lo, sizeof(t->lo));
+		sv_get(t->hi, sizeof(t->hi));
+	}
+	if (m & RTF_PNEXT)
+		t->pnext = (uint16_t)sv_get_u16();
+	if (m & RTF_PAD)
+		t->pad = (uint16_t)sv_get_u16();
+}
+
+/* A record on the pending list: physical, pending or dry (pend_remove). */
+static int rt_pending(const rrt_t *t)
+{
+	return (t->flags & RT_PHYS) && (t->state == REC_PENDING || t->state == REC_DRY);
+}
+
+/* The pending list is the pending records at their positions (aux): then
+ * a load rebuilds it from the rows. */
+static int plist_derivable(const rmap_t *m)
+{
+	uint32_t p, i, n = 0;
+
+	for (p = 0; p < m->npend; p++)
+		if (m->plist[p] >= m->h->numrecs || m->rt[m->plist[p]].aux != p
+			|| !rt_pending(&m->rt[m->plist[p]]))
+			return 0;
+	for (i = 0; i < m->h->numrecs; i++)
+		n += rt_pending(&m->rt[i]);
+	return n == m->npend;
+}
+
+/* A table of cap rows of size bytes: the rows up to the last one that is
+ * not ref (NULL: zeros), each a delta row against ref. */
+static void rows_put(const void *a, uint32_t size, uint32_t cap, const void *ref)
+{
+	static const uint8_t zero[64];
+	const uint8_t *p = a;
+	uint32_t i, n = 0;
+
+	for (i = 0; i < cap; i++)
+		if (memcmp(p + i * size, ref ? ref : zero, size))
+			n = i + 1;
+	sv_u16(n);
+	for (i = 0; i < n; i++)
+		sv_put_delta(p + i * size, ref, size);
+}
+
+static void rows_get(void *a, uint32_t size, uint32_t cap, const void *ref)
+{
+	uint8_t *p = a;
+	uint32_t i, n = sv_get_u16();
+
+	if (n > cap)
+	{
+		sv_fail("rec: table rows");
+		n = 0;
+	}
+	for (i = 0; i < cap; i++)
+		if (i < n)
+			sv_get_delta(p + i * size, ref, size, NULL);
+		else if (ref)
+			memcpy(p + i * size, ref, size);
+		else
+			memset(p + i * size, 0, size);
+}
+
+/* The record row a store entry belongs to (an open map's record), NULL. */
+static const rrt_t *store_rec(const rstore_t *h)
+{
+	rmap_t *m;
+	int s, ri;
+
+	if (h->lump == LUMP_RT || (s = slot_of_map(h->map)) < 0
+		|| (ri = rec_index(GID_MAKE(s, h->lump), &m)) < 0)
+		return NULL;
+	return &m->rt[ri];
+}
+
+/* The store entry by entry: map, lump, runtime id and delta length, the
+ * release box only when it is not the box of the entry's record row (a
+ * dry record's), the delta with its padding. */
+static void store_put(void)
+{
+	uint32_t at = 0;
+
+	sv_u32(R.store_used);
+	while (at < R.store_used)
+	{
+		const rstore_t *h = (const rstore_t *)(R.store + at);
+		const rrt_t *t;
+		uint32_t n;
+		int box;
+
+		if (R.store_used - at < sizeof(rstore_t)
+			|| (n = store_need(h->len)) > R.store_used - at)
+		{
+			sv_fail("rec: store entries");
+			return;
+		}
+		t = store_rec(h);
+		box = !t || memcmp(t->lo, h->lo, sizeof(h->lo)) || memcmp(t->hi, h->hi, sizeof(h->hi));
+		sv_u16(h->map);
+		sv_u16(h->lump);
+		sv_u16(h->rtid);
+		sv_u16(h->len);
+		sv_u8((uint32_t)box);
+		if (box)
+		{
+			sv_put(h->lo, sizeof(h->lo));
+			sv_put(h->hi, sizeof(h->hi));
+		}
+		sv_put(R.store + at + sizeof(rstore_t), n - (uint32_t)sizeof(rstore_t));
+		at += n;
+	}
+}
+
+static int store_get(void)
+{
+	uint32_t at = 0;
+
+	R.store_used = sv_get_u32();
+	if (R.store_used > R.store_cap)
+	{
+		sv_fail("rec: store size");
+		return -1;
+	}
+	while (at < R.store_used && !sv_failed())
+	{
+		rstore_t *h = (rstore_t *)(R.store + at);
+		const rrt_t *t;
+		uint32_t n;
+
+		if (R.store_used - at < sizeof(rstore_t))
+			break;
+		memset(h, 0, sizeof(*h));
+		h->map = (uint16_t)sv_get_u16();
+		h->lump = (uint16_t)sv_get_u16();
+		h->rtid = (uint16_t)sv_get_u16();
+		h->len = (uint16_t)sv_get_u16();
+		if ((n = store_need(h->len)) > R.store_used - at)
+			break;
+		if (sv_get_u8())
+		{
+			sv_get(h->lo, sizeof(h->lo));
+			sv_get(h->hi, sizeof(h->hi));
+		}
+		else if ((t = store_rec(h)))
+		{
+			memcpy(h->lo, t->lo, sizeof(h->lo));
+			memcpy(h->hi, t->hi, sizeof(h->hi));
+		}
+		else
+			break;
+		sv_get(R.store + at + sizeof(rstore_t), n - (uint32_t)sizeof(rstore_t));
+		at += n;
+	}
+	if (at != R.store_used)
+		sv_fail("rec: store entries");
+	if (R.store_used > R.store_peak)
+		R.store_peak = R.store_used;
+	return sv_failed() ? -1 : 0;
+}
+
+/* Per ready slot its map and block (the slot reopens there), then the
+ * runtime part of the block: record rows against rt_ref, logic blocks,
+ * the pending list (or nothing when the rows give it), the pending grid's
+ * heads against the record-order grid; the tables (timers, frozen timers,
+ * uses, holders, runtime ids, twins, frozen maps, release retries) up to
+ * their last used row with the counters; the frozen maps' blocks at their
+ * offsets; the store. */
+void rec_save(void)
+{
+	static rt_sim_t sim;
+	rhold_t href;
+	rfmap_t fref;
+	int s, j;
+
+	sv_part("rec maps");
+	sv_tag(SV_TAG('R', 'E', 'C', '2'));
+	for (s = 0; s < REC_SLOTS; s++)
+	{
+		const rmap_t *m = &R.map[s];
+		uint32_t n, i;
+		int derived;
+
+		sv_u8(m->phase == PH_READY);
+		if (m->phase != PH_READY)
+			continue;
+		n = m->h->numrecs;
+		sv_u16(m->map);
+		sv_u32(m->block);
+		sv_u32(n);
+		sv_part("rec rt");
+		rt_sim_begin(&sim);
+		for (i = 0; i < n; i++)
+		{
+			rrt_t ref;
+
+			rt_ref(m, (int)i, &ref, &sim);
+			rt_put(&m->rt[i], &ref);
+		}
+		sv_part("rec logic");
+		sv_u16(m->nlogic);
+		for (i = 0; i < m->nlogic; i++)
+			sv_put_delta(&m->logic[i], NULL, sizeof(rec_logic_t));
+		sv_part("rec pending");
+		derived = plist_derivable(m);
+		sv_u16(m->npend);
+		sv_u8((uint32_t)derived);
+		if (!derived)
+			sv_put(m->plist, 2u * m->npend);
+		sv_part("rec pgrid");
+		sv_u16(m->huge);
+		sv_put_delta(m->head, sim.head, sizeof(m->head));
+		sv_put(m->pmin, sizeof(m->pmin));
+		sv_put(m->pmax, sizeof(m->pmax));
+		sv_u32(m->pgen);
+		sv_u8(m->idle);
+		sv_u32(m->idle_gen);
+		sv_put(m->idle_at, sizeof(m->idle_at));
+		sv_f32(m->rel_next);
+		sv_u8(m->logic_pending);
+		sv_u8(m->pre_wait);
+		sv_part("rec maps");
+	}
+	memset(&href, 0, sizeof(href));
+	href.n = NAME_NONE;
+	memset(&fref, 0, sizeof(fref));
+	fref.map = WLD_NO_MAP;
+	sv_part("rec tables");
+	rows_put(R.tm, sizeof(rtimer_t), REC_TIMERS, NULL);
+	rows_put(R.frozen, sizeof(rfrozen_t), REC_TIMERS, NULL);
+	rows_put(R.defer, sizeof(rdefer_t), REC_DEFER, NULL);
+	rows_put(R.hold, sizeof(rhold_t), REC_HOLDERS, &href);
+	rows_put(R.run, sizeof(rrun_t), REC_RUNTIME, NULL);
+	rows_put(R.twin, sizeof(rtwin_t), REC_TWINS, NULL);
+	rows_put(R.fmap, sizeof(rfmap_t), REC_FROZEN_MAPS, &fref);
+	sv_put_delta(R.retry, NULL, HL64_MAX_ENTITIES * (uint32_t)sizeof(float));
+	sv_u32(R.ntm);
+	sv_u32(R.seq);
+	sv_u32(R.nfrozen);
+	sv_u32(R.ndefer);
+	sv_u32(R.ntwin);
+	sv_u32(R.fage);
+	sv_u16(R.next_rtid);
+	sv_u16(R.pass);
+	sv_part("rec frozen maps");
+	for (j = 0; j < REC_FROZEN_MAPS; j++)
+		if (R.fmap[j].map != WLD_NO_MAP)
+			sv_put_delta(R.heap + R.fmap[j].block, NULL, R.fmap[j].block_len);
+	sv_part("rec store");
+	store_put();
+	sv_part("rec spawn");
+	sv_put(spawn_sig, sizeof(spawn_sig));
+	sv_u32((uint32_t)spawn_home);
+	sv_put(held_anc, sizeof(held_anc));
+	sv_u32((uint32_t)held_nanc);
+}
+
+/* A loaded record row: values its slot can hold. */
+static int rt_valid(const rmap_t *m, const rrt_t *t)
+{
+	uint32_t n = m->h->numrecs;
+
+	if (t->state > REC_DRY || (t->flags & ~(RT_LOGIC | RT_POINT | RT_PHYS | RT_HUGE))
+		|| (t->pnext >= n && t->pnext != HLE_NONE))
+		return 0;
+	if (t->flags & RT_LOGIC)
+		return t->aux < m->nlogic;
+	return !rt_pending(t) || t->aux < n;
+}
+
+int rec_load(void)
+{
+	static rt_sim_t sim;
+	rhold_t href;
+	rfmap_t fref;
+	int s, j;
+
+	if (sv_expect(SV_TAG('R', 'E', 'C', '2')))
+		return -1;
+	for (s = 0; s < REC_SLOTS && !sv_failed(); s++)
+	{
+		const wld_layer_t *L;
+		rmap_t *m = &R.map[s];
+		uint32_t map, block, n, i;
+
+		if (!sv_get_u8())
+			continue;
+		map = sv_get_u16();
+		block = sv_get_u32();
+		n = sv_get_u32();
+		if (sv_failed() || !(L = wld_layer(s)) || L->map != map || block >= R.heap_len)
+		{
+			sv_fail("rec: slot's layer");
+			break;
+		}
+		R.restore_at[s] = block;
+		rec_map_open(s);
+		rec_map_finish(s);
+		R.restore_at[s] = ~0u;
+		if (m->phase != PH_READY || m->h->numrecs != n)
+		{
+			sv_fail("rec: map records");
+			break;
+		}
+		rt_sim_begin(&sim);
+		for (i = 0; i < n && !sv_failed(); i++)
+		{
+			rrt_t ref;
+
+			rt_ref(m, (int)i, &ref, &sim);
+			rt_get(&m->rt[i], &ref);
+			if (!rt_valid(m, &m->rt[i]))
+				sv_fail("rec: record row");
+		}
+		if (sv_get_u16() != m->nlogic)
+		{
+			sv_fail("rec: logic records");
+			break;
+		}
+		for (i = 0; i < m->nlogic; i++)
+			sv_get_delta(&m->logic[i], NULL, sizeof(rec_logic_t), NULL);
+		m->npend = (uint16_t)sv_get_u16();
+		if (m->npend > n)
+		{
+			sv_fail("rec: pending list");
+			break;
+		}
+		if (sv_get_u8())
+		{
+			uint32_t c = 0;
+
+			memset(m->plist, 0xFF, 2u * m->npend);
+			for (i = 0; i < n && !sv_failed(); i++)
+			{
+				const rrt_t *t = &m->rt[i];
+
+				if (!rt_pending(t))
+					continue;
+				if (t->aux >= m->npend || m->plist[t->aux] != 0xFFFF)
+					sv_fail("rec: pending list");
+				else
+					m->plist[t->aux] = (uint16_t)i;
+				c++;
+			}
+			if (c != m->npend)
+				sv_fail("rec: pending list");
+		}
+		else
+			sv_get(m->plist, 2u * m->npend);
+		m->huge = (uint16_t)sv_get_u16();
+		sv_get_delta(m->head, sim.head, sizeof(m->head), NULL);
+		if (m->huge >= n && m->huge != HLE_NONE)
+			sv_fail("rec: pending grid");
+		for (i = 0; i < PG_BUCKETS; i++)
+			if (m->head[i] >= n && m->head[i] != HLE_NONE)
+				sv_fail("rec: pending grid");
+		sv_get(m->pmin, sizeof(m->pmin));
+		sv_get(m->pmax, sizeof(m->pmax));
+		m->pgen = sv_get_u32();
+		m->idle = (uint8_t)sv_get_u8();
+		m->idle_gen = sv_get_u32();
+		sv_get(m->idle_at, sizeof(m->idle_at));
+		m->rel_next = sv_get_f32();
+		m->logic_pending = (uint8_t)sv_get_u8();
+		m->pre_wait = (uint8_t)sv_get_u8();
+	}
+	if (sv_failed())
+		return -1;
+	memset(&href, 0, sizeof(href));
+	href.n = NAME_NONE;
+	memset(&fref, 0, sizeof(fref));
+	fref.map = WLD_NO_MAP;
+	rows_get(R.tm, sizeof(rtimer_t), REC_TIMERS, NULL);
+	rows_get(R.frozen, sizeof(rfrozen_t), REC_TIMERS, NULL);
+	rows_get(R.defer, sizeof(rdefer_t), REC_DEFER, NULL);
+	rows_get(R.hold, sizeof(rhold_t), REC_HOLDERS, &href);
+	rows_get(R.run, sizeof(rrun_t), REC_RUNTIME, NULL);
+	rows_get(R.twin, sizeof(rtwin_t), REC_TWINS, NULL);
+	rows_get(R.fmap, sizeof(rfmap_t), REC_FROZEN_MAPS, &fref);
+	sv_get_delta(R.retry, NULL, HL64_MAX_ENTITIES * (uint32_t)sizeof(float), NULL);
+	R.ntm = sv_get_u32();
+	R.seq = sv_get_u32();
+	R.nfrozen = sv_get_u32();
+	R.ndefer = sv_get_u32();
+	R.ntwin = sv_get_u32();
+	R.fage = sv_get_u32();
+	R.next_rtid = (uint16_t)sv_get_u16();
+	R.pass = (uint16_t)sv_get_u16();
+	if (R.ntm > REC_TIMERS || R.nfrozen > REC_TIMERS || R.ndefer > REC_DEFER || R.ntwin > REC_TWINS)
+		sv_fail("rec: table counts");
+	for (j = 0; j < REC_FROZEN_MAPS && !sv_failed(); j++)
+	{
+		rfmap_t *f = &R.fmap[j];
+
+		if (f->map == WLD_NO_MAP)
+			continue;
+		if (f->block > R.heap_len || f->block_len > R.heap_len - f->block)
+		{
+			sv_fail("rec: frozen map block");
+			break;
+		}
+		sv_get_delta(R.heap + f->block, NULL, f->block_len, NULL);
+	}
+	if (store_get())
+		return -1;
+	sv_get(spawn_sig, sizeof(spawn_sig));
+	spawn_home = (int)sv_get_u32();
+	sv_get(held_anc, sizeof(held_anc));
+	held_nanc = (int)sv_get_u32();
+	if (held_nanc < 0 || held_nanc > 8)
+		sv_fail("rec: anchors");
+	R.caller = R.self = R.running = GID_NONE;
+	return sv_failed() ? -1 : 0;
 }

@@ -30,6 +30,7 @@
 #include <string.h>
 
 #include "game/hl/player.h"
+#include "game/hl/savegame.h"
 
 /* ---- skill.cfg ------------------------------------------------------------- */
 
@@ -430,6 +431,20 @@ int W_OnTarget(void)
 /* ---- FireBulletsPlayer (combat.cpp) with EV_HLDM_FireBullets ------------------------ */
 
 static int tracerCount;
+
+/* autoaim, the player's tracer count and the skill data. gSkillData is
+ * the saving game's own (SkillDataInit at its New Game, whatever skill
+ * was set since): restored as it was, not derived again. */
+uint32_t W_SaveState(int op)
+{
+	uint32_t n = 0;
+
+	n += sg_io(op, m_vecAutoAim, sizeof(m_vecAutoAim));
+	n += sg_io(op, &m_fOnTarget, sizeof(m_fOnTarget));
+	n += sg_io(op, &tracerCount, sizeof(tracerCount));
+	n += sg_io(op, &gSkillData, sizeof(gSkillData));
+	return n;
+}
 
 void W_FireBulletsPlayer(int cShots, const float src[3], const float dirShooting[3],
 	const float spread[3], float dist, int bullet, int tracerfreq, int damage, float out[2])

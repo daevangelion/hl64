@@ -25,7 +25,12 @@
 #          outside teleport windows, one continuity line per switch with
 #          missing=0 extra=0, sane rec lines; K9: a second run stepping
 #          every live entity (`stepall 1`) gives identical route ops and
-#          player / entity / seam / rec records.
+#          player / entity / seam / rec records. Saved games
+#          (test/save/determinism.sh, FlashRAM and --pak, on the save
+#          scenes; test/save/pakfail.sh; test/save/flashcut.sh): A/B
+#          streams and stats equal, every autosave ok with every frame
+#          <= 67 ms, the Pak's no-room, too-large and failed-transfer
+#          paths, FlashRAM power cuts in every flash operation of a save.
 #   ares:  each route (uplink, hazard and m4: the M5 AI acceptance's
 #          routes are uplink and m4; m4 is checked as by test/run/m4.sh,
 #          with no old-tree oracle) on a PROFILE HL64_TEST ROM (PASS runs
@@ -40,7 +45,9 @@
 #          route the CPU / memory table per map visit (test/m5/cpu_table.py,
 #          the old tree's cart numbers beside it), the run-wide region
 #          table (test/m3/gate_table.py) and the seam-window table
-#          (test/m4/gate_table.py) into the gate log.
+#          (test/m4/gate_table.py) into the gate log; saved games
+#          (determinism.sh --ares, FlashRAM and --pak: save, quit ares,
+#          relaunch, load).
 #
 # Every route check runs (and is logged) even after an earlier one failed;
 # the gate fails at the end, naming each failure.
@@ -204,6 +211,35 @@ for f in "$ROOT"/test/m5/*.route; do
 	fi
 done
 
+# ---- saved games (host; architecture.md 14): test/save/determinism.sh on
+# the save scenes, FlashRAM and Controller Pak (A/B streams and stats
+# equal, every autosave ok with every frame <= 67 ms; manual saves' and
+# loads' frames reported), test/save/pakfail.sh (the Pak's no-room and
+# failed-transfer paths) and test/save/flashcut.sh (FlashRAM power cuts in
+# every erase / program of a save in the pool's worst case: no save lost,
+# at worst the latest settings change). seam-2to3 saves at 810, right after the
+# hldemo2 -> hldemo3 switch, with room for the cart's ~72-frame save before
+# T+N; earlier windows meet residency-dependent game rules (infodecal
+# retries, the hitbox pose memo) that differ warm (A) / cold (B) ----
+SAVE_CASES=(hl2-yard:600:150 hazard-seam:85:150 seam-2to3:810:90 hl2-return-battle:400:300:report)
+for pk in flash pak; do
+	CODE=0
+	BUILD_DIR="$BUILD_DIR/save-gate" HL64_CONTENT="$CONTENT" "$ROOT/test/save/determinism.sh" \
+		$([[ $pk == pak ]] && echo --pak) "${SAVE_CASES[@]}" >"$OUT/save-host-$pk.log" 2>&1 || CODE=$?
+	grep '^save: ' "$OUT/save-host-$pk.log" | tee -a "$GATE_LOG" || true
+	[[ $CODE -eq 0 ]] || fail "saved games (host, $pk): determinism.sh exit $CODE"
+done
+CODE=0
+BUILD_DIR="$BUILD_DIR/save-gate" HL64_CONTENT="$CONTENT" "$ROOT/test/save/pakfail.sh" \
+	>"$OUT/save-pakfail.log" 2>&1 || CODE=$?
+grep '^pakfail: ' "$OUT/save-pakfail.log" | tee -a "$GATE_LOG" || true
+[[ $CODE -eq 0 ]] || fail "Pak fallbacks (host): pakfail.sh exit $CODE"
+CODE=0
+BUILD_DIR="$BUILD_DIR/save-gate" HL64_CONTENT="$CONTENT" "$ROOT/test/save/flashcut.sh" \
+	>"$OUT/save-flashcut.log" 2>&1 || CODE=$?
+grep '^flashcut: ' "$OUT/save-flashcut.log" | tee -a "$GATE_LOG" || true
+[[ $CODE -eq 0 ]] || fail "FlashRAM power cuts (host): flashcut.sh exit $CODE"
+
 # ---- routes (host) ----
 # the lines two runs must agree on: route ops and stats records of <kinds>
 records() { grep -E "^route: [0-9]|^stats [0-9]+ ($1): " "$2" || true; }
@@ -361,6 +397,15 @@ for r in "${ROUTES[@]}"; do
 	[[ $CODE -eq 0 ]] || fail "$r seam-window table: $(tail -1 "$OUT/table-seams-$r.md")"
 	{ echo; echo "## $r (ares)"; cat "$OUT/table-maps-$r.md" "$OUT/table-run-$r.md" "$OUT/table-seams-$r.md"; } \
 		| tee -a "$GATE_LOG"
+done
+# saved games on the cart: save, quit ares, relaunch, load (FlashRAM and
+# Controller Pak images carried between the launches)
+for pk in flash pak; do
+	CODE=0
+	BUILD_DIR="$BUILD_DIR/save-gate" HL64_CONTENT="$CONTENT" "$ROOT/test/save/determinism.sh" --ares \
+		$([[ $pk == pak ]] && echo --pak) "${SAVE_CASES[@]}" >"$OUT/save-ares-$pk.log" 2>&1 || CODE=$?
+	grep '^save: ' "$OUT/save-ares-$pk.log" | tee -a "$GATE_LOG" || true
+	[[ $CODE -eq 0 ]] || fail "saved games (ares, $pk): determinism.sh exit $CODE"
 done
 if [[ ${#FAILS[@]} -ne 0 ]]; then
 	say "M5 FAIL: ${#FAILS[@]} failure(s): $(IFS=';'; echo "${FAILS[*]}")"

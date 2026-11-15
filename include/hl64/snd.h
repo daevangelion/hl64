@@ -50,6 +50,11 @@ void	snd_stop_all(void);
 void	snd_pause(int on);
 /* A menu sound: not positioned, vol x master volume, plays while paused. */
 void	snd_ui(res_t sound, float vol);
+/* Output gain 0 (on) / back (off) for every voice, playing or not: voices,
+ * loops and sentences run on unheard (no sound's state changes). A saved
+ * game holds frames longer than the output's queue around a mute, so the
+ * queue runs dry on silence (engine/save/save.c). */
+void	snd_mute(int on);
 
 /* Engine: boot, step 10 (listener = view origin + right vector, global),
  * free entity e's voices' positions when it is freed. */

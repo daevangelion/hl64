@@ -37,6 +37,8 @@
 #include "engine/core/dbg.h"
 #include "engine/core/sys.h"
 #include "engine/mem/carve.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/snd/snd_hw.h"
 
 /* The listener's own entity (the player, engine/phys/player.h slot 1):
@@ -103,6 +105,7 @@ typedef struct {
 	snd_stats_t	st;
 	uint32_t	frames;
 	uint64_t	us_sum, pump_sum;
+	uint8_t		mute;		/* snd_mute: output gain 0 */
 } snd_state_t;
 
 static snd_state_t	*S;
@@ -121,6 +124,8 @@ static int clamp_pitch(int p)
 
 static float master(void)
 {
+	if (S->mute)
+		return 0.0f;
 	return (float)settings.vol_master * (float)settings.vol_sfx * 1e-4f;
 }
 
@@ -907,6 +912,19 @@ void snd_ui(res_t sound, float vol)
 	start_sample(ENT_NONE, CHAN_AUTO, sound, vol, ATTN_NONE, PITCH_NORM, S->lis, 0);
 }
 
+void snd_mute(int on)
+{
+	int v;
+
+	if (!S || !on == !S->mute)
+		return;
+	S->mute = (uint8_t)(on != 0);
+	for (v = 0; v < SND_VOICES; v++)
+		if (S->v[v].busy)
+			voice_apply(v);
+	snd_logf("snd %lu %s\n", (unsigned long)S->frame, on ? "mute" : "unmute");
+}
+
 void snd_voice_info(int v, snd_voice_info_t *o)
 {
 	const voice_t *p = &S->v[v];
@@ -1106,4 +1124,61 @@ void snd_stats(snd_stats_t *s, int reset)
 		S->pump_sum = 0;
 		S->frames = 0;
 	}
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* Looping sounds (ambients, machinery, the game's loops): the game does
+ * not start them again, so a load does, from the start of their loop.
+ * One-shots and sentences end with the frame the save was taken in. */
+void snd_save(void)
+{
+	int i;
+
+	sv_tag(SV_TAG('S', 'N', 'D', '1'));
+	for (i = 0; i < SND_LOOPS; i++)
+	{
+		const loop_t *lp = &S->l[i];
+
+		sv_u8(lp->used);
+		if (!lp->used)
+			continue;
+		sv_u8((uint8_t)lp->chan);
+		sv_u8(lp->follow);
+		sv_u8(lp->pitch);
+		sv_u16(lp->ent);
+		sv_u16(lp->res);
+		sv_f32(lp->vol);
+		sv_f32(lp->attn);
+		sv_put(lp->org, sizeof(lp->org));
+	}
+}
+
+int snd_load(void)
+{
+	int i;
+
+	if (sv_expect(SV_TAG('S', 'N', 'D', '1')))
+		return -1;
+	snd_stop_all();
+	for (i = 0; i < SND_LOOPS && !sv_failed(); i++)
+	{
+		int chan, follow, pitch, e;
+		res_t r;
+		float vol, attn, org[3];
+
+		if (!sv_get_u8())
+			continue;
+		chan = (int8_t)sv_get_u8();
+		follow = (int)sv_get_u8();
+		pitch = (int)sv_get_u8();
+		e = (int)sv_get_u16();
+		r = (res_t)sv_get_u16();
+		vol = sv_get_f32();
+		attn = sv_get_f32();
+		sv_get(org, sizeof(org));
+		if (!sv_failed())
+			loop_start(e == ENT_NONE ? ENT_NONE : e, chan, r, vol, attn, pitch, org, follow);
+	}
+	return sv_failed() ? -1 : 0;
 }

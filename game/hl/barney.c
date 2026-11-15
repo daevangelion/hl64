@@ -82,6 +82,9 @@ static const Schedule_t slIdleBaStand[] = {
 		bits_SOUND_GARBAGE, "IdleStand")
 };
 
+/* saved games: append only (monster.h sched_list_t) */
+SCHED_LIST(sched_barney, slBaFollow, slBarneyEnemyDraw, slBaFaceTarget, slIdleBaStand);
+
 static void CBarney_RunTask(int e, const Task_t *t)
 {
 	int en;

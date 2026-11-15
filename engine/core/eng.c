@@ -28,6 +28,7 @@
 #include "hl64/seam.h"
 #include "hl64/settings.h"
 #include "hl64/snd.h"
+#include "hl64/save.h"
 #include "engine/core/dbg.h"
 #include "engine/core/eng.h"
 #include "engine/core/hlmath.h"
@@ -51,6 +52,8 @@
 #include "engine/render/trans.h"
 #include "engine/render/ren.h"
 #include "engine/world/wld.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/in/in.h"
 #include "engine/phys/phys.h"
 #include "engine/phys/player.h"
@@ -562,8 +565,17 @@ static void trace_frame(void)
 }
 #endif
 
+/* A save or settings write in flight finishes first: the command comes
+ * back next frame (a quit never cuts a flash write). */
 static int cmd_quit(const dbg_cmd_t *c)
 {
+	if (save_busy())
+	{
+		dbg_cmd_t q = *c;
+
+		q.frame = eng.frame + 1;
+		return dbg_push(&q) ? 1 : 0;
+	}
 	sys_exit((int)c->arg[0].u);
 }
 
@@ -1043,6 +1055,25 @@ uint32_t eng_frame_count(void)
 	return eng.frame;
 }
 
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+void eng_save_state(void)
+{
+	sv_tag(SV_TAG('E', 'N', 'G', '1'));
+	sv_u32(eng.frame);
+	sv_u32(eng.restart_frame);
+}
+
+int eng_load_state(void)
+{
+	if (sv_expect(SV_TAG('E', 'N', 'G', '1')))
+		return -1;
+	eng.frame = sv_get_u32();
+	eng.restart_frame = sv_get_u32();
+	eng.time = eng_clock_time();
+	eng.last_vi = sys_vi_count();
+	return sv_failed() ? -1 : 0;
+}
 /* Step 10 sound: listener = the view (global eye, right vector) of the
  * last drawn frame. */
 static void snd_step(uint32_t dt)
@@ -1059,24 +1090,30 @@ static void snd_step(uint32_t dt)
 
 /* A frame without the simulation (architecture 13): the title or pause
  * menu (tick: a counted frame with the debug commands and the roll-up)
- * or a save / load step in progress (not counted). I/O, sound (the
- * game's paused) and the menu's 2D over the cleared frame; at the title
- * the closed layers' fenced frees retire. */
-static void menu_only_frame(uint32_t dt, int tick)
+ * or a frame a save or a load holds (hold: save_frame's SAVE_HOLD /
+ * SAVE_HOLD_QUIET; not counted, no world, route or debug commands). I/O,
+ * sound (the game's paused; muted around a manual save's or a load's long
+ * holds) and the menu's 2D over the cleared frame; an autosave's
+ * SAVE_HOLD_QUIET frame shows nothing new: the last frame stays on screen.
+ * At the title the closed layers' fenced frees retire. */
+static void menu_only_frame(uint32_t dt, int tick, int hold)
 {
 	io_frame_begin(dt);
 	io_pump();
-	if (!phy_player_active())
+	if (!hold && !phy_player_active())
 		wld_frame(eng.frame);
 	snd_step(dt);
 	io_pump();
-	while (!sys_frame_try_begin())
+	if (hold != SAVE_HOLD_QUIET)
+	{
+		while (!sys_frame_try_begin())
+			io_pump();
 		io_pump();
-	io_pump();
-	d2_begin();
-	menu_draw();
-	d2_end();
-	sys_frame_end();
+		d2_begin();
+		menu_draw();
+		d2_end();
+		sys_frame_end();
+	}
 	if (tick)
 	{
 		eng.frame++;
@@ -1092,6 +1129,7 @@ void eng_frame(void)
 	uint32_t dt = (vi - eng.last_vi) * sys_vi_period_us();
 	in_cmd_t cmd;
 	double gdt;
+	int hold;
 
 	/* 1 plat: dt from the VI clock, clamped (D6 i); test builds may fix it */
 	SEAMPROF_BEGIN();
@@ -1105,10 +1143,11 @@ void eng_frame(void)
 	if (eng.timescale != 1.0f)
 		dt = (uint32_t)(dt * eng.timescale + 0.5f);
 	/* a save's snapshot or a load's restore in progress (save.h): no
-	 * simulation; the menu shows its progress */
-	if (eng.world && save_frame())
+	 * simulation; the menu shows its progress (not an autosave's) */
+	hold = eng.world ? save_frame() : 0;
+	if (hold)
 	{
-		menu_only_frame(dt, 0);
+		menu_only_frame(dt, 0, hold);
 		return;
 	}
 	/* the end section fired last frame (the route VM saw it at step 13):
@@ -1125,7 +1164,7 @@ void eng_frame(void)
 	/* 2 menu: Start pauses; the title and pause menus freeze the game */
 	if (eng.world && menu_frame(dt) != MENU_PLAY)
 	{
-		menu_only_frame(dt, 1);
+		menu_only_frame(dt, 1, 0);
 		return;
 	}
 	/* 2 in: pad -> usercmd once the player exists; before: the free camera */

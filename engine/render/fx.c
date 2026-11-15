@@ -823,10 +823,19 @@ uint16_t fx_text_current(float *time)
 
 /* ---- engine side ------------------------------------------------------------------- */
 
+/* Every effect ends; the game's assets (fx_assets, registered once by
+ * game_init) stay: a disconnect or a load keeps the same game. */
 void fx_init(void)
 {
+	static res_t assets[FX_A_SETS][FX_ASSET_MAX];
+	static uint8_t nassets[FX_A_SETS];
+
+	memcpy(assets, fx.assets, sizeof(assets));
+	memcpy(nassets, fx.nassets, sizeof(nassets));
 	memset(&fx_s, 0, sizeof(fx_s));
 	memset(&fx, 0, sizeof(fx));
+	memcpy(fx.assets, assets, sizeof(assets));
+	memcpy(fx.nassets, nassets, sizeof(nassets));
 	fx_s.rng = 0x2545F491u;
 	fx.title = NO_TITLE;
 	part_init();

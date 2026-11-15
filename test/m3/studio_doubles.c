@@ -8,6 +8,7 @@
  */
 #include "engine/core/eng.h"
 #include "hl64/fx.h"
+#include "engine/save/svmod.h"
 #include "hl64/rec.h"
 #include "hl64/snd.h"
 
@@ -54,4 +55,14 @@ __attribute__((weak)) void snd_ambient(const float org[3], res_t sound, float vo
 __attribute__((weak)) uint32_t eng_frame_count(void)
 {
 	return 0;
+}
+
+/* engine/core/eng.c's saved-game section (engine/save/save.c links it) */
+__attribute__((weak)) void eng_save_state(void)
+{
+}
+
+__attribute__((weak)) int eng_load_state(void)
+{
+	return -1;
 }

@@ -150,6 +150,11 @@ static const Schedule_t slHoundCombatFailNoPVS[] = {
 		bits_COND_HEAVY_DAMAGE, 0, "HoundCombatFailNoPVS")
 };
 
+/* saved games: append only (monster.h sched_list_t) */
+SCHED_LIST(sched_houndeye, slHoundGuardPack, slHoundRangeAttack, slHoundSleep, slHoundWakeLazy,
+	slHoundWakeUrgent, slHoundSpecialAttack1, slHoundAgitated, slHoundHopRetreat,
+	slHoundCombatFailPVS, slHoundCombatFailNoPVS);
+
 static const int16_t heIdle[] = { R_HE_IDLE1, R_HE_IDLE2, R_HE_IDLE3 };
 static const int16_t heWarmUp[] = { R_HE_ATTACK1, R_HE_ATTACK3 };
 static const int16_t heHunt[] = { R_HE_HUNT1, R_HE_HUNT2, R_HE_HUNT3 };

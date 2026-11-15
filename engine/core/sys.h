@@ -127,4 +127,52 @@ void		sys_pi_set_isr(void (*isr)(void));
 void		sys_irq_off(void);
 void		sys_irq_on(void);
 
+/* ---- FlashRAM save chip (D4, docs/architecture.md 14) --------------------
+ * 128 KB: 8 sectors of 16 KB, pages of 128 B (erase sets 0xFF). The cart
+ * drives the chip's command register at PI 0x08000000 (DOM2) with the io
+ * chain held around each register access / DMA, so streaming pieces never
+ * wait more than one such access; the host keeps the image in a file
+ * (hl64-host --save FILE). Erase and program only start the operation:
+ * sys_flash_poll reports when it ends. One operation at a time. */
+int		sys_flash_init(void);		/* boot: 1 chip present, 0 none */
+/* Blocking read of [off, off + len) into dst: off and len even, dst
+ * 16-aligned; 0 ok, -1 no chip / bad arguments. */
+int		sys_flash_read(void *dst, uint32_t off, uint32_t len);
+int		sys_flash_erase(uint32_t sector);	/* 0 started, -1 no chip / busy */
+/* Program page (128 B) from src (16-aligned); 0 started, -1 no chip / busy. */
+int		sys_flash_program(uint32_t page, const void *src);
+/* 1 the operation runs, 0 it ended ok (or none), -1 it failed. */
+int		sys_flash_poll(void);
+
+/* ---- Controller Pak in controller 1 (D4, docs/architecture.md 14) --------
+ * This game's notes on the Pak (game code "HL64", publisher code "HL",
+ * file names "HL64SAVE.<id>", id 0..15; plat/pakfs.h, shared by the cart
+ * and the host); other games' notes and the Pak's
+ * file system stay intact whatever happens to ours. The host keeps a
+ * 32 KB Pak image in a file (hl64-host --pak FILE; no --pak: nothing in
+ * the controller). Reads block; a write is open / steps / close, each step
+ * bounded by its byte count, so the caller spreads it over frames. */
+enum { SYS_PAK_ABSENT, SYS_PAK_CPAK, SYS_PAK_RUMBLE, SYS_PAK_OTHER };
+/* What is in controller 1 now (cheap: every frame). */
+int		sys_pak_accessory(void);
+/* Mount the Pak's file system after SYS_PAK_CPAK appears: 0 ok, -1
+ * unformatted / damaged (nothing mounted). Unmount when it goes. */
+int		sys_pak_mount(void);
+void		sys_pak_unmount(void);
+/* Free bytes (whole pages) and free note entries; -1 not mounted. */
+int		sys_pak_stat(uint32_t *free_bytes, int *free_notes);
+/* Our notes: their ids (ascending) and sizes; count, -1 not mounted. */
+int		sys_pak_notes(uint8_t *ids, uint32_t *bytes, int max);
+/* Blocking read of [off, off + len) of note id: 0 ok, -1 failed. */
+int		sys_pak_read(int id, void *dst, uint32_t off, uint32_t len);
+/* Create note id (it must not exist) of len bytes, all pages allocated:
+ * 0 ok, -1 no room / failed. Then sys_pak_write any [off, off + len)
+ * inside it (save.c writes its header last: a note whose header does not
+ * check out is a corrupt save, never another game's damage) and
+ * sys_pak_close. */
+int		sys_pak_create(int id, uint32_t len);
+int		sys_pak_write(const void *src, uint32_t off, uint32_t len);	/* 0 ok, -1 failed */
+int		sys_pak_close(void);		/* 0 ok, -1 failed */
+int		sys_pak_delete(int id);		/* 0 ok, -1 failed */
+
 #endif

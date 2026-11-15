@@ -25,6 +25,7 @@
 #include <math.h>
 
 #include "game/hl/monster.h"
+#include "game/hl/savegame.h"
 
 /* material hooks (GameCore material.c), used when present */
 float	TEXTURETYPE_PlaySound(const col_trace_t *tr, const float src[3], const float end[3],
@@ -703,12 +704,19 @@ int Mon_CheckTraceHullAttack(int e, float flDist, int iDamage, int iDmgType)
 	return -1;
 }
 
+/* FireBullets' static tracerCount (file scope: saved games) */
+static int	tracerCount;
+
+uint32_t FireBullets_SaveState(int op)
+{
+	return sg_io(op, &tracerCount, sizeof(tracerCount));
+}
+
 /* CBaseEntity::FireBullets, the monsters' version */
 void FireBullets(int e, int cShots, const float src[3], const float dirShooting[3],
 	const float spread[3], float flDistance, int iBulletType, int iTracerFreq, int iDamage,
 	int attacker)
 {
-	static int	tracerCount;
 	col_trace_t	tr;
 	float		right[3], up[3], dir[3], end[3], x, y, z;
 	int		shot, tracer, hit;

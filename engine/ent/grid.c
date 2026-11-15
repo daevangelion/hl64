@@ -33,6 +33,9 @@
 #include "engine/core/sys.h"
 #include "engine/ent/ent.h"
 #include "engine/mem/carve.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
+#include "hl64/game.h"
 
 #define GRID_BUCKETS	1024		/* power of two */
 #define GRID_HUGE	GRID_BUCKETS	/* extra head: the huge list */
@@ -501,4 +504,121 @@ void ent_grid_stats(ent_grid_stats_t *s)
 		if (len > s->peak_bucket)
 			s->peak_bucket = len;
 	}
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* The occupancy, the heads of the occupied buckets (an empty one's head
+ * is ENT_UNLINKED), the level counts; per node in the grid (slot order)
+ * its memberships along the node's chain (bucket, bucket chain, next
+ * membership); the pool's free list as runs of consecutive entries. A
+ * free entry keeps only its link: cell_add writes every field before a
+ * membership is read, so a load zeroes the rest. */
+#define CELL_CHAIN_MAX	8	/* memberships of one node: 2 x 2 x 2 cells */
+
+void ent_grid_save(void)
+{
+	uint32_t b, guard = 0;
+	uint16_t c;
+	int i;
+
+	sv_put(g.occ, sizeof(g.occ));
+	for (b = 0; b <= GRID_HUGE; b++)
+		if (g.occ[b >> 5] & (1u << (b & 31)))
+			sv_u16(g.head[b]);
+	sv_put(g.nlevel, sizeof(g.nlevel));
+	for (i = 0; i < HL64_MAX_ENTITIES; i++)
+		if (ent_s.node[i].kind)
+			for (c = ent_s.node[i].cells; c != ENT_UNLINKED; c = ent_s.cell[c].enext)
+			{
+				sv_u16(ent_s.cell[c].bucket);
+				sv_u16(ent_s.cell[c].next);
+				sv_u16(ent_s.cell[c].enext);
+			}
+	for (c = g.freecell; c != ENT_UNLINKED && guard < ENT_CELLS; )
+	{
+		uint16_t start = c, n = 1;
+
+		while (ent_s.cell[c].next == c + 1 && ++guard < ENT_CELLS)
+		{
+			c++;
+			n++;
+		}
+		sv_u16(start);
+		sv_u16(n);
+		c = ent_s.cell[c].next;
+		guard++;
+	}
+	sv_u16(ENT_UNLINKED);
+}
+
+int ent_grid_load(void)
+{
+	static uint32_t seen[(ENT_CELLS + 31) / 32];
+	uint16_t *link = &g.freecell;
+	uint32_t b;
+	int i;
+
+	memset(seen, 0, sizeof(seen));
+	memset(ent_s.cell, 0, ENT_CELLS * sizeof(ent_cell_t));
+	memset(g.head, 0xFF, 2u * (GRID_BUCKETS + 1));
+	sv_get(g.occ, sizeof(g.occ));
+	if (g.occ[GRID_OCC_WORDS - 1] >> ((GRID_BUCKETS + 1) & 31))
+		sv_fail("ent: grid occupancy");
+	for (b = 0; b <= GRID_HUGE; b++)
+		if (g.occ[b >> 5] & (1u << (b & 31)))
+			if ((g.head[b] = (uint16_t)sv_get_u16()) >= ENT_CELLS)
+				sv_fail("ent: grid bucket head");
+	sv_get(g.nlevel, sizeof(g.nlevel));
+	for (i = 0; i < HL64_MAX_ENTITIES && !sv_failed(); i++)
+	{
+		uint16_t c;
+		int k = 0;
+
+		if (!ent_s.node[i].kind)
+			continue;
+		for (c = ent_s.node[i].cells; c != ENT_UNLINKED && !sv_failed(); c = ent_s.cell[c].enext)
+		{
+			ent_cell_t *m = &ent_s.cell[c];
+
+			if (c >= ENT_CELLS || (seen[c >> 5] & (1u << (c & 31))) || k++ == CELL_CHAIN_MAX)
+			{
+				sv_fail("ent: grid memberships");
+				break;
+			}
+			seen[c >> 5] |= 1u << (c & 31);
+			m->ent = (uint16_t)i;
+			m->bucket = (uint16_t)sv_get_u16();
+			m->next = (uint16_t)sv_get_u16();
+			m->enext = (uint16_t)sv_get_u16();
+			if (m->bucket > GRID_HUGE || (m->next >= ENT_CELLS && m->next != ENT_UNLINKED))
+				sv_fail("ent: grid membership");
+		}
+	}
+	while (!sv_failed())
+	{
+		uint32_t start = sv_get_u16(), n, c;
+
+		if (start == ENT_UNLINKED)
+			break;
+		n = sv_get_u16();
+		if (start < HL64_MAX_ENTITIES || n == 0 || n > ENT_CELLS - start)
+		{
+			sv_fail("ent: grid free list");
+			break;
+		}
+		for (c = start; c < start + n; c++)
+		{
+			if (seen[c >> 5] & (1u << (c & 31)))
+			{
+				sv_fail("ent: grid free list");
+				break;
+			}
+			seen[c >> 5] |= 1u << (c & 31);
+			*link = (uint16_t)c;
+			link = &ent_s.cell[c].next;
+		}
+	}
+	*link = ENT_UNLINKED;
+	return sv_failed() ? -1 : 0;
 }

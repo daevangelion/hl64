@@ -936,11 +936,13 @@ static int make_room(wld_chunk_t *ch, int p, uint32_t size, int cls)
 	do
 	{
 		/* evicted REND / TEXP bytes free behind their fence: once the
-		 * fenced bytes could make the hole (the largest free block plus
-		 * every fenced byte covers the request), wait for them (two
-		 * frames) instead of evicting the rest of the pool; a pool whose
-		 * free bytes are fragmented evicts on until they could */
-		if (pl->fenced && mem_pool_largest(pl) + pl->fenced >= size && !weaker_queued(p, cls))
+		 * fenced bytes would make the hole (a run of free and fenced
+		 * blocks covers the request), wait for them (two frames) instead
+		 * of evicting the rest of the pool; fenced bytes elsewhere never
+		 * make it and new ones are fenced every frame, so a pool whose
+		 * holes are fragmented evicts on until they would (architecture.md
+		 * 5.3) */
+		if (pl->fenced && mem_pool_largest_fenced(pl) >= size && !weaker_queued(p, cls))
 			return 0;
 		if (!evict_one(p, cls))
 		{
@@ -1111,7 +1113,10 @@ void wld_frame(uint32_t frame)
 {
 	int p;
 
-	wld_frame_no = frame + 1;	/* 0 means never used */
+	/* 0 means never used. Never backwards: a load (engine/save) brings
+	 * the frame number back to the save's after frames that held it, and
+	 * the fences and LRU stamps of those frames must stay in the past. */
+	wld_frame_no = frame + 1 >= wld_frame_no ? frame + 1 : wld_frame_no + 1;
 	for (p = 0; p < NPOOLS; p++)
 		mem_pool_retire(&pools[p], wld_frame_no);
 	mem_pool_retire(&layer_pool, wld_frame_no);
@@ -1406,8 +1411,9 @@ static void open_fail(wld_layer_t *L, const char *what, uint32_t bytes)
 	wld_n_open_fail++;
 }
 
-/* Take a free slot for map and queue its header read; NULL when no slot. */
-static wld_layer_t *open_begin(int map)
+/* Take a free slot (want, or the lowest when want < 0) for map and queue
+ * its header read; NULL when no slot. */
+static wld_layer_t *open_begin(int map, int want)
 {
 	wld_layer_t *L = NULL;
 	open_t *o;
@@ -1420,7 +1426,7 @@ static wld_layer_t *open_begin(int map)
 	for (s = 0; s < HL64_WORLD_LAYERS; s++)
 		if (!wld_layers[s].open)
 		{
-			if (!L)
+			if (!L && (want < 0 || want == s))
 				L = &wld_layers[s];
 		}
 		else if (!wld_layers[s].high)
@@ -1455,7 +1461,7 @@ wld_layer_t *wld_open_async(int map)
 
 	if (L)
 		return L;
-	if (!(L = open_begin(map)))
+	if (!(L = open_begin(map, -1)))
 	{
 		log_printf("world: open_fail %s: no free layer slot\n", wld_map_name(map));
 		wld_n_open_fail++;
@@ -1633,15 +1639,12 @@ void wld_open_step(wld_layer_t *L, uint32_t crc_budget)
 	}
 }
 
-wld_layer_t *wld_open(int map)
+/* land an open's reads now, stage by stage (load I/O) */
+static wld_layer_t *open_sync(wld_layer_t *L)
 {
-	wld_layer_t *L = open_begin(map);
-	open_t *o;
+	open_t *o = &opens[L->slot];
 	int i, spins = 0;
 
-	if (!L)
-		sys_error("world: %d layers open", HL64_WORLD_LAYERS);
-	o = &opens[L->slot];
 	/* load I/O: land the open's reads now, stage by stage */
 	io_set_load(1);
 	while (!L->ready)
@@ -1663,6 +1666,24 @@ wld_layer_t *wld_open(int map)
 	if (L->ready < 0)
 		sys_error("world: %s: no layer-region room (see the open_fail line)", pkg_path(L));
 	return L;
+}
+
+wld_layer_t *wld_open(int map)
+{
+	wld_layer_t *L = open_begin(map, -1);
+
+	if (!L)
+		sys_error("world: %d layers open", HL64_WORLD_LAYERS);
+	return open_sync(L);
+}
+
+wld_layer_t *wld_open_in(int map, int slot)
+{
+	wld_layer_t *L = open_begin(map, slot);
+
+	if (!L || L->slot != slot)
+		return NULL;
+	return open_sync(L);
 }
 
 static void pvs_close(int slot);

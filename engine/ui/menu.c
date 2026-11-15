@@ -224,10 +224,11 @@ static void sound(int s)
 }
 
 /* the notes that replace the description line for a while */
-enum { N_LOADING, N_NOSAVE, N_SAVING, N_SAVED, N_SAVEFAIL, N_LOADFAIL, N_COUNT };
+enum { N_LOADING, N_NOSAVE, N_SAVING, N_SAVED, N_SAVEFAIL, N_LOADFAIL, N_PAKBIG, N_TOOBIG, N_COUNT };
 static const char *const note_text[N_COUNT] = {
 	"Loading...", "The game cannot be saved now.", "Saving...", "Game saved.",
-	"The save failed.", "The game could not be loaded."
+	"The save failed.", "The game could not be loaded.",
+	"Save too large for Controller Pak.", "Save too large."
 };
 
 /* a save / load slot's description: SD_* */
@@ -532,7 +533,8 @@ static int busy_step(void)
 			return 1;
 		M.busy = BUSY_NONE;
 		slots_refresh();
-		note(save_result() == 0 ? N_SAVED : N_SAVEFAIL, 3000000u);
+		note(save_result() == 0 ? N_SAVED : save_result() == SAVE_ERR_PAK_SIZE ? N_PAKBIG
+			: save_result() == SAVE_ERR_SIZE ? N_TOOBIG : N_SAVEFAIL, 3000000u);
 		log_printf("menu: save %s\n", save_result() == 0 ? "done" : "failed");
 		if (save_result() == 0)
 			open_screen(SCR_MAIN);

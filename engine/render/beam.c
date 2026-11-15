@@ -27,7 +27,7 @@ typedef struct {
 	res_t		sprite;
 	uint8_t		rgb[3], bright;
 	uint8_t		live, ring;
-	uint16_t	pad;
+	int16_t		key;		/* fx_beam's key, -1 none */
 } fxbeam_t;
 
 static fxbeam_t	pool[HL64_FX_BEAMS];
@@ -55,32 +55,44 @@ uint32_t beam_dropped(int reset)
 	return d;
 }
 
-static fxbeam_t *alloc(int *id)
+/* A slot for a beam: the live beam holding key (replaced), else a free one. */
+static fxbeam_t *alloc(int key)
 {
-	int i;
+	int i, at = -1;
 
 	for (i = 0; i < HL64_FX_BEAMS; i++)
-		if (!pool[i].live)
+	{
+		if (key >= 0 && pool[i].live && pool[i].key == key)
 		{
-			memset(&pool[i], 0, sizeof(pool[i]));
-			pool[i].live = 1;
-			pool[i].start = fx_s.now;
-			nlive++;
-			*id = i;
-			return &pool[i];
+			at = i;
+			nlive--;
+			break;
 		}
-	dropped++;
-	return NULL;
+		if (at < 0 && !pool[i].live)
+			at = i;
+	}
+	if (at < 0)
+	{
+		dropped++;
+		return NULL;
+	}
+	memset(&pool[at], 0, sizeof(pool[at]));
+	pool[at].live = 1;
+	pool[at].key = (int16_t)key;
+	pool[at].start = fx_s.now;
+	nlive++;
+	return &pool[at];
 }
 
-int fx_beam(int e0, const float p0[3], int e1, const float p1[3], res_t sprite, int width,
-	int noise, int r, int g, int b, int brightness, int speed, int life)
+int fx_beam(int key, int e0, const float p0[3], int e1, const float p1[3], res_t sprite,
+	int width, int noise, int r, int g, int b, int brightness, int speed, int life)
 {
 	fxbeam_t *bm;
-	int id;
 
-	if (!(bm = alloc(&id)))
-		return -1;
+	if (key < 0)
+		key = -1;
+	if (!(bm = alloc(key)))
+		return key;
 	bm->h0 = e0 >= 0 && ent_is_live(e0) ? ent_handle_of(e0) : 0;
 	bm->h1 = e1 >= 0 && ent_is_live(e1) ? ent_handle_of(e1) : 0;
 	if (p0)
@@ -96,25 +108,30 @@ int fx_beam(int e0, const float p0[3], int e1, const float p1[3], res_t sprite, 
 	bm->rgb[2] = (uint8_t)b;
 	bm->bright = (uint8_t)brightness;
 	bm->die = life > 0 ? fx_s.now + (double)life * 0.1 : 0;
-	return id;
+	return key;
 }
 
-void fx_beam_kill(int beam)
+void fx_beam_kill(int key)
 {
-	if (beam >= 0 && beam < HL64_FX_BEAMS && pool[beam].live)
-	{
-		pool[beam].live = 0;
-		nlive--;
-	}
+	int i;
+
+	if (key < 0)
+		return;
+	for (i = 0; i < HL64_FX_BEAMS; i++)
+		if (pool[i].live && pool[i].key == key)
+		{
+			pool[i].live = 0;
+			nlive--;
+			return;
+		}
 }
 
 int beam_ring(const float org_g[3], float r, res_t sprite, float life, int width, int noise,
 	const uint8_t rgb[3], int bright)
 {
 	fxbeam_t *bm;
-	int id;
 
-	if (life <= 0 || !(bm = alloc(&id)))
+	if (life <= 0 || !(bm = alloc(-1)))
 		return -1;
 	memcpy(bm->p0, org_g, sizeof(bm->p0));
 	bm->ring = 1;
@@ -125,7 +142,7 @@ int beam_ring(const float org_g[3], float r, res_t sprite, float life, int width
 	memcpy(bm->rgb, rgb, 3);
 	bm->bright = (uint8_t)bright;
 	bm->die = fx_s.now + life;
-	return id;
+	return 0;
 }
 
 /* End point now (global); 0 when its entity is gone. */

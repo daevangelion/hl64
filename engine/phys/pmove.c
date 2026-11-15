@@ -32,6 +32,8 @@
 #include "engine/in/in.h"
 #include "engine/phys/phys.h"
 #include "engine/phys/player.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/world/wld.h"
 
 phy_pm_t phy_pm;
@@ -912,4 +914,49 @@ void phy_player_init(void)
 	game_pm_init();
 	dbg_handler_set(DBG_NOCLIP, cmd_noclip);
 	dbg_handler_set(DBG_GOD, cmd_god);
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* The player block and its home map; the entity (slot 1) came back with
+ * the components, linked as it was. */
+void phy_player_save(void)
+{
+	sv_tag(SV_TAG('P', 'L', 'R', '1'));
+	sv_u8(P.active);
+	sv_u32((uint32_t)P.map);
+	sv_u32((uint32_t)sizeof(P.pl));
+	sv_put_delta(&P.pl, NULL, sizeof(P.pl));
+}
+
+int phy_player_load(void)
+{
+	uint8_t active;
+	int map;
+
+	if (sv_expect(SV_TAG('P', 'L', 'R', '1')))
+		return -1;
+	active = (uint8_t)sv_get_u8();
+	map = (int)sv_get_u32();
+	if (sv_get_u32() != sizeof(P.pl))
+		sv_fail("player block layout");
+	if (sv_failed())
+		return -1;
+	phy_player_reset();
+	sv_get_delta(&P.pl, NULL, sizeof(P.pl), NULL);
+	if (!active)
+		return sv_failed() ? -1 : 0;
+	if (map < 0 || map >= wld_map_count() || !(P.home = wld_layer_of_map(map))
+		|| !ent_is_live(ENT_PLAYER))
+	{
+		sv_fail("player home map");
+		return -1;
+	}
+	P.e = ent_cv(ENT_PLAYER);
+	P.map = map;
+	P.hofs = wld_map_origin(map);
+	P.active = 1;
+	dbg_handler_set(DBG_SETPOS, cmd_setpos);
+	dbg_handler_set(DBG_LOOK, cmd_look);
+	return sv_failed() ? -1 : 0;
 }

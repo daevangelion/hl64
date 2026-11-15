@@ -6,7 +6,8 @@
  * commands the cart's channels deliver.
  *
  *   hl64-host [--root DIR] [--frames N] [--route FILE.rbc] [--play] [--title]
- *             [--cmd "[@FRAME] NAME ARGS..."]... [--write-cmds FILE]
+ *             [--save FILE] [--pak FILE|rumble] [--cmd "[@FRAME] NAME ARGS..."]...
+ *             [--write-cmds FILE]
  *
  * --root        cart root (the DFS image source; mounted like the cart's
  *               DFS, plat/host/host.h); default "." with no DFS
@@ -20,6 +21,15 @@
  *               (eng_play), not the free camera
  * --title       without a route: boot to the title menu (eng_title; the
  *               playable build's boot); the `pad` command presses its keys
+ * --save        the FlashRAM image file (128 KB, created filled 0xFF when
+ *               missing; saved games and settings, engine/save). Default:
+ *               hl64.fla beside the hl64-host binary, so a second run of
+ *               the same build sees the first's saves; give a fresh FILE
+ *               to start from an empty chip (plat/host/flash_host.c)
+ * --pak         controller 1's accessory: a Controller Pak whose 32 KB
+ *               memory is FILE (a missing FILE: a freshly formatted Pak;
+ *               the file is an ares Pak image too, ARES_PAK_IN), or
+ *               "rumble": a Rumble Pak. Default: nothing (pak_host.c)
  * --write-cmds  write the parsed commands as a cart command file
  *               (dbg.h DBG_FILE_*) and exit instead of running.
  */
@@ -76,7 +86,8 @@ static const char *route_path(const char *file)
 static int usage(void)
 {
 	fprintf(stderr, "usage: hl64-host [--root DIR] [--frames N] [--route FILE.rbc] [--play] "
-		"[--title] [--cmd \"[@FRAME] NAME ARGS...\"]... [--write-cmds FILE]\n");
+		"[--title] [--save FILE] [--pak FILE|rumble] [--cmd \"[@FRAME] NAME ARGS...\"]... "
+		"[--write-cmds FILE]\n");
 	return 2;
 }
 
@@ -191,6 +202,10 @@ int main(int argc, char **argv)
 			cmd = argv[++i];
 		else if (!strcmp(argv[i], "--write-cmds") && i + 1 < argc)
 			out = argv[++i];
+		else if (!strcmp(argv[i], "--save") && i + 1 < argc)
+			host_flash_set_path(argv[++i]);
+		else if (!strcmp(argv[i], "--pak") && i + 1 < argc)
+			host_pak_set(argv[++i]);
 		else if (!strcmp(argv[i], "--route") && i + 1 < argc)
 		{
 			if (!(eng_route_path = route_path(argv[++i])))

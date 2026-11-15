@@ -25,6 +25,7 @@
 #include <string.h>
 
 #include "game/hl/monster.h"
+#include "game/hl/savegame.h"
 
 static CSound	pool[MAX_WORLD_SOUNDS];
 static int	freeSound, activeSound;
@@ -134,3 +135,38 @@ CSound *CSoundEnt_SoundPointerForIndex(int i)
 }
 
 int CSoundEnt_ClientSoundIndex(int e) { return e - 1; }
+
+/* ---- saved games (game/hl/savegame.h) -------------------------------------- */
+
+static int sound_index_ok(int i)
+{
+	return i >= SOUNDLIST_EMPTY && i < MAX_WORLD_SOUNDS;
+}
+
+/* The whole pool: a monster's m_iAudibleList may still walk the
+ * m_iNextAudible chain of sounds freed since (as in HLSDK). */
+uint32_t SoundEnt_SaveState(int op)
+{
+	uint32_t n = 0;
+	int i, bad;
+
+	n += sg_io(op, pool, sizeof(pool));
+	n += sg_io(op, &freeSound, sizeof(freeSound));
+	n += sg_io(op, &activeSound, sizeof(activeSound));
+	n += sg_io(op, &nextThink, sizeof(nextThink));
+	n += sg_io(op, &ready, sizeof(ready));
+	if (op == SG_GET)
+	{
+		bad = !sound_index_ok(freeSound) || !sound_index_ok(activeSound) ||
+			(ready != 0 && ready != 1);
+		for (i = 0; i < MAX_WORLD_SOUNDS; i++)
+			bad |= !sound_index_ok(pool[i].m_iNext) ||
+				!sound_index_ok(pool[i].m_iNextAudible);
+		if (bad)
+		{
+			sv_fail("game: sound list index out of range");
+			CSoundEnt_Init();
+		}
+	}
+	return n;
+}

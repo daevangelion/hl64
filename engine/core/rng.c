@@ -7,6 +7,8 @@
 #include "engine/core/rng.h"
 #include "engine/core/dbg.h"
 #include "engine/core/log.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "hl64/pmove.h"
 
 static uint32_t rng_state = 0x6c078965u;
@@ -71,4 +73,38 @@ float hl64_rand_float(float lo, float hi)
 {
 	TRACE_DRAW();
 	return lo + (hi - lo) * (float)(next() >> 8) * (1.0f / 16777215.0f);
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+void rng_save(void)
+{
+	sv_tag(SV_TAG('R', 'N', 'G', '1'));
+	sv_u32(rng_state);
+#ifdef HL64_TEST
+	sv_u32(rng_draws);
+#else
+	sv_u32(0);
+#endif
+}
+
+int rng_load(void)
+{
+	uint32_t s, d;
+
+	if (sv_expect(SV_TAG('R', 'N', 'G', '1')))
+		return -1;
+	s = sv_get_u32();
+	d = sv_get_u32();
+	if (!s)
+		sv_fail("rng state");
+	if (sv_failed())
+		return -1;
+	rng_state = s;
+#ifdef HL64_TEST
+	rng_draws = d;
+#else
+	(void)d;
+#endif
+	return 0;
 }

@@ -20,6 +20,8 @@
 #include "engine/ent/ent.h"
 #include "engine/phys/motion.h"
 #include "engine/phys/phys.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 
 /* calibrated constants (physics-movetypes.md 3, 5) */
 #define FLOOR_Z		0.7f	/* a floor plane: normal.z above this */
@@ -601,4 +603,20 @@ void phy_motion_prof(phy_motion_prof_t *p, int reset)
 		prof.in_frame = 0;
 		phy_trace_count = 0;
 	}
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+void phy_conv_save(void)
+{
+	sv_tag(SV_TAG('C', 'O', 'N', 'V'));
+	sv_put_delta(conv, NULL, sizeof(conv));
+}
+
+int phy_conv_load(void)
+{
+	if (sv_expect(SV_TAG('C', 'O', 'N', 'V')))
+		return -1;
+	sv_get_delta(conv, NULL, sizeof(conv), NULL);
+	return sv_failed() ? -1 : 0;
 }
