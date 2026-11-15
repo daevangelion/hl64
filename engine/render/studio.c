@@ -997,6 +997,9 @@ int studio_load(void)
 		if (anims[i].blk)
 			mem_pool_free(&pool, anims[i].blk, 0);
 	memset(anims, 0, sizeof(anims));
+	/* their small models' every-sequence prefetch runs again, as at boot */
+	for (i = 0; i < HL64_STUDIO_MODELS; i++)
+		models[i].anim_pf = 0;
 	while (!sv_failed())
 	{
 		int mi = (int)sv_get_u16() - 1, s, key;
