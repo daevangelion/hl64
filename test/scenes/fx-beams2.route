@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: MIT
+# Scene fx-beams2 (test/README.md): hldemo2's teleport beams. Second visit
+# from the hldemo3 tunnel as hl2-return-battle (battle_master through
+# trigger_once #520, second_battle_mm), then the second-battle yard's
+# trigger_once #561 (master battle_master) -> teleport_mm1: env_beams
+# 'teleport_beams' #549-#560 (center -> a..ltarget2, toggled on at 0 and
+# off at 1 s) and 'teleport_beam_chaos' #530 (random strikes in 200 u,
+# life 0.5 s): uplink.route lines 539-577 (SHOT hldemo2-return .. the
+# yard) with the shots added; the player looks at 'center' (2706 65 -58).
+startmap hldemo2
+waitmap hldemo2 60
+# the route's player has the suit here (hldemo1's item_suit): drop it on
+# him (HLSDK CBaseEntity::Create, touch pickup)
+setpos 2528 -48 -348 0 180
+wait 0.3
+drop item_suit 2528 -48 -348
+drop weapon_9mmAR 2528 -48 -348
+drop ammo_9mmAR 2528 -48 -348
+drop weapon_crowbar 2528 -48 -348
+wait 1.5
+god 1
+look 0 180
+wait 0.5
+stats begin
+# tunnel west, crawl south (crouch-only y -64..-144) into the corridor, stand
+# at its south end and climb ladder #48: passes trigger_once #520
+# (z -96..-60) -> multisource battle_master enabled
+setpos 2228 -20 -348 0 270
+wait 0.3
++duck
+wait 0.5
++forward
+waitnear 2228 -200 -366 24 8
+-duck
+waitnear 2228 -456 -348 10 8
+-forward
+look -70 180
++forward
+waitnear 2208 -456 75 20 8
+-forward
+# over the cage fence, drop into the corridor north of it and walk east
+# into trigger_once #518 (master battle_master): killtarget spaz_door_1,
+# second_battle_mm -> 2nd_pass_broken_door slams shut, dome_gate_1, spawns
+setpos 2228 -336 84 0 90
+wait 0.3
+setpos 2300 -296 -60 0 0
+wait 0.3
++forward
+waitmoved 2nd_pass_broken_door 15
+-forward
+# around the second-battle yard to trigger_once #561 -> teleport_mm1
+setpos 2700 -356 -60 0 0
+wait 0.3
+setpos 2980 -356 -60 0 90
+wait 0.3
+setpos 2980 -40 -60 0 90
+wait 0.3
+setpos 2904 40 -60 0 173
+wait 0.4
+shot teleport-beams
+wait 0.4
+shot teleport-beams-2
+wait 1
+shot teleport-after
+stats end
+wait 0.2
+pass

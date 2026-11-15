@@ -561,9 +561,10 @@ void fx_implosion(const float org[3], int radius, int count, int life)
 	}
 }
 
-/* TE_FIZZ bubbles [own]: at most 16 a call, rising 30-50 u/s, scale
- * 0.3-0.6, alive until the water surface over them (liquid at the spawn
- * point) or the solid above them (a NOMONSTERS trace, 1024 u at most). */
+/* TE_FIZZ bubbles, [EST] values (render-fx.md 5: the client side is not
+ * in the HLSDK): at most 16 a call, rising 30-50 u/s, scale 0.3-0.6,
+ * alive until the water surface over them (liquid at the spawn point) or
+ * the solid above them (a NOMONSTERS trace, 1024 u at most). */
 #define FIZZ_MAX	16
 
 static int liquid(int c)

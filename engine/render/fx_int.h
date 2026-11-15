@@ -231,6 +231,9 @@ void		sprite_draw(const fx_sprite_t *s, int f, const float org[3], const float a
  * alpha-level TLUT (render-fx.md 3), GPU_FX_IALPHA for the blended modes. */
 void		sprite_bind(const fx_sprite_t *s, const fx_sprframe_t *fr, int gpu_mode,
 			const uint8_t rgba[4]);
+/* After sprite_bind of the same sprite and mode: only the blend / tint of
+ * the following draws changes (the ramp's ends; the texture stays). */
+void		sprite_reblend(const fx_sprite_t *s, int gpu_mode, const uint8_t rgba[4]);
 /* Image of entity frame f at effects time t (render-fx.md 3: a group
  * frame picks its member by time within the group's intervals). */
 int		sprite_image(const fx_sprite_t *s, int f, double t);

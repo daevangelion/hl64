@@ -1183,6 +1183,17 @@ No spawn function runs; the game resumes at the next frame (placed decals
 rebuild over the next frames as their chunks land). The menu shows
 "Saving..." / "Loading..." over the held frames (`SAVE_HOLD`).
 
+**Reload** (`eng_reload`, `player_loadsaved`'s HLSDK `SERVER_COMMAND
+("reload")`): the newest saved game by save sequence (the autosave or a
+manual save, FlashRAM or Controller Pak) loads as above. With no saved
+game the session ends at the frame boundary and New Game starts on the
+player's current map (its start, as New Game; nothing of the session
+kept). **[probe:measured]** HLDS 1.1.2.2 (build 10211, `-game valve
++maxplayers 1 +map c1a0`, no `valve/SAVE`): the console `reload` logs
+`Spawn Server c1a0` and spawns the map afresh (`Game started`); a
+dedicated server's `save` writes nothing, so reload with a save present
+is not observable there.
+
 **Gate** (`test/save/determinism.sh [--ares] [--pak] SCENE:T:N[:report]`,
 run by `test/run/m5.sh`): run S saves at T and quits; A saves at T and
 goes on; B is a fresh boot (host process / ares launch) with S's FlashRAM

@@ -397,7 +397,8 @@ void beam_draw(int id, uint8_t blend)
 		strip((const float (*)[3])pts, n, (const float (*)[3])side, s, fr->th, rgba);
 		return;
 	}
-	/* shade in: dark at the start, full at the end; shade out: the reverse */
+	/* shade in: dark at the start, full at the end; shade out: the
+	 * reverse; the texture bound above stays, each step sets its blend */
 	for (i = 0; i < n; i++)
 	{
 		float t = ((float)i + 0.5f) / (float)n;
@@ -407,7 +408,7 @@ void beam_draw(int id, uint8_t blend)
 		rgba[3] = (uint8_t)((float)blend * t + 0.5f);
 		if (!rgba[3])
 			continue;
-		sprite_bind(spr, fr, GPU_FX_ADD, rgba);
+		sprite_reblend(spr, GPU_FX_ADD, rgba);
 		strip((const float (*)[3])pts + i, 1, (const float (*)[3])side + i, s + i, fr->th,
 			rgba);
 	}

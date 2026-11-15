@@ -1206,7 +1206,7 @@ static void test_beams(void)
 	float a[3], b[3], g[3], up[3];
 	gpu_fx_stats_t gs;
 	uint8_t pin[4], pout[4], env[4];
-	int k, i, e, f[3], calls[3], live, nfr;
+	int k, i, e, f[3], calls[3], loads[3], live, nfr;
 	col_trace_t tr;
 	char note[240];
 
@@ -1229,8 +1229,9 @@ static void test_beams(void)
 		f[i] = beam_test_frame(7, fx_s.now + 0.1 * i + 0.05);
 	CHECK(nfr == 2 && f[0] == 1 && f[1] == 0 && f[2] == 1,
 		"frames %d: %d %d %d (want 1 0 1)", nfr, f[0], f[1], f[2]);
-	/* shade: one batch plain, one per step shaded; the last step is the
-	 * brightest shading in, the darkest shading out */
+	/* shade: one batch plain, one per step shaded, the texture loaded once
+	 * either way; the last step is the brightest shading in, the darkest
+	 * shading out */
 	for (i = 0; i < 3; i++)
 	{
 		static const int fl[3] = { 0, FX_BEAM_SHADEIN, FX_BEAM_SHADEOUT };
@@ -1239,13 +1240,18 @@ static void test_beams(void)
 		draw();
 		gpu_fx_stats(&gs);
 		calls[i] = (int)gs.calls[GPU_FX_ADD];
+		loads[i] = (int)gs.texloads;
 		gpu_fx_host_last_ramp(i == 2 ? pout : pin, env);
 	}
 	CHECK(calls[0] == 1 && calls[1] == 8 && calls[2] == 8, "shade batches %d %d %d (want 1 8 8)",
 		calls[0], calls[1], calls[2]);
-	CHECK(pin[0] + pin[1] + pin[2] > pout[0] + pout[1] + pout[2],
-		"shade: last step in %d %d %d not above out %d %d %d", pin[0], pin[1], pin[2], pout[0],
-		pout[1], pout[2]);
+	CHECK(loads[0] == 1 && loads[1] == 1 && loads[2] == 1, "shade texture loads %d %d %d (want 1)",
+		loads[0], loads[1], loads[2]);
+	/* the step's brightness is the ramp's blend (PRIM alpha); the colour
+	 * ends are the sprite ramp x tint, the same for every step */
+	CHECK(pin[3] > pout[3] && pin[0] == pout[0] && pin[1] == pout[1] && pin[2] == pout[2],
+		"shade: last step in %d,%d,%d,%d not above out %d,%d,%d,%d", pin[0], pin[1], pin[2],
+		pin[3], pout[0], pout[1], pout[2], pout[3]);
 	fx_beam_kill(7);
 	/* a full pool of strikes: a keyed beam takes the one ending first */
 	for (i = 0; i < HL64_FX_BEAMS; i++)
@@ -1258,6 +1264,7 @@ static void test_beams(void)
 	fx_beam(-1, -1, a, -1, b, test_spr, 0, 0, 20, 0, 255, 255, 255, 200, 0, 5, 0);
 	CHECK(beam_test_frame(FX_BEAM_KEY(3, 0), fx_s.now) >= 0, "a strike replaced the keyed beam");
 	fx_init();
+	step(0);	/* the effects clock at the test's (fx_init zeroed it) */
 	/* TE_FIZZ: density 2 = 3 bubbles in the box, rising to the ceiling */
 	e = make_ent(g);
 	for (k = 0; k < 3; k++)
@@ -1267,6 +1274,8 @@ static void test_beams(void)
 		up[k] = g[k] + (k == 2 ? 1024 : 0);
 	}
 	fx_trace(g, up, COL_MOVE_NOMONSTERS, &tr);
+	/* the game calls it with the entity's layer as the frame */
+	eng_set_frame_layer(L->slot);
 	fx_fizz(e, test_spr, 2);
 	live = tent_live();
 	eng_set_frame_layer(-1);

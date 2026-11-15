@@ -1090,7 +1090,9 @@ const game_class_t gc_ENV_SHOOTER = {
 	res_t		m_texture;	/* SetTexture */ \
 	uint8_t		m_type;		/* BEAM_* */ \
 	uint8_t		m_flags;	/* FX_BEAM_SHADE* (SetFlags) */ \
-	uint8_t		m_width, m_noise, m_frame, m_scroll;
+	uint8_t		m_width, m_noise, m_frame, m_scroll; \
+	uint8_t		m_decalSet;	/* m_decalAt holds a decal [own] */ \
+	float		m_decalAt[3];	/* the beam's last decal point [own] */
 
 typedef struct {
 	CBASEENTITY_FIELDS
@@ -1111,6 +1113,8 @@ static const sv_field_t f_CBeam[] = {
 	SVF(CBeam, m_noise, SV_U8, SVK),
 	SVF(CBeam, m_frame, SV_U8, SVK),
 	SVF(CBeam, m_scroll, SV_U8, SVK),
+	SVF(CBeam, m_decalSet, SV_U8, 0),
+	SVF(CBeam, m_decalAt, SV_POS, 0),
 };
 
 /* GetStartPos / GetEndPos (they ignore attachments, as HLSDK's) */
@@ -1225,6 +1229,12 @@ static void DoSparks(int e, const float start[3], const float end[3])
 		UTIL_Sparks(end);
 }
 
+/* Beam decals closer than this to the beam's last one are skipped [own]:
+ * a beam held on a surface (env_laser at 10 thinks a second, the welder
+ * moving 25 u/s) lays a 16 u decal every 2.5 u; half a decal apart keeps
+ * the trail unbroken with a third of the decals (pool and draw cost). */
+#define BEAM_DECAL_SPACING	8.0f
+
 /* CBeam::BeamDamage: dmg x the time since the last damage to what the
  * trace hit (the world takes none), decals on brushes with SF_BEAM_DECALS */
 static void BeamDamage(int e, const col_trace_t *tr)
@@ -1247,7 +1257,19 @@ static void BeamDamage(int e, const col_trace_t *tr)
 			ApplyMultiDamage(e, e);
 		}
 		if ((pev->spawnflags & SF_BEAM_DECALS) && (hit == 0 || IsBSPModel(hit)))
-			UTIL_DecalTrace(tr, DECAL_BIGSHOT1 + RANDOM_LONG(0, 4));
+		{
+			CBeam *b = BEAM(e);
+			int d = DECAL_BIGSHOT1 + RANDOM_LONG(0, 4);	/* HLSDK's draw, always */
+			float gap[3];
+
+			VecSub(tr->end, b->m_decalAt, gap);
+			if (!b->m_decalSet || VecLen(gap) >= BEAM_DECAL_SPACING)
+			{
+				UTIL_DecalTrace(tr, d);
+				VecCopy(tr->end, b->m_decalAt);
+				b->m_decalSet = 1;
+			}
+		}
 	}
 	pev->dmgtime = gtime();
 }
@@ -1528,6 +1550,11 @@ void CLightning_ToggleUse(int e, int activator, int caller, int use_type, float 
 
 		p->m_active = 1;
 		r->effects &= (uint16_t)~EF_NODRAW;
+		/* the end entities again by name: one released since Activate
+		 * (out of its spawn radius) left a stale handle; HLSDK's entity
+		 * pointers never go stale, and the first named entity is the
+		 * same entity */
+		BeamUpdateVars(e);
 		BeamStartPos(e, a);
 		BeamEndPos(e, b);
 		DoSparks(e, a, b);
@@ -1536,6 +1563,7 @@ void CLightning_ToggleUse(int e, int activator, int caller, int use_type, float 
 			ent_think_at(e, gtime());
 			p->dmgtime = gtime();
 		}
+		return;
 	}
 	BeamShow(e);
 }

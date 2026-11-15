@@ -463,11 +463,12 @@ void sprite_draw(const fx_sprite_t *s, int f, const float org[3], const float an
 	gpu_fx_tris(v, 4, idx, 2);
 }
 
-void sprite_bind(const fx_sprite_t *s, const fx_sprframe_t *fr, int gpu_mode,
-	const uint8_t rgba[4])
+/* The ramp ends sprite_bind sets for rgba under gpu_mode; the mode the
+ * draw takes, -1 when it draws through the palette TLUT (no ramp). */
+static int bind_ends(const fx_sprite_t *s, int gpu_mode, const uint8_t rgba[4], uint8_t prim[4],
+	uint8_t env[4])
 {
 	const add_ramp_t *r = s->ramp;
-	uint8_t prim[4], env[4];
 	int k;
 
 	if (s->texformat == FX_SPR_TEX_INDEXALPHA)
@@ -490,16 +491,37 @@ void sprite_bind(const fx_sprite_t *s, const fx_sprframe_t *fr, int gpu_mode,
 		}
 		memcpy(env, prim, 3);
 		env[3] = 255;
+		return gpu_mode;
 	}
-	else if (gpu_fx_rdp[gpu_mode].combiner == GPU_FX_CC_RAMP)
+	if (gpu_fx_rdp[gpu_mode].combiner == GPU_FX_CC_RAMP)
+	{
 		add_ramp_ends(r, rgba, rgba[3], prim, env);
-	else
+		return gpu_mode;
+	}
+	return -1;
+}
+
+void sprite_bind(const fx_sprite_t *s, const fx_sprframe_t *fr, int gpu_mode,
+	const uint8_t rgba[4])
+{
+	uint8_t prim[4], env[4];
+	int m = bind_ends(s, gpu_mode, rgba, prim, env);
+
+	if (m < 0)
 	{
 		gpu_fx_mode(gpu_mode, NULL);
 		gpu_fx_tex_ci4(s->tlut, s->base + fr->ci4, fr->tw, fr->th);
 		return;
 	}
-	gpu_fx_mode(gpu_mode, NULL);
+	gpu_fx_mode(m, NULL);
 	gpu_fx_ramp(prim, env);
-	gpu_fx_tex_ci4(r->ia, s->base + fr->ci4, fr->tw, fr->th);
+	gpu_fx_tex_ci4(s->ramp->ia, s->base + fr->ci4, fr->tw, fr->th);
+}
+
+void sprite_reblend(const fx_sprite_t *s, int gpu_mode, const uint8_t rgba[4])
+{
+	uint8_t prim[4], env[4];
+
+	if (bind_ends(s, gpu_mode, rgba, prim, env) >= 0)
+		gpu_fx_ramp(prim, env);
 }

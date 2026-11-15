@@ -760,7 +760,9 @@ static void eng_restart(void)
  * game (by save seq: the autosave or a manual save, Flash or Pak) loads
  * at the next frame boundary; with none, the session ends at the frame
  * boundary and New Game starts on the player's map, as the end of a
- * section restarts on the start map. */
+ * section restarts on the start map: HLDS answers `reload` with no save
+ * by spawning the current map afresh ("Spawn Server c1a0", architecture.md
+ * 14 Reload). */
 void eng_reload(void)
 {
 	save_info_t s[SAVE_SLOTS_MAX];
