@@ -6,7 +6,8 @@
 # ares' ARES_TEST_INPUT pad file walks it: title -> New Game -> Easy ->
 # play (once the cart logs PLAY_AT, walk forward) -> Start (pause) ->
 # Configuration (brightness +3 steps, sound volume -2, look speed +1) ->
-# B (stored) -> Save Game -> slot 1 -> Load Game screen -> B -> Start
+# B (stored) -> Save Game -> slot 1 -> Load Game -> slot 1 (the save just
+# made: `menu: load done`, play goes on) -> walk -> Start (pause) -> Start
 # (resume) -> walk -> Start -> Quit to Title -> confirm, then a second
 # session: New Game -> Easy -> play -> Start -> Quit to Title. Every press is
 # held until the cart logs the menu's answer (`menu: ...` lines), so the
@@ -16,7 +17,7 @@
 # of the framebuffer's first 216 rows (its VI output height with the CRT
 # margin), so the description line (rows 214..232, all scanned out by the
 # VI: plat/n64/main.c) is cut off in them; `menu: layout ok` proves it fits.
-# PASS: every step answered; `menu: layout ok`; the second quit's title
+# PASS: every step answered; the load done; `menu: layout ok`; the second quit's title
 # `mem: title same as first quit` (the first quit's against boot is
 # reported: one-time allocations, eng.c title_settle); no `error:` line,
 # libdragon exception or assertion text.
@@ -163,7 +164,13 @@ snap saved
 tap $DOWN '^menu: select main Load Game'
 tap $A '^menu: screen load'
 snap load
-tap $B '^menu: screen main'
+tap $DOWN '^menu: select load Slot 1'
+tap $A '^menu: load (done|failed)'
+grep -q '^menu: load done' "$LOG" || fail "loading slot 1 failed"
+sleep 2
+walk 3
+snap loaded
+tap $START '^menu: pause'
 tap $START '^menu: resume'
 sleep 2
 walk 3
