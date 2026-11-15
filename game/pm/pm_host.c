@@ -441,5 +441,6 @@ void game_pm_move(phy_pm_t *rec)
 		o->inwater = t->inwater ? 1 : 0;
 		o->hitgroup = (uint8_t)t->hitgroup;
 		o->pad = 0;
+		VectorCopy(t->deltavelocity, rec->touchvel[i]);
 	}
 }

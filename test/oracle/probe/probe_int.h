@@ -200,5 +200,6 @@ bool Cap_KAlloc( int step );
 bool Cap_KSettle( int step );
 bool Cap_WWater( int step );
 bool Cap_LIllum( int step );
+bool Cap_PBotPush( int step );
 
 #endif

@@ -74,6 +74,7 @@ static const ProbeCapture s_caps[] =
 	{ "P-walkmove", "physics-movetypes",    Cap_PWalkmove, G_M3 },
 	{ "W-water",    "trace-and-hulls",      Cap_WWater, G_M3 },
 	{ "L-illum",    "lightstyles",          Cap_LIllum, G_M3 },
+	{ "P-botpush",  "physics-movetypes",    Cap_PBotPush, G_M3 },
 	{ "A-order",    "area-links-and-touch", Cap_AOrder, G_LIVE },
 };
 #define NUM_CAPS ( (int)( sizeof( s_caps ) / sizeof( s_caps[0] ) ) )

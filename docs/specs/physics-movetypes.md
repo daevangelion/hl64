@@ -149,9 +149,15 @@ Ordinary monster walking is done by the game through walk moves (6).
 2. Velocity non-zero, the **ground move** (STEP too):
    - horizontal speed s > 0 consumes the entity friction scale (then 1);
      **ground friction** when the entity was on the ground at the frame
-     start (FL_ONGROUND) and check_bottom (6) holds there: control =
-     max(s, stopspeed), s' = max(0, s − dt·control·sv_friction·scale),
-     velocity.xy ×= s'/s (200 → 192 → 184.32 … at dt 0.01);
+     start (FL_ONGROUND) and stands on the world there (a bottom corner,
+     1 u under the box, in world SOLID, as below) or check_bottom (6)
+     holds there: control = max(s, stopspeed), s' = max(0, s −
+     dt·control·sv_friction·scale), velocity.xy ×= s'/s (200 → 192 →
+     184.32 … at dt 0.01). A box sent over a **world** ledge brakes until
+     its last corner leaves it, whatever its groundentity (t0a0a's crate
+     at 400 u/s: 4 % a frame on, 162.94 u/s at frame 33 with 22 u of its
+     66 u box over the pit, where check_bottom fails)
+     **[probe:measured P-botpush slide_0 slidebsp_0]**;
    - FL_ONGROUND cleared; check velocity; slide; a slide onto a floor of
      the world or a SOLID_BSP entity sets FL_ONGROUND and groundentity;
      else FL_ONGROUND is set (groundentity unchanged) when any of the four
@@ -167,7 +173,14 @@ Ordinary monster walking is done by the game through walk moves (6).
    the frame before); a monster sinking past a 45° slope gets FL_ONGROUND
    once a corner is 1 u into it, 17 u above the slope under its centre
    **[probe:measured P-step ledge48 water_step, P-pushable pushstep_ledge
-   map_pushable_0]**.
+   map_pushable_0, P-botpush]**. Pushed by the player (CPushable::Touch
+   with the impact velocity, area-links-and-touch.md 4), t0a0a's crate
+   leaves its ledge on frame 78 and rests on the pit floor against the
+   west wall from frame 124 **[probe:measured P-botpush walk_0]**. hl64
+   matches that (leaves on frame 78–79, rests from 124 at the same place,
+   x within 0.5 u while pushed); GoldSrc's crate box is the model file's
+   bounds 1 u wider on every side (66 u, hl64 keeps 64 u), so hl64's crate
+   top rests 2 u lower: 19.97 u under the floor instead of 17.97.
 3. Think. 4. Water level.
 **[probe:measured P-pushable, P-step]**
 
@@ -346,7 +359,7 @@ state. (Client-side: awaits the retail-client capture plan.)
 | P6 | push: a crate on a lift rises; a door with a 4 u gap and 100 u travel moves a crate 95 u and leaves it overlapping by 1 u; a monster against a closing door blocks it, `blocked` once per blocked frame, earlier candidates return | **[probe:measured P-push]** |
 | P7 | rotating door carries an entity round the hinge; non-client yaw follows, client yaw does not | **[probe:measured P-rotate]** |
 | P8 | corpses collapse instead of blocking; a collapsed corpse the door has passed lands on the world every frame (its toss trace stops on the floor at fraction 0, where the move query clips no entities, trace-and-hulls.md 4.4) | **[probe:measured P-push corpse]** |
-| P9 | pushable friction (200 → 192 → 184.32 at dt 0.01, 120-start map pushables likewise) and falling off a ledge with no air friction; friction only from a frame-start ground where check_bottom holds (hldemo3 pushable on two `momentary_door`s: every other frame) | **[probe:measured P-pushable]** |
+| P9 | pushable friction (200 → 192 → 184.32 at dt 0.01, 120-start map pushables likewise) and falling off a ledge with no air friction; friction only from a frame-start ground on the world (a bottom corner in world SOLID) or where check_bottom holds (hldemo3 pushable on two `momentary_door`s: every other frame); a map crate sent 400 u/s over its world ledge with groundentity the world or a brush entity (P-botpush slides); the player walking t0a0a's crate into its pit (P-botpush walk_0: test/m5/crate-pit.route, its end state) | **[probe:measured P-pushable, P-botpush]** |
 | P10 | walk_move: world 8 u stairs climbed up to the step whose corners leave the check_bottom span; an 18 u SOLID_BSP brush-entity step fails; overhang > 18 u fails check_bottom; partial ground correction | **[probe:measured P-walkmove]** |
 | P11 | drop_to_floor codes and origins | probe P-walkmove |
 | P12 | conveyor: an item resting on an FL_CONVEYOR pusher (speed 100) never moves while its basevelocity is 100; on leaving a trigger_push, velocity += basevelocity·(1 + dt/2) | **[probe:measured P-toss]** |

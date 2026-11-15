@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Regression scene (test/run/m5.sh "scenes"): the Hazard Course crate.
+# t0a0a's func_pushable #156 (*67, x 1392..1456, y -1048..-984 in the map
+# file) stands 40 u east of the pit (x 1248..1352, floor -256). Walking
+# into it from the east pushes it off the ledge; it falls and rests on the
+# pit floor against the west wall. GoldSrc (fixture
+# physics-movetypes/P-botpush t0a0a walk_0, the fake client running at it
+# from 1475 -1016 -135): box x 1248.03..1314.03, bottom -255.97, from
+# frame 124 (1.24 s); hl64's box is the file's 64 u, origin
+# (-143.97, 0, -83.97). Before engine/phys/pmove.c handed an impact touch
+# the velocity the player hit with, the head-on clipped velocity (0)
+# reached CPushable::Touch and the crate never moved.
+startmap t0a0a
+waitmap t0a0a 60
+god 1
+setpos 1475 -1016 -135 0 180
+wait 1
++forward
+waitclass func_pushable -144 0 -84 0.5 6
+-forward
+wait 0.2
+pass

@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Scene hazard-pushable (test/README.md): the Hazard Course crate in
+# t0a0a, test/m5/crate-pit.route with shots: func_pushable #156 (*67)
+# stands 40 u east of the pit (x 1248..1352, floor -256); the player walks
+# into it from the east for 4 s, it slides off the ledge, falls and rests
+# on the pit floor against the west wall (GoldSrc: fixture
+# physics-movetypes/P-botpush t0a0a walk_0, from 1.24 s). Shot `overview`
+# looks at the pit and the ledge from the west side whether the crate fell
+# or not; `pit` from above the crate.
+startmap t0a0a
+waitmap t0a0a 60
+god 1
+setpos 1475 -1016 -135 0 180
+wait 1
+stats begin
+shot before
++forward
+wait 0.5
+shot pushing
+wait 3.5
+-forward
+setpos 1180 -1016 -136 20 0
+wait 0.5
+shot overview
+waitclass func_pushable -144 0 -84 0.5 0
+setpos 1400 -1016 -136 45 180
+wait 0.5
+shot pit
+stats end
+wait 0.2
+pass

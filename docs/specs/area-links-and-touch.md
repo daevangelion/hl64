@@ -193,7 +193,13 @@ that removes itself in its own touch gets no B.touch(A)
 **[probe:measured A-touch]**. A SOLID_NOT mover passes through box
 entities without stopping and without any impact touch (its moves ignore
 monsters, physics-movetypes.md 2) **[probe:measured A-touch]**. A caller
-checks A's liveness before continuing.
+checks A's liveness before continuing. The player's impact touches (the
+pmove touch list, pmove-host.md 1 step 7) see the player's velocity as it
+was when it hit B (the touch entry's `deltavelocity`), not the move's
+clipped result; after the touches the velocity is the move's again,
+whatever a touch wrote (CPushable::Move's `pevToucher->velocity`): a
+crate walked into head-on gets the player's impact speed (clamped to its
+`m_maxSpeed`) and the player stops **[probe:measured P-botpush walk_0]**.
 
 ## 5. Tests
 

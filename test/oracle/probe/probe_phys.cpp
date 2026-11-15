@@ -559,6 +559,143 @@ bool Cap_PPushable( int step )
 	return Scen_Capture( step, "physics-movetypes", "P-pushable", d, n, 160, 256 );
 }
 
+// ---------------------------------------------------------------- P-botpush
+//
+// A map func_pushable taken off its nearest world ledge. Per pushable k:
+// `walk_k`: the fake client runs forward into it (CPushable::Touch);
+// `use_k`: the same holding +use (CPushable::Use, continuous use);
+// `slide_k`: no bot, the box on the ground with groundentity the world
+// gets 400 u/s toward the ledge at frame 10; `slidebsp_k`: the same with
+// groundentity a map SOLID_BSP brush entity (which ground the friction
+// gate reads past the ledge). Direction: of the four axes, the one whose
+// floor ends first (a point 2 u under the box's leading face no longer in
+// world solid) on a clear run of its own box; the bot starts behind the
+// box, feet on its bottom. Each k's scenarios start from where `walk_k`
+// found the box (origin, flags, ground, friction).
+
+enum { BP_WALK, BP_USE, BP_SLIDE, BP_SLIDEBSP, BP_KINDS };
+static Vector s_bpDir, s_bpAng;
+static unsigned short s_bpButtons;
+static EHANDLE s_bpBox;
+
+static void BotPushTick( int f )
+{
+	if ( g_scenId % BP_KINDS >= BP_SLIDE )
+	{
+		CBaseEntity *b = s_bpBox;
+		if ( b && f == 10 )
+		{
+			b->pev->velocity = s_bpDir * 400;
+			fprintf( g_scenFile, "{\"sc\":%d,\"ev\":\"push\",\"i\":%d,\"v\":" VF ",\"fl\":%d}\n", g_scenId, b->entindex(), VA( b->pev->velocity ), b->pev->flags );
+		}
+		return;
+	}
+	edict_t *bot = Probe_Bot();
+	if ( !bot || bot->v.solid == SOLID_NOT ) return;
+	Probe_BotMove( s_bpAng, f < 500 ? 320 : 0, 0, 0, f < 500 ? s_bpButtons : 0, 10 );
+}
+
+#define BP_SCEN( k ) { "walk_" #k, 600, NULL, BotPushTick }, { "use_" #k, 600, NULL, BotPushTick }, \
+	{ "slide_" #k, 200, NULL, BotPushTick }, { "slidebsp_" #k, 200, NULL, BotPushTick }
+static const ScenDef s_botpush[] = { BP_SCEN( 0 ), BP_SCEN( 1 ), BP_SCEN( 2 ), BP_SCEN( 3 ), BP_SCEN( 4 ) };
+
+static bool BotPushSetup( void )
+{
+	int want = g_scenId / BP_KINDS, kind = g_scenId % BP_KINDS, k = 0;
+	edict_t *pe = NULL;
+	s_bpBox = NULL;
+	for ( edict_t *c = FIND_ENTITY_BY_CLASSNAME( NULL, "func_pushable" ); !FNullEnt( c ); c = FIND_ENTITY_BY_CLASSNAME( c, "func_pushable" ) )
+		if ( k++ == want ) { pe = c; break; }
+	if ( !pe ) return Scen_Skip( "no such func_pushable" );
+	static Vector s_org;
+	static int s_flags;
+	static edict_t *s_ground;
+	static float s_fric;
+	if ( kind != BP_WALK )
+	{
+		pe->v.velocity = g_vecZero;
+		pe->v.flags = s_flags;
+		pe->v.groundentity = s_ground;
+		pe->v.friction = s_fric;
+		UTIL_SetOrigin( &pe->v, s_org );
+	}
+	else
+	{
+		s_org = pe->v.origin;
+		s_flags = pe->v.flags;
+		s_ground = pe->v.groundentity;
+		s_fric = pe->v.friction;
+	}
+	edict_t *bot = Probe_Bot();
+	if ( !bot ) return Scen_Skip( "no fake client" );
+	static const Vector dirs[4] = { Vector( 1, 0, 0 ), Vector( -1, 0, 0 ), Vector( 0, 1, 0 ), Vector( 0, -1, 0 ) };
+	Vector mn = pe->v.origin + pe->v.mins, mx = pe->v.origin + pe->v.maxs, c = ( mn + mx ) * 0.5f;
+	float bestS = 1e9f;
+	int best = -1;
+	for ( int d = 0; d < 4; d++ )
+	{
+		float half = fabsf( dirs[d].x ) * ( mx.x - mn.x ) * 0.5f + fabsf( dirs[d].y ) * ( mx.y - mn.y ) * 0.5f;
+		for ( float s = 0; s <= 384; s += 2 )
+		{
+			TraceResult tr;
+			TRACE_MONSTER_HULL( pe, pe->v.origin + Vector( 0, 0, 1 ), pe->v.origin + Vector( 0, 0, 1 ) + dirs[d] * s, ignore_monsters, pe, &tr );
+			if ( tr.flFraction < 1.0f || tr.fStartSolid ) break;
+			Vector p = c + dirs[d] * ( half + s );
+			if ( POINT_CONTENTS( Vector( p.x, p.y, mn.z - 2 ) ) != CONTENTS_SOLID )
+			{
+				if ( s < bestS ) { bestS = s; best = d; }
+				break;
+			}
+		}
+	}
+	if ( best < 0 ) return Scen_Skip( "no ledge" );
+	s_bpDir = dirs[best];
+	s_bpAng = Vector( 0, best == 0 ? 0 : best == 1 ? 180 : best == 2 ? 90 : 270, 0 );
+	s_bpButtons = kind == BP_USE ? IN_USE : 0;
+	Scen_Track( pe );
+	if ( kind >= BP_SLIDE )
+	{
+		edict_t *g = INDEXENT( 0 );
+		if ( kind == BP_SLIDEBSP )
+		{
+			g = NULL;
+			for ( int i = 1; i < gpGlobals->maxEntities && !g; i++ )
+			{
+				edict_t *b = INDEXENT( i );
+				if ( b && !b->free && b->v.solid == SOLID_BSP && b->v.model && STRING( b->v.model )[0] == '*' )
+					g = b;
+			}
+			if ( !g ) return Scen_Skip( "no SOLID_BSP brush entity" );
+		}
+		pe->v.flags |= FL_ONGROUND;
+		pe->v.groundentity = g;
+		s_bpBox = CBaseEntity::Instance( pe );
+	}
+	else
+	{
+		float half = fabsf( s_bpDir.x ) * ( mx.x - mn.x ) * 0.5f + fabsf( s_bpDir.y ) * ( mx.y - mn.y ) * 0.5f;
+		Vector start = c - s_bpDir * ( half + 16 + 2 );
+		start.z = mn.z + 37;
+		TraceResult tr;
+		TRACE_HULL( start, start, dont_ignore_monsters, human_hull, NULL, &tr );
+		if ( tr.fStartSolid ) return Scen_Skip( "bot start blocked" );
+		Probe_BotReset( start, SOLID_SLIDEBOX );
+		Scen_Track( bot );
+	}
+	fprintf( g_scenFile, "{\"sc\":%d,\"map_pushable\":%d,\"friction\":%.9g,\"model\":\"%s\",\"dir\":" VF ",\"ledge\":%.9g,\"ground\":%d,\"fake_client\":%s,\"buttons\":%d}\n",
+		g_scenId, ENTINDEX( pe ), (double)pe->v.friction, STRING( pe->v.model ), VA( s_bpDir ), (double)bestS,
+		Probe_Idx( pe->v.groundentity ), kind < BP_SLIDE ? "true" : "false", s_bpButtons );
+	return true;
+}
+
+bool Cap_PBotPush( int step )
+{
+	static ScenDef d[sizeof( s_botpush ) / sizeof( s_botpush[0] )];
+	const int n = sizeof( s_botpush ) / sizeof( s_botpush[0] );
+	for ( int i = 0; i < n; i++ ) { d[i] = s_botpush[i]; d[i].setup = BotPushSetup; }
+	return Scen_Capture( step, "physics-movetypes", "P-botpush", d, n, 160, 256 );
+}
+
 // ---------------------------------------------------------------- P-walkmove
 
 static void WM( CBaseEntity *m, const char *what, float yaw, float dist, int mode )
