@@ -33,7 +33,9 @@
 /* hl64 [own]: hold the sound's samples in the SOUND region while its wave
  * is open (no cart reads per play; such a wave closes after the streamed
  * ones). For short sounds started several times a second (the sparks'
- * ricochets); streamed when the region has no room for them. */
+ * ricochets); streamed when the region has no room for them. The held
+ * samples are a cache: an open that finds no room evicts cached waves
+ * (unused ones first, then the voices playing them) and retries. */
 #define SND_RESIDENT		(1 << 9)
 
 /* pfnEmitSound: source = entity e's origin, followed while it plays. */
@@ -81,13 +83,16 @@ void	snd_music_stop(void);
  * in it, us = mean snd_frame CPU (backend pump included) over its frames,
  * us_max the worst frame. mem = SOUND region bytes in use (tables + the
  * backend's voice buffers and open waves), mem_peak its high-water mark
- * since boot, mem_region the region's size (HL64_SOUND_KB). */
+ * since boot, want_peak the high-water mark of mem without the cache
+ * (SND_RESIDENT samples), mem_region the region's size (HL64_SOUND_KB);
+ * evicted = cached waves closed for an open's room since boot. */
 typedef struct {
 	uint32_t	emits, started, stolen, dropped;	/* in the window */
 	uint32_t	voices, voices_peak, loops, loops_peak, waves_open, waves_peak;
 	uint32_t	us, us_max, frames;
 	uint32_t	pump_us;	/* mean backend pump (cart: mixer_try_play) per frame */
-	uint32_t	mem, mem_peak, mem_region;
+	uint32_t	mem, mem_peak, want_peak, mem_region;
+	uint32_t	evicted;
 	uint32_t	music;		/* CD track playing now, 0 none */
 } snd_stats_t;
 void	snd_stats(snd_stats_t *s, int reset);

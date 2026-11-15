@@ -188,7 +188,11 @@ Peaks are one-map values; M4 re-measured the two-layer regions (ares, route
 `/scratch/hl64/builds/SeamPerf/g4/m4/table-seams.md`). The render, texture
 and collision pools are LRU caches: the 90% / peak × 1.25 rule applies to
 their **want** peak (open + pin classes), the resident high-water is
-information only.
+information only. The studio pool (want = live users' models) and the
+SOUND region's resident samples (`SND_RESIDENT`, sound.md 3: an open with
+no room evicts them, so they fill whatever room the region has) are ruled
+the same way: `prof studio_us want_peak=`, `prof snd_us want_peak=` (the
+region in use without the cache), their pool / mem peaks information.
 
 | region | hl64 KB (carve) | M3 peak (use) | old tree | basis |
 |---|---:|---:|---:|---|
@@ -209,7 +213,7 @@ information only.
 | saved games (`HL64_SAVE_KB`, 14) | 160 | largest staged state 70418 B (Uplink route, hldemo2 → hldemo1 autosave, host), image ≤ 32256 B | — (no saves) | by construction: header + settings block + 32256 B image cap (2 flash sectors, written over frames) + 24 KB coder work area + the staged state (≤ 106496 B); replaces the unused 24 KB sentence-table carve |
 | lightstyle patterns + state | 4 | not reported | strings + 96 × value | lightstyles.md |
 | think heap, active bitsets, grid tables | 12 | 6.3 KB (52%) | area tree + leaf lists | **measured** |
-| sound (16 voice buffers, 10 wav64, loops, CD music stream) | 113 | 76.1 KB (79% of 96) | M6 CD music, scene hl3-welder on ares: 90.0 KB (92208 B; 84032 B without the music) × 1.25 = 112.6 KB → 113 | **measured** (scenes hl1-start / hl2-yard / hl3-welder with / without `media/`, m6-music; M5 hazard route 82832 B, uplink 82080 B, m5-int2 `eb47299`; the earlier `snd_ares.sh` peak was 78144 B) |
+| sound (16 voice buffers, 10 wav64, loops, CD music stream; resident ricochets = cache) | 113 | 76.1 KB (79% of 96) | M6 CD music, scene hl3-welder on ares: 90.0 KB (92208 B; 84032 B without the music) × 1.25 = 112.6 KB → 113. M6 EnvFx resident ricochets (an evictable cache, ruled on the want peak): want peak 92208 B (80%) on scenes hl3-welder / fx-beams3, mem peak (cache included, information) 108944 B, ares, m6-int8b c23 | **measured** (scenes hl1-start / hl2-yard / hl3-welder with / without `media/`, m6-music; M5 hazard route 82832 B, uplink 82080 B, m5-int2 `eb47299`; the earlier `snd_ares.sh` peak was 78144 B) |
 | sprite cache / decals / particles | 64 / 106 / 12 | — / 51.7 KB (92% of the old 56 KB, m3-a) / — | 64 / 8 / 512 | decals: global sheet + 2 per-map placed-decal sheets (`DECL`, one per open layer) + piece vertices, cook-proved (`tools/cook/decals.py`): Uplink 76672 B (29856 + 2 × 11888 t0a0b + 23040), retail 86528 B; carve = retail × 1.25 → **106 KB** (`HL64_DECAL_TEXELS_KB`) |
 | dlight scratch | 32 | not reported | same | 2 × 512 vertex pairs × 32 B by construction (the flashlight pool's 14 KB went with D12) |
 | HUD sheets + font (ui8) | 128 | 63.5 KB (50%; 65024 B, font creditsfont) | similar | **measured** |

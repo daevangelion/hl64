@@ -11,12 +11,19 @@
  * the cart's. The music stream (SND_MUSIC) also reads the bytes its
  * samples take from the cart as it plays, in the cart's AUDIO-class
  * pieces, so the host's audio I/O counts the cart's streaming.
+ *
+ * Room: the cart's arena is modelled in bytes for the waves alone (no
+ * voice rings): an open costs plat/n64/audio.c open_slot's check (state,
+ * header, Huffman tables, handle), a resident wave its samples on top
+ * (the cache); -2 when the room does not hold an open, a resident
+ * request streams when it does not hold the samples too.
  */
 #include <string.h>
 
 #include "engine/core/sys.h"
 #include "engine/io/io.h"
 #include "engine/snd/snd_hw.h"
+#include "plat/host/host.h"
 
 #define HDR_BYTES	32
 #define PIECE		2048	/* plat/n64/audio.c BOUNCE: its AUDIO reads */
@@ -25,6 +32,7 @@ typedef struct {
 	uint8_t		used;
 	snd_wave_info_t	inf;
 	uint32_t	data, bytes;	/* sample data: cart address, size */
+	uint32_t	cost, cache;	/* modelled room taken; its cache part */
 } hwave_t;
 
 typedef struct {
@@ -43,11 +51,17 @@ typedef struct {
 } host_audio_t;
 
 static host_audio_t	*H;
-static uint32_t		h_bytes;
+static uint32_t		h_bytes;	/* host_audio_t, 16-aligned */
+static uint32_t		h_room, h_used, h_peak, h_cache, h_want_peak;
 
 static uint32_t be32(const uint8_t *p)
 {
 	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+
+void host_snd_room(uint32_t bytes)
+{
+	h_room = bytes;
 }
 
 void snd_hw_init(void *mem, uint32_t bytes)
@@ -58,6 +72,8 @@ void snd_hw_init(void *mem, uint32_t bytes)
 	H = mem;
 	memset(H, 0, sizeof(*H));
 	h_bytes = ((uint32_t)sizeof(host_audio_t) + 15u) & ~15u;
+	h_room = bytes > h_bytes ? bytes - h_bytes : 0;
+	h_used = h_peak = h_cache = h_want_peak = 0;
 }
 
 /* Open into slot i (snd_hw_open / snd_hw_stream_open, plat/n64/audio.c
@@ -66,7 +82,7 @@ static int open_slot(int i, uint32_t rom, uint32_t size, int resident, snd_wave_
 	void **wave, int music)
 {
 	const uint8_t *h = H->hdr;
-	uint32_t hb = music ? HDR_BYTES + 4 : HDR_BYTES;
+	uint32_t open, samples, hb = music ? HDR_BYTES + 4 : HDR_BYTES;
 
 	*wave = NULL;
 	if (!rom || size < hb || (rom & 1))
@@ -78,9 +94,6 @@ static int open_slot(int i, uint32_t rom, uint32_t size, int resident, snd_wave_
 	memset(info, 0, sizeof(*info));
 	info->format = h[5];
 	info->channels = h[6];
-	/* the cart's choice without its arena: VADPCM is held (no room
-	 * limit modelled here) */
-	info->resident = (uint8_t)(resident && h[5] == 1);
 	info->freq = be32(h + 8);
 	info->len = be32(h + 12);
 	info->loop_len = be32(h + 16);
@@ -91,10 +104,25 @@ static int open_slot(int i, uint32_t rom, uint32_t size, int resident, snd_wave_
 		return -1;
 	if (H->w[i].used)
 		return -2;
+	/* the cart's open check (plat/n64/audio.c open_slot `need`), then
+	 * the samples when they are held */
+	open = 256 + ((be32(h + 24) - HDR_BYTES + 15u) & ~15u) + 3 * 256 + 64;
+	samples = ((size - be32(h + 24)) + 15u) & ~15u;
+	if (h_used + open > h_room)
+		return -2;
+	info->resident = (uint8_t)(resident && h[5] == 1 && h_used + open + samples <= h_room);
 	H->w[i].used = 1;
 	H->w[i].inf = *info;
 	H->w[i].data = rom + be32(h + 24);
 	H->w[i].bytes = size - be32(h + 24);
+	H->w[i].cache = info->resident ? samples : 0;
+	H->w[i].cost = open + H->w[i].cache;
+	h_used += H->w[i].cost;
+	h_cache += H->w[i].cache;
+	if (h_used > h_peak)
+		h_peak = h_used;
+	if (h_used - h_cache > h_want_peak)
+		h_want_peak = h_used - h_cache;
 	*wave = &H->w[i];
 	return 0;
 }
@@ -122,6 +150,8 @@ void snd_hw_close(void *wave)
 	for (v = 0; v < SND_CHANNELS; v++)
 		if (H->v[v].playing && H->v[v].w == wave)
 			sys_error("snd: wave closed under voice %d", v);
+	h_used -= ((hwave_t *)wave)->cost;
+	h_cache -= ((hwave_t *)wave)->cache;
 	((hwave_t *)wave)->used = 0;
 }
 
@@ -222,9 +252,11 @@ void snd_hw_pump(double dt)
 	}
 }
 
-void snd_hw_mem(uint32_t *now, uint32_t *peak)
+void snd_hw_mem(uint32_t *now, uint32_t *peak, uint32_t *want_peak)
 {
-	*now = *peak = h_bytes;
+	*now = h_bytes + h_used;
+	*peak = h_bytes + h_peak;
+	*want_peak = h_bytes + h_want_peak;
 }
 
 double snd_hw_end_offset(int v)

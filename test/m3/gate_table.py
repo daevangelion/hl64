@@ -19,8 +19,11 @@ fill to their size: their peak is the run's WANT peak (`mem world:
 stats records' resident high-water is printed beside it as information.
 The studio pool is such a cache too (engine/render/studio.c alloc() evicts
 any block not used this frame, soft-resident ones included, before it
-fails): ruled on `prof studio_us want_peak=`, its pool_peak information. A
-region nothing reports is listed as such.
+fails): ruled on `prof studio_us want_peak=`, its pool_peak information.
+The sound region's resident samples are a cache as well (engine/snd/snd.c
+evict_cached closes them for an open that finds no room): ruled on `prof
+snd_us want_peak=`, its mem_peak information. A region nothing reports is
+listed as such.
 
 Region rule (docs/architecture.md 4.1): a reported region whose peak is
 above 90% of its carve, or whose peak x 1.25 exceeds its carve, fails the
@@ -138,8 +141,14 @@ def main():
             d = kv(l)
             note("studio", d.get("want_peak", d["pool_peak"]), "prof studio_us want_peak")
             resident["studio"] = max(resident.get("studio", 0), d["pool_peak"])
+        # the sound region's resident samples (snd.h SND_RESIDENT) are a
+        # cache: an open with no room evicts them (engine/snd/snd.c
+        # evict_cached), so the region is ruled on the want peak (in use
+        # without the cache), mem_peak is information
         if l.startswith("prof snd_us "):
-            note("sound", kv(l)["mem_peak"], "prof snd_us mem_peak")
+            d = kv(l)
+            note("sound", d.get("want_peak", d["mem_peak"]), "prof snd_us want_peak")
+            resident["sound"] = max(resident.get("sound", 0), d["mem_peak"])
         m = re.search(r"^stats \d+ world: .*render=\d+/(\d+)KB texture=\d+/(\d+)KB coll=\d+/(\d+)KB", l)
         if m:
             for r, v in zip(LRU, m.groups()):

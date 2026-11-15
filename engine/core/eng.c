@@ -1066,12 +1066,13 @@ static void rollup(void)
 
 		snd_stats(&s, 1);
 		log_printf("prof snd_us avg=%lu max=%lu voices_peak=%lu loops_peak=%lu waves_peak=%lu "
-			"started=%lu stolen=%lu dropped=%lu mem=%lu mem_peak=%lu region=%lu "
-			"audio_io=%luB audio_io_us=%lu pump_us=%lu music=%lu\n",
+			"started=%lu stolen=%lu dropped=%lu evicted=%lu mem=%lu mem_peak=%lu "
+			"want_peak=%lu region=%lu audio_io=%luB audio_io_us=%lu pump_us=%lu music=%lu\n",
 			(unsigned long)s.us, (unsigned long)s.us_max, (unsigned long)s.voices_peak,
 			(unsigned long)s.loops_peak, (unsigned long)s.waves_peak,
 			(unsigned long)s.started, (unsigned long)s.stolen, (unsigned long)s.dropped,
-			(unsigned long)s.mem, (unsigned long)s.mem_peak, (unsigned long)s.mem_region,
+			(unsigned long)s.evicted, (unsigned long)s.mem, (unsigned long)s.mem_peak,
+			(unsigned long)s.want_peak, (unsigned long)s.mem_region,
 			(unsigned long)io.audio_bytes, (unsigned long)io.audio_us, (unsigned long)s.pump_us,
 			(unsigned long)s.music);
 	}

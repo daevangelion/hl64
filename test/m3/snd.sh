@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
-# Snd slice tests (host; docs/specs/sound.md 5): S1-S3, S5, S6, S8 and the
-# host parts of S4 / S7, on a synthetic content set made here (raw 16-bit
-# wav64 files with the libdragon header layout, a sentences.txt, a test
+# Snd slice tests (host; docs/specs/sound.md 5): S1-S3, S5, S6, S8, S10 and
+# the host parts of S4 / S7, on a synthetic content set made here (raw
+# 16-bit wav64 files with the libdragon header layout, three VADPCM-headed
+# ones for the S10 cache, a sentences.txt, a test
 # res.def naming them), cooked by tools/restab into its own campaign.rtb,
 # then test/m3/snd.c over the real engine with the null audio backend and
 # the event log on. No Valve data, no captures (the retail S-mix parts of
 # S3 / S4 / S7 are out of scope until a capture plan exists).
 #
-# Usage: test/m3/snd.sh [S1 ... S8 | all]
+# Usage: test/m3/snd.sh [S1 ... S8 | S10 | all]
 # Env:   BUILD_DIR (scratch)
 # Exit:  0 pass, 1 failure.
 set -euo pipefail
@@ -57,6 +58,12 @@ for i in range(16):
 wav64("w1", 11025, 0.3)
 wav64("w2", 11025, 0.3)
 wav64("w3", 11025, 0.4)
+# S10's cache: VADPCM headers (format 1, an 8 B extended header of zeros)
+# over 8192 sample bytes; the host backend reads only the header
+for i in range(3):
+    hdr = b"WV64" + struct.pack(">bbbbiiiiII", 10, 1, 1, 16, 11025, 22050, 0, 0, 40, 0)
+    with open(os.path.join(content, "sound", "t", "c%d.wav64" % i), "wb") as f:
+        f.write(hdr + bytes(8) + bytes(8192))
 with open(os.path.join(content, "sound", "sentences.txt"), "w") as f:
     f.write("TST0 t/w1 w2(p120 v80) w3(e50)\n")
     f.write("TST1 t/w1 w2 w1 w2 w1 w2\n")
@@ -64,6 +71,7 @@ lines = ['RES(SOUND, A, "t/a.wav")', 'RES(SOUND, B, "t/b.wav")',
          'RES(SOUND, LOOP, "t/loop.wav")', 'RES(SOUND, SHORT, "t/short.wav")']
 lines += ['RES(SOUND, D%d, "t/d%d.wav")' % (i, i) for i in range(16)]
 lines += ['RES(SENTENCE, TST0, "TST0")', 'RES(SENTENCE, TST1, "TST1")']
+lines += ['RES(SOUND, C%d, "t/c%d.wav")' % (i, i) for i in range(3)]
 with open(os.path.join(defs, "res.def"), "w") as f:
     f.write("\n".join(lines) + "\n")
 EOF

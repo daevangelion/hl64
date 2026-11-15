@@ -284,6 +284,43 @@ static int oldest_oneshot(void)
 	return best;
 }
 
+/* Make room for an open: close one cached (resident) wave, the least
+ * recently used no voice plays, else the least recently used one with the
+ * voices playing it stopped (its samples are the cache: snd.h
+ * SND_RESIDENT); w = the slot being opened. 0 when no cached wave is open. */
+static int evict_cached(int w)
+{
+	int i, v, best = -1, best_used = 0;
+
+	for (i = 0; i < SND_WAVES; i++)
+	{
+		int used;
+
+		if (i == w || !S->w[i].hw || !S->w[i].inf.resident)
+			continue;
+		used = wave_in_use(i);
+		if (best < 0 || used < best_used || (used == best_used && S->w[i].lru < S->w[best].lru))
+		{
+			best = i;
+			best_used = used;
+		}
+	}
+	if (best < 0)
+		return 0;
+	for (v = 0; v < SND_VOICES; v++)
+		if (S->v[v].busy && S->v[v].wave == best)
+		{
+			S->st.stolen++;
+			voice_free(v, "evict");
+		}
+	snd_logf("snd %lu evict s%u %s\n", (unsigned long)S->frame, (unsigned)S->w[best].res,
+		rname(S->w[best].res));
+	snd_hw_close(S->w[best].hw);
+	S->w[best].hw = NULL;
+	S->st.evicted++;
+	return 1;
+}
+
 /* Open sound r (or find it open): its wave slot, -1 when it cannot play.
  * resident: ask the backend to hold the samples (SND_RESIDENT). */
 static int wave_get(res_t r, int resident)
@@ -327,7 +364,10 @@ static int wave_get(res_t r, int resident)
 	if (!res_file(r, &file, &ofs, &size) || !(rom = res_file_rom(file, NULL)))
 		rc = -1;
 	else
-		rc = snd_hw_open(rom + ofs, size, resident, &S->w[w].inf, &S->w[w].hw);
+		/* no room: the cache gives way before the open fails */
+		while ((rc = snd_hw_open(rom + ofs, size, resident, &S->w[w].inf, &S->w[w].hw)) == -2
+			&& evict_cached(w))
+			;
 	if (rc)
 	{
 		S->w[w].hw = NULL;
@@ -1264,7 +1304,7 @@ void snd_frame(const float listener[3], const float right[3], double dt)
 
 void snd_stats(snd_stats_t *s, int reset)
 {
-	uint32_t now, peak;
+	uint32_t now, peak, want;
 
 	if (!S)
 	{
@@ -1278,9 +1318,10 @@ void snd_stats(snd_stats_t *s, int reset)
 	s->frames = S->frames;
 	s->us = S->frames ? (uint32_t)(S->us_sum / S->frames) : 0;
 	s->pump_us = S->frames ? (uint32_t)(S->pump_sum / S->frames) : 0;
-	snd_hw_mem(&now, &peak);
+	snd_hw_mem(&now, &peak, &want);
 	s->mem = S->tables + now;
 	s->mem_peak = S->tables + peak;
+	s->want_peak = S->tables + want;
 	s->mem_region = mem_region_bytes(MEM_SOUND);
 	s->music = (uint32_t)S->mus_track;
 	if (reset)

@@ -65,8 +65,10 @@ void		snd_hw_rate(int v, float hz);
 void		snd_hw_vol(int v, float left, float right);
 /* Feed the output (cart: mixer_try_play; host: advance by dt). */
 void		snd_hw_pump(double dt);
-/* Backend bytes in use now / at peak inside its part of the region. */
-void		snd_hw_mem(uint32_t *now, uint32_t *peak);
+/* Backend bytes in use now / at peak inside its part of the region, and
+ * the peak of its want: in use minus the cache (resident waves' held
+ * samples; snd.c evicts cached waves when an open finds no room). */
+void		snd_hw_mem(uint32_t *now, uint32_t *peak, uint32_t *want_peak);
 /* Host: seconds into the last pump at which voice v's wave ended
  * (-1 still playing); 0 on the cart. */
 double		snd_hw_end_offset(int v);

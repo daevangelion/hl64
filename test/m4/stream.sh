@@ -23,7 +23,7 @@
 #     BUILD_DIR  (env) the build directory (default /scratch/hl64/builds/Stream)
 set -eu
 cd "$(dirname "$0")/../.."
-CONTENT=${1:-${HL64_CONTENT:-/scratch/hl64/tmp/Int8/c22}}
+CONTENT=${1:-${HL64_CONTENT:-/scratch/hl64/tmp/Int9/c23}}
 B=${BUILD_DIR:-/scratch/hl64/builds/Stream}
 T=$(mktemp -d "${TMPDIR:-/tmp}/streamtest.XXXXXX")
 trap 'rm -rf "$T"' EXIT

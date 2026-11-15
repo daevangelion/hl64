@@ -5,13 +5,14 @@
  * campaign.rtb, entities, engine/snd/snd.c over the null audio backend)
  * driven frame by frame at 1/30 s, with the event log ("snd ...") on.
  *
- *   hl64-snd --root CONTENT S1|S2|S3|S4|S5|S6|S7|S8|all
+ *   hl64-snd --root CONTENT S1|S2|S3|S4|S5|S6|S7|S8|S10|all
  *
  * The content is snd.sh's synthetic set: raw 16-bit wav64 files under
  * sound/t/ and two sentences; the test res.def lines (snd.sh) name them in
  * this order: A (11025 Hz, 2 s), B (22050 Hz, 2 s), LOOP (22050 samples
  * at 11025 Hz, loop 11025), SHORT (0.1 s), D0..D15 (2 s each), sentences
- * TST0 "t/w1 w2(p120 v80) w3(e50)" and TST1 (six words).
+ * TST0 "t/w1 w2(p120 v80) w3(e50)" and TST1 (six words), then C0..C2
+ * (VADPCM headers, 2 s at 11025 Hz, 8192 sample bytes: the cache's waves).
  * Exit 0 when every check of the chosen tests passes.
  */
 #include <math.h>
@@ -32,7 +33,13 @@
 
 #define DT		(1.0 / 30.0)
 
-enum { R_A, R_B, R_LOOP, R_SHORT, R_D0, R_TST0 = R_D0 + 16, R_TST1 };
+enum { R_A, R_B, R_LOOP, R_SHORT, R_D0, R_TST0 = R_D0 + 16, R_TST1, R_C0 };
+
+/* audio_host.c's room model: an open of a raw wave (data at 32) and of a
+ * C wave (8 B extended header), a C wave's samples */
+#define OPEN_RAW	(256 + 768 + 64)
+#define OPEN_C		(256 + 16 + 768 + 64)
+#define SAMPLES_C	8192
 
 static int fails, checks;
 static float lis[3], right_v[3] = { 0, -1, 0 };
@@ -665,6 +672,82 @@ static void s8(void)
 	CHECK(on(e, CHAN_AUTO, NULL) == 1 && snd_waves_open() <= SND_WAVES, "LRU close for a new wave");
 }
 
+/* ---- S10: the resident samples are a cache: a full cache never blocks an
+ * open (snd.h SND_RESIDENT, engine/snd/snd.c evict_cached) ------------------- */
+
+static void s10(void)
+{
+	snd_stats_t sb, st0, st;
+	uint32_t want;
+	int e, e2, k;
+
+	log_printf("S10 cache\n");
+	reset();
+	snd_stop_all();		/* no wave open: the room below is all the model's */
+	e = ent_at(10, 0, 0);
+	e2 = ent_at(-10, 0, 0);
+	/* room for three cached waves, not for one open more */
+	host_snd_room(3 * (OPEN_C + SAMPLES_C) + OPEN_RAW / 2);
+	snd_stats(&sb, 0);
+
+	/* unused cached waves give way */
+	for (k = 0; k < 3; k++)
+		snd_emit(e, CHAN_AUTO, R(R_C0 + k), 1, ATTN_NORM, SND_RESIDENT, 100);
+	snd_stats(&st0, 0);
+	CHECK(on(e, CHAN_AUTO, NULL) == 3 && snd_waves_open() == 3, "three cached sounds play (%d)",
+		on(e, CHAN_AUTO, NULL));
+	want = sb.mem + 3 * OPEN_C > sb.want_peak ? sb.mem + 3 * OPEN_C : sb.want_peak;
+	CHECK(st0.mem == sb.mem + 3 * (OPEN_C + SAMPLES_C) && st0.want_peak == want,
+		"their samples are the cache: mem %lu (+%lu), want peak %lu (expected %lu)",
+		(unsigned long)st0.mem, (unsigned long)(st0.mem - sb.mem),
+		(unsigned long)st0.want_peak, (unsigned long)want);
+	frames(75);		/* 2.5 s: they end, their waves stay open */
+	CHECK(busy() == 0 && snd_waves_open() == 3, "the cache is full and idle");
+	snd_emit(e2, CHAN_AUTO, R(R_A), 1, ATTN_NORM, 0, 100);
+	snd_stats(&st, 0);
+	CHECK(on(e2, CHAN_AUTO, NULL) == 1, "a streamed open into a full idle cache plays");
+	CHECK(st.evicted == st0.evicted + 1 && st.dropped == st0.dropped,
+		"one cached wave evicted (%lu), nothing dropped (%lu)",
+		(unsigned long)(st.evicted - st0.evicted), (unsigned long)(st.dropped - st0.dropped));
+	CHECK(st.want_peak < st.mem_peak, "want peak %lu below mem peak %lu",
+		(unsigned long)st.want_peak, (unsigned long)st.mem_peak);
+
+	/* cached waves under voices give way too: their voices stop (reset
+	 * destroys the entities) */
+	reset();
+	snd_stop_all();
+	e = ent_at(10, 0, 0);
+	e2 = ent_at(-10, 0, 0);
+	for (k = 0; k < 3; k++)
+		snd_emit(e, CHAN_AUTO, R(R_C0 + k), 1, ATTN_NORM, SND_RESIDENT, 100);
+	snd_stats(&st0, 0);
+	CHECK(on(e, CHAN_AUTO, NULL) == 3, "the cache is full and playing");
+	snd_emit(e2, CHAN_AUTO, R(R_A), 1, ATTN_NORM, 0, 100);
+	snd_stats(&st, 0);
+	CHECK(on(e2, CHAN_AUTO, NULL) == 1 && on(e, CHAN_AUTO, NULL) == 2,
+		"a streamed open into a full playing cache plays (%d), one cached voice stopped (%d left)",
+		on(e2, CHAN_AUTO, NULL), on(e, CHAN_AUTO, NULL));
+	CHECK(st.evicted == st0.evicted + 1 && st.dropped == st0.dropped,
+		"one cached wave evicted (%lu), nothing dropped (%lu)",
+		(unsigned long)(st.evicted - st0.evicted), (unsigned long)(st.dropped - st0.dropped));
+	CHECK(snd_wave_voice_check() < 0, "no voice on a closed wave");
+
+	/* positive control: with no cache an open the room cannot hold drops
+	 * (the source is live: only the room fails it) */
+	reset();
+	snd_stop_all();
+	e2 = ent_at(-10, 0, 0);
+	host_snd_room(OPEN_RAW / 2);
+	snd_stats(&st0, 0);
+	snd_emit(e2, CHAN_AUTO, R(R_A), 1, ATTN_NORM, 0, 100);
+	snd_stats(&st, 0);
+	CHECK(on(e2, CHAN_AUTO, NULL) == 0 && st.dropped == st0.dropped + 1 && st.evicted == st0.evicted,
+		"no room and no cache: the open fails (dropped %lu)",
+		(unsigned long)(st.dropped - st0.dropped));
+	reset();
+	snd_stop_all();
+}
+
 int main(int argc, char **argv)
 {
 	const char *t;
@@ -672,7 +755,7 @@ int main(int argc, char **argv)
 
 	if (argc < 4 || strcmp(argv[1], "--root"))
 	{
-		fprintf(stderr, "usage: hl64-snd --root CONTENT S1..S8|all\n");
+		fprintf(stderr, "usage: hl64-snd --root CONTENT S1..S8|S10|all\n");
 		return 2;
 	}
 	host_io_init(argv[2]);
@@ -700,6 +783,8 @@ int main(int argc, char **argv)
 		s7();
 	if (!strcmp(t, "all") || !strcmp(t, "S8"))
 		s8();
+	if (!strcmp(t, "all") || !strcmp(t, "S10"))
+		s10();
 	snd_stats(&st, 0);
 	log_printf("snd stats started=%lu stolen=%lu dropped=%lu voices_peak=%lu loops_peak=%lu "
 		"waves_peak=%lu mem_peak=%lu region=%lu\n", (unsigned long)st.started,
