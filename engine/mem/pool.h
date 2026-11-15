@@ -24,18 +24,22 @@
 
 #include <stdint.h>
 
-typedef struct mem_blk_s
+/* 48 bytes, 16-aligned: three VR4300 data-cache lines. A walk of the
+ * address-ordered list (the residency manager's room search) reads the
+ * first (next, extent, state) and, for a used block, the second. */
+typedef struct __attribute__((aligned(16))) mem_blk_s
 {
-	struct mem_blk_s	*prev, *next;	/* address order, used and free */
-	struct mem_blk_s	*fprev, *fnext;	/* address order, free blocks only */
+	struct mem_blk_s	*next;		/* address order, used and free */
 	uint32_t		ofs, size;
-	uint32_t		fence;		/* frame the block may be reused after */
 	uint8_t			state;		/* MEM_BLK_* */
 	uint8_t			locked;		/* DMA in flight: never moved */
-	void			**owner;	/* rewritten when the block slides */
-	int32_t			user;		/* caller's tag (residency: layer/chunk key) */
 	uint32_t		memo[2];	/* caller's cache (residency: its make-room
 						 * classification of the block) */
+	int32_t			user;		/* caller's tag (residency: layer/chunk key) */
+	struct mem_blk_s	*prev;
+	struct mem_blk_s	*fprev, *fnext;	/* address order, free blocks only */
+	uint32_t		fence;		/* frame the block may be reused after */
+	void			**owner;	/* rewritten when the block slides */
 } mem_blk_t;
 
 enum { MEM_BLK_FREE, MEM_BLK_USED, MEM_BLK_FENCED, MEM_BLK_SPARE };

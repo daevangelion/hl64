@@ -378,7 +378,12 @@ evictable blocks that spans the request (weakest strongest victim class,
 then youngest victim oldest, then fewest bytes: the LRU order of single
 evictions, made to form a hole; one at a time they free scattered blocks a
 fragmented pool never joins); with the hole there but the pool's block
-descriptors used up, one victim whose free merges with a neighbour.
+descriptors used up, one victim whose free merges with a neighbour. A
+search classifies each block once per frame and target generation (its
+memo; naming clears it, a victim is re-checked before its drop), and the
+requests that would wait on the same fenced bytes (the pool's longest
+free + fenced run covers them, until it allocates) skip the search: one
+full walk per request was 55 ms of stream time in hl2-return-battle.
 Victims are chunks not used this frame or the last; prefetch never evicts
 a chunk used in the last 30 frames. The target
 set is recomputed only when one of its inputs changed (eye leaf, player
