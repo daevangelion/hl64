@@ -14,7 +14,9 @@ test/m3/gate_table.py). The world pools render / texture / collision are
 LRU caches that fill to their size: the rule takes the run's WANT peak
 (`mem world: <pool>_want_peak=`, the open + pin class chunks wanted at
 once; the `mem` command the PROFILE route's PASS runs with its last stats record, so it covers
-every window), the window's resident peak is shown as information.
+every window), the window's resident peak is shown as information; the
+studio pool and the sound region's resident samples likewise (`prof
+studio_us want_peak=`, `prof snd_us want_peak=`).
 
 Old-tree baseline (doc only, not measured here): the old tree's cart
 Uplink route (n64/docs/stream-arch-v2.md 6.8 "Cart Uplink route (ares,
@@ -93,6 +95,12 @@ def main():
         if l.startswith("prof studio_us ") and "want_peak=" in l:
             want_run["studio"] = max(want_run.get("studio", 0),
                                      int(re.search(r"want_peak=(\d+)", l).group(1)))
+        # the sound region's resident samples are a cache: an open with no
+        # room evicts them (engine/snd/snd.c evict_cached); its need is the
+        # want peak (in use without the cache)
+        if l.startswith("prof snd_us ") and "want_peak=" in l:
+            want_run["sound"] = max(want_run.get("sound", 0),
+                                    int(re.search(r"want_peak=(\d+)", l).group(1)))
     out += ["", "### M4 gate: memory per region at each crossing (peak in the +-2 s window vs the "
             "carved size; rule: use <= %d%% and peak x %.2f <= size, %s exempt)" % (
                 USE_MAX * 100, HEADROOM, ", ".join(sorted(EXEMPT))), ""]

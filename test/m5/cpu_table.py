@@ -105,6 +105,7 @@ def parse(lines):
                     cur.peak("studio_want", d.get("want_peak", 0))
                 if m.group(1) == "snd" and "mem_peak" in d:
                     cur.peak("snd_mem", d["mem_peak"])
+                    cur.peak("snd_want", d.get("want_peak", 0))
             continue
         if cur is None:
             continue
@@ -193,7 +194,7 @@ def main():
             w["zones"].get("mon", 0) / 1000.0, w.get("mon_avg", 0) / 1000.0, dominant(w["zones"]), zs))
     out += ["", "#### memory per map visit (peaks of its stats records / roll-ups)", "",
             "| # | map | render KB | texture KB | coll KB | rec live | dehydrate store B | studio want / pool B | "
-            "snd mem B |", "|---:|---|---:|---:|---:|---:|---:|---:|---:|"]
+            "snd want / mem B |", "|---:|---|---:|---:|---:|---:|---:|---:|---:|"]
     for v in visits:
         m = v.mem
 
@@ -201,7 +202,8 @@ def main():
             return "%d/%d" % (m[k], m[k + "_size"]) if k in m else "—"
         out.append("| %d | %s | %s | %s | %s | %s | %s | %s | %s |" % (
             v.k, v.map, pool("render"), pool("texture"), pool("coll"), m.get("live", "—"), m.get("store", "—"),
-            "%s / %s" % (m.get("studio_want", "—"), m.get("studio_pool", "—")), m.get("snd_mem", "—")))
+            "%s / %s" % (m.get("studio_want", "—"), m.get("studio_pool", "—")),
+            "%s / %s" % (m.get("snd_want", "—"), m.get("snd_mem", "—"))))
     print("\n".join(out))
     return 0
 

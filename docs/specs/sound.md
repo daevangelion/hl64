@@ -62,6 +62,13 @@ the listener's own sounds: both ears = volume. Then × master volume.
   ricochets, up to 10 a second) is read whole at open and held in the
   SOUND region (VADPCM, when the region has room; else streamed): no
   cart reads per start; streamed waves close before resident ones.
+- The held samples are a cache [own]: an open that finds no room closes
+  a resident wave (the least recently used no voice plays, else the least
+  recently used one, its voices stopped) and retries, so the cache never
+  fails an open while it holds bytes; the SOUND region rule (architecture
+  4.1) takes the want peak (the region in use without the cache, `prof
+  snd_us want_peak=`), mem_peak is information. A closed resident wave's
+  per-voice decoder states leave the region with it.
 
 ## 4. Sentences
 
@@ -88,6 +95,7 @@ the listener's own sounds: both ears = volume. Then × master volume.
 | S7 | sentence word order, modifiers, ≤ one frame gap, stop mid-sentence | host + retail capture of the dome scene |
 | S8 | ≤ 10 open waves, none closed under a voice | host + cart stats |
 | S9 | CD music: hldemo1 start plays track 3, hldemo3 dome_cd_track track 2, `cd stop`, a cut, the end of a track, the volume setting, the session end | host event log (test/m6/music_host.sh) + cart scene |
+| S10 | resident samples are a cache: a streamed open into a full cache (idle, then playing) evicts one cached wave and plays, nothing dropped; the want peak leaves the cache out; with no cache the open fails (control) | host (room model in plat/host/audio_host.c) |
 
 ## 6. CD music
 

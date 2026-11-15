@@ -6,6 +6,8 @@
 #ifndef HL64_PLAT_HOST_H
 #define HL64_PLAT_HOST_H
 
+#include <stdint.h>
+
 /* io_host.c: cart root (the DFS image source); NULL keeps "." and mounts
  * nothing (a ROM without content). With a root, mounts it as the cart's
  * libdragon mounts its DFS: the lookup table (8 + 16 B per file) and the
@@ -27,5 +29,9 @@ void	host_pak_set(const char *arg);
 /* gpu.c (the draw-list recorder): how many times the last finished frame
  * (gpu_end) bound this page (gpu_bind_page; host tests). */
 int	host_gpu_bound(const void *page);
+
+/* audio_host.c: the modelled room for the waves (bytes; host tests), from
+ * the next open on; snd_hw_init sets it to the backend's whole share. */
+void	host_snd_room(uint32_t bytes);
 
 #endif

@@ -57,6 +57,17 @@ typedef struct {
 
 static uint8_t		*a_lo, *a_hi;	/* KSEG0 */
 static uint32_t		a_used, a_peak;
+/* the cache: resident waves' held samples blocks (cwave_t cache); want =
+ * a_used - a_cache, its peak not taken while a resident wave loads (its
+ * preload and scratch are the cache's) */
+static uint32_t		a_cache, a_want_peak;
+static uint8_t		a_loading;
+
+static void want_note(void)
+{
+	if (!a_loading && a_used - a_cache > a_want_peak)
+		a_want_peak = a_used - a_cache;
+}
 
 static uint8_t *kseg0(const void *p)
 {
@@ -95,6 +106,7 @@ static void *arena_alloc(size_t align, size_t size)
 		a_used += b->size;
 		if (a_used > a_peak)
 			a_peak = a_used;
+		want_note();
 		return q + BLK_HDR;
 	}
 	return NULL;
@@ -291,6 +303,7 @@ static filesystem_t	snd_fs = {
 
 typedef struct {
 	wav64_t		*wav;
+	uint32_t	cache;		/* resident: its held samples block (held_bytes) */
 } cwave_t;
 
 /* SND_WAVES sound waves, then the music stream (snd_hw_stream_open) */
@@ -332,7 +345,8 @@ void snd_hw_init(void *mem, uint32_t bytes)
 	b = (blk_t *)a_lo;
 	b->size = (uint32_t)(a_hi - a_lo);
 	b->used = 0;
-	a_used = a_peak = 0;
+	a_used = a_peak = a_cache = a_want_peak = 0;
+	a_loading = 0;
 	if (attach_filesystem("snd:/", &snd_fs) < 0)
 		sys_error("snd: cannot attach the snd:/ filesystem");
 	mem_heap_redirect(&redirect);
@@ -379,12 +393,26 @@ static uint32_t be32(const uint8_t *p)
  * whole 32-sample pairs) and, Huffman-coded, a second scratch twice that.
  * x = the VADPCM extended header's first 8 bytes.
  */
+static uint32_t vadpcm_fb(const uint8_t *h, const uint8_t *x)
+{
+	return (2u * (x[6] ? x[6] : 4u) + 1u) * h[6];
+}
+
+/* The preload's block that stays while the wave is open: the samples and
+ * the decoder state (the cache, cwave_t) */
+static uint32_t held_bytes(const uint8_t *h, const uint8_t *x)
+{
+	uint32_t len = be32(h + 12);
+
+	return ((((len + 15u) / 16u) * vadpcm_fb(h, x) + 15u) & ~15u)
+		+ ((be32(h + 28) + 15u) & ~15u) + BLK_HDR;
+}
+
 static uint32_t preload_bytes(const uint8_t *h, const uint8_t *x)
 {
-	uint32_t len = be32(h + 12), ch = h[6], bits = x[6] ? x[6] : 4u, fb = 2u * bits + 1u;
-	uint32_t body = (((len + 15u) / 16u) * fb * ch + 15u) & ~15u;
-	uint32_t file = ((((len + 31u) / 32u) * 2u * fb * ch) + 15u) & ~15u;
-	uint32_t n = body + ((be32(h + 28) + 15u) & ~15u) + BLK_HDR + file;
+	uint32_t len = be32(h + 12);
+	uint32_t file = ((((len + 31u) / 32u) * 2u * vadpcm_fb(h, x)) + 15u) & ~15u;
+	uint32_t n = held_bytes(h, x) + file;
 
 	if (x[3] & VADPCM_HUFFMAN)
 		n += BLK_HDR + 2u * file;
@@ -401,7 +429,7 @@ static int open_slot(int i, uint32_t rom, uint32_t size, int resident, snd_wave_
 	wav64_loadparms_t parms;
 	char path[32];
 	uint8_t h[HDR_BYTES + 8];
-	uint32_t ext, need, hb = music ? HDR_BYTES + 4 : HDR_BYTES;
+	uint32_t ext, need, before, hb = music ? HDR_BYTES + 4 : HDR_BYTES;
 
 	*wave = NULL;
 	if (!rom || size < hb || (rom & 1))
@@ -452,11 +480,25 @@ static int open_slot(int i, uint32_t rom, uint32_t size, int resident, snd_wave_
 	snprintf(path, sizeof(path), "snd:/%lx/%lx", (unsigned long)rom, (unsigned long)size);
 	memset(&parms, 0, sizeof(parms));
 	parms.streaming_mode = resident ? WAV64_STREAMING_NONE : WAV64_STREAMING_FULL;
+	before = a_used;
+	a_loading = (uint8_t)resident;
 	redirect.active = 1;
 	waves[i].wav = wav64_load(path, &parms);
 	redirect.active = 0;
+	a_loading = 0;
 	if (!waves[i].wav)
 		return -2;
+	/* the cache: the resident wave's held samples block (no more than the
+	 * open took) */
+	waves[i].cache = 0;
+	if (resident)
+	{
+		waves[i].cache = held_bytes(h, h + HDR_BYTES);
+		if (waves[i].cache > a_used - before)
+			waves[i].cache = a_used - before;
+	}
+	a_cache += waves[i].cache;
+	want_note();
 	memset(info, 0, sizeof(*info));
 	info->format = h[5];
 	info->channels = h[6];
@@ -493,6 +535,9 @@ void snd_hw_close(void *wave)
 	wav64_t *silent = NULL;
 	int v;
 
+	/* its cache goes first (wav64_close only frees) */
+	a_cache -= w->cache;
+	w->cache = 0;
 	/* wav64_close waits for the mixer rounds still reading the wave */
 	wav64_close(w->wav);
 	w->wav = NULL;
@@ -598,10 +643,11 @@ void snd_hw_pump(double dt)
 #endif
 }
 
-void snd_hw_mem(uint32_t *now, uint32_t *peak)
+void snd_hw_mem(uint32_t *now, uint32_t *peak, uint32_t *want_peak)
 {
 	*now = BOUNCE + a_used;
 	*peak = BOUNCE + a_peak;
+	*want_peak = BOUNCE + a_want_peak;
 }
 
 double snd_hw_end_offset(int v)
