@@ -68,7 +68,7 @@ static mem_blk_t	desc_render[DESC_RENDER], desc_texture[DESC_TEXTURE];
 static mem_blk_t	desc_coll[DESC_COLL], desc_layers[DESC_LAYERS];
 static io_req_t		reqs[HL64_WORLD_REQS];
 uint32_t		wld_frame_no = 1;
-uint16_t		wld_tgen = 1;
+uint16_t		wld_tgen = 1, wld_tgen_held;
 uint32_t		wld_layer_gen;
 uint32_t		wld_n_promoted, wld_n_evict_queued, wld_n_prefetch_req;
 uint32_t		wld_n_open_async, wld_n_open_fail;
@@ -705,13 +705,13 @@ static int chunk_pool(uint32_t fourcc)
 static int cls_prio(int cls)
 {
 	return cls >= WLD_CLS_OPEN ? IO_PRIO_OPEN : cls == WLD_CLS_PIN ? IO_PRIO_SEAM
-		: IO_PRIO_PREFETCH;
+		: cls == WLD_CLS_NEAR ? IO_PRIO_NEAR : IO_PRIO_PREFETCH;
 }
 
 static int prio_cls(int prio)
 {
 	return prio == IO_PRIO_OPEN ? WLD_CLS_OPEN : prio == IO_PRIO_SEAM ? WLD_CLS_PIN
-		: WLD_CLS_PREFETCH;
+		: prio == IO_PRIO_NEAR ? WLD_CLS_NEAR : WLD_CLS_PREFETCH;
 }
 
 static void landed(wld_layer_t *L, int c, uint8_t *p)
@@ -818,13 +818,19 @@ static io_req_t *weaker_queued(int p, int cls)
 
 /* The eviction class of chunk ch for make_room: -1 when it is no
  * candidate of any request (not resident, or used this frame or the
- * last), else its class (that of the generation that named it, NONE when
- * this one did not). */
+ * last), else its class: that of the generation that named it; while a
+ * new one is named (wld_tgen_held), the held generation's, near at most
+ * (the new set's open and pin requests evict them as before, its near and
+ * prefetch ones not what the naming has yet to reach); NONE otherwise. */
 static int chunk_k(const wld_chunk_t *ch)
 {
 	if (ch->state != WLD_CH_RESIDENT || ch->used + 1 >= wld_frame_no)
 		return -1;
-	return ch->want == wld_tgen ? ch->cls : WLD_CLS_NONE;
+	if (ch->want == wld_tgen)
+		return ch->cls;
+	if (wld_tgen_held && ch->want == wld_tgen_held)
+		return ch->cls < WLD_CLS_NEAR ? ch->cls : WLD_CLS_NEAR;
+	return WLD_CLS_NONE;
 }
 
 /* A candidate of class k last used in frame used is a victim of a
@@ -855,13 +861,15 @@ static wld_layer_t *blk_chunk(const mem_blk_t *b, int *c)
  * frame's requests cost a full pool walk of cache misses apiece.
  * wld_name clears the memo of a chunk it names while the stamp is live;
  * a chunk used since is caught before its drop (room_classify).
- * pool_alloc clears a new block's memo. */
+ * pool_alloc clears a new block's memo. The held generation is part of
+ * the epoch (its chunks' class ends with the naming). */
 static uint32_t room_stamp, room_frame;
-static uint16_t room_tgen;
+static uint16_t room_tgen, room_held;
 
 static int room_live(void)
 {
-	return room_stamp && room_frame == wld_frame_no && room_tgen == wld_tgen;
+	return room_stamp && room_frame == wld_frame_no && room_tgen == wld_tgen
+		&& room_held == wld_tgen_held;
 }
 
 static void room_epoch(void)
@@ -870,6 +878,7 @@ static void room_epoch(void)
 		return;
 	room_frame = wld_frame_no;
 	room_tgen = wld_tgen;
+	room_held = wld_tgen_held;
 	if (!(room_stamp = (room_stamp + 1) & 0xFFFFFF))
 		room_stamp = 1;
 }

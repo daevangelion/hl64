@@ -12,6 +12,11 @@
 /* Target-set generation (never 0): a chunk with want == wld_tgen is in
  * this generation's set with class cls. */
 extern uint16_t		wld_tgen;
+/* While the stream names a new generation, the one before (0 otherwise):
+ * a chunk it wanted keeps its class, near at most, for eviction, so the
+ * new set's near and prefetch requests do not evict what the same naming
+ * names again a few steps later (a monster's box in the second layer). */
+extern uint16_t		wld_tgen_held;
 /* Frame number of wld_frame (+1; 0 = never used). */
 extern uint32_t		wld_frame_no;
 /* Bumped when a layer becomes ready or closes (a target-set input). */

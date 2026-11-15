@@ -3225,34 +3225,76 @@ int rec_wake_box(const float gmins[3], const float gmaxs[3])
 	return wake_box(gmins, gmaxs, NULL, 0);
 }
 
+/* Record ri's brush submodel into out[0..*n) when its box meets [lo, hi]
+ * (map-local) and the list lacks it. */
+static void pend_model(const rmap_t *m, int ri, int s, const float lo[3], const float hi[3],
+	uint32_t *out, int *n)
+{
+	const rrt_t *t = &m->rt[ri];
+	uint32_t v;
+	res_t r;
+	int k;
+
+	for (k = 0; k < 3; k++)
+		if (t->hi[k] < lo[k] || t->lo[k] > hi[k])
+			return;
+	r = rec_key_res(gid_of(m, ri), RK_MODEL);
+	if (r == RES_NONE || RES_KIND(r) != RES_K_SUBMODEL || (int)RES_SUB_SLOT(r) != s)
+		return;
+	v = (uint32_t)s << 16 | RES_SUB_NUM(r);
+	for (k = 0; k < *n && out[k] != v; k++)
+		;
+	if (k == *n)
+		out[(*n)++] = v;
+}
+
+/* The pending records' candidates as wake_box finds them: the pending
+ * grid's cells around the box (a record sits in its centre's cell, the
+ * huge ones on their own chain), the pending list when the box spans
+ * more than PG_SCAN_CELLS cells. Engine/world asks per moving entity's
+ * window, so the grid keeps it to a few chains. */
 int rec_pending_models(const float gmins[3], const float gmaxs[3], uint32_t *out, int max)
 {
 	int s, i, k, n = 0;
 
 	if (!R.map)
 		return 0;
-	for (s = 0; s < REC_SLOTS; s++)
+	for (s = 0; s < REC_SLOTS && n < max; s++)
 	{
 		const rmap_t *m = &R.map[s];
 		const float *g;
+		float lo[3], hi[3];
+		int c0[3], c1[3], cells = 1, x, y, z;
 
-		if (!m->open || !wld_layer(s))
+		if (!m->open || !m->npend || !wld_layer(s))
 			continue;
 		g = wld_layer(s)->gofs;
-		for (i = 0; i < m->npend && n < max; i++)
+		for (k = 0; k < 3; k++)
 		{
-			const rrt_t *t = &m->rt[m->plist[i]];
-			res_t r;
-
-			for (k = 0; k < 3; k++)
-				if (t->hi[k] < gmins[k] - g[k] || t->lo[k] > gmaxs[k] - g[k])
-					break;
-			if (k < 3)
-				continue;
-			r = rec_key_res(gid_of(m, m->plist[i]), RK_MODEL);
-			if (r != RES_NONE && RES_KIND(r) == RES_K_SUBMODEL && (int)RES_SUB_SLOT(r) == s)
-				out[n++] = (uint32_t)s << 16 | RES_SUB_NUM(r);
+			lo[k] = gmins[k] - g[k];
+			hi[k] = gmaxs[k] - g[k];
+			if (hi[k] < m->pmin[k] || lo[k] > m->pmax[k])
+				break;
+			c0[k] = ifloor((lo[k] - PG_HALF) / PG_CELL);
+			c1[k] = ifloor((hi[k] + PG_HALF) / PG_CELL);
+			cells *= c1[k] - c0[k] + 1;
 		}
+		if (k < 3)
+			continue;
+		if (cells > PG_SCAN_CELLS)
+		{
+			for (i = 0; i < m->npend && n < max; i++)
+				pend_model(m, m->plist[i], s, lo, hi, out, &n);
+			continue;
+		}
+		for (i = m->huge; i != HLE_NONE && n < max; i = m->rt[i].pnext)
+			pend_model(m, i, s, lo, hi, out, &n);
+		for (x = c0[0]; x <= c1[0]; x++)
+			for (y = c0[1]; y <= c1[1]; y++)
+				for (z = c0[2]; z <= c1[2]; z++)
+					for (i = m->head[pg_bucket(x, y, z)]; i != HLE_NONE && n < max;
+						i = m->rt[i].pnext)
+						pend_model(m, i, s, lo, hi, out, &n);
 	}
 	return n;
 }

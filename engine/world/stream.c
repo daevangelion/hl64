@@ -36,6 +36,7 @@
 #include "hl64/ent.h"
 #include "hl64/game.h"
 #include "hl64/limits.h"
+#include "hl64/rec.h"
 #include "engine/core/dbg.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
@@ -67,8 +68,10 @@
 #define DUCK_DZ		16.0f		/* standing eye - ducked eye (view offsets 28 / 12) */
 #define ENT_WINDOWS	64		/* moving entities with a collision window */
 #define ENT_LEAD_S	0.5f		/* an entity's window + v * 0.5 s */
-#define EW_MODELS	12		/* brush models of an entity's window */
+#define EW_MODELS	16		/* brush models of an entity's window */
 #define EW_REQUERY	30		/* frames between a window's model queries */
+#define EW_MOVE		64.0f		/* ... or once its box moved this far (half COL_WIN:
+					   a brush model is named >= 64 u before the box meets it) */
 #define GOAL_SPAN	1024.0f		/* a route span is prefetched this far at most */
 #define GOAL_MARGIN	40.0f		/* ... around the hull (a step up and down: 2 x 18 u) */
 #define SPAWN_WANTS	26		/* hydration windows per layer (wld_stream_spawns: rec's
@@ -96,12 +99,15 @@ typedef struct {
 
 /* an entity's collision window (ent_window): grid cell ranges per layer
  * slot (cell_range; [0] > [3]: none) of its box and route span, and its
- * brush models */
+ * brush models, the box's first (m[0..nb)); near: a thinking monster's,
+ * whose box part is named at near class; q: the origin of the last model
+ * query */
 typedef struct {
 	int16_t		e, slot;
 	int32_t		r[HL64_WORLD_LAYERS][6], g[HL64_WORLD_LAYERS][6];
-	int32_t		nm;
+	uint8_t		near, nb, nm, pad;
 	uint32_t	m[EW_MODELS];
+	float		q[3];
 } ewin_t;
 
 typedef struct {
@@ -209,11 +215,15 @@ static void retry_add(wld_layer_t *L, int c, uint32_t e, int flag)
 	S.retry[S.nretry++] = e;
 }
 
-/* A chunk that could not be queued: listed when open / pin, degraded
- * when prefetch (its class: the strongest naming of the generation). */
+/* A chunk that could not be queued: listed when open / pin / near,
+ * degraded when prefetch (its class: the strongest naming of the
+ * generation); a near one degrades too once the list is half full (the
+ * other half stays for open / pin: monsters' boxes must not force a whole
+ * naming every frame). */
 static void failed(wld_layer_t *L, int c, uint32_t e, int flag)
 {
-	if (L->ch[c].cls <= WLD_CLS_PREFETCH)
+	if (L->ch[c].cls <= WLD_CLS_PREFETCH
+		|| (L->ch[c].cls == WLD_CLS_NEAR && S.nretry >= RETRY_MAX / 2))
 		S.pref_short = 1;
 	else
 		retry_add(L, c, e, flag);
@@ -561,16 +571,51 @@ static int models_of(const wld_layer_t *L, const float lo[3], const float hi[3],
 	return col_models_box(a, b, out, max);
 }
 
+/* m[0..n) into window w's brush models, without repeats, up to EW_MODELS. */
+static void ew_merge(ewin_t *w, const uint32_t *m, int n)
+{
+	int i, j;
+
+	for (i = 0; i < n && w->nm < EW_MODELS; i++)
+	{
+		for (j = 0; j < w->nm && w->m[j] != m[i]; j++)
+			;
+		if (j == w->nm)
+			w->m[w->nm++] = m[i];
+	}
+}
+
+/* The brush models of L's map-local box [lo, hi] into window w: the live
+ * brush entities there (models_of) and the pending records (triggers,
+ * walls, breakables) whose wake the mover's box would cause: its move's
+ * link hydrates them and tests their hull in the same frame. */
+static void ew_models(const wld_layer_t *L, const float lo[3], const float hi[3], ewin_t *w)
+{
+	uint32_t m[EW_MODELS];
+	float a[3], b[3];
+	int k;
+
+	ew_merge(w, m, models_of(L, lo, hi, m, EW_MODELS));
+	for (k = 0; k < 3; k++)
+	{
+		a[k] = lo[k] + L->gofs[k];
+		b[k] = hi[k] + L->gofs[k];
+	}
+	ew_merge(w, m, rec_pending_models(a, b, m, EW_MODELS));
+}
+
 /* Entity e's collision window (architecture.md 5.3: cells of moving
  * monsters and projectiles, hulls of the brush entities in their box)
  * into w: its linked box + COL_WIN and + v * ENT_LEAD_S, and a moving
  * monster's route span (game_move_goal: the box swept to its waypoint,
  * at most GOAL_SPAN, + GOAL_MARGIN), as grid cell ranges of every open
- * layer; the brush models of both (from prev while its ranges are
- * prev's, a fresh query every EW_REQUERY frames). A moving pusher: its
- * own hull (a push tests the entities it meets against it). Toss
- * entities at rest too (a pusher shoves them through triggers). 0: no
- * window (a point traces hull 0, pinned). */
+ * layer; the brush models of both, live and pending (ew_models; from
+ * prev while its ranges are prev's and its box moved less than EW_MOVE,
+ * a fresh query every EW_REQUERY frames). A thinking monster's box part
+ * is near (its next think's walk and CheckLocalMove trace there). A
+ * moving pusher: its own hull (a push tests the entities it meets
+ * against it). Toss entities at rest too (a pusher shoves them through
+ * triggers). 0: no window (a point traces hull 0, pinned). */
 static int ent_window(int e, wld_layer_t *L, const ewin_t *prev, ewin_t *w)
 {
 	const col_ent_t *cv = ent_cv(e);
@@ -589,7 +634,7 @@ static int ent_window(int e, wld_layer_t *L, const ewin_t *prev, ewin_t *w)
 		w->slot = (int16_t)L->slot;
 		for (s = 0; s < HL64_WORLD_LAYERS; s++)
 			w->r[s][0] = w->g[s][0] = 1;	/* no cells */
-		w->nm = 1;
+		w->nm = w->nb = 1;
 		w->m[0] = (uint32_t)L->slot << 16 | COL_MODEL_SUB(cv->model);
 		return 1;
 	case MOVETYPE_WALK: case MOVETYPE_STEP: case MOVETYPE_FLY: case MOVETYPE_TOSS:
@@ -606,6 +651,7 @@ static int ent_window(int e, wld_layer_t *L, const ewin_t *prev, ewin_t *w)
 	memset(w, 0, sizeof(*w));
 	w->e = (int16_t)e;
 	w->slot = (int16_t)L->slot;
+	w->near = (cv->flags & FL_MONSTER) && ent_tm(e)->think;
 	for (k = 0; k < 3; k++)
 	{
 		float dv = v[k] * ENT_LEAD_S;
@@ -652,29 +698,28 @@ static int ent_window(int e, wld_layer_t *L, const ewin_t *prev, ewin_t *w)
 		}
 		cell_range(O, a, b, w->g[s]);
 	}
-	/* the brush models: queried again when a range changed, and every
-	 * EW_REQUERY frames (brush entities hydrate and release) */
+	/* the brush models: queried again when a range changed, the box
+	 * moved EW_MOVE, and every EW_REQUERY frames (brush entities hydrate
+	 * and release) */
 	if (prev && prev->e == e && prev->slot == w->slot && !memcmp(prev->r, w->r, sizeof(w->r))
 		&& !memcmp(prev->g, w->g, sizeof(w->g)) && (wld_frame_no + (uint32_t)e) % EW_REQUERY)
 	{
-		w->nm = prev->nm;
-		memcpy(w->m, prev->m, sizeof(w->m));
-		return 1;
-	}
-	w->nm = models_of(L, lo, hi, w->m, EW_MODELS);
-	if (span && w->nm < EW_MODELS)
-	{
-		uint32_t gm[EW_MODELS];
-		int n = models_of(L, glo, ghi, gm, EW_MODELS), i, j;
-
-		for (i = 0; i < n && w->nm < EW_MODELS; i++)
+		for (k = 0; k < 3; k++)
+			d[k] = cv->origin[k] - prev->q[k];
+		if (len3(d) < EW_MOVE)
 		{
-			for (j = 0; j < w->nm && w->m[j] != gm[i]; j++)
-				;
-			if (j == w->nm)
-				w->m[w->nm++] = gm[i];
+			w->nb = prev->nb;
+			w->nm = prev->nm;
+			memcpy(w->m, prev->m, sizeof(w->m));
+			memcpy(w->q, prev->q, sizeof(w->q));
+			return 1;
 		}
 	}
+	memcpy(w->q, cv->origin, sizeof(w->q));
+	ew_models(L, lo, hi, w);
+	w->nb = w->nm;
+	if (span)
+		ew_models(L, glo, ghi, w);
 	return 1;
 }
 
@@ -947,14 +992,23 @@ static void name_pvs_ahead(wld_layer_t *L)
 
 static void retry_clear(void);
 
-/* Window w's cells in layer L (slot s) and, in its own layer, its brush
- * models. */
+/* Window w's part of class cls in layer L (slot s): its box's cells and,
+ * in its own layer, the box's brush models at near class when w is near
+ * (else prefetch); its route span's at prefetch. */
 static void name_ewin(wld_layer_t *L, int s, const ewin_t *w, int cls)
 {
-	name_cells(L, w->r[s], cls);
-	name_cells(L, w->g[s], cls);
-	if (w->slot == s)
-		name_models(w->m, w->nm, cls);
+	if (cls == (w->near ? WLD_CLS_NEAR : WLD_CLS_PREFETCH))
+	{
+		name_cells(L, w->r[s], cls);
+		if (w->slot == s)
+			name_models(w->m, w->nb, cls);
+	}
+	if (cls == WLD_CLS_PREFETCH)
+	{
+		name_cells(L, w->g[s], cls);
+		if (w->slot == s)
+			name_models(w->m + w->nb, w->nm - w->nb, cls);
+	}
 }
 
 static void name_spawn(wld_layer_t *L, const spawn_want_t *w, int cls)
@@ -1032,12 +1086,20 @@ static void name_all(void)
 					if (S.tele[i].slot == s)
 						name_point(L, S.tele[i].org, cls);
 			}
+			else if (cls == WLD_CLS_NEAR)
+			{
+				/* thinking monsters' boxes: their next think
+				 * traces there; a seam's pins come first */
+				for (i = 0; i < S.nwin; i++)
+					name_ewin(L, s, &S.ew[i], cls);
+			}
 			else
 			{
-				/* moving entities' windows and the hydration
-				 * candidates' spawn windows: prefetch (an OPEN set
-				 * this wide overflowed the collision pool in the
-				 * warehouse fight; the sync fallback evicts them) */
+				/* moving entities' windows (the near boxes named
+				 * above) and the hydration candidates' spawn
+				 * windows: prefetch (an OPEN set this wide
+				 * overflowed the collision pool in the warehouse
+				 * fight; the sync fallback evicts them) */
 				for (i = 0; i < S.nwin; i++)
 					name_ewin(L, s, &S.ew[i], cls);
 				for (i = 0; i < S.nspawn[s]; i++)
@@ -1084,7 +1146,10 @@ static void name_delta(void)
 		if (!L)
 			continue;
 		for (i = 0; i < S.ndwin; i++)
+		{
+			name_ewin(L, s, &S.ew[S.dwin[i]], WLD_CLS_NEAR);
 			name_ewin(L, s, &S.ew[S.dwin[i]], WLD_CLS_PREFETCH);
+		}
 		for (i = 0; i < S.ndspawn; i++)
 			if (S.dspawn_slot[i] == s)
 				name_spawn(L, &S.dspawn[i], S.spawn_gate[s] ? WLD_CLS_PIN : WLD_CLS_PREFETCH);
@@ -1363,9 +1428,16 @@ void wld_stream_frame(int home_map, const float eye[3], const float vel[3])
 		S.layer_gen_seen = wld_layer_gen;
 		S.coll_gen_seen = S.coll_gen;
 		S.valid = 1;
+		/* the generation before holds its chunks against the new
+		 * set's near and prefetch requests until the naming is done:
+		 * one layer's would otherwise evict another's still-wanted
+		 * window (a monster's, which its next think traces) before
+		 * the naming reached it */
+		wld_tgen_held = wld_tgen;
 		if (!++wld_tgen)
 			wld_tgen = 1;
 		name_all();
+		wld_tgen_held = 0;
 		S.st.recompute++;
 	}
 	else
