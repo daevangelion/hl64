@@ -92,6 +92,8 @@ GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
 GAME_SRC_LS := game/hl/levelstate.c
 # M4 Stream: level-load model precache at HLE map open (game_map_opened)
 GAME_SRC_CORE += game/hl/precache.c
+# M6 FuncTank: mounted guns and mortar fields (HLSDK func_tank.cpp, mortar.cpp)
+GAME_SRC_CORE += game/hl/tanks.c
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
 	$(ENGINE_SRC_SND) $(ENGINE_SRC_FX) $(ENGINE_SRC_D2)
 # M4 Gate: the seam-window profiler (engine/test/seamprof.c: PROFILE carts,

@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: MIT
+# Regression scene (test/run/m5.sh "scenes"): hldemo2's mounted guns and
+# trailer-yard mortars (game/hl/tanks.c; HLSDK func_tank.cpp, mortar.cpp).
+# - sandbag_gun_1 (func_tank *90, spawnflags 1: active) and missile_turret
+#   (func_tankrocket *92, spawnflags 3) face north over the yard; from the
+#   yard (2300 400) both see the player: the gun turns to him (yawrate 30)
+#   and the turret's rpg_rockets leave its barrel (52 u).
+# - biggun (func_tank *105, spawnflags 32: player controlled) is taken
+#   with +use on func_tankcontrols *89 behind it; it then turns with the
+#   player's view (CFuncTank::TrackTarget mirrors v_angle). Walking 30 u
+#   away lets it go (CFuncTank::OnControls).
+# - the yard's trigger_once *82 (delay 3) fires init_trailer_mortars_mm:
+#   four func_mortar_field (m_iCount 1) strike 2.5 s after their use, one
+#   a second apart. test/run/m5.sh counts the log lines below (`#
+#   expect-log: COUNT REGEX`, grep -E): one control taken and let go, one
+#   strike per field and four monster_mortar explosions.
+# expect-log: 1 ^tank: [0-9]+ using TANK!$
+# expect-log: 1 ^tank: [0-9]+ stopped using TANK$
+# expect-log: 4 ^mortar: field [0-9]+ strikes 1 at
+# expect-log: 4 ^mortar: [0-9]+ explodes at
+# Before tanks.c the cook dropped these classes (routec: no rpg_rocket
+# class, no biggun / sandbag_gun_1 entities).
+startmap hldemo2
+waitmap hldemo2 60
+god 1
+setpos 2300 400 -60 0 270
+waitmoved sandbag_gun_1 8
+waitclass rpg_rocket 2445 182 -35 400 10
+# behind the biggun, facing its controls (x 2372..2380, y 37..103)
+setpos 2355 70 -40 0 0
+wait 1
++use
+wait 0.2
+-use
+look 10 30
+waitmoved biggun 5
++attack
+wait 1
+-attack
+setpos 2300 400 -60 0 270
+wait 1
+# trigger_once *82 (x 1736..2048, y 1056..1424): the trailer mortars
+setpos 1830 1072 -60 0 90
+wait 10
+pass

@@ -40,6 +40,7 @@
 #include "game/hl/player.h"
 #include "game/hl/gib.h"
 #include "game/hl/savegame.h"
+#include "game/hl/tanks.h"
 
 #define ARMOR_RATIO		0.2f	/* armor takes 80% of the damage */
 #define ARMOR_BONUS		0.5f	/* each point of armor is worth 1/x points of health */
@@ -89,6 +90,7 @@ uint32_t Player_SaveState(int op)
 	{
 		sv_fail("game: player weapon or suit index out of range");
 		memset(p, 0, sizeof(*p));
+		p->m_pTank = EH_NONE;
 	}
 	return n;
 }
@@ -550,6 +552,19 @@ static int CBasePlayer_TakeDamage(int e, int inflictor, int attacker, float flDa
 	return fTookDamage;
 }
 
+/* m_pTank->Use(this, this, USE_OFF, 0); m_pTank = NULL */
+static void Player_ReleaseTank(void)
+{
+	CBasePlayer *p = &pl_state;
+	int t = EHGet(p->m_pTank);
+
+	if (p->m_pTank == EH_NONE)
+		return;
+	p->m_pTank = EH_NONE;
+	if (t >= 0)
+		UseEntity(t, ENT_PLAYER, ENT_PLAYER, USE_OFF, 0);
+}
+
 static void CBasePlayer_Killed(int e, int attacker, int iGib)
 {
 	CBaseMonster *m = MON(e);
@@ -560,6 +575,7 @@ static void CBasePlayer_Killed(int e, int attacker, int iGib)
 	/* holster weapon immediately, to allow it to cleanup */
 	if (p->m_pActiveItem)
 		W_Holster(p->m_pActiveItem);
+	Player_ReleaseTank();
 	p->m_flRespawnTimer = 0;
 	m->deadflag = DEAD_DYING;
 	pl->dead = 1;
@@ -744,6 +760,7 @@ void game_player_spawn(int e)
 	m->m_iszTriggerTarget = NAME_NONE;
 	m->m_sMaster = NAME_NONE;
 	p->dmg_inflictor = EH_NONE;
+	p->m_pTank = EH_NONE;
 	/* CBasePlayer::Spawn */
 	m->health = 100;
 	p->armorvalue = 0;
@@ -1276,9 +1293,20 @@ void game_player_postthink(ent_player_t *pl)
 		return;
 	if (!CBasePlayer_IsAlive(ENT_PLAYER))
 		goto pt_end;
-	/* do weapon stuff: ItemPostFrame (impulses and use first, unless the
-	 * weapon's attack delay holds them) */
-	if (p->m_flNextAttack <= 0)
+	/* Handle Tank controlling: if they've moved too far from the gun, or
+	 * selected a weapon, unuse the gun */
+	if (p->m_pTank != EH_NONE)
+	{
+		int t = EHGet(p->m_pTank);
+
+		if (t >= 0 && CFuncTank_OnControls(t) && p->viewmodel == RES_NONE)
+			UseEntity(t, ENT_PLAYER, ENT_PLAYER, USE_SET, 2);	/* try fire the gun */
+		else
+			Player_ReleaseTank();	/* they've moved off the platform */
+	}
+	/* do weapon stuff: ItemPostFrame (nothing while using a tank;
+	 * impulses and use first, unless the weapon's attack delay holds them) */
+	if (p->m_pTank == EH_NONE && p->m_flNextAttack <= 0)
 	{
 		ImpulseCommands(pl);
 		W_ItemPostFrame();
@@ -1482,6 +1510,7 @@ void Player_RemoveAllItems(int removeSuit)
 		p->m_pActiveItem = 0;
 	}
 	p->m_pLastItem = 0;
+	Player_ReleaseTank();
 	p->viewmodel = RES_NONE;
 	for (i = 0; i < WPN_SLOTS; i++)
 		memset(&p->wpn[i], 0, sizeof(p->wpn[i]));
@@ -1611,5 +1640,6 @@ void game_items_init(void)
 void game_items_new_campaign(void)
 {
 	memset(&pl_state, 0, sizeof(pl_state));
+	pl_state.m_pTank = EH_NONE;
 	SkillDataInit();
 }

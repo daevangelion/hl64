@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Regression scene (test/run/m5.sh "scenes"): hldemo3's security cameras
+# are func_tank (camera1-3: spawnflags 1 active, bullet 0, persistence 0,
+# yawrate 60, pitchrange 0): they never fire (CFuncTank::CanFire needs
+# gpGlobals->time - m_lastSightTime < 0) but turn after the player they
+# see, 6 degrees per 0.1 s think. camera3 (*56 at -167 36 78) sees the
+# player on the upper landing by the second info_player_start.
+startmap hldemo3
+waitmap hldemo3 60
+god 1
+setpos -261 124 52 0 0
+waitmoved camera3 5
+pass

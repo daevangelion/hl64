@@ -205,7 +205,8 @@ done
 # from New Game on one map: a game behaviour a whole route can miss, e.g.
 # dish-pending: the dish turned from the control room first) at the fixed
 # 1/30 s: `route PASS`, exit 0, no frame whose box wakes went over the
-# entity budget (stats `rec: wakeover=0`) ----
+# entity budget (stats `rec: wakeover=0`), and each `# expect-log: COUNT
+# REGEX` line of the route matched by exactly COUNT log lines (grep -E) ----
 for f in "$ROOT"/test/m5/*.route; do
 	[[ -e "$f" ]] || continue
 	s="$(basename "$f" .route)"
@@ -219,7 +220,12 @@ for f in "$ROOT"/test/m5/*.route; do
 	elif grep -qE '^stats [0-9]+ rec: .* wakeover=[1-9]' "$OUT/scene-$s.log"; then
 		fail "scene $s (host): $(grep -E '^rec: frame [0-9]+: box wakes' "$OUT/scene-$s.log" | head -1)"
 	else
-		say "scene $s: route PASS (host)"
+		BAD=0
+		while read -r want re; do
+			got="$(grep -cE -- "$re" "$OUT/scene-$s.log" || true)"
+			[[ "$got" == "$want" ]] || { fail "scene $s (host): $got lines match '$re', expected $want"; BAD=1; }
+		done < <(sed -n 's/^# expect-log: //p' "$f")
+		[[ $BAD -eq 1 ]] || say "scene $s: route PASS (host)"
 	fi
 done
 

@@ -145,12 +145,12 @@ void CSprite_Use(int e, int activator, int caller, int use_type, float value)
 	}
 }
 
-static int CSprite_Spawn(int e, gid_t16 gid)
+/* CSprite::Spawn after the keys (map sprites) or SpriteInit (SpriteCreate) */
+static void sprite_spawn(int e)
 {
 	CSprite *p = PRIV(CSprite, e);
 	float *ang = ent_cv(e)->angles;
 
-	(void)gid;
 	ent_set_solid(e, SOLID_NOT);
 	ent_set_movetype(e, MOVETYPE_NONE);
 	ent_rnd(e)->effects = 0;
@@ -172,11 +172,74 @@ static int CSprite_Spawn(int e, gid_t16 gid)
 		ang[2] = ang[1];
 		ang[1] = 0;
 	}
+}
+
+static int CSprite_Spawn(int e, gid_t16 gid)
+{
+	/* a run-time sprite (CSprite_SpriteCreate) spawns once its model is set */
+	if (gid != GID_NONE)
+		sprite_spawn(e);
 	return 0;
 }
 
+/* CSprite::AnimateUntilDead */
+void CSprite_AnimateUntilDead(int e)
+{
+	if (gtime() > CBase(e)->dmgtime)
+		UTIL_Remove(e);
+	else
+	{
+		CSprite_AnimateThink(e);
+		ent_think_at(e, gtime());
+	}
+}
+
+int CSprite_SpriteCreate(res_t model, const float org[3], int animate)
+{
+	int e = CBaseEntity_Create(CLS_ENV_SPRITE, org, g_vecZero, -1);
+	CSprite *p;
+
+	if (e < 0)
+		return -1;
+	/* SpriteInit: model, origin, Spawn */
+	p = PRIV(CSprite, e);
+	p->spawnflags |= SF_SPRITE_TEMPORARY;
+	p->model = model;
+	sprite_spawn(e);
+	ent_set_movetype(e, MOVETYPE_NOCLIP);
+	if (animate)
+		CSprite_TurnOn(e);
+	return e;
+}
+
+void CSprite_AnimateAndDie(int e, float framerate)
+{
+	SetThink(e, FN_CSprite_AnimateUntilDead);
+	ent_rnd(e)->framerate = framerate;
+	CBase(e)->dmgtime = gtime() + PRIV(CSprite, e)->m_maxFrame / framerate;
+	ent_think_at(e, gtime());
+}
+
+void CSprite_SetTransparency(int e, int mode, int r, int g, int b, int a, int fx)
+{
+	ent_rnd_t *rnd = ent_rnd(e);
+
+	ent_cv(e)->rendermode = (uint8_t)mode;
+	rnd->rendercolor[0] = (uint8_t)r;
+	rnd->rendercolor[1] = (uint8_t)g;
+	rnd->rendercolor[2] = (uint8_t)b;
+	rnd->renderamt = (uint8_t)a;
+	rnd->renderfx = (uint8_t)fx;
+}
+
+/* CSprite::ObjectCaps: temporary sprites (SpriteCreate) are never saved */
+static int CSprite_ObjectCaps(int e)
+{
+	return (PRIV(CSprite, e)->spawnflags & SF_SPRITE_TEMPORARY) ? (int)FCAP_DONT_SAVE : 0;
+}
+
 static const game_vt_t CSprite_vt = {
-	.ObjectCaps = NoTransition_ObjectCaps,
+	.ObjectCaps = CSprite_ObjectCaps,
 };
 
 /* HLSDK CSprite::m_SaveData */

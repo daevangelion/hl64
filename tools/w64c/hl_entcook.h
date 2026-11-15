@@ -407,6 +407,9 @@ static const struct { const char *name; uint16_t flags; } hle_classes[] = {
 	{"func_breakable", 0}, {"func_pushable", 0}, {"func_rotating", 0},
 	{"func_pendulum", 0}, {"func_healthcharger", 0}, {"func_recharge", 0},
 	{"func_ladder", 0}, {"func_guntarget", 0},
+	/* mounted guns, mortar fields (game/hl/tanks.c) */
+	{"func_tank", 0}, {"func_tankrocket", 0}, {"func_tankcontrols", 0},
+	{"func_mortar_field", 0},
 	/* triggers / logic */
 	{"trigger_teleport", 0}, {"trigger_once", 0}, {"trigger_multiple", 0},
 	{"trigger_relay", HLE_CF_LOGIC}, {"trigger_hurt", 0},
@@ -554,6 +557,16 @@ static const struct { const char *name; uint16_t kind; } hle_xkeys[] = {
 	/* infodecal (CDecal::KeyValue): the decals.wad name; the id step
 	 * writes its decal id (hle-format-v1.md "Ids") */
 	{"texture",HLE_KS},
+	/* func_tank / func_tankrocket (func_tank.cpp CFuncTank::KeyValue),
+	 * func_mortar_field (mortar.cpp CFuncMortarField::KeyValue) */
+	{"yawrate",HLE_KF}, {"yawrange",HLE_KF}, {"yawtolerance",HLE_KF},
+	{"pitchrange",HLE_KF}, {"pitchrate",HLE_KF}, {"pitchtolerance",HLE_KF},
+	{"firerate",HLE_KF}, {"barrel",HLE_KF}, {"barrely",HLE_KF}, {"barrelz",HLE_KF},
+	{"spritescale",HLE_KF}, {"spritesmoke",HLE_KS}, {"spriteflash",HLE_KS},
+	{"rotatesound",HLE_KS}, {"persistence",HLE_KF}, {"bullet",HLE_KF},
+	{"bullet_damage",HLE_KF}, {"firespread",HLE_KF}, {"minRange",HLE_KF},
+	{"maxRange",HLE_KF}, {"m_iszXController",HLE_KN}, {"m_iszYController",HLE_KN},
+	{"m_flSpread",HLE_KF}, {"m_fControl",HLE_KF}, {"m_iCount",HLE_KF},
 	{NULL, 0}
 };
 

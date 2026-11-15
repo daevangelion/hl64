@@ -145,3 +145,11 @@ CLASS(WEAPON_TRIPMINE, "weapon_tripmine")
 CLASS(INFODECAL, "infodecal")
 CLASS(ENV_GLOW, "env_glow")
 CLASS(TRIGGER_AUTOSAVE, "trigger_autosave")
+// ---- FuncTank: mounted guns, mortar fields (tanks.c; HLSDK func_tank.cpp,
+// mortar.cpp, rpg.cpp CRpgRocket); monster_mortar and rpg_rocket are run-time ----
+CLASS(FUNC_TANK, "func_tank")
+CLASS(FUNC_TANKROCKET, "func_tankrocket")
+CLASS(FUNC_TANKCONTROLS, "func_tankcontrols")
+CLASS(FUNC_MORTAR_FIELD, "func_mortar_field")
+CLASS(MONSTER_MORTAR, "monster_mortar")
+CLASS(RPG_ROCKET, "rpg_rocket")

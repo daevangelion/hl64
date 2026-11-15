@@ -434,7 +434,8 @@ static void draw_ammo(const CBasePlayer *p)
 	uint8_t c[3];
 	int a, x, y, aw = hl_rects[HR_number_0].w, iw, off;
 
-	if (!ii || !Player_IsAlive())
+	/* CHudAmmo::Draw: HIDEHUD_WEAPONS (a tank) hides it */
+	if (!ii || !Player_IsAlive() || (p->m_iHideHUD & HIDEHUD_WEAPONS))
 		return;
 	a = (int)fmaxf(MIN_ALPHA, hud.ammo_fade);
 	if (hud.ammo_fade > 0)
@@ -481,7 +482,9 @@ static void draw_crosshair(const CBasePlayer *p)
 	const rc_t *r = &wrects[p->m_pActiveItem].cross;
 	uint8_t c[3];
 
-	if (!p->m_pActiveItem || r->s < 0 || !r->w || !Player_IsAlive())
+	/* MsgFunc_HideWeapon: HIDEHUD_WEAPONS (a tank) clears the crosshair */
+	if (!p->m_pActiveItem || r->s < 0 || !r->w || !Player_IsAlive() ||
+		(p->m_iHideHUD & HIDEHUD_WEAPONS))
 		return;
 	/* the engine's crosshair, drawn in the HUD colour */
 	scale(RGB_YELLOWISH, 255, c);
@@ -569,7 +572,8 @@ static void draw_selection(const CBasePlayer *p)
 	uint8_t c[3];
 	int slot, x = 10, y, id;
 
-	if (!act || hud.time > hud.select_time)
+	/* CHudAmmo::DrawWList: HIDEHUD_WEAPONS (a tank) hides it */
+	if (!act || hud.time > hud.select_time || (p->m_iHideHUD & HIDEHUD_WEAPONS))
 		return;
 	scale(RGB_YELLOWISH, 255, c);
 	for (slot = 0; slot < 5; slot++)
