@@ -23,9 +23,14 @@
  * sources in both open layers spatialise without conversion. Nothing is
  * allocated: the tables live in the SOUND region, the backend uses the
  * rest of it.
+ *
+ * CD music (sound.md 6) has its own voice (SND_MUSIC) and stream slot in
+ * the backend: a track never takes a sound voice or wave, and the sound
+ * policy never touches it.
  */
 #include <math.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "hl64/coll.h"
@@ -106,6 +111,9 @@ typedef struct {
 	uint32_t	frames;
 	uint64_t	us_sum, pump_sum;
 	uint8_t		mute;		/* snd_mute: output gain 0 */
+	int8_t		mus_track;	/* CD track playing (snd_music_play), 0 none */
+	void		*mus_hw;	/* its stream, NULL none */
+	float		mus_gain;	/* gain last given the music voice */
 } snd_state_t;
 
 static snd_state_t	*S;
@@ -912,6 +920,137 @@ void snd_ui(res_t sound, float vol)
 	start_sample(ENT_NONE, CHAN_AUTO, sound, vol, ATTN_NONE, PITCH_NORM, S->lis, 0);
 }
 
+/* ---- CD music (snd.h snd_music_play, sound.md 6) ----------------------------- */
+
+#define MUSIC_TRACKS	30	/* HLSDK PlayCDTrack's range: 1..30 play */
+
+static float music_gain(void)
+{
+	if (S->mute)
+		return 0.0f;
+	return (float)settings.vol_master * (float)settings.vol_music * 1e-4f;
+}
+
+static void music_vol(void)
+{
+	float g = music_gain();
+
+	if (S->mus_hw && g != S->mus_gain)
+	{
+		snd_hw_vol(SND_MUSIC, g, g);
+		S->mus_gain = g;
+		snd_logf("snd %lu music %d vol %.2f\n", (unsigned long)S->frame, S->mus_track,
+			(double)g);
+	}
+}
+
+/* The cart file of track t (the cook names it by track number), 0 none. */
+static uint32_t music_file(int t, uint32_t *size)
+{
+	char path[24];
+
+	snprintf(path, sizeof(path), "media/cd%02d.wav64", t);
+	return sys_cart_addr(path, size);
+}
+
+static void music_close(const char *why)
+{
+	snd_hw_stop(SND_MUSIC);
+	snd_hw_close(S->mus_hw);
+	snd_logf("snd %lu music %d %s\n", (unsigned long)S->frame, S->mus_track, why);
+	S->mus_hw = NULL;
+	S->mus_track = 0;
+}
+
+void snd_music_stop(void)
+{
+	if (S && S->mus_hw)
+		music_close("stop");
+}
+
+void snd_music_play(int track)
+{
+	snd_wave_info_t inf;
+	uint32_t rom = 0, size = 0;
+	int r;
+
+	if (!S)
+		return;
+	if (S->mus_hw)
+		music_close("cut");
+	if (track >= 1 && track <= MUSIC_TRACKS)
+		rom = music_file(track, &size);
+	if (!rom)
+	{
+		log_printf("snd: music track %d: not on the cart (media/cd%02d.wav64): silence\n", track,
+			track);
+		return;
+	}
+	r = snd_hw_stream_open(rom, size, &inf, &S->mus_hw);
+	if (r)
+	{
+		log_printf("snd: music track %d: media/cd%02d.wav64 %s\n", track, track,
+			r == -1 ? "is not a music stream (re-cook)" : "has no room");
+		S->mus_hw = NULL;
+		return;
+	}
+	S->mus_track = (int8_t)track;
+	S->mus_gain = music_gain();
+	snd_hw_play(SND_MUSIC, S->mus_hw, 0);
+	snd_hw_vol(SND_MUSIC, S->mus_gain, S->mus_gain);
+	snd_logf("snd %lu music %d start %lu Hz %u ch %lu samples\n", (unsigned long)S->frame, track,
+		(unsigned long)inf.freq, (unsigned)inf.channels, (unsigned long)inf.len);
+}
+
+/* Per frame: a track over closes its stream; volume changes apply. */
+static void music_frame(void)
+{
+	if (!S->mus_hw)
+		return;
+	if (!snd_hw_playing(SND_MUSIC))
+	{
+		music_close("end");
+		return;
+	}
+	music_vol();
+}
+
+/* Boot: the music voice's ring now, not at the first track (the SOUND
+ * arena would be fragmented by then): the first track the cart has plays
+ * and stops before any pump, as plat/n64/audio.c sizes the sound voices.
+ * Every track is cooked alike, so no later track reallocates it. */
+static void music_init(void)
+{
+	snd_wave_info_t inf;
+	uint32_t rom = 0, size = 0, r, sz;
+	int t, n = 0, first = 0;
+
+	for (t = 1; t <= MUSIC_TRACKS; t++)
+		if ((r = music_file(t, &sz)) != 0)
+		{
+			n++;
+			if (!first)
+			{
+				first = t;
+				rom = r;
+				size = sz;
+			}
+		}
+	if (!first)
+	{
+		log_printf("snd: music: no tracks on the cart\n");
+		return;
+	}
+	if (snd_hw_stream_open(rom, size, &inf, &S->mus_hw))
+		sys_error("snd: music: media/cd%02d.wav64 is not a music stream (re-cook)", first);
+	snd_hw_play(SND_MUSIC, S->mus_hw, 0);
+	snd_hw_stop(SND_MUSIC);
+	snd_hw_close(S->mus_hw);
+	S->mus_hw = NULL;
+	log_printf("snd: music: %d tracks on the cart, voice sized on track %d (%lu Hz, %u ch)\n", n,
+		first, (unsigned long)inf.freq, (unsigned)inf.channels);
+}
+
 void snd_mute(int on)
 {
 	int v;
@@ -922,6 +1061,7 @@ void snd_mute(int on)
 	for (v = 0; v < SND_VOICES; v++)
 		if (S->v[v].busy)
 			voice_apply(v);
+	music_vol();
 	snd_logf("snd %lu %s\n", (unsigned long)S->frame, on ? "mute" : "unmute");
 }
 
@@ -994,6 +1134,16 @@ static int cmd_sound(const dbg_cmd_t *c)
 	return 0;
 }
 
+/* DBG_MUSIC (test builds): snd_music_play(track), 0 = snd_music_stop */
+static int cmd_music(const dbg_cmd_t *c)
+{
+	if (c->arg[0].u)
+		snd_music_play((int)c->arg[0].u);
+	else
+		snd_music_stop();
+	return 0;
+}
+
 void snd_init(void)
 {
 	uint8_t *m = mem_region(MEM_SOUND);
@@ -1019,8 +1169,10 @@ void snd_init(void)
 	}
 	snd_hw_init(m + t, n - t);
 	dbg_handler_set(DBG_SOUND, cmd_sound);
+	dbg_handler_set(DBG_MUSIC, cmd_music);
 	log_printf("snd: %d voices @ %d Hz, %d loops, %d waves; tables %lu B of %lu B\n",
 		SND_VOICES, SND_HZ, SND_LOOPS, SND_WAVES, (unsigned long)t, (unsigned long)n);
+	music_init();
 }
 
 void snd_frame(const float listener[3], const float right[3], double dt)
@@ -1075,6 +1227,7 @@ void snd_frame(const float listener[3], const float right[3], double dt)
 			if (had && S->l[i].voice < 0)
 				snd_logf("snd %lu virtual L%d\n", (unsigned long)S->frame, i);
 		}
+	music_frame();
 	{
 		uint64_t p0 = sys_time_us();
 
@@ -1113,6 +1266,7 @@ void snd_stats(snd_stats_t *s, int reset)
 	s->mem = S->tables + now;
 	s->mem_peak = S->tables + peak;
 	s->mem_region = mem_region_bytes(MEM_SOUND);
+	s->music = (uint32_t)S->mus_track;
 	if (reset)
 	{
 		S->st.emits = S->st.started = S->st.stolen = S->st.dropped = 0;

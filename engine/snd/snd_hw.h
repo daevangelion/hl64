@@ -20,6 +20,10 @@
 #define SND_VOICES		16	/* mixer voices */
 #define SND_LOOPS		32	/* loop slots (sound.md 3) */
 #define SND_WAVES		10	/* open wav64 streams */
+/* The music voice (CD tracks, snd.h snd_music_play): mixer channel
+ * SND_VOICES, its stereo wave's right half on the next one. */
+#define SND_MUSIC		SND_VOICES
+#define SND_CHANNELS		(SND_VOICES + 2)
 #define SND_HZ			22050	/* output rate */
 #define SND_PITCH_CAP		130	/* playback rate cap, % of SND_HZ */
 #define SND_AUDIBLE		0.002f	/* loop ear-gain sum that holds a voice */
@@ -39,6 +43,11 @@ void		snd_hw_init(void *mem, uint32_t bytes);
 /* Open the wav64 at cart range [rom, rom + size) into *wave: 0 ok, -1 not
  * a readable wav64 (never retried), -2 the backend's room is full now. */
 int		snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave);
+/* The music stream: the wav64 at [rom, rom + size) (VADPCM, mono or
+ * stereo, no Huffman) into the backend's own stream slot (not one of the
+ * SND_WAVES), played on SND_MUSIC; -1 not a playable music wave, -2 the
+ * slot is open or no room. Its wave reads are AUDIO-class, as the waves'. */
+int		snd_hw_stream_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave);
 /* Close a wave no voice plays (waits for the RSP first on the cart). */
 void		snd_hw_close(void *wave);
 /* Start wave on voice v from sample pos (0, or the loop start). */

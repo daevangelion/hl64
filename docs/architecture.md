@@ -209,7 +209,7 @@ information only.
 | saved games (`HL64_SAVE_KB`, 14) | 160 | largest staged state 70418 B (Uplink route, hldemo2 → hldemo1 autosave, host), image ≤ 32256 B | — (no saves) | by construction: header + settings block + 32256 B image cap (2 flash sectors, written over frames) + 24 KB coder work area + the staged state (≤ 106496 B); replaces the unused 24 KB sentence-table carve |
 | lightstyle patterns + state | 4 | not reported | strings + 96 × value | lightstyles.md |
 | think heap, active bitsets, grid tables | 12 | 6.3 KB (52%) | area tree + leaf lists | **measured** |
-| sound (16 voice buffers, 10 wav64, loops) | 104 | 76.1 KB (79% of 96) | M5 hazard route 80.9 KB (82832 B) × 1.25 > 100 KB → 104 | **measured** (route, m5-int2 `eb47299`; uplink 82080 B; the earlier `snd_ares.sh` peak was 78144 B) |
+| sound (16 voice buffers, 10 wav64, loops, CD music stream) | 113 | 76.1 KB (79% of 96) | M6 CD music, scene hl3-welder on ares: 90.0 KB (92208 B; 84032 B without the music) × 1.25 = 112.6 KB → 113 | **measured** (scenes hl1-start / hl2-yard / hl3-welder with / without `media/`, m6-music; M5 hazard route 82832 B, uplink 82080 B, m5-int2 `eb47299`; the earlier `snd_ares.sh` peak was 78144 B) |
 | sprite cache / decals / particles | 64 / 106 / 12 | — / 51.7 KB (92% of the old 56 KB, m3-a) / — | 64 / 8 / 512 | decals: global sheet + 2 per-map placed-decal sheets (`DECL`, one per open layer) + piece vertices, cook-proved (`tools/cook/decals.py`): Uplink 76672 B (29856 + 2 × 11888 t0a0b + 23040), retail 86528 B; carve = retail × 1.25 → **106 KB** (`HL64_DECAL_TEXELS_KB`) |
 | dlight scratch | 32 | not reported | same | 2 × 512 vertex pairs × 32 B by construction (the flashlight pool's 14 KB went with D12) |
 | HUD sheets + font (ui8) | 128 | 63.5 KB (50%; 65024 B, font creditsfont) | similar | **measured** |
@@ -935,7 +935,9 @@ voice); wave reads in the `AUDIO` I/O class. The frame's pump is
 `mixer_try_play`, which queues the mixer's RSP rounds without waiting for
 them unless the AI is down to its last buffer (160 ms of AI buffers).
 GoldSrc channel semantics, attenuation and stereo model, loops,
-sentences: specs/sound.md. Sounds are
+sentences: specs/sound.md. CD music (trigger_cdaudio / target_cdaudio,
+specs/sound.md 6): cooked `media/cdNN.wav64` (stereo VADPCM 4-bit, 22050 Hz)
+on a dedicated mixer voice pair (channels 16, 17) and stream slot. Sounds are
 `res_t`; sentences are cooked (word `res_t` lists with VOX modifiers),
 nothing is parsed at run time. Positions are global, so both open layers
 spatialise without conversion.
@@ -998,7 +1000,8 @@ line for the highlighted button, the menu sounds of the player's
   goes on with its next word, an interrupted one-shot ends (a VADPCM wave
   only seeks to its start or loop start). Buttons held as a menu closes
   are ignored until released.
-- **Configuration**: brightness (0..100), sound volume (`vol_sfx`), look
+- **Configuration**: brightness (0..100), sound volume (`vol_sfx`), music
+  volume (`vol_music`), look
   speed (`look_sens`, 25..200 %), invert look; applied as they change,
   stored through `settings_store` when the screen is left, loaded at boot
   in playable builds. Brightness lifts the black level: `gpu_view_t.lift`
@@ -1009,7 +1012,7 @@ line for the highlighted button, the menu sounds of the player's
   ares (scene.sh `--cmd "@2 set brightness N"`): hl1-start 33.4 / 33.5 ms
   avg / p90 at 0, 50 and 100; hl2-yard 51.5 / 77.0, 51.5 / 76.6,
   51.5 / 77.0: no cost. The Configuration screen previews it on a grey
-  ramp. No music volume: the engine has no music path.
+  ramp. Music Volume (`vol_music`) sets the CD music's gain (specs/sound.md 6).
 - **Layout**: framebuffer pixels; the VI scans out all 320×240 inside
   libdragon's CRT-safe area (`VI_CRT_MARGIN`; the cart logs `vi: ...
   columns 0..319, rows 0..239 shown`), so a string is on screen when it is

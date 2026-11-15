@@ -747,3 +747,119 @@ const game_class_t gc_TRIGGER_ENDSECTION = {
 	.size = sizeof(CTriggerEndSection), .Spawn = CTriggerEndSection_Spawn,
 	.vt = &CBaseTrigger_vt, .save = &sv_CTriggerEndSection,
 };
+
+/* ---- trigger_cdaudio / target_cdaudio (CD music) -------------------------- */
+
+/* PlayCDTrack: the single player's client gets `cd play N` / `cd stop`;
+ * the engine's music voice is that client (include/hl64/snd.h
+ * snd_music_play, docs/specs/sound.md 6). */
+static void PlayCDTrack(int iTrack)
+{
+	/* Can't play if the client is not connected! */
+	if (!phy_player_active())
+		return;
+	if (iTrack < -1 || iTrack > 30)
+	{
+		log_printf("game: TriggerCDAudio - Track %d out of range\n", iTrack);
+		return;
+	}
+	if (iTrack == -1)
+		snd_music_stop();
+	else
+		snd_music_play(iTrack);
+}
+
+/* CTriggerCDAudio::PlayTrack (!!!HACK - overloaded HEALTH to avoid adding
+ * new field) */
+static void CTriggerCDAudio_PlayTrack(int e)
+{
+	PlayCDTrack((int)CBase(e)->health);
+	SetTouch(e, FN_NONE);
+	UTIL_Remove(e);
+}
+
+/* Changes tracks or stops CD when player touches */
+void CTriggerCDAudio_Touch(int e, int other)
+{
+	if (!IsPlayer(other))
+		return;	/* only clients may trigger these events */
+	CTriggerCDAudio_PlayTrack(e);
+}
+
+void CTriggerCDAudio_Use(int e, int activator, int caller, int use_type, float value)
+{
+	(void)activator;
+	(void)caller;
+	(void)use_type;
+	(void)value;
+	CTriggerCDAudio_PlayTrack(e);
+}
+
+static int CTriggerCDAudio_Spawn(int e, gid_t16 gid)
+{
+	CBaseTrigger_KeyValue(e, gid);
+	InitTrigger(e);
+	SetTouch(e, FN_CTriggerCDAudio_Touch);
+	SetUse(e, FN_CTriggerCDAudio_Use);
+	return 0;
+}
+
+const game_class_t gc_TRIGGER_CDAUDIO = {
+	.size = sizeof(CBaseTrigger), .Spawn = CTriggerCDAudio_Spawn, .vt = &CBaseTrigger_vt,
+	.save = &sv_CBaseTrigger,
+};
+
+/* CTargetCDAudio: plays a CD track when fired or when the player enters
+ * its radius (pev->scale, the "radius" key); only plays for ONE client,
+ * so only use in single play! */
+static void CTargetCDAudio_Play(int e)
+{
+	PlayCDTrack((int)CBase(e)->health);
+	UTIL_Remove(e);
+}
+
+void CTargetCDAudio_Use(int e, int activator, int caller, int use_type, float value)
+{
+	(void)activator;
+	(void)caller;
+	(void)use_type;
+	(void)value;
+	CTargetCDAudio_Play(e);
+}
+
+void CTargetCDAudio_Think(int e)
+{
+	float org[3], d[3];
+
+	/* Can't play if the client is not connected! */
+	if (!phy_player_active())
+		return;
+	ThinkIn(e, 0.5f);
+	OriginIn(ENT_PLAYER, e, org);
+	VecSub(org, ent_cv(e)->origin, d);
+	if (VecLen(d) <= ent_rnd(e)->scale)
+		CTargetCDAudio_Play(e);
+}
+
+static int CTargetCDAudio_Spawn(int e, gid_t16 gid)
+{
+	ent_rnd(e)->scale = KeyF(gid, K_RADIUS, 0);	/* KeyValue "radius" */
+	ent_set_solid(e, SOLID_NOT);
+	ent_set_movetype(e, MOVETYPE_NONE);
+	SetUse(e, FN_CTargetCDAudio_Use);
+	if (ent_rnd(e)->scale > 0)
+	{
+		SetThink(e, FN_CTargetCDAudio_Think);
+		ThinkIn(e, 1.0f);
+	}
+	return 0;
+}
+
+/* CPointEntity: no level transitions (as CBaseTrigger's) */
+static const game_vt_t CTargetCDAudio_vt = {
+	.ObjectCaps = CBaseTrigger_ObjectCaps,
+};
+
+const game_class_t gc_TARGET_CDAUDIO = {
+	.size = sizeof(CBaseEntity), .Spawn = CTargetCDAudio_Spawn, .vt = &CTargetCDAudio_vt,
+};

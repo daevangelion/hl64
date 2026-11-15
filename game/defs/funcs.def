@@ -163,3 +163,8 @@ THINK(CFuncTrackTrain_Find)
 THINK(CFuncTrackTrain_DeadEnd)
 USE(CFuncTrackTrain_Use)
 BLOCKED(CFuncTrackTrain_Blocked)
+// ---- Music: CD audio (triggers.cpp CTriggerCDAudio, CTargetCDAudio) ----
+TOUCH(CTriggerCDAudio_Touch)
+USE(CTriggerCDAudio_Use)
+THINK(CTargetCDAudio_Think)
+USE(CTargetCDAudio_Use)
