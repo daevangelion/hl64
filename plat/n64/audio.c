@@ -295,12 +295,31 @@ typedef struct {
 
 /* SND_WAVES sound waves, then the music stream (snd_hw_stream_open) */
 static cwave_t	waves[SND_WAVES + 1];
+/* The resident wave whose decoder state voice v's mixer channel holds:
+ * libdragon's mixer_ch_play allocates that state when a channel takes a
+ * resident wave and frees it only when the channel next takes a streamed
+ * one (or at mixer_close), so it outlives the wave (snd_hw_close) */
+static cwave_t	*vres[SND_VOICES];
 
-void snd_hw_init(void *mem, uint32_t bytes)
+/* The voice-sizing wave (silent_vadpcm, streamed); redirect active */
+static wav64_t *silent_load(void)
 {
 	wav64_loadparms_t parms;
 	wav64_t *silent;
 	char path[32];
+
+	snprintf(path, sizeof(path), "snd:/0/%x", (unsigned)sizeof(silent_vadpcm));
+	memset(&parms, 0, sizeof(parms));
+	parms.streaming_mode = WAV64_STREAMING_FULL;
+	silent = wav64_load(path, &parms);
+	if (!silent)
+		sys_error("snd: cannot open the voice-sizing wave");
+	return silent;
+}
+
+void snd_hw_init(void *mem, uint32_t bytes)
+{
+	wav64_t *silent;
 	uint8_t *m = kseg0(mem);
 	blk_t *b;
 	int i;
@@ -328,12 +347,7 @@ void snd_hw_init(void *mem, uint32_t bytes)
 	 * the wave's units, plus its decoder state; silent_vadpcm sizes it
 	 * (mono 4-bit VADPCM: 4224 + 48 B). Stopped before any poll.
 	 */
-	snprintf(path, sizeof(path), "snd:/0/%x", (unsigned)sizeof(silent_vadpcm));
-	memset(&parms, 0, sizeof(parms));
-	parms.streaming_mode = WAV64_STREAMING_FULL;
-	silent = wav64_load(path, &parms);
-	if (!silent)
-		sys_error("snd: cannot open the voice-sizing wave");
+	silent = silent_load();
 	for (i = 0; i < SND_VOICES; i++)
 	{
 		mixer_ch_set_limits(i, 16, (float)SND_HZ * (SND_PITCH_CAP * 0.01f), 0);
@@ -476,10 +490,33 @@ int snd_hw_stream_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void 
 void snd_hw_close(void *wave)
 {
 	cwave_t *w = wave;
+	wav64_t *silent = NULL;
+	int v;
 
 	/* wav64_close waits for the mixer rounds still reading the wave */
 	wav64_close(w->wav);
 	w->wav = NULL;
+	/* a voice that last took this resident wave still holds its decoder
+	 * state: the voice-sizing wave (streamed, on the ring it sized at
+	 * boot) frees it, so no block of a closed wave stays in the arena
+	 * (a session's end closes every wave: eng.c title_settle) */
+	for (v = 0; v < SND_VOICES; v++)
+		if (vres[v] == w)
+		{
+			redirect.active = 1;
+			if (!silent)
+				silent = silent_load();
+			wav64_play(silent, v);
+			mixer_ch_stop(v);
+			redirect.active = 0;
+			vres[v] = NULL;
+		}
+	if (silent)
+	{
+		redirect.active = 1;
+		wav64_close(silent);
+		redirect.active = 0;
+	}
 }
 
 void snd_hw_play(int v, void *wave, uint32_t pos)
@@ -497,6 +534,8 @@ void snd_hw_play(int v, void *wave, uint32_t pos)
 	redirect.active = 1;	/* a bigger decoder state reallocates the buffer */
 	wav64_play(w->wav, v);
 	redirect.active = 0;
+	if (v < SND_VOICES)
+		vres[v] = w->wav->wave.mem ? w : NULL;
 	if (pos)
 		mixer_ch_set_pos(v, (double)pos);
 }
