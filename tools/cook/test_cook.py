@@ -149,6 +149,47 @@ class TestWorldTex(unittest.TestCase):
         ci4_ofs = struct.unpack_from(">I", out, 76 + 32)[0]
         self.assertEqual(out[ci4_ofs], 0)          # index 255 -> slot 0
 
+    def test_fence_slot0_edge_fill(self):
+        # index 255 blue (the retail '{' palettes); rows 0-3 holes, rows 4
+        # and 15 (next to them, wrapping) colour 10, the rest colour 20:
+        # slot 0 carries colour 10, not blue, so a bilinear alpha edge
+        # blends towards the fence's own colour
+        pal = bytearray(768)
+        pal[255 * 3:256 * 3] = bytes((0, 0, 255))
+        pal[10 * 3:11 * 3] = bytes((200, 100, 50))
+        pal[20 * 3:21 * 3] = bytes((40, 40, 40))
+        pix = bytes([255] * 64 + [10] * 16 + [20] * 160 + [10] * 16)
+        out = self.bake(bsp30(textures=texlump(miptex("{grate", 16, 16, pix, bytes(pal)))))
+        tlut_ofs = struct.unpack_from(">I", out, 76 + 40)[0]
+        slot0 = struct.unpack_from(">H", out, tlut_ofs)[0]
+        self.assertEqual(slot0, (200 >> 3) << 11 | (100 >> 3) << 6 | (50 >> 3) << 1)
+        ci4_ofs = struct.unpack_from(">I", out, 76 + 32)[0]
+        self.assertEqual(out[ci4_ofs:ci4_ofs + 32], bytes(32))   # holes stay slot 0
+        # a non-fence texture with the same texels keeps every slot opaque
+        out = self.bake(bsp30(textures=texlump(miptex("grate", 16, 16, pix, bytes(pal)))))
+        tlut_ofs = struct.unpack_from(">I", out, 76 + 40)[0]
+        self.assertTrue(all(t & 1 for t in struct.unpack_from(">16H", out, tlut_ofs)))
+
+    def test_fence_fill_fallbacks(self):
+        pal = bytearray(768)
+        pal[255 * 3:256 * 3] = bytes((0, 0, 255))
+        pal[7 * 3:8 * 3] = bytes((0, 0, 255))      # pure blue: transparent too
+        pal[1 * 3:2 * 3] = bytes((10, 20, 30))
+        pal[2 * 3:3 * 3] = bytes((30, 40, 51))
+        pal = bytes(pal)
+        self.assertEqual(bake_world_tex.fence_fill([(bytes([255, 7] * 8), 4, 4)], pal), (0, 0, 0))
+        self.assertEqual(bake_world_tex.fence_fill([(bytes([1, 2] * 8), 4, 4)], pal), (20, 30, 41))
+        # the edge mean ignores opaque texels with no transparent neighbour
+        # (the hole at 0,0 sees rows 3, 0, 1 and columns 3, 0, 1: wrapping)
+        img = bytes([7, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 2, 1])
+        self.assertEqual(bake_world_tex.fence_fill([(img, 4, 4)], pal), (10, 20, 30))
+        # several images sum; clear_index: only that index is transparent
+        # (blue 7 then counts as opaque: no edge, the mean of all)
+        self.assertEqual(bake_world_tex.fence_fill([(img, 4, 4), (bytes([2] * 16), 4, 4)], pal),
+                         (10, 20, 30))
+        self.assertEqual(bake_world_tex.fence_fill([(bytes([7, 1] * 8), 4, 4)], pal, 255),
+                         (5, 10, 143))
+
     def test_wad_texture_skipped(self):
         wadtex = b"ext".ljust(16, b"\0") + struct.pack("<6I", 16, 16, 0, 0, 0, 0)
         out = self.bake(bsp30(textures=texlump(wadtex)))
@@ -226,6 +267,21 @@ class TestSprite(unittest.TestCase):
         ofs = struct.unpack_from(">I", out, 88 + 12)[0]
         texels = [v for b in out[ofs:ofs + 128] for v in (b >> 4, b & 15)]
         self.assertEqual(texels, [(i * 15 + 127) // 255 for i in range(256)])
+
+    def test_alphatest_edge_fill(self):
+        # ALPHTEST (texformat 3), index 255 blue as in blood.spr: the
+        # transparent entry carries the colour next to the holes (index 9,
+        # rows 0 and 3 of 4 wrap onto the hole rows 1-2), not blue
+        pal = bytearray(768)
+        pal[765:768] = bytes((0, 0, 255))
+        pal[9 * 3:10 * 3] = bytes((160, 16, 8))
+        pal[4 * 3:5 * 3] = bytes((60, 60, 60))
+        head = b"IDSP" + struct.pack("<iiifiiiii", 2, 0, 3, 1.0, 8, 4, 1, 0, 0)
+        px = bytes([9] * 8 + [255] * 16 + [9] * 8)
+        out = hl_sprite_cook.cook(head + struct.pack("<h", 256) + bytes(pal)
+                                  + struct.pack("<i4i", 0, 0, 0, 8, 4) + px)
+        self.assertEqual(struct.unpack_from(">H", out, 16)[0],
+                         (160 >> 3) << 11 | (16 >> 3) << 6 | (8 >> 3) << 1)
 
     def test_ramp_in_file(self):
         out = hl_sprite_cook.cook(spr([(8, 8, bytes(range(64)))]))

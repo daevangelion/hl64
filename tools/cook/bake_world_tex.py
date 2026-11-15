@@ -13,14 +13,19 @@ then the most used colour of each of 15 luminance bands, then by use) and
 every palette index is mapped to the nearest chosen colour (weighted
 squared RGB distance, green x2). Fence textures (`{` prefix): CI4 slot 0 is
 transparent (TLUT alpha 0); palette index 255 and pure blue map there.
+Slot 0's colour is the edge fill (`fence_fill`): the mean colour of the
+opaque texels next to a transparent one, so the cart's bilinear filter
+blends an alpha edge towards the fence's own colour instead of index 255's
+(blue, (0, 0, 255) in every retail '{' palette).
 
 Palette: by default each texture's own 256-colour palette (the BSP30
 miptex palette after mip level 3). `--ref-palette FILE` (768-byte RGB)
 first remaps every texel to the nearest colour of FILE (squared RGB
 distance, lowest index on ties; fence index 255 and pure blue stay 255)
 and quantises on FILE's colours: with the old tree's Quake palette this
-reproduces the old cook's bytes exactly (W1, world-surfaces.md 5); hl64
-never ships that palette.
+reproduces the old cook's bytes exactly (W1, world-surfaces.md 5; that
+mode keeps the old cook's slot 0 colour, index 255's, so no edge fill);
+hl64 never ships that palette.
 
 Textures stored in WADs (miptex offsets 0) are read from the WAD3 files the
 map's worldspawn `wad` key lists (their file names looked up in --wad-dir,
@@ -66,7 +71,47 @@ def pow2floor(v: int) -> int:
     return p
 
 
-def build_ci4(pix: bytes, w: int, h: int, pal: bytes, fence: bool = False):
+def fence_clear(pal: bytes, c: int) -> bool:
+    """A fence texture's transparent index: 255, or any pure blue entry."""
+    return c == 255 or (pal[c * 3], pal[c * 3 + 1], pal[c * 3 + 2]) == (0, 0, 255)
+
+
+def fence_fill(images, pal, clear_index=None) -> Tuple[int, int, int]:
+    """The RGB a fence page's transparent slot carries: over `images`
+    ((texels, w, h), ...), the rounded mean source colour of the opaque
+    texels 8-adjacent to a transparent texel (wrapping, as the page
+    repeats); with no such texel the mean of all opaque texels; black when
+    none is opaque. Transparent: `fence_clear`, or the one `clear_index`."""
+    clear = [fence_clear(pal, c) if clear_index is None else c == clear_index
+             for c in range(256)]
+    edge = [0, 0, 0, 0]
+    full = [0, 0, 0, 0]
+    for src, pw, ph in images:
+        for y in range(ph):
+            for x in range(pw):
+                c = src[y * pw + x]
+                if clear[c]:
+                    continue
+                r, g, b = pal[c * 3], pal[c * 3 + 1], pal[c * 3 + 2]
+                full[0] += r
+                full[1] += g
+                full[2] += b
+                full[3] += 1
+                if any(clear[src[((y + dy) % ph) * pw + (x + dx) % pw]]
+                       for dy in (-1, 0, 1) for dx in (-1, 0, 1)):
+                    edge[0] += r
+                    edge[1] += g
+                    edge[2] += b
+                    edge[3] += 1
+    s = edge if edge[3] else full
+    if not s[3]:
+        return 0, 0, 0
+    n = s[3]
+    return (s[0] + n // 2) // n, (s[1] + n // 2) // n, (s[2] + n // 2) // n
+
+
+def build_ci4(pix: bytes, w: int, h: int, pal: bytes, fence: bool = False,
+              edge_fill: bool = True):
     pw = pow2floor(min(w, 64))
     ph = pow2floor(min(h, 64))
     uvu, uvv = pw / w, ph / h
@@ -110,19 +155,19 @@ def build_ci4(pix: bytes, w: int, h: int, pal: bytes, fence: bool = False):
         top.append(c)
         used.add(c)
     tlut = []
+    fill = fence_fill([(src, pw, ph)], pal) if fence and edge_fill else None
     for s, c in enumerate(top):
         r, g, b = pal[c * 3], pal[c * 3 + 1], pal[c * 3 + 2]
         a_bit = 0 if (fence and s == 0) else 1
+        if fill and s == 0:
+            r, g, b = fill
         tlut.append(((r >> 3) << 11) | ((g >> 3) << 6) | ((b >> 3) << 1) | a_bit)
     remap = [0] * 256
     for i in range(256):
-        if fence and i == 255:
+        if fence and fence_clear(pal, i):
             remap[i] = 0
             continue
         ir, ig, ib = pal[i * 3], pal[i * 3 + 1], pal[i * 3 + 2]
-        if fence and ir == 0 and ig == 0 and ib == 255:
-            remap[i] = 0
-            continue
         bestd, bests = 10**9, 0
         start = 1 if fence else 0
         for s in range(start, len(top)):
@@ -289,7 +334,8 @@ def bake(bsp_path: Path, ref: Optional[bytes], wad_dir: Optional[Path] = None) -
         fence = name.startswith("{")
         if ref is not None:
             pix, pal = remap_to(pix, pal, ncolors, ref, fence), ref
-        ci4, pw, ph, uvu, uvv, tlut = build_ci4(pix, w, h, pal, fence=fence)
+        ci4, pw, ph, uvu, uvv, tlut = build_ci4(pix, w, h, pal, fence=fence,
+                                                edge_fill=ref is None)
         ents.append((name, pw, ph, w, h, uvu, uvv, ci4, tlut))
     if len(ents) > 0xFFFF:
         raise TexError(f"{bsp_path}: too many textures")

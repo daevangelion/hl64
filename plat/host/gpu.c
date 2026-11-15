@@ -100,6 +100,11 @@ void gpu_state_lost(void)
 {
 }
 
+void gpu_fence_ref(int ref)
+{
+	(void)ref;
+}
+
 void gpu_draw(const w64_vert_t *v, int nv, const int16_t *idx, int ni)
 {
 	int k, faces = 0;

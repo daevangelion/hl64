@@ -65,6 +65,16 @@ void	gpu_bind_page(const w64_texp_t *p, uint8_t *state);
 /* Another renderer (the effects pass) set the RDP alpha compare: the next
  * gpu_bind_page applies its page's fence state whatever it was. */
 void	gpu_state_lost(void);
+/* Alpha-compare threshold of fence pages (W64_TEXF_FENCE: TLUT[0] alpha 0,
+ * the rest 1, bilinear-filtered): GPU_FENCE_REF, half coverage, while the
+ * combiner's alpha is the texel's alpha x 255 (the world, TransAlpha
+ * brushes, Normal studio models), so a pixel draws only where the opaque
+ * texels outweigh the transparent slot; a caller whose combiner scales the
+ * texel alpha by a constant k sets (k + 1) / 2, or 1 when the texel alpha
+ * does not take part (clamped to 1..255). gpu_begin resets it; a change
+ * applies at once to a bound fence page. */
+#define GPU_FENCE_REF	128
+void	gpu_fence_ref(int ref);
 /* Additive pages (render-fx.md 2a: brush and studio TransAdd / Glow):
  * tint_blend = rgb tint and blend; until gpu_page_ramp(NULL) every
  * gpu_bind_page also loads its page's cooked IA16 ramp TLUT (addblend.h
