@@ -120,6 +120,9 @@
 #define HL64_FX_PARTICLES		512
 #define HL64_FX_BEAMS			16
 #define HL64_FX_BEAM_SEGS		16
+/* Entity-following trails (TE_BEAMFOLLOW; engine/render/trail.c), each
+ * HL64_FX_BEAM_SEGS samples [own]. */
+#define HL64_FX_TRAILS			4
 #define HL64_FX_DECALS			96
 #define HL64_FX_DECAL_VERTS		24
 #define HL64_FX_DECAL_QUEUE		16

@@ -841,6 +841,7 @@ void fx_init(void)
 	part_init();
 	tent_init();
 	beam_init();
+	trail_init();
 	sprite_init();
 	decal_init();
 }
@@ -857,6 +858,7 @@ void fx_frame(double time, double dt)
 	tent_frame();
 	part_frame();
 	beam_frame();
+	trail_frame();
 	decal_frame();
 	sprite_frame();
 	shake_step();
@@ -864,8 +866,9 @@ void fx_frame(double time, double dt)
 		fx_s.st.temps_peak = (uint32_t)tent_live();
 	if (part_live() > (int)fx_s.st.particles_peak)
 		fx_s.st.particles_peak = (uint32_t)part_live();
-	if (beam_live() > (int)fx_s.st.beams_peak)
-		fx_s.st.beams_peak = (uint32_t)beam_live();
+	/* beams and trails (beam strips both) */
+	if (beam_live() + trail_live() > (int)fx_s.st.beams_peak)
+		fx_s.st.beams_peak = (uint32_t)(beam_live() + trail_live());
 	us = (uint32_t)(sys_time_us() - t0);
 	/* the previous frame (its sim and its draw) is complete */
 	if (fx.frame_us > fx_s.st.us_max)

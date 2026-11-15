@@ -477,6 +477,10 @@ static void draw_item(const item_t *it)
 		beam_draw(it->id, it->blend);
 		ds.beams++;
 		break;
+	case TK_TRAIL:
+		trail_draw(it->id, it->blend);
+		ds.beams++;
+		break;
 	}
 }
 
@@ -513,6 +517,7 @@ void fx_draw_trans(void)
 	list_sprite_ents();
 	tent_list_sprites();
 	beam_list();
+	trail_list();
 	for (i = 0; i < ncuts; i++)
 		draw_item(&cuts[i]);
 	/* back to front: insertion sort by distance, farthest first */

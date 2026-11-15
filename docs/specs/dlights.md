@@ -29,6 +29,7 @@ random stream):
 | entity EF_BRIGHTLIGHT | origin + (0,0,16) | 400 + rand32 | one frame |
 | entity EF_DIMLIGHT (not the local player) | origin | 200 + rand32 | one frame |
 | local player EF_DIMLIGHT | none: night vision (2) | | |
+| entity EF_LIGHT (rpg_rocket; without EF_BRIGHTLIGHT / EF_DIMLIGHT) | origin | 120 [EST] | one frame |
 | game effect "dlight" (HLSDK TE_DLIGHT: radius in tens, colour, life in tenths, decay in tens) | given | given ×10 | given ×0.1, decay ×10 |
 | game effect "elight" (HLSDK TE_ELIGHT) | entity attachment | given | models only (does not light the world) |
 | explosions, muzzle flashes of the view model | render-fx.md | | |

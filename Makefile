@@ -68,7 +68,7 @@ ENGINE_SRC_STUDIO := engine/render/studio.c
 ENGINE_SRC_SND := engine/snd/snd.c
 ENGINE_SRC_FX := engine/render/fx.c engine/render/tent.c engine/render/part.c \
 	engine/render/beam.c engine/render/decal.c engine/render/sprite.c engine/render/trans.c \
-	engine/render/addblend.c
+	engine/render/addblend.c engine/render/trail.c
 ENGINE_SRC_D2 := engine/render/draw2d.c
 GAME_SRC_CORE := game/hl/util.c game/hl/dispatch.c game/hl/world.c game/hl/triggers.c game/hl/logic.c \
 	game/hl/doors.c game/hl/buttons.c game/hl/lights.c game/hl/ambient.c \

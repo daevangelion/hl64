@@ -348,3 +348,10 @@ void beam_draw(int id, uint8_t blend)
 	}
 	strip((const float (*)[3])pts, n, (const float (*)[3])side, s, fr->th, rgba);
 }
+
+/* Trails (trail.c) draw their segments as beam strips. */
+void beam_strip(const float (*pts)[3], int n, const float (*side)[3], const float *s, float th,
+	const uint8_t rgba[4])
+{
+	strip(pts, n, side, s, th, rgba);
+}

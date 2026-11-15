@@ -155,7 +155,7 @@ void ren_dlight_sources(double time)
 		float org[3];
 
 		r = ent_rnd(e);
-		if (!(r->effects & (EF_MUZZLEFLASH | EF_BRIGHTLIGHT | EF_DIMLIGHT)))
+		if (!(r->effects & (EF_MUZZLEFLASH | EF_BRIGHTLIGHT | EF_DIMLIGHT | EF_LIGHT)))
 			continue;
 		gm = eng_layer_origin(ent_idc(e)->layer);
 		for (k = 0; k < 3; k++)
@@ -186,5 +186,10 @@ void ren_dlight_sources(double time)
 		}
 		else if ((r->effects & EF_DIMLIGHT) && e != ENT_PLAYER)
 			one_frame(e, org, 200.0f + (float)rand32(), time);
+		/* EF_LIGHT (the rpg rocket's): dlights.md 1 gives no radius:
+		 * [EST] 120 u, one frame, kept small (meshlet copies scale with
+		 * the sphere) */
+		if ((r->effects & EF_LIGHT) && !(r->effects & (EF_BRIGHTLIGHT | EF_DIMLIGHT)))
+			one_frame(e, org, 120.0f, time);
 	}
 }

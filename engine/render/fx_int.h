@@ -146,6 +146,19 @@ int		beam_live(void);
 int		beam_ring(const float org_g[3], float r, res_t sprite, float life, int width, int noise,
 			const uint8_t rgb[3], int bright);
 
+/* Strip over points pts[0..n] with per-point side offsets, s along, texture
+ * height th (the beams' strip, for trail.c). */
+void		beam_strip(const float (*pts)[3], int n, const float (*side)[3], const float *s,
+			float th, const uint8_t rgba[4]);
+
+/* ---- entity-following trails (trail.c; TE_BEAMFOLLOW) --------------------- */
+
+void		trail_init(void);
+void		trail_frame(void);
+void		trail_list(void);		/* into the translucent list */
+void		trail_draw(int t, uint8_t blend);	/* trans.c callback */
+int		trail_live(void);
+
 /* ---- particles (part.c) ----------------------------------------------------- */
 
 #define PT_STATIC	0	/* no gravity */
@@ -242,7 +255,7 @@ void		sprite_stats(sprite_stats_t *s, int reset);
 
 /* ---- translucent list (trans.c) --------------------------------------------- */
 
-enum { TK_SPRITE_ENT, TK_STUDIO_ENT, TK_BRUSH_ENT, TK_TEMP, TK_BEAM };
+enum { TK_SPRITE_ENT, TK_STUDIO_ENT, TK_BRUSH_ENT, TK_TEMP, TK_BEAM, TK_TRAIL };
 
 /* Add an item at squared eye distance d2; kept: nearest HL64_FX_TRANS_MAX. */
 void		trans_add(int kind, int id, float d2, uint8_t blend, uint8_t mode);

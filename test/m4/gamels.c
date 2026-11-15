@@ -187,6 +187,10 @@ static const struct { const char *name; int carry; } hlsdk_carry[] = {
 	{ "info_landmark", 0 }, { "info_player_start", 0 }, { "info_teleport_destination", 0 },
 	{ "scripted_sequence", 0 }, { "aiscripted_sequence", 0 }, { "grenade", 1 },
 	{ "weaponbox", 1 },
+	/* func_tank.cpp, mortar.cpp (CFuncTank, CFuncTankControls, CFuncMortarField
+	 * remove it); rpg.cpp CRpgRocket keeps CGrenade's */
+	{ "func_tank", 0 }, { "func_tankrocket", 0 }, { "func_tankcontrols", 0 },
+	{ "func_mortar_field", 0 }, { "rpg_rocket", 1 },
 };
 
 static int expect_carry(const char *n)
@@ -705,6 +709,9 @@ static void quiesce(int e)
 	}
 	if (ent_idc(e)->cls == CLS_MONSTER_TRIPMINE)
 		ent_tm(e)->think = 0;
+	if (ent_idc(e)->cls == CLS_FUNC_TANK || ent_idc(e)->cls == CLS_FUNC_TANKROCKET)
+		/* m_pController, CFuncTank::m_SaveData field 21: nobody drives it */
+		*(ent_h *)((uint8_t *)ent_priv(e) + sv_table_of(e)->f[21].ofs) = EH_NONE;
 	if (ent_idc(e)->cls == CLS_FUNC_HEALTHCHARGER || ent_idc(e)->cls == CLS_FUNC_RECHARGE)
 		*(int32_t *)((uint8_t *)ent_priv(e) + sv_table_of(e)->f[3].ofs) = 0;	/* m_iOn */
 	if (ent_cv(e)->movetype == MOVETYPE_FOLLOW)

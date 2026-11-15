@@ -32,6 +32,7 @@
 #include <math.h>
 
 #include "hl64/fx.h"
+#include "engine/core/hlmath.h"
 #include "engine/phys/player.h"
 #include "game/hl/breakable.h"
 #include "game/hl/grenade.h"
@@ -370,12 +371,12 @@ static void AdjustAnglesForBarrel(int e, float angles[3], float distance)
 		if (p->m_barrelPos[1] != 0)
 		{
 			r2 = p->m_barrelPos[1] * p->m_barrelPos[1];
-			angles[1] += (float)((180.0 / M_PI) * atan2(p->m_barrelPos[1], sqrt(d2 - r2)));
+			angles[1] += (float)((180.0 / M_PI) * hl_atan2(p->m_barrelPos[1], sqrt(d2 - r2)));
 		}
 		if (p->m_barrelPos[2] != 0)
 		{
 			r2 = p->m_barrelPos[2] * p->m_barrelPos[2];
-			angles[0] += (float)((180.0 / M_PI) * atan2(-p->m_barrelPos[2], sqrt(d2 - r2)));
+			angles[0] += (float)((180.0 / M_PI) * hl_atan2(-p->m_barrelPos[2], sqrt(d2 - r2)));
 		}
 	}
 }
@@ -964,9 +965,9 @@ void CRpgRocket_IgniteThink(int e)
 	ent_rnd(e)->effects |= EF_LIGHT;
 	/* make rocket sound */
 	EMIT_SOUND(e, CHAN_VOICE, RESID(W_ROCKET1), 1, 0.5f);
-	/* rocket trail (TE_BEAMFOLLOW sprites/smoke.spr, life 4 s, width 5,
-	 * colour 224 224 255, brightness 255): the effects API has no
-	 * entity-following trail beam */
+	/* rocket trail: TE_BEAMFOLLOW sprites/smoke.spr, life 4 s, width 5,
+	 * colour 224 224 255, brightness 255 */
+	fx_beam_follow(e, RESID(SPR_SMOKE_TRAIL), 40, 5, 224, 224, 255, 255);
 	R(e)->m_flIgniteTime = gtime();
 	/* set to follow laser spot */
 	SetThink(e, FN_CRpgRocket_FollowThink);

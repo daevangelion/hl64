@@ -21,7 +21,11 @@ waitmoved sandbag_gun_1 8
 waitclass rpg_rocket 2445 182 -35 400 10
 wait 0.3
 shot tanks-fire
-wait 1.5
+# the rocket ignites 0.4 s after launch: its trail (TE_BEAMFOLLOW) and
+# EF_LIGHT from the turret toward the player
+wait 0.6
+shot rocket-trail
+wait 0.9
 stats tanks-fire
 # biggun: its controls (x 2372..2380, y 37..103) ahead
 setpos 2355 70 -40 0 0
