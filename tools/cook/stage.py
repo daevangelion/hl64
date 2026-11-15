@@ -32,7 +32,7 @@ sounds are derived from those maps' entity lumps, the class table
                         one the player's data lacks gets a warning naming
                         its referrer and is absent (no id; res.def ones stop)
   sound/sentences.txt   pruned to the referenced sentences
-  titles.txt            pruned to the env_message titles
+  titles.txt            pruned to the env_message / player_loadsaved titles
   maps/<m>.w64          layer packages: tools/cook/bake_world_tex.py ->
                         <staging>/maps/<m>.wci4 (embedded and WAD
                         textures), hlecook -> <m>.hle, tools/w64c/touchrank.py

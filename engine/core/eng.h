@@ -42,5 +42,9 @@ void		eng_start_game(int map);
  * records and layers dropped as at an end of section; the regions return
  * to their boot state (checked: `mem: title ...` line). */
 void		eng_to_title(void);
+/* The game's "reload" (HLSDK player_loadsaved, any time in a frame): the
+ * newest saved game loads at the next frame boundary; without one, New
+ * Game on the player's map (logged `eng: reload: ...`). */
+void		eng_reload(void);
 
 #endif

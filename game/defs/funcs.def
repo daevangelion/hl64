@@ -157,3 +157,12 @@ USE(CDecal_TriggerDecal)
 THINK(CGlow_Think)
 // ---- GameCore: trigger_autosave (M6 SaveGame) ----
 TOUCH(CTriggerSave_SaveTouch)
+// ---- EnvFx (M6): effects.cpp env_beam / env_laser / env_bubbles ----
+THINK(CLightning_StrikeThink)
+THINK(CLightning_DamageThink)
+USE(CLightning_StrikeUse)
+USE(CLightning_ToggleUse)
+THINK(CLaser_StrikeThink)
+USE(CLaser_Use)
+THINK(CBubbling_FizzThink)
+USE(CBubbling_Use)

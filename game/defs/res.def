@@ -562,3 +562,5 @@ RES(SOUND, PM_LADDER2, "player/pl_ladder2.wav")
 RES(SOUND, PM_LADDER3, "player/pl_ladder3.wav")
 RES(SOUND, PM_LADDER4, "player/pl_ladder4.wav")
 RES(SOUND, PM_FALLPAIN3, "player/pl_fallpain3.wav")
+// ---- EnvFx (M6): effects.cpp CBubbling ----
+RES(SPRITE, SPR_BUBBLE, "sprites/bubble.spr")

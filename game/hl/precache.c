@@ -109,6 +109,8 @@ static const pre_t pre[] = {
 	M(SPARK_SHOWER, MDL_GRENADE),
 	D(ENV_BEVERAGE, ITEM_SODACAN), M(ITEM_SODACAN, MDL_CAN),
 	M(GIBSHOOTER, MON_HGIBS),
+	/* env_bubbles (CBubbling::Precache) */
+	M(ENV_BUBBLES, SPR_BUBBLE),
 };
 
 #undef M
@@ -147,6 +149,13 @@ static void precache_record(gid_t16 gid, cls_t cls)
 		break;
 	case CLS_ENV_SHOOTER:
 		PRECACHE(rec_key_res(gid, K_SHOOTMODEL));
+		break;
+	case CLS_ENV_BEAM:
+		PRECACHE(rec_key_res(gid, K_TEXTURE));
+		break;
+	case CLS_ENV_LASER:
+		PRECACHE(rec_key_res(gid, K_TEXTURE));
+		PRECACHE(rec_key_res(gid, K_ENDSPRITE));
 		break;
 	case CLS_FUNC_BREAKABLE:
 	case CLS_FUNC_PUSHABLE:

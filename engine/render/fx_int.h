@@ -269,6 +269,9 @@ int		trans_last_order(uint8_t *kind, uint16_t *id, uint8_t *blend, int max);
  * (HL64_FX_DECAL_VERTS vertices, fans of 3): the vertex ring's worst
  * case. Slots filled, or -1. */
 int		decal_test_fill_worst(int i);
+/* Tests: the entity frame of the live beam holding key at effects time t
+ * (-1: no such beam, its sprite not resident). */
+int		beam_test_frame(int key, double t);
 #endif
 
 #endif

@@ -4,11 +4,14 @@
  * TE_BEAMPOINTS / BEAMENTPOINT / BEAMENTS / BEAMCYLINDER fields): entity <->
  * entity, entity <-> point and point <-> point, width, noise amplitude
  * (random perpendicular offsets per segment, new every frame), colour,
- * brightness, texture scroll, life; drawn additive in the translucent pass
- * as camera-facing strips of at most HL64_FX_BEAM_SEGS segments. Rings
- * (TE_BEAMCYLINDER) are vertical bands that grow to their radius over
- * their life. Written from the spec; segment counts and the noise scale
- * are this module's choices [own].
+ * brightness, sprite frame animation (starting frame, rate), texture
+ * scroll, shade in / out (brightness ramped along the beam), life; drawn
+ * additive in the translucent pass as camera-facing strips of at most
+ * HL64_FX_BEAM_SEGS segments. Rings (TE_BEAMCYLINDER) are vertical bands
+ * that grow to their radius over their life. Written from the spec;
+ * segment counts, the noise scale, the stepped shade (one brightness per
+ * segment, the additive combiner has no per-vertex shade) and the keyed
+ * beams' pool priority are this module's choices [own].
  */
 #include <math.h>
 #include <string.h>
@@ -23,10 +26,10 @@ typedef struct {
 	ent_h		h0, h1;		/* end entities (0: the point) */
 	float		p0[3], p1[3];	/* points, global */
 	double		start, die;	/* die 0: until killed */
-	float		width, noise, speed, radius;
+	float		width, noise, speed, radius, framerate;
 	res_t		sprite;
 	uint8_t		rgb[3], bright;
-	uint8_t		live, ring;
+	uint8_t		live, ring, frame0, flags;
 	int16_t		key;		/* fx_beam's key, -1 none */
 } fxbeam_t;
 
@@ -55,10 +58,13 @@ uint32_t beam_dropped(int reset)
 	return d;
 }
 
-/* A slot for a beam: the live beam holding key (replaced), else a free one. */
+/* A slot for a beam: the live beam holding key (replaced), else a free
+ * one; a keyed beam (a game entity's, until killed) with the pool full
+ * takes the unkeyed beam's that ends first (its strike would be gone
+ * soon; the entity's beam would be gone for good) [own]. */
 static fxbeam_t *alloc(int key)
 {
-	int i, at = -1;
+	int i, at = -1, temp = -1;
 
 	for (i = 0; i < HL64_FX_BEAMS; i++)
 	{
@@ -70,6 +76,15 @@ static fxbeam_t *alloc(int key)
 		}
 		if (at < 0 && !pool[i].live)
 			at = i;
+		if (pool[i].live && pool[i].key < 0 && pool[i].die > 0
+			&& (temp < 0 || pool[i].die < pool[temp].die))
+			temp = i;
+	}
+	if (at < 0 && key >= 0 && temp >= 0)
+	{
+		at = temp;
+		nlive--;
+		dropped++;
 	}
 	if (at < 0)
 	{
@@ -85,7 +100,8 @@ static fxbeam_t *alloc(int key)
 }
 
 int fx_beam(int key, int e0, const float p0[3], int e1, const float p1[3], res_t sprite,
-	int width, int noise, int r, int g, int b, int brightness, int speed, int life)
+	int frame, int framerate, int width, int noise, int r, int g, int b, int brightness,
+	int speed, int life, int flags)
 {
 	fxbeam_t *bm;
 
@@ -107,6 +123,9 @@ int fx_beam(int key, int e0, const float p0[3], int e1, const float p1[3], res_t
 	bm->rgb[1] = (uint8_t)g;
 	bm->rgb[2] = (uint8_t)b;
 	bm->bright = (uint8_t)brightness;
+	bm->frame0 = (uint8_t)frame;
+	bm->framerate = (float)framerate * 0.1f;	/* const.h: frame rate in 0.1's */
+	bm->flags = (uint8_t)(flags & (FX_BEAM_SHADEIN | FX_BEAM_SHADEOUT));
 	bm->die = life > 0 ? fx_s.now + (double)life * 0.1 : 0;
 	return key;
 }
@@ -266,6 +285,31 @@ static void strip(const float (*pts)[3], int n, const float (*side)[3], const fl
 	gpu_fx_tris(v, 2 * (n + 1), idx, 2 * n);
 }
 
+/* Segments of a shaded beam (one brightness step each) [own]. */
+#define SHADE_SEGS	8
+
+/* The sprite's entity frame at time t: from the starting frame at the
+ * frame rate, wrapping. */
+static int frame_at(const fxbeam_t *b, const fx_sprite_t *spr, double t)
+{
+	int f = (int)b->frame0 + (int)((t - b->start) * (double)b->framerate);
+
+	return spr->nframes > 1 ? f % spr->nframes : 0;
+}
+
+#ifdef HL64_HOST
+int beam_test_frame(int key, double t)
+{
+	const fx_sprite_t *spr;
+	int i;
+
+	for (i = 0; i < HL64_FX_BEAMS; i++)
+		if (pool[i].live && pool[i].key == key)
+			return (spr = sprite_get(pool[i].sprite)) ? frame_at(&pool[i], spr, t) : -1;
+	return -1;
+}
+#endif
+
 void beam_draw(int id, uint8_t blend)
 {
 	const fxbeam_t *b = &pool[id];
@@ -279,7 +323,7 @@ void beam_draw(int id, uint8_t blend)
 	if (!b->live || !(spr = sprite_get(b->sprite)) || !end_point(b->h0, b->p0, a)
 		|| !end_point(b->h1, b->p1, c))
 		return;
-	fr = &spr->frames[0];
+	fr = &spr->frames[sprite_image(spr, frame_at(b, spr, fx_s.now), fx_s.now)];
 	memcpy(rgba, b->rgb, 3);
 	rgba[3] = blend;
 	sprite_bind(spr, fr, GPU_FX_ADD, rgba);
@@ -311,6 +355,8 @@ void beam_draw(int id, uint8_t blend)
 	if (len < 1)
 		return;
 	n = b->noise > 0 ? (int)(len / 16.0f) : 1;
+	if (b->flags && n < SHADE_SEGS)
+		n = SHADE_SEGS;
 	if (n < 1)
 		n = 1;
 	if (n > HL64_FX_BEAM_SEGS)
@@ -346,5 +392,23 @@ void beam_draw(int id, uint8_t blend)
 			side[i][k] = sd[k] * 0.5f * (b->width > 0.5f ? b->width : 0.5f);
 		s[i] = scroll + len * t * (float)fr->tw / rep;
 	}
-	strip((const float (*)[3])pts, n, (const float (*)[3])side, s, fr->th, rgba);
+	if (!b->flags)
+	{
+		strip((const float (*)[3])pts, n, (const float (*)[3])side, s, fr->th, rgba);
+		return;
+	}
+	/* shade in: dark at the start, full at the end; shade out: the reverse */
+	for (i = 0; i < n; i++)
+	{
+		float t = ((float)i + 0.5f) / (float)n;
+
+		if (b->flags & FX_BEAM_SHADEOUT)
+			t = 1.0f - t;
+		rgba[3] = (uint8_t)((float)blend * t + 0.5f);
+		if (!rgba[3])
+			continue;
+		sprite_bind(spr, fr, GPU_FX_ADD, rgba);
+		strip((const float (*)[3])pts + i, 1, (const float (*)[3])side + i, s + i, fr->th,
+			rgba);
+	}
 }

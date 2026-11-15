@@ -1155,7 +1155,7 @@ static void test_x6(void)
 		fx_particles(o, d, 247, 20);
 		fx_implosion(o, 100, 20, 5);
 		fx_beam_cylinder(o, 200, spr, 5, 16, 0, 255, 255, 255, 200);
-		id = fx_beam(i, -1, o, -1, b, spr, 20, 10, 255, 255, 255, 200, 10, 0);
+		id = fx_beam(i, -1, o, -1, b, spr, 0, 0, 20, 10, 255, 255, 255, 200, 10, 0, 0);
 		beams += id == i;	/* the key, also for a dropped beam */
 		fx_shake(o, 4, 2, 1, 0);
 		fx_fade(0, 0, 0, 255, 1, 1, 1);
@@ -1197,6 +1197,90 @@ static void test_x6(void)
 	snprintf(note, sizeof(note), "60x burst of every effect: drops temps=%lu parts=%lu beams=%lu, "
 		"all freed after 10 s", (unsigned long)td, (unsigned long)pd, (unsigned long)bd);
 	finish("X6", note);
+}
+
+/* ---- BEAMS: beam frames, shade in / out, keyed priority, TE_FIZZ (M6 EnvFx) ------- */
+
+static void test_beams(void)
+{
+	float a[3], b[3], g[3], up[3];
+	gpu_fx_stats_t gs;
+	uint8_t pin[4], pout[4], env[4];
+	int k, i, e, f[3], calls[3], live, nfr;
+	col_trace_t tr;
+	char note[240];
+
+	begin();
+	fx_init();
+	kill_all();
+	make_sprite(FX_SPR_PARALLEL);
+	for (k = 0; k < 3; k++)
+	{
+		a[k] = L->start_org[k] + (k == 0 ? 60 : k == 1 ? -40 : 0);
+		b[k] = L->start_org[k] + (k == 0 ? 60 : k == 1 ? 40 : 0);
+		g[k] = L->start_org[k] + L->gofs[k];
+	}
+	eye(g, 0, 0);
+	eng_set_frame_layer(L->slot);
+	/* frames: start 1, 10 fps over the test sprite's 2 entity frames */
+	fx_beam(7, -1, a, -1, b, test_spr, 1, 100, 20, 0, 255, 255, 255, 200, 0, 0, 0);
+	nfr = sprite_get(test_spr) ? sprite_get(test_spr)->nframes : 0;
+	for (i = 0; i < 3; i++)
+		f[i] = beam_test_frame(7, fx_s.now + 0.1 * i + 0.05);
+	CHECK(nfr == 2 && f[0] == 1 && f[1] == 0 && f[2] == 1,
+		"frames %d: %d %d %d (want 1 0 1)", nfr, f[0], f[1], f[2]);
+	/* shade: one batch plain, one per step shaded; the last step is the
+	 * brightest shading in, the darkest shading out */
+	for (i = 0; i < 3; i++)
+	{
+		static const int fl[3] = { 0, FX_BEAM_SHADEIN, FX_BEAM_SHADEOUT };
+
+		fx_beam(7, -1, a, -1, b, test_spr, 0, 0, 20, 0, 255, 255, 255, 200, 0, 0, fl[i]);
+		draw();
+		gpu_fx_stats(&gs);
+		calls[i] = (int)gs.calls[GPU_FX_ADD];
+		gpu_fx_host_last_ramp(i == 2 ? pout : pin, env);
+	}
+	CHECK(calls[0] == 1 && calls[1] == 8 && calls[2] == 8, "shade batches %d %d %d (want 1 8 8)",
+		calls[0], calls[1], calls[2]);
+	CHECK(pin[0] + pin[1] + pin[2] > pout[0] + pout[1] + pout[2],
+		"shade: last step in %d %d %d not above out %d %d %d", pin[0], pin[1], pin[2], pout[0],
+		pout[1], pout[2]);
+	fx_beam_kill(7);
+	/* a full pool of strikes: a keyed beam takes the one ending first */
+	for (i = 0; i < HL64_FX_BEAMS; i++)
+		fx_beam(-1, -1, a, -1, b, test_spr, 0, 0, 20, 0, 255, 255, 255, 200, 0, 10 + i, 0);
+	live = beam_live();
+	fx_beam(FX_BEAM_KEY(3, 0), -1, a, -1, b, test_spr, 0, 0, 20, 0, 255, 255, 255, 200, 0, 0, 0);
+	CHECK(live == HL64_FX_BEAMS && beam_live() == HL64_FX_BEAMS
+		&& beam_test_frame(FX_BEAM_KEY(3, 0), fx_s.now) >= 0, "keyed beam into a full pool: %d %d",
+		live, beam_live());
+	fx_beam(-1, -1, a, -1, b, test_spr, 0, 0, 20, 0, 255, 255, 255, 200, 0, 5, 0);
+	CHECK(beam_test_frame(FX_BEAM_KEY(3, 0), fx_s.now) >= 0, "a strike replaced the keyed beam");
+	fx_init();
+	/* TE_FIZZ: density 2 = 3 bubbles in the box, rising to the ceiling */
+	e = make_ent(g);
+	for (k = 0; k < 3; k++)
+	{
+		ent_cv(e)->absmin[k] = L->start_org[k] - 8;
+		ent_cv(e)->absmax[k] = L->start_org[k] + 8;
+		up[k] = g[k] + (k == 2 ? 1024 : 0);
+	}
+	fx_trace(g, up, COL_MOVE_NOMONSTERS, &tr);
+	fx_fizz(e, test_spr, 2);
+	live = tent_live();
+	eng_set_frame_layer(-1);
+	for (i = 0; i < (int)(30 * ((tr.end[2] - g[2] - 8) / 50 - 0.2f)); i++)
+		step(1.0 / 30);
+	k = tent_live();
+	for (; i < (int)(30 * ((tr.end[2] - g[2] + 8) / 30 + 0.2f)); i++)
+		step(1.0 / 30);
+	CHECK(live == 3 && k == 3 && tent_live() == 0, "fizz: %d bubbles, %d before the ceiling "
+		"(%.0f u up), %d after", live, k, (double)(tr.end[2] - g[2]), tent_live());
+	ent_destroy(e);
+	snprintf(note, sizeof(note), "frames 1 0 1, shade batches %d %d %d, keyed priority, fizz %d "
+		"bubbles to %.0f u", calls[0], calls[1], calls[2], live, (double)(tr.end[2] - g[2]));
+	finish("BEAMS", note);
 }
 
 /* ---- screen state ---------------------------------------------------------------------- */
@@ -2239,6 +2323,7 @@ int main(int argc, char **argv)
 	test_x4();
 	test_x5();
 	test_x6();
+	test_beams();
 	test_screen();
 	test_dlights();
 	test_styles();

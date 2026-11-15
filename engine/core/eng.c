@@ -93,6 +93,8 @@ static struct {
 	uint8_t		world;		/* player content present */
 	uint8_t		ents_dump;	/* DBG_ENTS_DUMP: per-entity stats lines */
 	uint32_t	restart_frame;	/* end section: New Game at this frame (0 none) */
+	uint16_t	restart_map;	/* map of that New Game + 1 (0: the start map) */
+	uint8_t		reload;		/* eng_reload without a save: restart at the boundary */
 	uint32_t	rollup_frames;
 	uint64_t	rollup_t0;
 	uint64_t	rollup_world_us;	/* world draw CPU in the roll-up window */
@@ -747,8 +749,36 @@ void eng_start_game(int map)
 
 static void eng_restart(void)
 {
+	int map = eng.restart_map ? eng.restart_map - 1 : wld_start_map();
+
 	eng.restart_frame = 0;
-	eng_start_game(wld_start_map());
+	eng.restart_map = 0;
+	eng_start_game(map);
+}
+
+/* HLSDK SERVER_COMMAND("reload") (player_loadsaved): the newest saved
+ * game (by save seq: the autosave or a manual save, Flash or Pak) loads
+ * at the next frame boundary; with none, the session ends at the frame
+ * boundary and New Game starts on the player's map, as the end of a
+ * section restarts on the start map. */
+void eng_reload(void)
+{
+	save_info_t s[SAVE_SLOTS_MAX];
+	int n = save_slots(s, SAVE_SLOTS_MAX), i, best = -1;
+
+	for (i = 0; i < n; i++)
+		if (s[i].state == SAVE_OK && (best < 0 || s[i].seq > s[best].seq))
+			best = i;
+	if (best >= 0 && save_load(best) == 0)
+	{
+		log_printf("eng: reload: slot %d (seq %lu, %s, %.16s)\n", best,
+			(unsigned long)s[best].seq, s[best].flags & SAVE_F_AUTO ? "autosave" : "save",
+			s[best].map);
+		return;
+	}
+	log_printf("eng: reload: no save to load, New Game on %s\n",
+		phy_player_active() ? wld_map_name(phy_player_map()) : "the start map");
+	eng.reload = 1;
 }
 
 int eng_can_start(void)
@@ -1155,6 +1185,13 @@ void eng_frame(void)
 	 * title menu) */
 	if (eng.restart_frame && eng.frame >= eng.restart_frame)
 		eng_restart();
+	else if (!eng.restart_frame && eng.reload)
+	{
+		eng.reload = 0;
+		eng.restart_map = phy_player_active() ? (uint16_t)(phy_player_map() + 1) : 0;
+		session_end();
+		eng.restart_frame = eng.frame + RESTART_FRAMES;
+	}
 	else if (!eng.restart_frame && eng.world && game_end_section() > 0)
 		eng_disconnect();
 

@@ -131,9 +131,9 @@ align16(largest `DECL`) + `HL64_FX_DECALS` × `HL64_FX_DECAL_VERTS` × 10 B
 ## Cook rules
 
 - Classes: only `hle_classes[]` (what the native game spawns); others are
-  dropped (`info_node`, `env_beam`, `env_bubbles`, `env_sound`,
-  `trigger_autosave`, `func_tank*`, `func_tracktrain`, …). `infodecal`
-  and `env_glow` are kept: GoldSrc shows placed decals and glows.
+  dropped (`info_node`, `env_sound`, `func_tank*`, `func_tracktrain`, …).
+  `infodecal` and `env_glow` are kept: GoldSrc shows placed decals and
+  glows.
   - `infodecal` (HLSDK `CDecal`): physical record (class flags 0), every
     one kept. Keys: `texture` (`HLE_KS`, keys.def `TEXTURE`; id = decal id,
     above; `rec_key_decal`), `origin` (`HLE_KV`); the targetname is the
@@ -143,11 +143,24 @@ align16(largest `DECL`) + `HL64_FX_DECALS` × `HL64_FX_DECAL_VERTS` × 10 B
     `model` (`HLE_KS`, sprite `res_t`), `origin`, `rendercolor` (`HLE_KV`),
     `rendermode`, `renderamt`, `renderfx`, `scale`, `framerate`
     (`HLE_KF`), as the map sets them (absent = HLSDK default).
+  - `env_beam` (HLSDK `CLightning`), `env_laser` (`CLaser`), effects.cpp:
+    physical records. Keys: `texture` (`HLE_KS`, sprite `res_t`; for
+    `infodecal` the decal id instead), `LightningStart`, `LightningEnd`,
+    `LaserTarget` (`HLE_KN`), `life`, `BoltWidth`, `width`,
+    `NoiseAmplitude`, `TextureScroll`, `StrikeTime`, `framestart`,
+    `Radius`, `damage` (`HLE_KF`), `EndSprite` (`HLE_KS`, sprite `res_t`),
+    and the entvars (`rendercolor`, `renderamt`, `framerate`, …).
+  - `env_bubbles` (`CBubbling`) and `func_monsterclip`
+    (`CFuncMonsterClip`, bmodels.cpp): physical brush records; bubble keys
+    `density`, `frequency`, `current` (`HLE_KF`).
+  - `player_loadsaved` (`CRevertSaved`, player.cpp): logic record. Keys
+    `duration`, `holdtime`, `messagetime`, `loadtime` (`HLE_KF`),
+    `rendercolor`, `renderamt`, `message` (title id, as `env_message`).
 - Pruned: logic classes that act only when used and have no targetname
   (`multi_manager`, `trigger_relay`, `multisource`, `env_render`,
   `env_shake`, `env_fade`, `env_message`, `player_weaponstrip`,
   `env_explosion`, `env_shooter`, `gibshooter`, `light`, `light_spot`,
-  `env_beverage`), and `info_target` / `path_corner` / `path_track` /
+  `env_beverage`, `player_loadsaved`), and `info_target` / `path_corner` / `path_track` /
   `info_teleport_destination` whose name no key in the map references
   (fixed point). Names are kept even when nothing
   in this map fires them: a neighbouring map's `changetarget` may.

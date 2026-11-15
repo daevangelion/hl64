@@ -145,3 +145,10 @@ CLASS(WEAPON_TRIPMINE, "weapon_tripmine")
 CLASS(INFODECAL, "infodecal")
 CLASS(ENV_GLOW, "env_glow")
 CLASS(TRIGGER_AUTOSAVE, "trigger_autosave")
+// EnvFx (M6): effects.cpp CLightning / CLaser / CBubbling, bmodels.cpp
+// CFuncMonsterClip, player.cpp CRevertSaved.
+CLASS(ENV_BEAM, "env_beam")
+CLASS(ENV_LASER, "env_laser")
+CLASS(ENV_BUBBLES, "env_bubbles")
+CLASS(FUNC_MONSTERCLIP, "func_monsterclip")
+CLASS(PLAYER_LOADSAVED, "player_loadsaved")

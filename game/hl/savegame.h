@@ -89,9 +89,12 @@ void		Ai_Settle(void);
 int		Ai_Pending(void);
 
 /* the fx beams a private block names, made again after a load (the engine
- * starts the effects empty): garg.c, islave.c, tripmine.c */
+ * starts the effects empty): garg.c, islave.c, tripmine.c, env.c (env_beam,
+ * env_laser and its end sprite) */
 void		CGargantua_LoadDone(int e);
 void		CISlave_LoadDone(int e);
 void		CTripmineGrenade_LoadDone(int e);
+void		CLightning_LoadDone(int e);
+void		CLaser_LoadDone(int e);
 
 #endif

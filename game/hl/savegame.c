@@ -340,6 +340,8 @@ void game_load_done(void)
 		case CLS_MONSTER_GARGANTUA: fix = CGargantua_LoadDone; break;
 		case CLS_MONSTER_ALIEN_SLAVE: fix = CISlave_LoadDone; break;
 		case CLS_MONSTER_TRIPMINE: fix = CTripmineGrenade_LoadDone; break;
+		case CLS_ENV_BEAM: fix = CLightning_LoadDone; break;
+		case CLS_ENV_LASER: fix = CLaser_LoadDone; break;
 		default: continue;
 		}
 		/* beam points are map-local in the entity's frame */
