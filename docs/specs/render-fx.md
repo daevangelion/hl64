@@ -186,8 +186,9 @@ All in fixed pools, randomness from the render random stream:
   sprite frame (starting frame, rate in 0.1 frames/s, HLSDK `TE_BEAM*`),
   scroll speed, life, shade in / out (`FBEAM_SHADEIN` / `SHADEOUT`: the
   brightness ramps along the beam); drawn additive as camera-facing strips
-  of ≤ 16 segments. A shaded beam draws as 8 brightness steps, one per
-  segment [own: the additive ramp combiner has no per-vertex shade]. Pool
+  of ≤ 16 segments. A shaded beam draws as brightness steps, one per
+  segment, one step per 10 u of length, 2 to 8 [own: the additive ramp
+  combiner has no per-vertex shade; each step is a batch]. Pool
   32; a game entity's beam (keyed, alive until killed) arriving at a full
   pool takes the temporary beam that ends first [own]. Beam decals
   (`env_beam` / `env_laser` `SF_BEAM_DECALS`, HLSDK `CBeam::BeamDamage`:

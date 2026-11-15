@@ -29,6 +29,7 @@ _Static_assert(sizeof(part_t) == 24, "part_t");
 
 #define STREAK_S	0.02f	/* streak length: travel in 20 ms [own] */
 #define STREAK_W	0.75f	/* half width (u) [own] */
+#define STREAK_EDGE	(32767 - 4)	/* corner range: head / tail +- the half width */
 #define POINT_PIX	2
 
 static part_t	*pool;		/* particles region */
@@ -58,9 +59,12 @@ void part_color(uint8_t index, uint8_t rgb[3])
 		rgb[0] = rgb[1] = rgb[2] = index;
 }
 
+/* Rounded half away from zero, inline (newlib's lrintf is a call; every
+ * gravity particle takes one a frame). */
 static int16_t clamp16(float v)
 {
-	return (int16_t)(v > 32767.0f ? 32767 : v < -32767.0f ? -32767 : lrintf(v));
+	return (int16_t)(v > 32767.0f ? 32767 : v < -32767.0f ? -32767
+		: (int)(v < 0 ? v - 0.5f : v + 0.5f));
 }
 
 int part_add_rgb(const float org_g[3], const float vel[3], const uint8_t rgb[3], int type,
@@ -192,40 +196,40 @@ void part_draw(void)
 			continue;
 		if (p->type == PT_TRACER || p->type == PT_TRACER_GRAV)
 		{
-			float tail[3], d[3], to[3], s[3], len;
+			float tail[3], to[3], s[3], len;
+			int16_t h[3], t[3], w[3], q[4][3];
 			uint8_t c[4];
-			int16_t q[4][3];
-			int ok = 1;
 
 			for (k = 0; k < 3; k++)
 			{
-				d[k] = (float)p->vel[k] * STREAK_S;
-				tail[k] = p->org[k] - d[k];
+				tail[k] = p->org[k] - (float)p->vel[k] * STREAK_S;
 				to[k] = p->org[k] - fx_s.eye[k];
 			}
-			/* side = d x (p - eye), normalised to the half width */
-			s[0] = d[1] * to[2] - d[2] * to[1];
-			s[1] = d[2] * to[0] - d[0] * to[2];
-			s[2] = d[0] * to[1] - d[1] * to[0];
+			/* side = vel x (p - eye), normalised to the half width */
+			s[0] = (float)p->vel[1] * to[2] - (float)p->vel[2] * to[1];
+			s[1] = (float)p->vel[2] * to[0] - (float)p->vel[0] * to[2];
+			s[2] = (float)p->vel[0] * to[1] - (float)p->vel[1] * to[0];
 			len = sqrtf(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
 			if (len < 1e-4f)
 				continue;
+			/* head and tail to camera units once, the half width (under 4
+			 * units) as a camera-unit offset: a unit from rounding each
+			 * corner on its own; corners must stay in range */
+			if (!fx_cam_pos(p->org, h) || !fx_cam_pos(tail, t))
+				continue;
+			len = STREAK_W * GPU_FX_POS_SCALE / len;
 			for (k = 0; k < 3; k++)
-				s[k] *= STREAK_W / len;
 			{
-				float c0[3], c1[3], c2[3], c3[3];
-
-				for (k = 0; k < 3; k++)
-				{
-					c0[k] = p->org[k] + s[k];
-					c1[k] = p->org[k] - s[k];
-					c2[k] = tail[k] - s[k];
-					c3[k] = tail[k] + s[k];
-				}
-				ok = fx_cam_pos(c0, q[0]) && fx_cam_pos(c1, q[1]) && fx_cam_pos(c2, q[2])
-					&& fx_cam_pos(c3, q[3]);
+				if (h[k] < -STREAK_EDGE || h[k] > STREAK_EDGE || t[k] < -STREAK_EDGE
+					|| t[k] > STREAK_EDGE)
+					break;
+				w[k] = (int16_t)(s[k] * len);
+				q[0][k] = (int16_t)(h[k] + w[k]);
+				q[1][k] = (int16_t)(h[k] - w[k]);
+				q[2][k] = (int16_t)(t[k] - w[k]);
+				q[3][k] = (int16_t)(t[k] + w[k]);
 			}
-			if (!ok)
+			if (k < 3)
 				continue;
 			colour(p, c);
 			/* additive head-to-tail fade as unit colour x brightness (render-fx.md 2a) */

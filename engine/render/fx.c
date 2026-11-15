@@ -99,6 +99,9 @@ float fx_gravity(void)
 	return settings.gravity;
 }
 
+/* Rounded half away from zero by a truncating conversion: newlib's lrintf
+ * is a ~60-instruction call on the cart, and every effects vertex comes
+ * through here. */
 int fx_cam_pos(const float g[3], int16_t out[3])
 {
 	int k;
@@ -109,7 +112,7 @@ int fx_cam_pos(const float g[3], int16_t out[3])
 
 		if (v < -32767.0f || v > 32767.0f)
 			return 0;
-		out[k] = (int16_t)lrintf(v);
+		out[k] = (int16_t)(int)(v < 0 ? v - 0.5f : v + 0.5f);
 	}
 	return 1;
 }
@@ -136,6 +139,9 @@ static res_t asset(int set, int pick)
 	return fx.assets[set][pick < 0 ? fx_randi(0, n - 1) : pick % n];
 }
 
+/* The ricochets are held in memory (SND_RESIDENT): sparks start one up to
+ * ten times a second (env_laser's end sparks), and a streamed wave reads
+ * its whole sample from the cart at every start. */
 void fx_play(int set, const float org_g[3], float vol, float attn)
 {
 	res_t s = asset(set, -1);
@@ -145,7 +151,8 @@ void fx_play(int set, const float org_g[3], float vol, float attn)
 		return;
 	frame = eng_frame_layer();
 	eng_set_frame_layer(-1);
-	snd_ambient(org_g, s, vol, attn, 0, 95 + fx_randi(0, 10));
+	snd_ambient(org_g, s, vol, attn, set == FX_A_RICOCHET_SND ? SND_RESIDENT : 0,
+		95 + fx_randi(0, 10));
 	eng_set_frame_layer(frame);
 }
 

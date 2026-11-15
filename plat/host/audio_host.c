@@ -55,7 +55,7 @@ void snd_hw_init(void *mem, uint32_t bytes)
 	h_bytes = ((uint32_t)sizeof(host_audio_t) + 15u) & ~15u;
 }
 
-int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
+int snd_hw_open(uint32_t rom, uint32_t size, int resident, snd_wave_info_t *info, void **wave)
 {
 	const uint8_t *h = H->hdr;
 	int i;
@@ -70,6 +70,9 @@ int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
 	memset(info, 0, sizeof(*info));
 	info->format = h[5];
 	info->channels = h[6];
+	/* the cart's choice without its arena: VADPCM is held (no room
+	 * limit modelled here) */
+	info->resident = (uint8_t)(resident && h[5] == 1);
 	info->freq = be32(h + 8);
 	info->len = be32(h + 12);
 	info->loop_len = be32(h + 16);

@@ -1069,6 +1069,43 @@ static void test_x5(void)
 			snprintf(note + l, sizeof(note) - l, "; drawn in frame, max %.4f u off", err);
 		}
 	}
+	/* batching: two decals of one texture on one wall, consecutive in the
+	 * pool, draw as one batch (one call, both decals' vertices), every
+	 * drawn vertex still at its stored position */
+	{
+		float q[3] = { p[0], p[1], p[2] + 6 }, w[2 * HL64_FX_DECAL_VERTS][3], err = 0;
+		gpu_fx_vert_t v[64];
+		gpu_fx_stats_t gs;
+		fx_draw_stats_t fs;
+		ren_mat_t mt;
+		int j, m, nv, nd, owner, total = 0, framed;
+
+		fx_init();
+		CHECK(decal_place_now(p, n, -1, 0) > 0 && decal_place_now(q, n, -1, 0) > 0,
+			"batch: placement");
+		for (i = 0; i < HL64_FX_DECALS; i++)
+			if (decal_info(i, &owner, &nd, w + total, 2 * HL64_FX_DECAL_VERTS - total) > 0)
+				total += nd;
+		eye(eg, 0, 0);
+		draw();
+		gpu_fx_stats(&gs);
+		fx_draw_stats(&fs);
+		nv = gpu_fx_host_last(v, 64, &m);
+		framed = gpu_fx_host_last_frame(&mt);
+		for (j = 0; j < nv && j < total; j++)
+			for (k = 0; k < 3; k++)
+			{
+				float d3 = mt.m[3][k] + eg[k] + v[j].pos[0] * mt.m[0][k]
+					+ v[j].pos[1] * mt.m[1][k] + v[j].pos[2] * mt.m[2][k];
+
+				if (fabsf(d3 - w[j][k]) > err)
+					err = fabsf(d3 - w[j][k]);
+			}
+		CHECK(fs.decals == 2 && gs.calls[GPU_FX_DECAL] == 1 && m == GPU_FX_DECAL && framed
+			&& nv == total && err <= 1.0f / 256, "batch: %lu decals in %lu calls, %d of %d "
+			"vertices, max %.4f u off", (unsigned long)fs.decals,
+			(unsigned long)gs.calls[GPU_FX_DECAL], nv, total, err);
+	}
 	/* the vertex ring at its worst: all HL64_FX_DECALS in view, each
 	 * HL64_FX_DECAL_VERTS vertices and its frame matrix, none dropped */
 	{
@@ -1206,7 +1243,7 @@ static void test_beams(void)
 	float a[3], b[3], g[3], up[3];
 	gpu_fx_stats_t gs;
 	uint8_t pin[4], pout[4], env[4];
-	int k, i, e, f[3], calls[3], loads[3], live, nfr;
+	int k, i, e, f[3], calls[3], loads[3], live, nfr, short_calls;
 	col_trace_t tr;
 	char note[240];
 
@@ -1252,6 +1289,18 @@ static void test_beams(void)
 	CHECK(pin[3] > pout[3] && pin[0] == pout[0] && pin[1] == pout[1] && pin[2] == pout[2],
 		"shade: last step in %d,%d,%d,%d not above out %d,%d,%d,%d", pin[0], pin[1], pin[2],
 		pin[3], pout[0], pout[1], pout[2], pout[3]);
+	/* a 20 u shaded beam: 2 steps (one per 10 u, at least 2) */
+	{
+		float c[3];
+
+		for (k = 0; k < 3; k++)
+			c[k] = a[k] + (k == 1 ? 20 : 0);
+		fx_beam(7, -1, a, -1, c, test_spr, 0, 0, 20, 0, 255, 255, 255, 200, 0, 0, FX_BEAM_SHADEIN);
+		draw();
+		gpu_fx_stats(&gs);
+		short_calls = (int)gs.calls[GPU_FX_ADD];
+		CHECK(short_calls == 2, "20 u shade batches %d (want 2)", short_calls);
+	}
 	fx_beam_kill(7);
 	/* a full pool of strikes: a keyed beam takes the one ending first */
 	for (i = 0; i < HL64_FX_BEAMS; i++)
@@ -1287,8 +1336,9 @@ static void test_beams(void)
 	CHECK(live == 3 && k == 3 && tent_live() == 0, "fizz: %d bubbles, %d before the ceiling "
 		"(%.0f u up), %d after", live, k, (double)(tr.end[2] - g[2]), tent_live());
 	ent_destroy(e);
-	snprintf(note, sizeof(note), "frames 1 0 1, shade batches %d %d %d, keyed priority, fizz %d "
-		"bubbles to %.0f u", calls[0], calls[1], calls[2], live, (double)(tr.end[2] - g[2]));
+	snprintf(note, sizeof(note), "frames 1 0 1, shade batches %d %d %d (20 u: %d), keyed priority, "
+		"fizz %d bubbles to %.0f u", calls[0], calls[1], calls[2], short_calls, live,
+		(double)(tr.end[2] - g[2]));
 	finish("BEAMS", note);
 }
 

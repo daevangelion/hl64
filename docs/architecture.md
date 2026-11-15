@@ -930,8 +930,9 @@ D6 (iv).
 
 libdragon mixer, 16 voices, 22050 Hz; wav64 version 10 (mono VADPCM,
 decoded by the mixer's RSP ucode) streamed from the cart
-(`WAV64_STREAMING_FULL`); ≤ 10 open waves with LRU close (never under a
-voice); wave reads in the `AUDIO` I/O class. The frame's pump is
+(`WAV64_STREAMING_FULL`; `SND_RESIDENT` sounds held whole,
+`WAV64_STREAMING_NONE`, specs/sound.md 3); ≤ 10 open waves with LRU close
+(never under a voice); wave reads in the `AUDIO` I/O class. The frame's pump is
 `mixer_try_play`, which queues the mixer's RSP rounds without waiting for
 them unless the AI is down to its last buffer (160 ms of AI buffers).
 GoldSrc channel semantics, attenuation and stereo model, loops,

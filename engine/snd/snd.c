@@ -51,7 +51,7 @@ typedef struct {
 	void		*hw;		/* NULL = free slot */
 	res_t		res;
 	uint32_t	lru;		/* higher = used more recently */
-	snd_wave_info_t	inf;
+	snd_wave_info_t	inf;		/* inf.resident: samples held by the backend */
 } wave_t;
 
 typedef struct {
@@ -247,13 +247,18 @@ int snd_wave_voice_check(void)
 
 static void voice_free(int v, const char *why);
 
-/* An open wave slot no voice plays, the least recently used; -1 none. */
+/* An open wave slot no voice plays, the least recently used; -1 none.
+ * Streamed waves close first: a resident one costs its whole sample to
+ * open again. */
 static int wave_lru_unused(void)
 {
 	int w, best = -1;
 
 	for (w = 0; w < SND_WAVES; w++)
-		if (S->w[w].hw && !wave_in_use(w) && (best < 0 || S->w[w].lru < S->w[best].lru))
+		if (S->w[w].hw && !wave_in_use(w) && (best < 0
+			|| S->w[w].inf.resident < S->w[best].inf.resident
+			|| (S->w[w].inf.resident == S->w[best].inf.resident
+			&& S->w[w].lru < S->w[best].lru)))
 			best = w;
 	return best;
 }
@@ -271,8 +276,9 @@ static int oldest_oneshot(void)
 	return best;
 }
 
-/* Open sound r (or find it open): its wave slot, -1 when it cannot play. */
-static int wave_get(res_t r)
+/* Open sound r (or find it open): its wave slot, -1 when it cannot play.
+ * resident: ask the backend to hold the samples (SND_RESIDENT). */
+static int wave_get(res_t r, int resident)
 {
 	unsigned idx = RES_INDEX(r);
 	int w, file, rc;
@@ -313,7 +319,7 @@ static int wave_get(res_t r)
 	if (!res_file(r, &file, &ofs, &size) || !(rom = res_file_rom(file, NULL)))
 		rc = -1;
 	else
-		rc = snd_hw_open(rom + ofs, size, &S->w[w].inf, &S->w[w].hw);
+		rc = snd_hw_open(rom + ofs, size, resident, &S->w[w].inf, &S->w[w].hw);
 	if (rc)
 	{
 		S->w[w].hw = NULL;
@@ -473,7 +479,7 @@ static void sentence_next(int v, double gap)
 
 		p->word++;
 		p->left--;
-		if (!wd || (w = wave_get(wd->res)) < 0)
+		if (!wd || (w = wave_get(wd->res, 0)) < 0)
 			continue;
 		p->wvol = wd->volume;
 		p->wpitch = wd->pitch;
@@ -539,7 +545,7 @@ static void loop_update(int i, int fresh)
 		voice_apply(lp->voice);
 		return;
 	}
-	if ((w = wave_get(lp->res)) < 0)
+	if ((w = wave_get(lp->res, 0)) < 0)
 		return;
 	if ((v = voice_pick(fresh)) < 0)
 		return;
@@ -674,17 +680,32 @@ static void change_match(int e, int c, res_t r, int flags, float vol, int pitch)
 	}
 }
 
-/* Shared start path of snd_emit / snd_ambient (flags without STOP /
- * CHANGE_*). */
-static void start_sample(int e, int chan, res_t r, float vol, float attn, int pitch,
-	const float org[3], int follow)
+/* A one-shot no ear hears: dropped (logged). */
+static int silent(int e, res_t r, const float org[3], float vol, float attn)
 {
 	float l, r2;
-	int w, v;
+
+	snd_gains(org, vol, attn, e == SND_SELF, &l, &r2);
+	if (l + r2 > 0.0f)
+		return 0;
+	S->st.dropped++;
+	snd_logf("snd %lu drop s%u %s silent\n", (unsigned long)S->frame, (unsigned)r, rname(r));
+	return 1;
+}
+
+/* Shared start path of snd_emit / snd_ambient (flags without STOP /
+ * CHANGE_*: SND_RESIDENT only). A resident sound is a one-shot: silent,
+ * its wave is not opened (that reads its whole sample). */
+static void start_sample(int e, int chan, res_t r, float vol, float attn, int pitch,
+	const float org[3], int follow, int flags)
+{
+	int w, v, resident = (flags & SND_RESIDENT) != 0;
 
 	if (chan != CHAN_AUTO && e != ENT_NONE)
 		stop_match(e, chan, r, "replace");
-	if ((w = wave_get(r)) < 0)
+	if (resident && silent(e, r, org, vol, attn))
+		return;
+	if ((w = wave_get(r, resident)) < 0)
 	{
 		S->st.dropped++;
 		return;
@@ -694,13 +715,8 @@ static void start_sample(int e, int chan, res_t r, float vol, float attn, int pi
 		loop_start(e, chan, r, vol, attn, pitch, org, follow);
 		return;
 	}
-	snd_gains(org, vol, attn, e == SND_SELF, &l, &r2);
-	if (l + r2 <= 0.0f)
-	{
-		S->st.dropped++;
-		snd_logf("snd %lu drop s%u %s silent\n", (unsigned long)S->frame, (unsigned)r, rname(r));
+	if (!resident && silent(e, r, org, vol, attn))
 		return;
-	}
 	S->keep = -1;
 	if ((v = voice_pick(1)) < 0)
 	{
@@ -748,7 +764,7 @@ void snd_emit(int e, int chan, res_t sound, float vol, float attn, int flags, in
 		S->st.dropped++;
 		return;
 	}
-	start_sample(e, chan, sound, vol, attn, pitch, org, 1);
+	start_sample(e, chan, sound, vol, attn, pitch, org, 1, flags);
 }
 
 void snd_ambient(const float org[3], res_t sound, float vol, float attn, int flags, int pitch)
@@ -773,7 +789,7 @@ void snd_ambient(const float org[3], res_t sound, float vol, float attn, int fla
 	g = eng_layer_origin(eng_frame_layer());
 	for (k = 0; k < 3; k++)
 		p[k] = org[k] + g[k];
-	start_sample(ENT_NONE, CHAN_STATIC, sound, vol, attn, pitch, p, 0);
+	start_sample(ENT_NONE, CHAN_STATIC, sound, vol, attn, pitch, p, 0, flags);
 }
 
 void snd_sentence(int e, int chan, uint16_t sentence, float vol, float attn, int flags,
@@ -909,7 +925,7 @@ void snd_ui(res_t sound, float vol)
 	if (!S)
 		return;
 	S->st.emits++;
-	start_sample(ENT_NONE, CHAN_AUTO, sound, vol, ATTN_NONE, PITCH_NORM, S->lis, 0);
+	start_sample(ENT_NONE, CHAN_AUTO, sound, vol, ATTN_NONE, PITCH_NORM, S->lis, 0, 0);
 }
 
 void snd_mute(int on)

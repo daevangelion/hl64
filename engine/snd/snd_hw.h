@@ -3,7 +3,8 @@
  * snd_hw.h -- the sound backend under engine/snd/snd.c (docs/architecture.md
  * 10): mixer voices playing wav64 waves. plat/n64/audio.c drives the
  * libdragon mixer over cart-streamed wav64 (WAV64_STREAMING_FULL, wave
- * reads in the engine/io AUDIO class); plat/host/audio_host.c is the null
+ * reads in the engine/io AUDIO class; a resident wave is read whole at
+ * open, WAV64_STREAMING_NONE); plat/host/audio_host.c is the null
  * output of the host build: it reads the same wav64 headers through the
  * same I/O path and models each voice's play position from its rate and
  * the frame time, so voice allocation, loops and sentences run the same.
@@ -31,14 +32,18 @@ typedef struct {
 	uint32_t	loop_len;	/* samples looped at the end, 0 = one-shot */
 	uint8_t		format;		/* wav64 format: 0 raw, 1 VADPCM, 3 Opus */
 	uint8_t		channels;
+	uint8_t		resident;	/* samples held in memory (no reads per play) */
 } snd_wave_info_t;
 
 /* Boot: SND_VOICES voices at SND_HZ; mem/bytes = the SOUND region's
  * remainder after snd.c's tables (backend allocations live there). */
 void		snd_hw_init(void *mem, uint32_t bytes);
 /* Open the wav64 at cart range [rom, rom + size) into *wave: 0 ok, -1 not
- * a readable wav64 (never retried), -2 the backend's room is full now. */
-int		snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave);
+ * a readable wav64 (never retried), -2 the backend's room is full now.
+ * resident: hold its samples (VADPCM) when the room has them, else it
+ * streams; info->resident says which. */
+int		snd_hw_open(uint32_t rom, uint32_t size, int resident, snd_wave_info_t *info,
+			void **wave);
 /* Close a wave no voice plays (waits for the RSP first on the cart). */
 void		snd_hw_close(void *wave);
 /* Start wave on voice v from sample pos (0, or the loop start). */

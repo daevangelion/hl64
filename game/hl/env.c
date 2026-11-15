@@ -1092,7 +1092,8 @@ const game_class_t gc_ENV_SHOOTER = {
 	uint8_t		m_flags;	/* FX_BEAM_SHADE* (SetFlags) */ \
 	uint8_t		m_width, m_noise, m_frame, m_scroll; \
 	uint8_t		m_decalSet;	/* m_decalAt holds a decal [own] */ \
-	float		m_decalAt[3];	/* the beam's last decal point [own] */
+	float		m_decalAt[3];	/* the beam's last decal point [own] */ \
+	float		m_sparkTime;	/* no end sparks before [own] */
 
 typedef struct {
 	CBASEENTITY_FIELDS
@@ -1115,6 +1116,7 @@ static const sv_field_t f_CBeam[] = {
 	SVF(CBeam, m_scroll, SV_U8, SVK),
 	SVF(CBeam, m_decalSet, SV_U8, 0),
 	SVF(CBeam, m_decalAt, SV_POS, 0),
+	SVF(CBeam, m_sparkTime, SV_TIME, 0),
 };
 
 /* GetStartPos / GetEndPos (they ignore attachments, as HLSDK's) */
@@ -1219,10 +1221,22 @@ static int IsPointEntity(int e)
 	return c == CLS_INFO_TARGET || c == CLS_INFO_LANDMARK || c == CLS_PATH_CORNER;
 }
 
+/* A beam's end sparks at most every BEAM_SPARK_GAP s [own]: HLSDK sparks
+ * at every strike (CBeam::DoSparks; an env_laser strikes every 0.1 s), each
+ * a TE_SPARKS of 8 streaks, a ricochet sprite and a ricochet sound. Every
+ * other strike of a laser keeps 5 a second: the hldemo3 welder's window
+ * on the cart, render-fx.md 5. Only the effects random stream is skipped:
+ * the game's draws are the same. */
+#define BEAM_SPARK_GAP	0.15f
+
 static void DoSparks(int e, const float start[3], const float end[3])
 {
 	uint32_t sf = CBase(e)->spawnflags;
+	CBeam *b = BEAM(e);
 
+	if (!(sf & (SF_BEAM_SPARKSTART | SF_BEAM_SPARKEND)) || gtime() < b->m_sparkTime)
+		return;
+	b->m_sparkTime = gtime() + BEAM_SPARK_GAP;
 	if (sf & SF_BEAM_SPARKSTART)
 		UTIL_Sparks(start);
 	if (sf & SF_BEAM_SPARKEND)

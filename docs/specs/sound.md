@@ -58,7 +58,10 @@ the listener's own sounds: both ears = volume. Then × master volume.
   new loop and logs it.
 - ≤ 10 open wav64 streams, LRU close of waves no voice uses (never under a
   voice: stop, wait for the RSP, close). Wave reads use the AUDIO I/O
-  class.
+  class. A sound started with `SND_RESIDENT` [own] (the sparks'
+  ricochets, up to 10 a second) is read whole at open and held in the
+  SOUND region (VADPCM, when the region has room; else streamed): no
+  cart reads per start; streamed waves close before resident ones.
 
 ## 4. Sentences
 

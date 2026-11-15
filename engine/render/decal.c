@@ -1429,26 +1429,73 @@ static int culled(const fxdecal_t *d, const float org[3], float ax[3][3])
 }
 
 /* Drawn in the surface's frame like the world (push_translation) and the
- * movers (mover_matrix), anchored at the decal's first vertex: rows 0-2
+ * movers (mover_matrix), anchored at a decal's first vertex: rows 0-2
  * the axes / GPU_FX_POS_SCALE, row 3 the anchor - eye; the vertices are
  * the stored quarter units minus the anchor's, exact. Measured on ares
  * (hldemo1, eye x .96875): camera-relative quarter-unit positions put the
  * decal behind the wall by more than the RDP decal Z tolerance, and every
- * pixel failed the compare. */
+ * pixel failed the compare.
+ *
+ * Consecutive decals of the pool in one frame (owner and layer) with one
+ * texture draw as one batch [own] while their vertices fit it and lie
+ * within BATCH_SPAN of the batch's anchor (the first decal's first vertex):
+ * the same drawing order, a matrix and a batch for a run of decals (a
+ * beam's trail on one door) rather than for each. */
+#define BATCH_VERTS	64		/* gpu_fx_tris */
+#define BATCH_SPAN	8191		/* quarter units from the anchor */
+
+typedef struct {
+	gpu_fx_vert_t	v[BATCH_VERTS];
+	uint8_t		idx[3 * BATCH_VERTS];
+	ren_mat_t	mt;
+	int16_t		anchor[3];
+	ent_h		owner;
+	int		layer, tex, nv, ni;
+} batch_t;
+
+static void batch_flush(batch_t *B, int *last)
+{
+	if (!B->nv)
+		return;
+	if (B->tex != *last)
+	{
+		gpu_fx_tex_i4(tex[B->tex].i4, tex[B->tex].tw, tex[B->tex].th);
+		*last = B->tex;
+	}
+	gpu_fx_frame(&B->mt);
+	gpu_fx_tris(B->v, B->nv, B->idx, B->ni / 3);
+	B->nv = B->ni = 0;
+}
+
+/* Decal d's vertices fit B's open batch (same frame and texture, room,
+ * within the span of its anchor). */
+static int batch_fits(const batch_t *B, const fxdecal_t *d, const dvert_t *dv)
+{
+	int j, k;
+
+	if (!B->nv || B->owner != d->owner || B->layer != d->layer || B->tex != d->tex
+		|| B->nv + d->nverts > BATCH_VERTS)
+		return 0;
+	for (j = 0; j < d->nverts; j++)
+		for (k = 0; k < 3; k++)
+			if (dv[j].pos[k] - B->anchor[k] < -BATCH_SPAN || dv[j].pos[k] - B->anchor[k] > BATCH_SPAN)
+				return 0;
+	return 1;
+}
+
 void decal_draw(uint32_t *ndecals, uint32_t *nverts)
 {
+	static batch_t B;
 	int i, last = -1, set = 0;
 
 	*ndecals = *nverts = 0;
+	B.nv = B.ni = 0;
 	for (i = 0; i < HL64_FX_DECALS; i++)
 	{
 		fxdecal_t *d = &pool[i];
 		const dvert_t *dv = &verts[i * HL64_FX_DECAL_VERTS];
-		gpu_fx_vert_t v[HL64_FX_DECAL_VERTS];
-		uint8_t idx[3 * HL64_FX_DECAL_VERTS];
 		float org[3], ax[3][3], a[3];
-		ren_mat_t mt;
-		int k, j, ni = 0, b = 0;
+		int k, j, b;
 
 		if (!d->live)
 			continue;
@@ -1456,36 +1503,48 @@ void decal_draw(uint32_t *ndecals, uint32_t *nverts)
 			continue;
 		if (d->map != fx_s.map || culled(d, org, ax))
 			continue;
-		world_of(&dv[0], org, ax, a);
-		memset(&mt, 0, sizeof(mt));
-		for (k = 0; k < 3; k++)
+		if (!batch_fits(&B, d, dv))
 		{
-			mt.m[3][k] = a[k] - fx_s.eye[k];
-			if (mt.m[3][k] < -8191.0f || mt.m[3][k] > 8191.0f)
-				break;		/* beyond the far plane */
-			for (j = 0; j < 3; j++)
-				mt.m[j][k] = ax[j][k] / GPU_FX_POS_SCALE;
+			batch_flush(&B, &last);
+			world_of(&dv[0], org, ax, a);
+			memset(&B.mt, 0, sizeof(B.mt));
+			for (k = 0; k < 3; k++)
+			{
+				B.mt.m[3][k] = a[k] - fx_s.eye[k];
+				if (B.mt.m[3][k] < -8191.0f || B.mt.m[3][k] > 8191.0f)
+					break;		/* beyond the far plane */
+				for (j = 0; j < 3; j++)
+					B.mt.m[j][k] = ax[j][k] / GPU_FX_POS_SCALE;
+			}
+			if (k < 3)
+				continue;
+			B.mt.m[3][3] = 1.0f;
+			memcpy(B.anchor, dv[0].pos, sizeof(B.anchor));
+			B.owner = d->owner;
+			B.layer = d->layer;
+			B.tex = d->tex;
 		}
-		if (k < 3)
-			continue;
-		mt.m[3][3] = 1.0f;
+		b = B.nv;
 		for (j = 0; j < d->nverts; j++)
 		{
+			gpu_fx_vert_t *o = &B.v[B.nv + j];
+
 			for (k = 0; k < 3; k++)
-				v[j].pos[k] = (int16_t)(dv[j].pos[k] - dv[0].pos[k]);
-			v[j].st[0] = dv[j].st[0];
-			v[j].st[1] = dv[j].st[1];
-			memcpy(v[j].rgba, tex[d->tex].tint, 3);
-			v[j].rgba[3] = 255;
+				o->pos[k] = (int16_t)(dv[j].pos[k] - B.anchor[k]);
+			o->st[0] = dv[j].st[0];
+			o->st[1] = dv[j].st[1];
+			memcpy(o->rgba, tex[d->tex].tint, 3);
+			o->rgba[3] = 255;
 		}
+		B.nv += d->nverts;
 		/* each piece a fan */
 		for (k = 0; k < d->npieces; k++)
 		{
 			for (j = 1; j + 1 < d->piece[k]; j++)
 			{
-				idx[ni++] = (uint8_t)b;
-				idx[ni++] = (uint8_t)(b + j);
-				idx[ni++] = (uint8_t)(b + j + 1);
+				B.idx[B.ni++] = (uint8_t)b;
+				B.idx[B.ni++] = (uint8_t)(b + j);
+				B.idx[B.ni++] = (uint8_t)(b + j + 1);
 			}
 			b += d->piece[k];
 		}
@@ -1494,16 +1553,10 @@ void decal_draw(uint32_t *ndecals, uint32_t *nverts)
 			gpu_fx_mode(GPU_FX_DECAL, NULL);
 			set = 1;
 		}
-		if (d->tex != last)
-		{
-			gpu_fx_tex_i4(tex[d->tex].i4, tex[d->tex].tw, tex[d->tex].th);
-			last = d->tex;
-		}
-		gpu_fx_frame(&mt);
-		gpu_fx_tris(v, d->nverts, idx, ni / 3);
 		(*ndecals)++;
 		*nverts += (uint32_t)d->nverts;
 	}
+	batch_flush(&B, &last);
 	gpu_fx_frame(NULL);
 }
 
@@ -1530,13 +1583,16 @@ _Static_assert(HL64_FX_DECAL_VERTS % 3 == 0 && HL64_FX_DECAL_VERTS / 3 <= PIECES
 	"worst-case decal as fans of 3");
 _Static_assert(HL64_WORLD_LAYERS * MAX_CHUNKS <= 1 << SEQ_SUB, "a placement's commits fit its seq block");
 
+/* Every decal of the pool as decal i, with HL64_FX_DECAL_VERTS vertices,
+ * every other one on another global texture: no two share a batch (the
+ * vertex ring's worst case under decal_draw's batching). */
 int decal_test_fill_worst(int i)
 {
 	fxdecal_t src;
 	dvert_t v[3];
 	int j, k;
 
-	if (i < 0 || i >= HL64_FX_DECALS || !pool[i].live || pool[i].nverts < 3)
+	if (i < 0 || i >= HL64_FX_DECALS || !pool[i].live || pool[i].nverts < 3 || ntex < 2)
 		return -1;
 	src = pool[i];
 	memcpy(v, &verts[i * HL64_FX_DECAL_VERTS], sizeof(v));
@@ -1544,6 +1600,8 @@ int decal_test_fill_worst(int i)
 	{
 		pool[j] = src;
 		pool[j].seq = ++seq << SEQ_SUB;
+		if (j & 1)
+			pool[j].tex = (uint8_t)(src.tex ? 0 : 1);
 		pool[j].nverts = HL64_FX_DECAL_VERTS;
 		pool[j].npieces = HL64_FX_DECAL_VERTS / 3;
 		for (k = 0; k < PIECES; k++)

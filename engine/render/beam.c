@@ -285,8 +285,11 @@ static void strip(const float (*pts)[3], int n, const float (*side)[3], const fl
 	gpu_fx_tris(v, 2 * (n + 1), idx, 2 * n);
 }
 
-/* Segments of a shaded beam (one brightness step each) [own]. */
+/* A shaded beam's brightness steps: one per SHADE_STEP_LEN units, 2 to
+ * SHADE_SEGS [own: each step is a batch; the hldemo3 welder's 23 u torch
+ * beam takes 3, an 80 u beam 8]. */
 #define SHADE_SEGS	8
+#define SHADE_STEP_LEN	10.0f
 
 /* The sprite's entity frame at time t: from the starting frame at the
  * frame rate, wrapping. */
@@ -355,8 +358,14 @@ void beam_draw(int id, uint8_t blend)
 	if (len < 1)
 		return;
 	n = b->noise > 0 ? (int)(len / 16.0f) : 1;
-	if (b->flags && n < SHADE_SEGS)
-		n = SHADE_SEGS;
+	if (b->flags)
+	{
+		int steps = (int)ceilf(len / SHADE_STEP_LEN);
+
+		steps = steps < 2 ? 2 : steps > SHADE_SEGS ? SHADE_SEGS : steps;
+		if (n < steps)
+			n = steps;
+	}
 	if (n < 1)
 		n = 1;
 	if (n > HL64_FX_BEAM_SEGS)
