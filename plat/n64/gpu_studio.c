@@ -147,51 +147,65 @@ static int	ramp;		/* the ramp combiner + IA16 TLUT are set */
 
 void gpu_studio_begin(void)
 {
-	rdpq_mode_combiner(CC_TEX_PRIM);
+	rdpq_mode_combiner(gpu_nvg() ? N64_CC_NVG_STUDIO : CC_TEX_PRIM);
 	rdpq_mode_tlut(TLUT_RGBA16);
 	ramp = 0;
-	t3d_state_set_drawflags(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH | T3D_FLAG_NO_LIGHT | N64_CULL);
+	/* night vision: the fog's alpha needs shade (gpu_world_state) */
+	t3d_state_set_drawflags(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH | T3D_FLAG_NO_LIGHT | N64_CULL
+		| (gpu_nvg() ? T3D_FLAG_SHADED : 0));
+	if (gpu_nvg())
+		t3d_fog_set_enabled(true);
 }
 
 void gpu_studio_end(void)
 {
 	/* the world's state (gpu_begin) back for later passes */
 	gpu_page_ramp(NULL);
-	rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
 	if (ramp)
 		rdpq_mode_tlut(TLUT_RGBA16);
 	ramp = 0;
 	rdpq_mode_blender(0);
 	rdpq_mode_zbuf(true, true);
-	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
-		| T3D_FLAG_NO_LIGHT | N64_CULL);
+	gpu_world_state();
 	done = cur;
 }
 
 static void set_mode(const gpu_studio_ent_t *e)
 {
-	int add = e->mode == GPU_STUDIO_ADD;
+	int add = e->mode == GPU_STUDIO_ADD, nvg = gpu_nvg();
 
 	/* additive: each skin page binds its ramp TLUT and sets PRIM / ENV to
 	 * its ends, tinted by rgba (render-fx.md 2a) */
 	gpu_page_ramp(add ? e->rgba : NULL);
 	if (add != ramp)
 	{
-		rdpq_mode_combiner(add ? CC_RAMP : CC_TEX_PRIM);
+		rdpq_mode_combiner(add ? CC_RAMP : nvg ? N64_CC_NVG_STUDIO : CC_TEX_PRIM);
 		rdpq_mode_tlut(add ? TLUT_IA16 : TLUT_RGBA16);
 		ramp = add;
 	}
-	if (!add)
+	/* night vision: the NVG colours instead of the model light (an
+	 * additive page's ramp set ENV), the entity's alpha kept */
+	if (!add && nvg)
+	{
+		rdpq_set_prim_color(RGBA32(GPU_NVG_PRIM_R, GPU_NVG_PRIM_G, GPU_NVG_PRIM_B, e->rgba[3]));
+		rdpq_set_env_color(RGBA32(GPU_NVG_ENV_R, GPU_NVG_ENV_G, GPU_NVG_ENV_B, 255));
+	}
+	else if (!add)
 		rdpq_set_prim_color(RGBA32(e->rgba[0], e->rgba[1], e->rgba[2], e->rgba[3]));
 	switch (e->mode)
 	{
 	case GPU_STUDIO_BLEND:
 	case GPU_STUDIO_ADD:
+		/* night vision: no fog on blended models (fog + blend is two-cycle) */
+		if (nvg)
+			rdpq_mode_fog(0);
 		rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 		rdpq_mode_zbuf(true, false);
 		break;
 	default:
 		rdpq_mode_blender(0);
+		if (nvg)
+			rdpq_mode_fog(RDPQ_FOG_STANDARD);
 		rdpq_mode_zbuf(true, true);
 		break;
 	}

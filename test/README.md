@@ -42,7 +42,7 @@ a09abb2 + m5-remote (ares-host) and 30f8f01 (build-vm).
 | `hl1-dome` | hldemo1 | dome trigger, scientists and barney's scripted talk | SHOT start .. SHOT dome-scene | 32 | 26 | 529 |
 | `seam-1to2` | hldemo1 -> 2 | elevator button, doors, USEONLY switch, hldemo2 arrival (also the hl2 arrival scene) | SHOT elevator .. SHOT hldemo2-arrival | 59 | 58 | |
 | `hl2-soda` | hldemo2 | soda room: crowbar, soda machine bust, valve, pipe duct crawl | SHOT hldemo2-arrival .. SHOT duct-dark | 20 | 29 | |
-| `hl2-duct-flashlight` | hldemo2 | dark duct, HEV flashlight; part `hold`: 8 s held | SHOT duct-dark .. SHOT vent-flashlight | 21 | 45 | |
+| `hl2-duct-flashlight` | hldemo2 | dark duct, HEV flashlight (night vision, D12); part `hold`: 8 s held | SHOT duct-dark .. SHOT vent-flashlight | 21 | 45 | |
 | `hl2-yard` | hldemo2 | vent, shotgun room, barney, zombie, tripmines, warehouse gate grunt, crane, yard drop, fallback squad (prelude: hl2-soda + the duct crawl) | SHOT vent-flashlight .. SHOT grunts-fight | 70 | 92 | 1474-1539 (53 s version) |
 | `fx-tripmine` | hldemo2 | zombie crates, barrier, tripmine chain explosions | ops 105 .. 124 | 12 | 11 | 313 |
 | `seam-2to3` | hldemo2 -> 3 | east yard (sci_execution), dome road, touch switch, hldemo3 arrival | SHOT grunts-fight .. SHOT hldemo3-arrival | 27 | 39 | |

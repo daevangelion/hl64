@@ -43,9 +43,11 @@ void gpu_index_reencode(int16_t *idx, int n, unsigned stride, unsigned base)
 
 void gpu_begin(const gpu_view_t *v)
 {
-	(void)v;
 	memset(&cur, 0, sizeof(cur));
 	cur.hash = 2166136261u;
+	/* night vision is drawn state (a lit frame's hash is unchanged) */
+	if (v->nvg)
+		mix(&v->nvg, sizeof(v->nvg));
 }
 
 void gpu_end(void)
@@ -96,11 +98,6 @@ void gpu_page_ramp(const uint8_t tint_blend[4])
 /* the recorder keeps no RDP state */
 void gpu_state_lost(void)
 {
-}
-
-void gpu_decal_depth(int on)
-{
-	mix(&on, sizeof(on));
 }
 
 void gpu_draw(const w64_vert_t *v, int nv, const int16_t *idx, int ni)

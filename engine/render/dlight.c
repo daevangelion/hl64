@@ -3,7 +3,8 @@
  * dlight.c -- the dynamic light pool, the world falloff and the model
  * light terms (docs/specs/dlights.md 1-4, lightstyles.md 4), written from
  * the spec. Sources: entity effects (EF_MUZZLEFLASH / BRIGHTLIGHT /
- * DIMLIGHT, the local player's flashlight) each frame here, game effects
+ * DIMLIGHT; the local player's DIMLIGHT is night vision instead,
+ * architecture.md D12) each frame here, game effects
  * (fx_dlight / fx_elight / muzzle flashes) through engine/render/fx.c.
  */
 #include <math.h>
@@ -143,47 +144,6 @@ static void one_frame(int key, const float org[3], float radius, double time)
 	l->color[0] = l->color[1] = l->color[2] = 255;
 }
 
-float ren_flashlight_bright(float d)
-{
-	float b;
-
-	if (d <= 500.0f)
-		return 1.0f;
-	b = (500.0f / d) * (500.0f / d);
-	return floorf(b * 255.0f + 0.5f) / 255.0f;
-}
-
-void ren_flashlight_place(const float eye[3], const float ang[3], int pass, float out[3],
-	float *bright)
-{
-	float a[3] = { ang[0], ang[1], 0 }, f[3], r[3], u[3], end[3];
-	col_trace_t tr;
-	int k, frame = eng_frame_layer();
-
-	ren_angle_axes(a, f, r, u);
-	for (k = 0; k < 3; k++)
-		end[k] = eye[k] + 2000.0f * f[k];
-	eng_set_frame_layer(-1);
-	col_trace_line(eye, end, COL_MOVE_NORMAL, pass > 0 && ent_is_live(pass) ? ent_cv(pass) : NULL,
-		&tr);
-	eng_set_frame_layer(frame);
-	memcpy(out, tr.end, sizeof(tr.end));
-	/* on a studio or sprite entity: at its origin (dlights.md 2) */
-	if (tr.ent > 0 && ent_is_live(tr.ent))
-	{
-		int kind = RES_KIND(ent_rnd(tr.ent)->model);
-
-		if (kind == RES_K_MODEL || kind == RES_K_SPRITE)
-		{
-			const float *gm = eng_layer_origin(ent_idc(tr.ent)->layer);
-
-			for (k = 0; k < 3; k++)
-				out[k] = ent_cv(tr.ent)->origin[k] + gm[k];
-		}
-	}
-	*bright = ren_flashlight_bright(2000.0f * tr.frac);
-}
-
 void ren_dlight_sources(double time)
 {
 	int e, k;
@@ -224,24 +184,7 @@ void ren_dlight_sources(double time)
 
 			one_frame(e, p, 400.0f + (float)rand32(), time);
 		}
-		else if (r->effects & EF_DIMLIGHT)
-		{
-			if (e == 1)
-			{
-				/* the local player's flashlight (dlights.md 2) */
-				float p[3], b;
-				ren_dlight_t *l;
-
-				ren_flashlight_place(ren_cam.org, ren_cam.ang, 1, p, &b);
-				l = ren_dlight_alloc(e, time);
-				memcpy(l->origin, p, sizeof(p));
-				l->radius = 80.0f;
-				l->die = time;
-				l->flash = 1;
-				l->color[0] = l->color[1] = l->color[2] = (uint8_t)(b * 255.0f + 0.5f);
-			}
-			else
-				one_frame(e, org, 200.0f + (float)rand32(), time);
-		}
+		else if ((r->effects & EF_DIMLIGHT) && e != ENT_PLAYER)
+			one_frame(e, org, 200.0f + (float)rand32(), time);
 	}
 }
