@@ -37,6 +37,11 @@ The N64 pad (controller port 1) in play. The binding is one table,
   usable weapons only, wrapping.
 - There is no walk (`+speed`) button: walking speed comes from the stick.
 - The look speed setting scales stick turning and C-up / C-down looking.
+- Mounted guns (`func_tank` with a `func_tankcontrols`, hldemo2's
+  biggun): B on the controls takes the gun, the stick and C-up / C-down
+  aim it (it follows the view), Z fires. Walking 30 u away lets it go;
+  as in HLSDK, B does not, and while on the gun the weapon, its HUD and
+  the D-pad impulses are off (`game/hl/tanks.c`, `player.c` PostThink).
 
 ## Menus
 
