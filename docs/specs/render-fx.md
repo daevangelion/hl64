@@ -184,7 +184,11 @@ All in fixed pools, randomness from the render random stream:
 - **Beams**: entity↔entity, entity↔point, point↔point; width, noise
   amplitude (random perpendicular offsets per segment), colour, brightness,
   scroll speed, life; drawn additive as camera-facing strips of ≤ 16
-  segments.
+  segments. Entity-following trails (TE_BEAMFOLLOW, pool of 4): ≤ 16
+  samples of the entity's position, one per life / 16 s after ≥ 1 u of
+  movement, each dying after life; brightness falls linearly with a
+  segment's age (8 steps); the trail outlives its entity until its last
+  sample dies [own].
 - **Effects catalogue** (one function each, HLSDK `TE_*` semantics):
   sparks, ricochet (sprite + sound), bullet impact (decal + sparks +
   material sound), blood sprite (bloodspray animated 0.25 s + up to 5

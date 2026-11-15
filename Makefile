@@ -68,7 +68,7 @@ ENGINE_SRC_STUDIO := engine/render/studio.c
 ENGINE_SRC_SND := engine/snd/snd.c
 ENGINE_SRC_FX := engine/render/fx.c engine/render/tent.c engine/render/part.c \
 	engine/render/beam.c engine/render/decal.c engine/render/sprite.c engine/render/trans.c \
-	engine/render/addblend.c
+	engine/render/addblend.c engine/render/trail.c
 ENGINE_SRC_D2 := engine/render/draw2d.c
 GAME_SRC_CORE := game/hl/util.c game/hl/dispatch.c game/hl/world.c game/hl/triggers.c game/hl/logic.c \
 	game/hl/doors.c game/hl/buttons.c game/hl/lights.c game/hl/ambient.c \
@@ -92,6 +92,8 @@ GAME_SRC_STUDIO := game/studio/pose.c game/studio/anim.c game/studio/event.c
 GAME_SRC_LS := game/hl/levelstate.c
 # M4 Stream: level-load model precache at HLE map open (game_map_opened)
 GAME_SRC_CORE += game/hl/precache.c
+# M6 FuncTank: mounted guns and mortar fields (HLSDK func_tank.cpp, mortar.cpp)
+GAME_SRC_CORE += game/hl/tanks.c
 ENGINE_SRC += $(ENGINE_SRC_ENT) $(ENGINE_SRC_PHYS) $(ENGINE_SRC_REC) $(ENGINE_SRC_STUDIO) \
 	$(ENGINE_SRC_SND) $(ENGINE_SRC_FX) $(ENGINE_SRC_D2)
 # M4 Gate: the seam-window profiler (engine/test/seamprof.c: PROFILE carts,

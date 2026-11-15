@@ -16,7 +16,8 @@ cooked content root (`make cook`). Exit 0 when every test passed.
 import subprocess
 import sys
 
-TESTS = ("X1", "X2", "X3", "X4", "X5", "X6", "SCREEN", "DLIGHT", "LSTYLE", "ADD", "TEXANIM")
+TESTS = ("X1", "X2", "X3", "X4", "X5", "X6", "X6-trail", "SCREEN", "DLIGHT", "LSTYLE", "ADD",
+         "TEXANIM")
 PLACED_MAPS = ("hldemo1", "hldemo2")
 
 

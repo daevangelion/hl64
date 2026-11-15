@@ -103,8 +103,8 @@ float		ren_dlight_falloff(float radius, float minlight, float p, float q);
  * entity e), floored at 32, clamped at 255. */
 int		ren_model_light(int e, const float org_g[3], float base, int style_slot, int amount);
 /* Per frame after ren_dlight_frame: the lights of entity effects
- * (EF_MUZZLEFLASH 0.1 s and consumed, EF_BRIGHTLIGHT / EF_DIMLIGHT one
- * frame; dlights.md 1). The local player's EF_DIMLIGHT is no light: it
+ * (EF_MUZZLEFLASH 0.1 s and consumed, EF_BRIGHTLIGHT / EF_DIMLIGHT / EF_LIGHT
+ * one frame; dlights.md 1). The local player's EF_DIMLIGHT is no light: it
  * is night vision (ren_frame, architecture.md D12). */
 void		ren_dlight_sources(double time);
 

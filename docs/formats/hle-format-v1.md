@@ -132,7 +132,7 @@ align16(largest `DECL`) + `HL64_FX_DECALS` × `HL64_FX_DECAL_VERTS` × 10 B
 
 - Classes: only `hle_classes[]` (what the native game spawns); others are
   dropped (`info_node`, `env_beam`, `env_bubbles`, `env_sound`,
-  `trigger_autosave`, `func_tank*`, …). `infodecal`
+  `trigger_autosave`, `func_tanklaser`, `func_tankmortar`, …). `infodecal`
   and `env_glow` are kept: GoldSrc shows placed decals and glows.
   - `func_tracktrain` (HLSDK `CFuncTrackTrain`, game/hl/trains.c): physical
     record. Keys: `wheels`, `height`, `startspeed`, `sounds`, `volume`,
@@ -153,6 +153,13 @@ align16(largest `DECL`) + `HL64_FX_DECALS` × `HL64_FX_DECAL_VERTS` × 10 B
     `model` (`HLE_KS`, sprite `res_t`), `origin`, `rendercolor` (`HLE_KV`),
     `rendermode`, `renderamt`, `renderfx`, `scale`, `framerate`
     (`HLE_KF`), as the map sets them (absent = HLSDK default).
+  - `func_tank`, `func_tankrocket` (HLSDK `CFuncTank`), `func_tankcontrols`,
+    `func_mortar_field` (game/hl/tanks.c): physical records. Keys as
+    `CFuncTank::KeyValue` / `CFuncMortarField::KeyValue` read them:
+    `spritesmoke`, `spriteflash`, `rotatesound` (`HLE_KS`, sprite / sound
+    `res_t`), `m_iszXController`, `m_iszYController` (`HLE_KN`), the
+    others (`yawrate` … `maxRange`, `m_flSpread`, `m_fControl`, `m_iCount`)
+    `HLE_KF`.
 - Pruned: logic classes that act only when used and have no targetname
   (`multi_manager`, `trigger_relay`, `multisource`, `env_render`,
   `env_shake`, `env_fade`, `env_message`, `player_weaponstrip`,

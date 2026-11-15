@@ -106,6 +106,9 @@
 #define NORMAL_GUN_FLASH	256
 #define DIM_GUN_FLASH		128
 
+/* CBasePlayer::m_iHideHUD (cdll_dll.h HIDEHUD_*) */
+#define HIDEHUD_WEAPONS		(1 << 0)
+
 /* BULLET_*: game/hl/monster.h (weapons.h Bullet) */
 
 #define ITEM_FLAG_SELECTONEMPTY		1
@@ -243,7 +246,10 @@ typedef struct {
 	/* weapons */
 	float		m_flNextAttack;		/* decrementing (CLIENT_WEAPONS) */
 	uint8_t		m_pActiveItem, m_pLastItem;	/* weapon ids, 0 none */
-	uint8_t		pad3[2];
+	uint8_t		m_iHideHUD;		/* HIDEHUD_* */
+	uint8_t		pad3;
+	/* the tank the player is controlling (game/hl/tanks.c), EH_NONE */
+	ent_h		m_pTank;
 	/* UpdatePlayerSound */
 	int16_t		m_iWeaponVolume, m_iWeaponFlash, m_iTargetVolume, m_iExtraSoundTypes;
 	float		m_flStopExtraSoundTime;

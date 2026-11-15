@@ -149,3 +149,11 @@ CLASS(TRIGGER_AUTOSAVE, "trigger_autosave")
 CLASS(FUNC_TRACKTRAIN, "func_tracktrain")
 CLASS(TARGET_CDAUDIO, "target_cdaudio")
 CLASS(TRIGGER_CDAUDIO, "trigger_cdaudio")
+// ---- FuncTank: mounted guns, mortar fields (tanks.c; HLSDK func_tank.cpp,
+// mortar.cpp, rpg.cpp CRpgRocket); monster_mortar and rpg_rocket are run-time ----
+CLASS(FUNC_TANK, "func_tank")
+CLASS(FUNC_TANKROCKET, "func_tankrocket")
+CLASS(FUNC_TANKCONTROLS, "func_tankcontrols")
+CLASS(FUNC_MORTAR_FIELD, "func_mortar_field")
+CLASS(MONSTER_MORTAR, "monster_mortar")
+CLASS(RPG_ROCKET, "rpg_rocket")

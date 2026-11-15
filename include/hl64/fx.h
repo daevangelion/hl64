@@ -63,6 +63,12 @@ void	fx_beam_cylinder(const float org[3], float radius, res_t sprite, int life, 
 		int noise, int r, int g, int b, int bright);
 /* TE_IMPLOSION: count tracers converging on org from radius over life (0.1 s) */
 void	fx_implosion(const float org[3], int radius, int count, int life);
+/* TE_BEAMFOLLOW: a trail of decaying beam segments behind entity e (sprite,
+ * life of each segment in 0.1 s, width in 0.1 units, colour, brightness);
+ * it outlives the entity until its segments die. One trail per entity
+ * (a new call replaces it); a full pool (HL64_FX_TRAILS) drops. */
+void	fx_beam_follow(int e, res_t sprite, int life, int width, int r, int g, int b,
+		int brightness);
 
 /* ---- decals (render-fx.md 4) -------------------------------------------- */
 

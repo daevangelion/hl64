@@ -66,7 +66,7 @@ enum {
  * ((records + 3) / 4 B, padded to 4) + REC_LOGIC_BYTES per logic record. */
 #define REC_RT_BYTES		24	/* rrt_t, per record */
 #define REC_LOGIC_BYTES		16	/* rec_logic_t, per logic record */
-#define REC_TABLE_BYTES		20016	/* rec_init's tables before the slot heap */
+#define REC_TABLE_BYTES		20112	/* rec_init's tables before the slot heap */
 /* dehydrate store entry header (map, lump, rtid, len, bounds) before each
  * delta (4-aligned) */
 #define REC_STORE_HDR		20

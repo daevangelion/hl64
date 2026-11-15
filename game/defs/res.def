@@ -572,3 +572,10 @@ RES(SOUND, TTRAIN7, "plats/ttrain7.wav")
 RES(SOUND, TTRAIN_BRAKE1, "plats/ttrain_brake1.wav")
 RES(SOUND, TTRAIN_START1, "plats/ttrain_start1.wav")
 RES(SOUND, TRAIN_USE1, "plats/train_use1.wav")
+// ---- FuncTank: rpg_rocket (rpg.cpp CRpgRocket::Precache), func_mortar_field
+// (mortar.cpp CFuncMortarField::Precache; weapons/mortarhit.wav is precached
+// there but played by nothing: MortarExplode's sound is #if 0) ----
+RES(MODEL, RPGROCKET_MDL, "models/rpgrocket.mdl")
+RES(SPRITE, SPR_SMOKE_TRAIL, "sprites/smoke.spr")
+RES(SOUND, W_ROCKET1, "weapons/rocket1.wav")
+RES(SOUND, W_MORTAR, "weapons/mortar.wav")

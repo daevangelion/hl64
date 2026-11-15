@@ -1199,6 +1199,80 @@ static void test_x6(void)
 	finish("X6", note);
 }
 
+/* ---- entity-following trails (TE_BEAMFOLLOW, trail.c) ------------------------- */
+
+static void test_trail(void)
+{
+	gpu_fx_stats_t gs;
+	float g[3], o[3], eg[3];
+	int e, i, k, ents[HL64_FX_TRAILS + 2], adds, live_gone, steps;
+	char note[160];
+
+	begin();
+	kill_all();
+	fx_init();
+	step(0);
+	make_sprite(FX_SPR_PARALLEL);
+	for (k = 0; k < 3; k++)
+		g[k] = L->start_org[k] + L->gofs[k];
+	e = make_ent(g);
+	/* the rpg rocket's: life 4 s, width 5, 224 224 255, brightness 255 */
+	eng_set_frame_layer(L->slot);
+	fx_beam_follow(e, test_spr, 40, 5, 224, 224, 255, 255);
+	eng_set_frame_layer(-1);
+	CHECK(trail_live() == 1, "trail not live");
+	/* 2 s at 200 u/s along +x, the eye behind it looking along */
+	for (i = 0; i < 60; i++)
+	{
+		for (k = 0; k < 3; k++)
+			o[k] = ent_cv(e)->origin[k];
+		o[0] += 200.0f / 30;
+		eng_set_frame_layer(L->slot);
+		ent_set_origin(e, o);
+		eng_set_frame_layer(-1);
+		step(1.0 / 30);
+	}
+	for (k = 0; k < 3; k++)
+		eg[k] = g[k] - (k == 0 ? 100 : 0) + (k == 2 ? 24 : 0);
+	eye(eg, 0, 0);
+	draw();
+	gpu_fx_stats(&gs);
+	adds = (int)gs.calls[GPU_FX_ADD];
+	/* samples 0.25 s apart over 2 s: ages 0..2 s of 4 s, brightness steps
+	 * 7..4: at least 3 strips, at most 8 */
+	CHECK(adds >= 3 && adds <= 8, "moving trail: %d additive strips", adds);
+	/* the entity goes: the trail stays until its last sample dies */
+	ent_destroy(e);
+	step(1.0 / 30);
+	live_gone = trail_live();
+	CHECK(live_gone == 1, "trail gone with its entity");
+	for (steps = 0; trail_live() && steps < 30 * 6; steps++)
+		step(1.0 / 30);
+	CHECK(!trail_live() && steps >= 30 * 3 && steps <= 30 * 4 + 1,
+		"trail died after %d frames (want 4 s after the newest sample)", steps);
+	draw();
+	gpu_fx_stats(&gs);
+	CHECK(gs.calls[GPU_FX_ADD] == 0, "dead trail drawn");
+	/* pool: one trail per entity, a full pool drops */
+	for (i = 0; i < HL64_FX_TRAILS + 2; i++)
+	{
+		ents[i] = make_ent(g);
+		eng_set_frame_layer(L->slot);
+		fx_beam_follow(ents[i], test_spr, 40, 5, 224, 224, 255, 255);
+		fx_beam_follow(ents[i], test_spr, 40, 5, 224, 224, 255, 255);
+	}
+	eng_set_frame_layer(-1);
+	CHECK(trail_live() == HL64_FX_TRAILS, "pool: %d live of %d", trail_live(), HL64_FX_TRAILS);
+	for (i = 0; i < HL64_FX_TRAILS + 2; i++)
+		ent_destroy(ents[i]);
+	for (i = 0; i < 30 * 5; i++)
+		step(1.0 / 30);
+	CHECK(trail_live() == 0, "pool not freed: %d", trail_live());
+	snprintf(note, sizeof(note), "rocket trail: %d strips over 2 s, outlived its entity %d "
+		"frames, pool %d", adds, steps, HL64_FX_TRAILS);
+	finish("X6-trail", note);
+}
+
 /* ---- screen state ---------------------------------------------------------------------- */
 
 static void test_screen(void)
@@ -1368,6 +1442,30 @@ static void test_dlights(void)
 		for (i = 0; i < HL64_DLIGHTS; i++)
 			ren_dlight(i)->die = 0;
 		ren_dlight_frame(t + 20, 0);
+	}
+	/* EF_LIGHT (the rpg rocket's, dlights.md 1 [EST]): a one-frame light of
+	 * radius 120 at the entity, keyed by it */
+	{
+		float g[3];
+		int k, e, found = 0;
+
+		for (k = 0; k < 3; k++)
+			g[k] = L->start_org[k] + L->gofs[k];
+		e = make_ent(g);
+		ent_rnd(e)->effects |= EF_LIGHT;
+		ren_dlight_sources(t + 20);
+		for (i = 0; i < HL64_DLIGHTS; i++)
+			if (ren_dlight_live(i) && ren_dlight(i)->key == e)
+			{
+				found++;
+				CHECK(ren_dlight(i)->radius == 120 && ren_dlight(i)->die == t + 20
+					&& fabsf(ren_dlight(i)->origin[0] - g[0]) < 1e-3f,
+					"EF_LIGHT radius %g", (double)ren_dlight(i)->radius);
+			}
+		CHECK(found == 1, "EF_LIGHT lights %d", found);
+		ren_dlight_frame(t + 20.1, 0.1);
+		CHECK(live_count() == 0, "EF_LIGHT light outlived its frame (%d live)", live_count());
+		ent_destroy(e);
 	}
 	/* night vision (architecture.md D12): the local player's EF_DIMLIGHT
 	 * is no light; the frame draws night vision and a world dlight 16 u
@@ -2239,6 +2337,7 @@ int main(int argc, char **argv)
 	test_x4();
 	test_x5();
 	test_x6();
+	test_trail();
 	test_screen();
 	test_dlights();
 	test_styles();

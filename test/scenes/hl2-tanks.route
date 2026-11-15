@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+# Scene hl2-tanks (test/README.md): hldemo2's mounted guns and trailer-yard
+# mortars (game/hl/tanks.c; HLSDK func_tank.cpp, mortar.cpp, rpg.cpp), as
+# test/m5/tanks.route with views and a stats window: the player in the yard
+# north of the sandbag nest, sandbag_gun_1 (func_tank, 12 mm, 10 rounds/s,
+# muzzle flash sprites) and missile_turret (func_tankrocket, rpg_rocket,
+# steam smoke sprites) tracking and firing at him; then the player on
+# biggun (+use on its func_tankcontrols, view-steered, firing); then the
+# yard's trigger_once *82 -> init_trailer_mortars_mm: four
+# func_mortar_field strikes (lightning beam, explosion, shake) on the
+# trailers, the first 5.5 s after the trigger. New Game on hldemo2 (no
+# uplink.route window: the route walks the yard's north side and leaves
+# by the east yard without facing the nest).
+startmap hldemo2
+waitmap hldemo2 60
+god 1
+setpos 2300 400 -60 0 270
+wait 0.5
+stats begin
+waitmoved sandbag_gun_1 8
+waitclass rpg_rocket 2445 182 -35 400 10
+wait 0.3
+shot tanks-fire
+# the rocket ignites 0.4 s after launch: its trail (TE_BEAMFOLLOW) and
+# EF_LIGHT from the turret toward the player
+wait 0.6
+shot rocket-trail
+wait 0.9
+stats tanks-fire
+# biggun: its controls (x 2372..2380, y 37..103) ahead
+setpos 2355 70 -40 0 0
+wait 1
++use
+wait 0.2
+-use
+look 5 20
+waitmoved biggun 5
++attack
+wait 0.5
+shot biggun-fire
+wait 1
+-attack
+stats biggun
+setpos 2300 400 -60 0 270
+wait 1
+# trigger_once *82 (delay 3): mortar field *81 (x 2616..2664, y 488..536)
+# strikes 5.5 s later, *83 / *86 / *87 a second apart each
+setpos 1830 1072 -60 0 0
+look -10 -34
+wait 5.55
+shot mortar-1
+wait 4
+stats end
+pass
