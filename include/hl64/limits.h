@@ -178,9 +178,10 @@
 /* Measured (ares, test/m3/snd_ares.sh): 78144 B peak = tables 3424 + AUDIO
  * bounce 2048 + 16 voice buffers (4096 + VADPCM state 48 + arena header)
  * + 10 open wav64 (state, codebook). M5 hazard route on ares: 82832 B peak
- * x 1.25 = 103540 B (test/run/m5.sh region table, m5-int2 eb47299; uplink
- * 82080 B). */
-#define HL64_SOUND_KB			104
+ * (m5-int2 eb47299; uplink 82080 B). M6 CD music (stereo VADPCM stream +
+ * its ring pair): scene hl3-welder on ares (m6-music) 92208 B peak with
+ * the music, 84032 B without; 92208 x 1.25 = 115260 B. */
+#define HL64_SOUND_KB			113
 #define HL64_SPRITE_CACHE_KB		64
 /* Decal region: HLSDK sheet (29856 B) + 96 x 24 piece vertices (23040 B)
  * + 2 per-map placed-decal (infodecal) sheet slots of the largest map's

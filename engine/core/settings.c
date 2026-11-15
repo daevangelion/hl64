@@ -52,6 +52,9 @@ void settings_reset(void)
 	settings.ai_budget = HL64_AI_BUDGET;
 	settings.ai_hold = HL64_AI_HOLD;
 	settings.look_sens = 100;
+	/* 100: GoldSrc's defaults play the MP3s at MP3Volume 0.8 and the sounds
+	 * at volume 0.7 (music 1.2 dB over the sounds); with vol_sfx 100 the
+	 * nearest is 100 (docs/specs/sound.md 6, music level) */
 	settings.vol_music = 100;
 }
 

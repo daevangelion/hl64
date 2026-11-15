@@ -114,7 +114,32 @@ the listener's own sounds: both ears = volume. Then × master volume.
   end, at `cd stop` and when the session ends (New Game, end of section,
   Quit to Title). Volume = master × `vol_music` (the Configuration
   screen's Music Volume, GoldSrc's MP3 volume), separate from the sounds'
-  `vol_sfx`. **[retail S-mix: levels of music against sounds]**
+  `vol_sfx`.
+- Music level (default `vol_music` 100): GoldSrc's defaults are
+  `MP3Volume` 0.8 (public cvar lists: txdv.github.io/cstrike-cvarlist,
+  gsu.site.nfoservers.com cvar list) and `volume` 0.7 (retail
+  `valve/default.cfg`), so a track plays 20·log10(0.8/0.7) = 1.2 dB over
+  a full-volume sound **[INFERENCE: Miles applies MP3Volume as a linear
+  gain; not measured]**. Here a sound at full volume and the music at
+  `vol_music` 100 both play at gain 1 (× master × `vol_sfx` /
+  `vol_music`), so 100 (the slider's top) is the nearest: 1.2 dB
+  quieter against the sounds than GoldSrc; `vol_sfx` 88 would match.
+  Levels (active RMS, 50 ms windows above −50 dBFS, per ear): the 26 retail
+  tracks the maps play median −15.8 dBFS (−25.0 Prospero04 … −12.5
+  Half-Life03; peaks 0 dBFS), the 1050 cooked sounds median −14.1 dBFS
+  (scientist speech −14.1, barney −18.3, HEV −15.8, weapons −12.5,
+  footsteps −19.1, monsters −7.0); the cart's VADPCM keeps the level
+  (Half-Life01 −17.73 / −17.75 dB, Prospero01 −16.64 / −16.64 dB,
+  reference / cart clip). So at the defaults the music sits at speech
+  level, as in GoldSrc.
+- Campaign size (retail `valve/maps`, every trigger_cdaudio /
+  target_cdaudio): 26 tracks with a file, 34.9 min (the campaign maps 25
+  tracks, 32.7 min; Uplink 2 tracks, 4.4 min; t0a0 none; track 5
+  Half-Life07 is never played). VADPCM is 9 B (4-bit) or 7 B (3-bit) per
+  16 samples per channel: 4-bit stereo 22050 Hz 1.42 MiB/min (campaign
+  46.4 MiB), 4-bit mono 23.2 MiB, 3-bit mono 18.1 MiB, 4-bit stereo
+  16 kHz 33.7 MiB, 4-bit mono 16 kHz 16.9 MiB, 3-bit mono 16 kHz
+  13.1 MiB.
 - Mechanism: the cook converts only the tracks the cooked maps' entities
   name (`tools/cook/hl_music.py`): `media/cdNN.wav64`, 22050 Hz stereo
   VADPCM 4-bit without Huffman (1.49 MB of ROM per minute). The music has
