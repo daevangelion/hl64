@@ -72,7 +72,7 @@ static void HC_SetYawSpeed(int e)
 static void HC_HandleAnimEvent(int e, const MonsterEvent_t *ev)
 {
 	CBaseMonster	*m = MON(e);
-	float		org[3], dir[3], gravity, height, speed, time, dist;
+	float		org[3], dir[3], eo[3], gravity, height, speed, time, dist;
 	int		en, s;
 
 	if (ev->event != HC_AE_JUMPATTACK)
@@ -93,12 +93,13 @@ static void HC_HandleAnimEvent(int e, const MonsterEvent_t *ev)
 		gravity = settings.gravity;
 		if (gravity <= 1)
 			gravity = 1;
-		height = ent_cv(en)->origin[2] + vo[2] - ent_cv(e)->origin[2];
+		OriginIn(en, e, eo);
+		height = eo[2] + vo[2] - ent_cv(e)->origin[2];
 		if (height < 16)
 			height = 16;
 		speed = sqrtf(2 * gravity * height);
 		time = speed / gravity;
-		VecAdd(ent_cv(en)->origin, vo, dir);
+		VecAdd(eo, vo, dir);
 		VecSub(dir, ent_cv(e)->origin, dir);
 		VecScale(dir, 1.0f / time, dir);
 		dir[2] = speed;
@@ -337,12 +338,14 @@ static void Z_AttackSound(int e)
 
 static int Z_TakeDamage(int e, int inflictor, int attacker, float dmg, int bits)
 {
-	float d[3], c[3], v[3];
+	float d[3], c[3], v[3], dl[3];
 
 	if (bits == DMG_BULLET && inflictor >= 0)
 	{
 		VecAdd(ent_cv(inflictor)->absmin, ent_cv(inflictor)->absmax, c);
 		VecScale(c, 0.5f, c);
+		if (LayerDelta(inflictor, e, dl))
+			VecAdd(c, dl, c);
 		VecSub(ent_cv(e)->origin, c, d);
 		VecNorm(d, d);
 		VecMA(ent_mot(e)->velocity, Mon_DamageForce(e, dmg), d, v);

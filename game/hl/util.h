@@ -261,11 +261,21 @@ int		UTIL_PointContents(const float p[3]);
 /* TRACE_TEXTURE: material character of the surface hit by a trace of
  * entity hit (0 world) along start -> end; 0 when none */
 int		UTIL_TraceTexture(int hit, const float start[3], const float end[3]);
-/* FVisible (entity eyes / point) */
+/* FVisible (entity eyes / point; another layer's entity: never) */
 int		FVisible(int e, int other);
 int		FVisiblePoint(int e, const float p[3]);
 void		EyePosition(int e, float out[3]);
 void		BodyTarget(int e, const float src[3], float out[3]);
+/* Another entity's points in e's frame (architecture.md 8 "Frames":
+ * entities simulate map-local to their own layer; another layer's
+ * entity, e.g. the player after a crossing, is at g_M(its layer) -
+ * g_M(e's layer) from its map-local values). LayerDelta: that offset,
+ * 0 (d zero) in the same layer. BodyTargetIn: src in e's frame. */
+int		LayerDelta(int other, int e, float d[3]);
+void		OriginIn(int other, int e, float out[3]);
+void		CenterIn(int other, int e, float out[3]);
+void		EyePositionIn(int other, int e, float out[3]);
+void		BodyTargetIn(int other, int e, const float src[3], float out[3]);
 
 /* ---- searches -------------------------------------------------------------- */
 

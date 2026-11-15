@@ -146,7 +146,7 @@ ROM := $(BUILD_DIR)/hl64.z64
 ELF := $(BUILD_DIR)/hl64.elf
 HOST_BIN := $(BUILD_DIR)/host/hl64-host
 
-.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest rec4test sndtest gamelstest intest seamproftest mathtest seamtest streamtest cook routes test-host test-ares provcheck sdk-check clean
+.PHONY: all rom elf host unit colltest studiotest area pmtest enttest fxtest gametest montest itemstest rectest rec4test sndtest gamelstest intest ailayertest seamproftest mathtest seamtest streamtest cook routes test-host test-ares provcheck sdk-check clean
 all: rom
 
 # ---- cart -------------------------------------------------------------------
@@ -441,7 +441,7 @@ SEAM_WRAP := wld_open_async wld_layer_ready wld_layer_of_map wld_pin_seam wld_pi
 	wld_unpin_seam wld_stream_rebase rec_map_open rec_map_ready rec_map_close rec_slot_live \
 	rec_release rec_twin_alias rec_twin_clear rec_rehome rec_entity rec_state rec_kill rec_wake \
 	rec_slot_held rec_origin \
-	rec_name_find rec_fire rec_fire_at rec_key_f game_twin_copy game_carry
+	rec_name_find rec_fire rec_fire_at rec_key_f game_twin_copy game_carry game_carried
 SEAM_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 	$(BUILD_DIR)/host/test/m4/seam_test.o
 $(SEAM_BIN): $(SEAM_OBJS)
@@ -465,6 +465,16 @@ INTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(INTEST_BIN): $(INTEST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) -Wl,--wrap=sys_pad_read
 intest: $(INTEST_BIN)
+
+# AI regression driver (test/m5/ai_layer.c, run by test/run/m5.sh): a
+# task paused in StartTask after a refused release / a drop, and a
+# monster against the player of another layer.
+AILAYER_BIN := $(BUILD_DIR)/host/hl64-ailayer
+AILAYER_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
+	$(BUILD_DIR)/host/test/m5/ai_layer.o
+$(AILAYER_BIN): $(AILAYER_OBJS)
+	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
+ailayertest: $(AILAYER_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 

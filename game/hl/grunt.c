@@ -560,7 +560,7 @@ static int Hg_CheckRangeAttack1(int e, float flDot, float flDist)
 	if (!IsPlayer(en) && flDist <= 64)
 		return 0;	/* kick nonclients, don't shoot them */
 	Hg_GetGunPosition(e, src);
-	BodyTarget(en, src, tgt);
+	BodyTargetIn(en, e, src, tgt);
 	/* a bullet from the gun hits the enemy before the world */
 	UTIL_TraceLineGlass(src, tgt, ignore_monsters, ignore_glass, e, &tr);
 	return tr.frac == 1.0f;
@@ -594,7 +594,10 @@ static int Hg_CheckRangeAttack2(int e, float flDot, float flDist)
 	if (g->m_weapons & HGRUNT_HANDGRENADE)
 	{
 		if (RANDOM_LONG(0, 1))	/* magically know where the feet are */
-			VecSet(tgt, ent_cv(en)->origin[0], ent_cv(en)->origin[1], ent_cv(en)->absmin[2]);
+		{
+			OriginIn(en, e, tgt);
+			tgt[2] = ent_cv(en)->absmin[2] + tgt[2] - ent_cv(en)->origin[2];
+		}
 		else			/* where they were last seen */
 			VecCopy(g->m_vecEnemyLKP, tgt);
 	}

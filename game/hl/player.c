@@ -1119,6 +1119,7 @@ static void UpdatePlayerSound(const ent_player_t *pl)
 	if (gtime() > p->m_flStopExtraSoundTime)
 		p->m_iExtraSoundTypes = 0;
 	VecCopy(pl->origin, snd->m_vecOrigin);
+	snd->m_iLayer = ent_idc(ENT_PLAYER)->layer;
 	snd->m_iType |= bits_SOUND_PLAYER | p->m_iExtraSoundTypes;
 	snd->m_iVolume = iVolume;
 	/* keep track of virtual muzzle flash */

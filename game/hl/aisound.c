@@ -39,6 +39,7 @@ static void sound_clear(CSound *s)
 	s->m_flExpireTime = 0;
 	s->m_iNext = SOUNDLIST_EMPTY;
 	s->m_iNextAudible = 0;
+	s->m_iLayer = -1;
 }
 
 static int IAllocSound(void)
@@ -118,7 +119,9 @@ void CSoundEnt_InsertSound(int iType, const float org[3], int iVolume, float flD
 	i = IAllocSound();
 	if (i == SOUNDLIST_EMPTY)
 		return;
+	/* org is in the caller's frame (the dispatched entity's layer) */
 	VecCopy(org, pool[i].m_vecOrigin);
+	pool[i].m_iLayer = eng_frame_layer();
 	pool[i].m_iType = iType;
 	pool[i].m_iVolume = iVolume;
 	pool[i].m_flExpireTime = gtime() + flDuration;

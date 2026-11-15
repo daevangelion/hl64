@@ -278,6 +278,7 @@ static void PossessEntity(int e)
 	int		t = EHGet(c->m_hTargetEnt);
 	CBaseMonster	*m;
 	ent_rnd_t	*r;
+	float		so[3];
 
 	if (!monster_ok(t))
 		return;
@@ -312,7 +313,8 @@ static void PossessEntity(int e)
 			Script_DelayStart(e, 1);
 		break;
 	case 4:
-		ent_set_origin(t, ent_cv(e)->origin);
+		OriginIn(e, t, so);	/* the script's mark in the monster's frame */
+		ent_set_origin(t, so);
 		ent_phys(t)->ideal_yaw = ent_cv(e)->angles[1];
 		ent_set_avelocity(t, g_vecZero);
 		ent_set_velocity(t, g_vecZero);

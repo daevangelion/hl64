@@ -424,12 +424,13 @@ int CBreakable_TakeDamage(int e, int inflictor, int attacker, float damage, int 
 {
 	CBreakable *p = PRIV(CBreakable, e);
 	const col_ent_t *c = ent_cv(e);
-	float tmp[3];
+	float tmp[3], io[3] = { 0, 0, 0 };
 	int i;
 
+	if (inflictor >= 0)
+		OriginIn(inflictor, e, io);
 	for (i = 0; i < 3; i++)
-		tmp[i] = (inflictor >= 0 ? ent_cv(inflictor)->origin[i] : 0) -
-			(c->absmin[i] + (c->absmax[i] - c->absmin[i]) * 0.5f);
+		tmp[i] = io[i] - (c->absmin[i] + (c->absmax[i] - c->absmin[i]) * 0.5f);
 	if (attacker == inflictor && attacker >= 0 &&
 	    (IsPlayer(attacker) || (ent_cv(attacker)->flags & FL_CLIENT)) &&
 	    (p->spawnflags & SF_BREAK_CROWBAR) && (bits & DMG_CLUB))

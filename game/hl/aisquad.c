@@ -140,14 +140,28 @@ int Sqm_SquadAdd(int e, int add)
 	return 0;
 }
 
+/* LKPs between members: into the receiver's frame (a member carried
+ * across a seam is in another layer than its squad) */
 void Sqm_SquadPasteEnemyInfo(int e)
 {
-	VecCopy(SQM(e)->m_vecEnemyLKP, SQM(Sqm_MySquadLeader(e))->m_vecEnemyLKP);
+	int leader = Sqm_MySquadLeader(e);
+	float d[3];
+
+	if (LayerDelta(e, leader, d))
+		VecAdd(SQM(e)->m_vecEnemyLKP, d, SQM(leader)->m_vecEnemyLKP);
+	else
+		VecCopy(SQM(e)->m_vecEnemyLKP, SQM(leader)->m_vecEnemyLKP);
 }
 
 void Sqm_SquadCopyEnemyInfo(int e)
 {
-	VecCopy(SQM(Sqm_MySquadLeader(e))->m_vecEnemyLKP, SQM(e)->m_vecEnemyLKP);
+	int leader = Sqm_MySquadLeader(e);
+	float d[3];
+
+	if (LayerDelta(leader, e, d))
+		VecAdd(SQM(leader)->m_vecEnemyLKP, d, SQM(e)->m_vecEnemyLKP);
+	else
+		VecCopy(SQM(leader)->m_vecEnemyLKP, SQM(e)->m_vecEnemyLKP);
 }
 
 void Sqm_SquadMakeEnemy(int e, int enemy)
@@ -169,7 +183,7 @@ void Sqm_SquadMakeEnemy(int e, int enemy)
 			if (EHGet(m->m_hEnemy) >= 0)
 				Mon_PushEnemy(mem, EHGet(m->m_hEnemy), m->m_vecEnemyLKP);
 			m->m_hEnemy = EHANDLE(enemy);
-			VecCopy(ent_cv(enemy)->origin, m->m_vecEnemyLKP);
+			OriginIn(enemy, mem, m->m_vecEnemyLKP);
 			Mon_SetConditions((CBaseMonster *)m, bits_COND_NEW_ENEMY);
 		}
 	}
@@ -228,7 +242,8 @@ int Sqm_SquadRecruit(int e, int radius, int maxMembers)
 				SQM(r)->netname == NAME_NONE)
 			{
 				VecAdd(ent_cv(e)->origin, s->view_ofs, a);
-				VecAdd(ent_cv(r)->origin, s->view_ofs, b);
+				OriginIn(r, e, b);
+				VecAdd(b, s->view_ofs, b);
 				UTIL_TraceLine(a, b, ignore_monsters, r, &tr);
 				if (tr.frac == 1.0f)
 				{
@@ -301,7 +316,7 @@ int Sqm_NoFriendlyFire(int e)
 	en = EHGet(s->m_hEnemy);
 	if (en < 0)
 		return 0;
-	Center(en, c);
+	CenterIn(en, e, c);
 	VecSub(c, ent_cv(e)->origin, c);
 	UTIL_VecToAngles(c, ang);
 	UTIL_MakeVectors(ang);
@@ -318,8 +333,9 @@ int Sqm_NoFriendlyFire(int e)
 		mem = Sqm_MySquadMember(leader, i);
 		if (mem >= 0 && mem != e)
 		{
-			const float *o = ent_cv(mem)->origin;
+			float o[3];
 
+			OriginIn(mem, e, o);
 			if (plane_front(&back, o) && plane_front(&left, o) && plane_front(&right, o))
 				return 0;
 		}
@@ -380,8 +396,14 @@ int Sqm_SquadMemberInRange(int e, const float loc[3], float dist)
 	for (i = 0; i < MAX_SQUAD_MEMBERS; i++)
 	{
 		mem = Sqm_MySquadMember(leader, i);
-		if (mem >= 0 && mv_dist2d(loc, ent_cv(mem)->origin) <= dist)
-			return 1;
+		if (mem >= 0)
+		{
+			float o[3];
+
+			OriginIn(mem, e, o);
+			if (mv_dist2d(loc, o) <= dist)
+				return 1;
+		}
 	}
 	return 0;
 }

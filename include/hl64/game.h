@@ -109,6 +109,12 @@ void	game_twin_copy(int from, int to);
 /* 1 when e crosses with the player if it is in the seam's carry box
  * (HLSDK ObjectCaps FCAP_ACROSS_TRANSITION / FCAP_FORCE_TRANSITION). */
 int	game_carry(int e);
+/* e crossed with the player (game_carry) and the engine re-based its
+ * components into B's frame by d (the seam's landmark delta): the game
+ * state follows as GoldSrc's transition restore leaves it (position
+ * fields moved by the landmark offset, the restored hooks run: a
+ * monster's schedule and route start afresh in B). */
+void	game_carried(int e, const float d[3]);
 /* Slot is closing: cut AI / combat references across the map boundary
  * (enemy, target ent, cine links) as if out of range. */
 void	game_cut_refs(int slot);

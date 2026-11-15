@@ -424,7 +424,7 @@ static void Ga_FlameDamage(int e, const float start[3], const float end[3], floa
 		/* UNDONE: this should check a damage mask, not an ignore */
 		if (iClassIgnore != CLASS_NONE && Classify(s) == iClassIgnore)
 			continue;
-		BodyTarget(s, mid, spot);
+		BodyTargetIn(s, e, mid, spot);
 		VecSub(spot, mid, d);
 		dist = VecDot(aim, d);
 		if (dist > radius)
@@ -864,7 +864,7 @@ static void Ga_RunTask(int e, const Task_t *t)
 		{
 			VecCopy(ent_cv(e)->origin, org);
 			org[2] += 64;
-			BodyTarget(en, org, tgt);
+			BodyTargetIn(en, e, org, tgt);
 			VecSub(tgt, org, dir);
 			UTIL_VecToAngles(dir, ang);
 			ang[0] = -ang[0];

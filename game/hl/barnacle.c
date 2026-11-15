@@ -142,7 +142,7 @@ void CBarnacle_BarnacleThink(int e)
 {
 	CBarnacle	*b = BCL(e);
 	const float	*o = ent_cv(e)->origin;
-	float		flLength, org[3], eye[3], yaw;
+	float		flLength, org[3], eye[3], yaw, ob[3];
 	int		touch, enemy;
 
 	ThinkIn(e, 0.1f);
@@ -165,16 +165,19 @@ void CBarnacle_BarnacleThink(int e)
 				return;
 			}
 			/* still pulling prey */
+			/* the barnacle's origin in the prey's frame (a held prey may have
+			 * been re-based into another layer); org is set in that frame */
+			OriginIn(e, enemy, ob);
 			VecCopy(ent_cv(enemy)->origin, org);
-			org[0] = o[0];
-			org[1] = o[1];
+			org[0] = ob[0];
+			org[1] = ob[1];
 			yaw = ent_cv(enemy)->angles[1];
 			org[0] -= 6 * (float)hl_cos(yaw * M_PI / 180.0);
 			org[1] -= 6 * (float)hl_sin(yaw * M_PI / 180.0);
 			b->m_flAltitude -= BARNACLE_PULL_SPEED;
 			org[2] += BARNACLE_PULL_SPEED;
 			EyePosition(enemy, eye);
-			if (fabsf(o[2] - (org[2] + (eye[2] - ent_cv(enemy)->origin[2]) - 8)) <
+			if (fabsf(ob[2] - (org[2] + (eye[2] - ent_cv(enemy)->origin[2]) - 8)) <
 				BARNACLE_BODY_HEIGHT)
 			{
 				/* prey has just been lifted into position */

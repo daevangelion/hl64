@@ -74,28 +74,15 @@ uint32_t		wld_n_promoted, wld_n_evict_queued, wld_n_prefetch_req;
 uint32_t		wld_n_open_async, wld_n_open_fail;
 uint32_t		wld_us_room, wld_n_room_scans;
 
-/* Eviction candidates of a pool (evict_one): the EVC_N best of one LRU
- * scan (evc_scan), best first, for one frame, target generation and
- * class; all = they are every candidate the scan found. */
-#define EVC_N		16
-#define EVC_GONE	0xFFFFFFFFu	/* entry evicted / no longer a candidate */
-typedef struct {
-	uint32_t	frame;
-	uint16_t	tgen;
-	uint8_t		cls, all, n, at;
-	uint8_t		k[EVC_N];
-	uint32_t	key[EVC_N];	/* layer slot << 16 | chunk */
-	uint32_t	used[EVC_N];
-} evc_t;
-static evc_t		evc[NPOOLS];
 /* A pool make_room found no candidate in, per frame and generation: a
- * request of class <= cls without a hole fails at once (request). */
+ * request of class <= cls without a hole (or, nodesc, with a hole but no
+ * block descriptor to carve it) fails at once (request). */
 static struct {
 	uint32_t	frame;
 	uint16_t	tgen;
-	uint8_t		cls;
+	uint8_t		cls, nodesc;
 } dry[NPOOLS];
-_Static_assert((HL64_WORLD_LAYERS & (HL64_WORLD_LAYERS - 1)) == 0, "evict_one masks the slot");
+_Static_assert((HL64_WORLD_LAYERS & (HL64_WORLD_LAYERS - 1)) == 0, "blk_chunk masks the slot");
 static wld_stats_t	st;
 
 /* ---- big-endian access, byte swap (host) --------------------------------- */
@@ -796,7 +783,9 @@ static io_req_t *weaker_queued(int p, int cls)
 }
 
 /* The eviction class of chunk c of L for a request of class cls in pool
- * p (evict_one's rule): -1 when it is not a candidate. */
+ * p: -1 when it is not a candidate. Not a chunk used this frame or the
+ * last; only one named by a weaker class (not named this generation =
+ * NONE); prefetch never evicts a chunk used in the last 30 frames. */
 static int evict_class(const wld_layer_t *L, int c, int p, int cls)
 {
 	const wld_chunk_t *ch = &L->ch[c];
@@ -811,141 +800,195 @@ static int evict_class(const wld_layer_t *L, int c, int p, int cls)
 	return k;
 }
 
-/* One LRU scan of pool p for class cls into its candidate list: the
- * EVC_N best (weakest class, then least recently used; scan order on a
- * tie), `all` when that is every candidate. */
-static void evc_scan(int p, int cls)
+/* The chunk whose bytes used block b holds (b->user: layer slot << 16 |
+ * chunk, set at its allocation), NULL when none. */
+static wld_layer_t *blk_chunk(const mem_blk_t *b, int *c)
 {
-	evc_t *e = &evc[p];
-	uint32_t n = 0;
-	int i, c, j;
+	wld_layer_t *L = &wld_layers[((uint32_t)b->user >> 16) & (HL64_WORLD_LAYERS - 1)];
 
-	wld_n_room_scans++;
-	e->frame = wld_frame_no;
-	e->tgen = wld_tgen;
-	e->cls = (uint8_t)cls;
-	e->n = e->at = 0;
-	for (i = 0; i < HL64_WORLD_LAYERS; i++)
-	{
-		const wld_layer_t *L = &wld_layers[i];
-
-		if (!L->open || !L->ch)
-			continue;
-		for (c = 0; c < L->dir->nchunks; c++)
-		{
-			int k = evict_class(L, c, p, cls);
-			uint32_t used;
-
-			if (k < 0)
-				continue;
-			n++;
-			used = L->ch[c].used;
-			/* insertion after its equals: scan order breaks ties */
-			for (j = e->n; j > 0 && (e->k[j - 1] > k
-				|| (e->k[j - 1] == k && e->used[j - 1] > used)); j--)
-				;
-			if (j == EVC_N)
-				continue;
-			if (e->n < EVC_N)
-				e->n++;
-			memmove(&e->key[j + 1], &e->key[j], (size_t)(e->n - 1 - j) * sizeof(e->key[0]));
-			memmove(&e->k[j + 1], &e->k[j], (size_t)(e->n - 1 - j) * sizeof(e->k[0]));
-			memmove(&e->used[j + 1], &e->used[j], (size_t)(e->n - 1 - j) * sizeof(e->used[0]));
-			e->key[j] = (uint32_t)i << 16 | (uint32_t)c;
-			e->k[j] = (uint8_t)k;
-			e->used[j] = used;
-		}
-	}
-	e->all = n <= EVC_N;
+	*c = b->user & 0xFFFF;
+	if (b->state != MEM_BLK_USED || b->user < 0 || !L->open || !L->ch || *c >= L->dir->nchunks
+		|| L->ch[*c].blk != b)
+		return NULL;
+	return L;
 }
 
-/* Make room in pool p for a request of class cls: a queued-not-started
- * read of a weaker class first, then the least recently used resident
- * chunk of a weaker class (not named this generation = NONE first) not
- * used this frame or the last; prefetch never evicts a chunk used in the
- * last 30 frames. 0 when nothing qualifies.
- *
- * The LRU order comes from the pool's candidate list (evc_scan), kept for
- * the frame and target generation: chunks only leave it (evicted, used,
- * named stronger), so its entries stay in order and a weaker request
- * takes the first that still qualifies for it; the list is scanned
- * again only when it runs out of candidates it did not hold all of, or
- * for a stronger class. A pool with none left answers at once. */
-static int evict_one(int p, int cls)
+/* evict_run's block kinds (blk->memo[0]: kind | eviction class << 8,
+ * memo[1]: a victim's last use) */
+enum { RK_SPACE, RK_VICTIM, RK_BAR };
+
+static void room_kind(mem_blk_t *b, int p, int cls)
 {
-	io_req_t *q = weaker_queued(p, cls);
-	evc_t *e = &evc[p];
-	int pass, j;
+	wld_layer_t *L;
+	int c, k;
 
-	if (q)
+	b->memo[0] = RK_SPACE;
+	if (b->state == MEM_BLK_FREE || b->state == MEM_BLK_FENCED)
+		return;
+	b->memo[0] = RK_BAR;
+	if (b->locked || !(L = blk_chunk(b, &c)) || (k = evict_class(L, c, p, cls)) < 0)
+		return;
+	b->memo[0] = RK_VICTIM | (uint32_t)k << 8;
+	b->memo[1] = L->ch[c].used;
+}
+
+static int is_victim(const mem_blk_t *b, uint32_t end)
+{
+	return b->ofs < end && b->state == MEM_BLK_USED && (b->memo[0] & 0xFF) == RK_VICTIM;
+}
+
+/* Evict room for size bytes in pool p at class cls: the run of address-
+ * consecutive blocks, each free, fenced (free once the GPU is done with
+ * it) or a victim (evict_class), that spans size bytes and costs least:
+ * the weakest strongest victim class, then the youngest victim oldest
+ * (single evictions' LRU order), then the fewest victim bytes; its
+ * victims dropped. Evicting the pool's LRU chunks one at a time frees
+ * scattered blocks: in a fragmented pool that evicts on without ever
+ * making the hole (hldemo1's 52 KB HLE1 ENTS chunk at its layer open on
+ * the uplink route: 88 frames of evictions and pop-ins, or never). -1
+ * when no run exists, 0 when the best run evicts nothing (its fenced
+ * bytes are the wait), 1 when its victims were dropped. */
+static int evict_run(int p, uint32_t size, int cls)
+{
+	mem_blk_t *s = NULL, *e, *b, *n, *bs = NULL;
+	uint64_t best = UINT64_MAX, key;
+	uint32_t bev = 0, ev, end = 0;
+	wld_layer_t *L;
+	int c;
+
+	wld_n_room_scans++;
+	for (e = pools[p].head; e; e = e->next)
 	{
-		cancel_queued(q);
-		return 1;
-	}
-	if (e->frame != wld_frame_no || e->tgen != wld_tgen || e->cls < cls)
-		evc_scan(p, cls);
-	for (pass = 0; pass < 2; pass++)
-	{
-		for (j = e->at; j < e->n; j++)
+		room_kind(e, p, cls);
+		if (e->memo[0] == RK_BAR)
 		{
-			wld_layer_t *L = &wld_layers[(e->key[j] >> 16) & (HL64_WORLD_LAYERS - 1)];
-			int c = (int)(e->key[j] & 0xFFFF);
-
-			if (e->key[j] == EVC_GONE || !L->open || !L->ch || c >= L->dir->nchunks
-				|| evict_class(L, c, p, e->cls) < 0)
-			{
-				/* no longer a candidate of the list's class, so of
-				 * no weaker one */
-				e->key[j] = EVC_GONE;
-				if (j == e->at)
-					e->at++;
-				continue;
-			}
-			if (evict_class(L, c, p, cls) < 0)
-				continue;	/* a stronger request's */
-			e->key[j] = EVC_GONE;
-			if (j == e->at)
-				e->at++;
-			drop(L, c);
-			st.evictions++;
-			return 1;
+			s = NULL;
+			continue;
 		}
-		if (e->all || pass)
-			return 0;
-		evc_scan(p, cls);
+		if (!s)
+			s = e;
+		/* the shortest run ending at e */
+		while (s != e && e->ofs + e->size - s->next->ofs >= size)
+			s = s->next;
+		if (e->ofs + e->size - s->ofs < size)
+			continue;
+		key = 0;
+		ev = 0;
+		for (b = s;; b = b->next)
+		{
+			if ((b->memo[0] & 0xFF) == RK_VICTIM)
+			{
+				uint64_t v = (uint64_t)((b->memo[0] >> 8) + 1) << 32 | b->memo[1];
+
+				if (v > key)
+					key = v;
+				ev += b->size;
+			}
+			if (b == e)
+				break;
+		}
+		if (key < best || (key == best && ev < bev))
+		{
+			best = key;
+			bev = ev;
+			bs = s;
+			end = e->ofs + e->size;
+		}
 	}
-	return 0;
+	if (!bs)
+		return -1;
+	if (!bev)
+		return 0;
+	/* a drop frees or fences its own block only (a free neighbour may
+	 * merge into it): the next victim, a used block, is found first */
+	for (b = bs; b && b->ofs < end && !is_victim(b, end); b = b->next)
+		;
+	for (; b && b->ofs < end; b = n)
+	{
+		for (n = b->next; n && n->ofs < end && !is_victim(n, end); n = n->next)
+			;
+		L = blk_chunk(b, &c);
+		drop(L, c);
+		st.evictions++;
+	}
+	return 1;
+}
+
+/* The pool holds a hole for the request but no spare block descriptor to
+ * carve it with (the pool's descriptor table is full of small blocks): a
+ * freed block that merges with a free or fenced neighbour returns one. 0
+ * when a fenced block will at its retirement, 1 when the best such victim
+ * (evict_run's order: the weakest class, then the least recently used)
+ * was dropped, -1 when there is none. */
+static int evict_desc(int p, int cls)
+{
+	mem_blk_t *b, *best = NULL;
+	uint64_t bk = UINT64_MAX, k;
+	wld_layer_t *L;
+	int c;
+
+	wld_n_room_scans++;
+	for (b = pools[p].head; b; b = b->next)
+	{
+		if (!(b->prev && b->prev->state != MEM_BLK_USED)
+			&& !(b->next && b->next->state != MEM_BLK_USED))
+			continue;
+		if (b->state == MEM_BLK_FENCED)
+			return 0;
+		if (b->state != MEM_BLK_USED)
+			continue;
+		room_kind(b, p, cls);
+		if ((b->memo[0] & 0xFF) != RK_VICTIM)
+			continue;
+		k = (uint64_t)(b->memo[0] >> 8) << 32 | b->memo[1];
+		if (k < bk)
+		{
+			bk = k;
+			best = b;
+		}
+	}
+	if (!best)
+		return -1;
+	L = blk_chunk(best, &c);
+	drop(L, c);
+	st.evictions++;
+	return 1;
 }
 
 /* A free block for chunk ch (size bytes, pool p, class cls) once room is
- * made (evict_one; a weaker queued read's block frees at once); 0 when
- * none could be. A pool with no candidate left is dry for the class
- * (and every weaker one) for the rest of the frame and generation. */
+ * made: weaker queued-not-started reads first (their blocks free at
+ * once), then a run evicted (evict_run), or with the hole there but no
+ * descriptor to carve it, a merging block (evict_desc); 0 while fenced
+ * bytes wait out their fence (the caller retries), or when nothing
+ * qualifies: the pool is then dry for the class (and every weaker one)
+ * for the rest of the frame and generation. */
 static int make_room(wld_chunk_t *ch, int p, uint32_t size, int cls)
 {
-	const mem_pool_t *pl = &pools[p];
+	io_req_t *q;
+	int r, nodesc = 0;
 
-	do
+	for (;;)
 	{
-		/* evicted REND / TEXP bytes free behind their fence: once the
-		 * fenced bytes could make the hole (the largest free block plus
-		 * every fenced byte covers the request), wait for them (two
-		 * frames) instead of evicting the rest of the pool; a pool whose
-		 * free bytes are fragmented evicts on until they could */
-		if (pl->fenced && mem_pool_largest(pl) + pl->fenced >= size && !weaker_queued(p, cls))
-			return 0;
-		if (!evict_one(p, cls))
+		if ((q = weaker_queued(p, cls)))
+			cancel_queued(q);
+		else if ((r = (nodesc = mem_pool_largest(&pools[p]) >= size) ? evict_desc(p, cls)
+			: evict_run(p, size, cls)) <= 0)
 		{
-			if (dry[p].frame != wld_frame_no || dry[p].tgen != wld_tgen || dry[p].cls < cls)
+			if (r < 0 && (dry[p].frame != wld_frame_no || dry[p].tgen != wld_tgen
+				|| dry[p].cls < cls))
 			{
 				dry[p].frame = wld_frame_no;
 				dry[p].tgen = wld_tgen;
 				dry[p].cls = (uint8_t)cls;
+				dry[p].nodesc = (uint8_t)nodesc;
 			}
 			return 0;
 		}
-	} while (!(ch->blk = mem_pool_alloc(&pools[p], size, &ch->data)));
-	return 1;
+		if ((ch->blk = mem_pool_alloc(&pools[p], size, &ch->data)))
+			return 1;
+		if (!q && p != POOL_COLL)
+			return 0;
+	}
 }
 
 /* Queue chunk c at class cls's priority: 1; 0 when no request slot could
@@ -958,9 +1001,9 @@ static int request(wld_layer_t *L, int c, int cls)
 	uint32_t size = (ck->size + 15) & ~15u;
 	io_req_t *r = NULL;
 
-	/* a dry pool: no hole, nothing to evict for this class */
+	/* a dry pool: no hole (or descriptor), nothing to evict for this class */
 	if (dry[p].frame == wld_frame_no && dry[p].tgen == wld_tgen && cls <= dry[p].cls
-		&& mem_pool_largest(&pools[p]) < size)
+		&& (dry[p].nodesc || mem_pool_largest(&pools[p]) < size))
 	{
 		st.nofit++;
 		return -1;
@@ -992,6 +1035,7 @@ static int request(wld_layer_t *L, int c, int cls)
 	if (cls < dry[p].cls)
 		dry[p].cls = (uint8_t)cls;
 	ch->blk->locked = 1;
+	ch->blk->user = (int32_t)L->slot << 16 | c;
 	ch->state = WLD_CH_LOADING;
 	memset(r, 0, sizeof(*r));
 	r->rom = L->rom + ck->ofs;
@@ -1086,10 +1130,11 @@ uint8_t *wld_chunk_sync(wld_layer_t *L, int c)
 			: "coll chunk (not wanted)");	/* req_done lands it */
 	if (ch->state == WLD_CH_ABSENT)
 	{
-		while (!(ch->blk = mem_pool_alloc(&pools[POOL_COLL], size, &ch->data)))
-			if (!evict_one(POOL_COLL, WLD_CLS_OPEN))
-				sys_error("world: %s: COLL chunk %d does not fit the collision pool",
-					maps[L->map].name, c);
+		if (!(ch->blk = mem_pool_alloc(&pools[POOL_COLL], size, &ch->data))
+			&& !make_room(ch, POOL_COLL, size, WLD_CLS_OPEN))
+			sys_error("world: %s: COLL chunk %d does not fit the collision pool",
+				maps[L->map].name, c);
+		ch->blk->user = (int32_t)L->slot << 16 | c;
 		io_read_sync(ch->data, L->rom + ck->ofs, size, "coll chunk");
 		ch->state = WLD_CH_RESIDENT;
 		st.loads++;
@@ -1696,7 +1741,6 @@ void wld_close(wld_layer_t *L)
 	L->open = 0;
 	L->ready = 0;
 	L->ch = NULL;
-	memset(evc, 0, sizeof(evc));	/* their keys name its chunks */
 	memset(dry, 0, sizeof(dry));
 	wld_layer_gen++;
 }

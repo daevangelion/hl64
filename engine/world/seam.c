@@ -1204,6 +1204,7 @@ static void cross(int si)
 		ent_set_origin(e, org);
 		if (rec_rehome(e, sb) < 0)
 			log_printf("seam: carried #%d: no runtime id (table full)\n", e);
+		game_carried(e, s.delta);
 		eng_set_frame_layer(sa);
 		if (ground == e)
 			ground_b = e;

@@ -214,7 +214,7 @@ int Tlk_EnumFriends(int e, int prev, int listNumber, int bTrace)
 	cls_t		cls = m_szFriends[friend_number(e, listNumber)];
 	int		f = prev;
 	col_trace_t	tr;
-	float		chk[3];
+	float		chk[3], dl[3];
 
 	if (cls == CLS_NONE)
 		return -1;
@@ -224,6 +224,10 @@ int Tlk_EnumFriends(int e, int prev, int listNumber, int bTrace)
 			continue;
 		if (bTrace)
 		{
+			/* sight is per layer (FVisible): another layer's friend is never
+			 * seen, whatever a trace to its far-off point would report */
+			if (LayerDelta(f, e, dl))
+				continue;
 			VecCopy(ent_cv(f)->origin, chk);
 			chk[2] = ent_cv(f)->absmax[2];
 			UTIL_TraceLine(ent_cv(e)->origin, chk, ignore_monsters, e, &tr);
@@ -286,13 +290,18 @@ float Tlk_TargetDistance(int e)
 
 	if (t < 0 || !IsAlive(t))
 		return 1e6f;
-	return mv_dist(ent_cv(t)->origin, ent_cv(e)->origin);
+	{
+		float o[3];
+
+		OriginIn(t, e, o);
+		return mv_dist(o, ent_cv(e)->origin);
+	}
 }
 
 int Tlk_FindNearestFriend(int e, int fPlayer)
 {
 	int		i, f, nearest = -1, cfriends = fPlayer ? 1 : TLK_CFRIENDS;
-	float		range = 10000000.0f, start[3], chk[3], d;
+	float		range = 10000000.0f, start[3], chk[3], dl[3], d;
 	col_trace_t	tr;
 	cls_t		cls;
 
@@ -319,8 +328,10 @@ int Tlk_FindNearestFriend(int e, int fPlayer)
 			if (f != ENT_PLAYER && (MON(f)->m_MonsterState == MONSTERSTATE_SCRIPT ||
 				MON(f)->m_MonsterState == MONSTERSTATE_PRONE))
 				continue;
-			VecCopy(ent_cv(f)->origin, chk);
+			OriginIn(f, e, chk);
 			chk[2] = ent_cv(f)->absmax[2];
+			if (LayerDelta(f, e, dl))
+				chk[2] += dl[2];
 			d = mv_dist(start, chk);
 			if (range > d)
 			{
@@ -561,7 +572,8 @@ void CTalkMonster_StartTask(int e, const Task_t *task)
 		if (tt >= 0)
 		{
 			ent_phys(e)->yaw_speed = 60;
-			VecSub(ent_cv(tt)->origin, ent_cv(e)->origin, d);
+			OriginIn(tt, e, p);
+			VecSub(p, ent_cv(e)->origin, d);
 			yaw = Mon_VecToYaw(e, d) - ent_cv(e)->angles[1];
 			if (yaw > 180)
 				yaw -= 360;
@@ -625,7 +637,7 @@ void CTalkMonster_RunTask(int e, const Task_t *task)
 	CTalkMonster	*t = TALK(e);
 	CBaseMonster	*m = (CBaseMonster *)t;
 	int		pl = ENT_PLAYER, tt;
-	float		org[3];
+	float		org[3], po[3];
 
 	switch (task->iTask)
 	{
@@ -634,7 +646,10 @@ void CTalkMonster_RunTask(int e, const Task_t *task)
 		if (m->m_MonsterState == MONSTERSTATE_IDLE && !Mon_IsMoving(m) && !Tlk_IsTalking(e))
 		{
 			if (ent_is_live(pl))
-				Tlk_IdleHeadTurn(e, ent_cv(pl)->origin);
+			{
+				OriginIn(pl, e, po);
+				Tlk_IdleHeadTurn(e, po);
+			}
 		}
 		else
 		{
@@ -643,10 +658,11 @@ void CTalkMonster_RunTask(int e, const Task_t *task)
 		}
 		if (task->iTask == TASK_TLK_CLIENT_STARE && ent_is_live(pl))
 		{
-			if (mv_dist2d(ent_cv(pl)->origin, ent_cv(e)->origin) > TLK_STARE_DIST)
+			OriginIn(pl, e, po);
+			if (mv_dist2d(po, ent_cv(e)->origin) > TLK_STARE_DIST)
 				Mon_TaskFail(m);
 			UTIL_MakeVectors(ent_cv(pl)->angles);
-			if (UTIL_DotPoints(ent_cv(pl)->origin, ent_cv(e)->origin, gpGlobals.v_forward) <
+			if (UTIL_DotPoints(po, ent_cv(e)->origin, gpGlobals.v_forward) <
 				m->m_flFieldOfView)
 				Mon_TaskFail(m);
 		}
@@ -656,9 +672,10 @@ void CTalkMonster_RunTask(int e, const Task_t *task)
 	case TASK_FACE_PLAYER:
 		if (ent_is_live(pl))
 		{
-			Mon_MakeIdealYaw(e, ent_cv(pl)->origin);
+			OriginIn(pl, e, po);
+			Mon_MakeIdealYaw(e, po);
 			Mon_ChangeYaw(e, (int)ent_phys(e)->yaw_speed);
-			Tlk_IdleHeadTurn(e, ent_cv(pl)->origin);
+			Tlk_IdleHeadTurn(e, po);
 			if (gtime() > m->m_flWaitFinished && Mon_FlYawDiff(e) < 10)
 				Mon_TaskComplete(m);
 		}
@@ -668,7 +685,10 @@ void CTalkMonster_RunTask(int e, const Task_t *task)
 	case TASK_TLK_EYECONTACT:
 		tt = EHGet(t->m_hTalkTarget);
 		if (!Mon_IsMoving(m) && Tlk_IsTalking(e) && tt >= 0)
-			Tlk_IdleHeadTurn(e, ent_cv(tt)->origin);
+		{
+			OriginIn(tt, e, po);
+			Tlk_IdleHeadTurn(e, po);
+		}
 		else
 			Mon_TaskComplete(m);
 		break;
@@ -684,7 +704,10 @@ void CTalkMonster_RunTask(int e, const Task_t *task)
 		tt = EHGet(t->m_hTalkTarget);
 		VecCopy(ent_cv(e)->origin, org);
 		if (Tlk_IsTalking(e) && tt >= 0)
-			Tlk_IdleHeadTurn(e, ent_cv(tt)->origin);
+		{
+			OriginIn(tt, e, po);
+			Tlk_IdleHeadTurn(e, po);
+		}
 		else
 		{
 			Tlk_IdleHeadTurn(e, org);
@@ -699,7 +722,10 @@ void CTalkMonster_RunTask(int e, const Task_t *task)
 	default:
 		tt = EHGet(t->m_hTalkTarget);
 		if (Tlk_IsTalking(e) && tt >= 0)
-			Tlk_IdleHeadTurn(e, ent_cv(tt)->origin);
+		{
+			OriginIn(tt, e, po);
+			Tlk_IdleHeadTurn(e, po);
+		}
 		else
 			Mon_SetBoneController(e, 0, 0);
 		CBaseMonster_RunTask(e, task);
@@ -711,6 +737,7 @@ const Schedule_t *CTalkMonster_GetScheduleOfType(int e, int type)
 	CTalkMonster	*t = TALK(e);
 	CBaseMonster	*m = (CBaseMonster *)t;
 	int		pl = ENT_PLAYER;
+	float		po[3];
 
 	switch (type)
 	{
@@ -745,9 +772,10 @@ const Schedule_t *CTalkMonster_GetScheduleOfType(int e, int type)
 		{
 			if (ent_is_live(pl))
 			{
+				OriginIn(pl, e, po);
 				UTIL_MakeVectors(ent_cv(pl)->angles);
-				if (mv_dist2d(ent_cv(pl)->origin, ent_cv(e)->origin) < TLK_STARE_DIST &&
-					UTIL_DotPoints(ent_cv(pl)->origin, ent_cv(e)->origin,
+				if (mv_dist2d(po, ent_cv(e)->origin) < TLK_STARE_DIST &&
+					UTIL_DotPoints(po, ent_cv(e)->origin,
 						gpGlobals.v_forward) >= m->m_flFieldOfView)
 					return &slTlkIdleWatchClient[1];
 				return slTlkIdleWatchClient;
