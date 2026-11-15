@@ -202,7 +202,9 @@ int		col_trace_hitboxes(const col_hitbox_t *hb, int n, const float start[3],
 int		col_material(uint16_t model, const float origin[3], const float angles[3],
 			const float start[3], const float end[3]);
 
-/* Brush model bounds (model frame). Returns 0 for a bad model. */
+/* Brush model bounds (model frame) as GoldSrc's model gives them: the
+ * file's bounds 1 u wider on every side (an entity's mins / maxs after
+ * SET_MODEL; a func_pushable's box). Returns 0 for a bad model. */
 int		col_model_bounds(uint16_t model, float mins[3], float maxs[3]);
 
 /* Boot (after wld_init): test builds register the `colbench MAP` debug

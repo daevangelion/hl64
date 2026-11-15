@@ -821,15 +821,24 @@ int col_hull_contents(const col_hull_t *h, int32_t node, const float p[3])
 	return walk_point(&s, node, p);
 }
 
+/* GoldSrc spreads every brush model's bounds by 1 u: a map brush
+ * entity's mins / maxs are the file's -/+ 1 on every axis [probe:measured
+ * brush_ents of the fixtures: 348 / 348 unrotated brush entities on
+ * t0a0a, t0a0b1, hldemo3]; HLSDK relies on it (func_door travel
+ * size - 2) and a func_pushable collides with that box. */
 int col_model_bounds(uint16_t model, float mins[3], float maxs[3])
 {
 	wld_layer_t *L = wld_layer(COL_MODEL_SLOT(model));
 	unsigned sub = COL_MODEL_SUB(model);
+	int k;
 
 	if (!L || sub >= L->dir->nsub)
 		return 0;
-	memcpy(mins, L->models[sub].mins, 3 * sizeof(float));
-	memcpy(maxs, L->models[sub].maxs, 3 * sizeof(float));
+	for (k = 0; k < 3; k++)
+	{
+		mins[k] = L->models[sub].mins[k] - 1;
+		maxs[k] = L->models[sub].maxs[k] + 1;
+	}
 	return 1;
 }
 

@@ -16,7 +16,7 @@ god 1
 setpos 1475 -1016 -135 0 180
 wait 1
 +forward
-waitclass func_pushable -144 0 -84 0.5 6
+waitclass func_pushable -143 0 -83 0.5 6
 -forward
 wait 0.2
 pass

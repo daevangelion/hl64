@@ -1608,11 +1608,13 @@ static void cooked_bounds(const rmap_t *m, int ri, int16_t lo[3], int16_t hi[3])
 		memcpy(org, m->fl + key->val, sizeof(org));
 	memcpy(l, org, sizeof(l));
 	memcpy(h, org, sizeof(h));
+	/* the brush model's box as an entity gets it (col_model_bounds:
+	 * the file's bounds 1 u wider on every side) */
 	if (L && mk && rkind(m, mk) == HLE_KS && RES_KIND(mk->id) == RES_K_SUBMODEL)
 		for (k = 0; k < 3; k++)
 		{
-			l[k] += L->models[RES_SUB_NUM(mk->id)].mins[k];
-			h[k] += L->models[RES_SUB_NUM(mk->id)].maxs[k];
+			l[k] += L->models[RES_SUB_NUM(mk->id)].mins[k] - 1;
+			h[k] += L->models[RES_SUB_NUM(mk->id)].maxs[k] + 1;
 		}
 	for (k = 0; k < 3; k++)
 	{

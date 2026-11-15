@@ -22,7 +22,7 @@ wait 3.5
 setpos 1180 -1016 -136 20 0
 wait 0.5
 shot overview
-waitclass func_pushable -144 0 -84 0.5 0
+waitclass func_pushable -143 0 -83 0.5 0
 setpos 1400 -1016 -136 45 180
 wait 0.5
 shot pit

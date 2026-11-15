@@ -19,7 +19,12 @@ Recomputed on every link:
    **[probe:measured A-touch]** (rotated brush entities on all 10 maps).
 2. Otherwise `origin + mins … origin + maxs`. Only SOLID_BSP entities use
    rule 1: a trigger (SOLID_TRIGGER) with angles keeps its unrotated box
-   **[probe:measured A-shape]**.
+   **[probe:measured A-shape]**. A brush entity's `mins` / `maxs` (set
+   with its model) are the BSP file's model bounds widened by 1 u on every
+   side (348 / 348 unrotated brush entities of the fixtures' `brush_ents`
+   on t0a0a, t0a0b1, hldemo3): a func_pushable (SOLID_BBOX) collides with
+   that box, HLSDK's func_door travel subtracts the 2 u again
+   **[probe:measured P-botpush]** (`engine/coll` `col_model_bounds`).
 3. Every linked box is then widened by 1 u on every axis, whatever its
    solid type and flags **[probe:measured A-touch]**. There is no item
    widening: HLSDK has no FL_ITEM, and bit 256 (FL_SKIPLOCALHOST) gets no
