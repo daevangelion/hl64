@@ -16,8 +16,9 @@
  * hl64 game/, Half Life 1 SDK licence (game/LICENSE-HLSDK).
  *
  * world.c -- worldspawn (HLSDK dlls/world.cpp CWorld), the point classes
- * that become entities (subs.cpp CPointEntity, pathcorner.cpp path_corner
- * and path_track), infodecal (world.cpp CDecal, on fx_decal_static).
+ * that become entities (subs.cpp CPointEntity, pathcorner.cpp
+ * path_corner; path_track is trains.c's), infodecal (world.cpp CDecal, on
+ * fx_decal_static).
  * info_player_start / info_landmark / info_target /
  * info_teleport_destination are cooked point records (no entity): their
  * origin and angles are read by name (util.c UTIL_NamedOrigin).
@@ -157,58 +158,6 @@ const game_class_t gc_PATH_CORNER = {
 	.Spawn = CPathCorner_Spawn,
 	.vt = &CPathCorner_vt,
 	.save = &sv_CPathCorner,
-};
-
-/* ---- path_track (pathcorner.cpp CPathTrack): no func_tracktrain is kept
- * by the cook, so only its toggle remains (no altpath key is cooked:
- * m_paltpath is always NULL) ------------------------------------------------ */
-
-#define SF_PATH_DISABLED	0x00000001
-
-typedef struct {
-	CBASEENTITY_FIELDS
-	float		m_length;
-} CPathTrack;
-
-void CPathTrack_Use(int e, int activator, int caller, int use_type, float value)
-{
-	CBaseEntity *pev = CBase(e);
-	int on = !(pev->spawnflags & SF_PATH_DISABLED);
-
-	(void)activator;
-	(void)caller;
-	(void)value;
-	if (ShouldToggle(use_type, on))
-	{
-		if (on)
-			pev->spawnflags |= SF_PATH_DISABLED;
-		else
-			pev->spawnflags &= ~SF_PATH_DISABLED;
-	}
-}
-
-static int CPathTrack_Spawn(int e, gid_t16 gid)
-{
-	static const float mn[3] = { -8, -8, -8 }, mx[3] = { 8, 8, 8 };
-
-	(void)gid;
-	ent_set_solid(e, SOLID_TRIGGER);
-	UTIL_SetSize(e, mn, mx);
-	SetUse(e, FN_CPathTrack_Use);
-	return 0;
-}
-
-/* HLSDK CPathTrack::m_SaveData (no next / alt path: see above) */
-static const sv_field_t f_CPathTrack[] = {
-	SVF(CPathTrack, m_length, SV_F32, 0),
-};
-static const sv_table_t sv_CPathTrack = SV_TABLE(&sv_CBaseEntity, f_CPathTrack);
-
-const game_class_t gc_PATH_TRACK = {
-	.size = sizeof(CPathTrack),
-	.Spawn = CPathTrack_Spawn,
-	.vt = &CPointEntity_vt,
-	.save = &sv_CPathTrack,
 };
 
 /* ---- info_* points (subs.cpp / triggers.cpp CPointEntity): cooked point

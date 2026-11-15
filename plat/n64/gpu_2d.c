@@ -18,7 +18,8 @@
 #include "hl64/draw2d.h"
 #include "engine/render/gpu_2d.h"
 
-#define SHEETS	8
+/* game/defs/hud.def's sheets (7) + engine/render/draw2d.c D2_DYN (2) */
+#define SHEETS	9
 
 static surface_t	sheet[SHEETS];
 static int		cur_mode = -1;

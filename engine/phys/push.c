@@ -449,6 +449,9 @@ void phy_pusher_step(int e, double time, double dt)
 		else
 			translate(e, mt, ltime0);
 	}
-	if (nt > ltime0 && nt <= tm->ltime)
+	/* the think: nextthink inside (old ltime, ltime], or, FL_ALWAYSTHINK
+	 * ("call think every frame regardless of nextthink - ltime", HLSDK
+	 * const.h: track trains), any nextthink past the old ltime */
+	if (nt > ltime0 && (nt <= tm->ltime || (ent_c.cv[e].flags & FL_ALWAYSTHINK)))
 		phy_call_think(e, time);
 }

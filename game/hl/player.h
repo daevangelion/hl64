@@ -237,7 +237,8 @@ typedef struct {
 	uint8_t		m_rgItems[MAX_ITEMS];
 	/* flashlight */
 	uint8_t		m_iFlashBattery;
-	uint8_t		pad[2];
+	uint8_t		m_iTrain;		/* train control position (TRAIN_*) */
+	uint8_t		pad;
 	float		m_flFlashLightTime;
 	/* weapons */
 	float		m_flNextAttack;		/* decrementing (CLIENT_WEAPONS) */
@@ -397,6 +398,8 @@ void	hud_flashlight(int on, int battery);
 void	hud_weapon_select(int id);
 /* the geiger range (CHudGeiger) */
 void	hud_geiger(int range);
+/* Train: the train control position, 0 none (CHudTrain) */
+void	hud_train(int pos);
 void	hud_reset(void);
 
 #endif

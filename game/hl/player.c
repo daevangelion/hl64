@@ -40,6 +40,7 @@
 #include "game/hl/player.h"
 #include "game/hl/gib.h"
 #include "game/hl/savegame.h"
+#include "game/hl/trains.h"
 
 #define ARMOR_RATIO		0.2f	/* armor takes 80% of the damage */
 #define ARMOR_BONUS		0.5f	/* each point of armor is worth 1/x points of health */
@@ -69,9 +70,54 @@
 #define IMPULSE_INVPREV		7
 #define IMPULSE_LASTINV		8
 
+/* m_iTrain: the train HUD position (low nibble) and message bits */
+#define TRAIN_ACTIVE		0x80
+#define TRAIN_NEW		0xc0
+#define TRAIN_OFF		0x00
+#define TRAIN_NEUTRAL		0x01
+#define TRAIN_SLOW		0x02
+#define TRAIN_MEDIUM		0x03
+#define TRAIN_FAST		0x04
+#define TRAIN_BACK		0x05
+
 static CBasePlayer	pl_state;
 static float		geiger_range = 1000, geiger_delay;
 static int		geiger_range_prev = 1000;
+
+/* TrainSpeed: the HUD position of speed iSpeed of a train of full speed
+ * iMax */
+static int TrainSpeed(int iSpeed, int iMax)
+{
+	float fSpeed;
+
+	if (iSpeed < 0)
+		return TRAIN_BACK;
+	if (iSpeed == 0)
+		return TRAIN_NEUTRAL;
+	fSpeed = iMax > 0 ? (float)iSpeed / (float)iMax : 1;
+	if (fSpeed < 0.33f)
+		return TRAIN_SLOW;
+	if (fSpeed < 0.66f)
+		return TRAIN_MEDIUM;
+	return TRAIN_FAST;
+}
+
+/* CBaseEntity::Instance(pev->groundentity), -1 none */
+static int PlayerGround(const ent_player_t *pl)
+{
+	return pl->groundentity >= 0 && ent_is_live(pl->groundentity) ? pl->groundentity : -1;
+}
+
+/* pTrain->OnControls(pev): the player's origin in the train's frame */
+static int OnTrainControls(int train, const ent_player_t *pl)
+{
+	float d[3], org[3];
+
+	VecCopy(pl->origin, org);
+	if (LayerDelta(ENT_PLAYER, train, d))
+		VecAdd(org, d, org);
+	return (ObjectCaps(train) & FCAP_DIRECTIONAL_USE) && TrackTrain_OnControls(train, org);
+}
 
 /* CBasePlayer and the geiger counter (the player entity's CBaseMonster
  * block is a private block: the engine saves it) */
@@ -773,6 +819,7 @@ void game_player_spawn(int e)
 	VecCopy(pl->view_ofs, m->view_ofs);
 	m->m_HackedGunPos[1] = 32;
 	p->m_fInitHUD = 1;
+	p->m_iTrain = TRAIN_NEW;
 	geiger_range = 1000;
 	geiger_range_prev = 1000;
 	geiger_delay = gtime() + 2;
@@ -902,6 +949,12 @@ static void UpdateClientData(void)
 		p->m_bitsHUDDamage = m->m_bitsDamageType;
 		/* clear off non-time-based damage indicators */
 		m->m_bitsDamageType &= DMG_TIMEBASED;
+	}
+	if (p->m_iTrain & TRAIN_NEW)
+	{
+		/* the Train message */
+		hud_train(p->m_iTrain & 0xF);
+		p->m_iTrain &= ~TRAIN_NEW;
 	}
 	/* update flashlight */
 	if (p->m_flFlashLightTime && p->m_flFlashLightTime <= gtime())
@@ -1091,6 +1144,64 @@ void game_player_prethink(ent_player_t *pl)
 		PlayerDeathThink(pl);
 		return;
 	}
+	/* so the correct flags get sent to client asap */
+	if (p->m_afPhysicsFlags & PFLAG_ONTRAIN)
+		pl->flags |= FL_ONTRAIN;
+	else
+		pl->flags &= ~FL_ONTRAIN;
+	/* train speed control */
+	if (p->m_afPhysicsFlags & PFLAG_ONTRAIN)
+	{
+		int pTrain = PlayerGround(pl), vel = 0;
+
+		if (pTrain < 0)
+		{
+			col_trace_t trainTrace;
+			float end[3];
+
+			/* maybe this is on the other side of a level transition */
+			VecCopy(pl->origin, end);
+			end[2] -= 38;
+			UTIL_TraceLine(pl->origin, end, ignore_monsters, ENT_PLAYER, &trainTrace);
+			/* HACKHACK - Just look for the func_tracktrain classname */
+			if (trainTrace.frac != 1.0f && trainTrace.ent > 0)
+				pTrain = trainTrace.ent;
+			if (pTrain < 0 || !OnTrainControls(pTrain, pl))
+			{
+				p->m_afPhysicsFlags &= ~PFLAG_ONTRAIN;
+				p->m_iTrain = TRAIN_NEW | TRAIN_OFF;
+				return;
+			}
+		}
+		else if (!(pl->flags & FL_ONGROUND)
+			|| (CBase(pTrain) && (CBase(pTrain)->spawnflags & SF_TRACKTRAIN_NOCONTROL))
+			|| (p->button & (IN_BTN_MOVELEFT | IN_BTN_MOVERIGHT)))
+		{
+			/* turn off the train if you jump, strafe, or the train
+			 * controls go dead */
+			p->m_afPhysicsFlags &= ~PFLAG_ONTRAIN;
+			p->m_iTrain = TRAIN_NEW | TRAIN_OFF;
+			return;
+		}
+		VecSet(pl->velocity, 0, 0, 0);
+		if (p->m_afButtonPressed & IN_BTN_FORWARD)
+		{
+			vel = 1;
+			UseEntity(pTrain, ENT_PLAYER, ENT_PLAYER, USE_SET, (float)vel);
+		}
+		else if (p->m_afButtonPressed & IN_BTN_BACK)
+		{
+			vel = -1;
+			UseEntity(pTrain, ENT_PLAYER, ENT_PLAYER, USE_SET, (float)vel);
+		}
+		if (vel)
+		{
+			p->m_iTrain = (uint8_t)(TrainSpeed((int)CBase(pTrain)->speed,
+				TrackTrain_Impulse(pTrain)) | TRAIN_ACTIVE | TRAIN_NEW);
+		}
+	}
+	else if (p->m_iTrain & TRAIN_ACTIVE)
+		p->m_iTrain = TRAIN_NEW;	/* turn off train */
 	if (!(pl->flags & FL_ONGROUND))
 		p->m_flFallVelocity = -pl->velocity[2];
 	if (p->m_afPhysicsFlags & PFLAG_ONBARNACLE)
@@ -1161,6 +1272,32 @@ static void PlayerUse(const ent_player_t *pl)
 
 	if (!((p->button | p->m_afButtonPressed | p->m_afButtonReleased) & IN_BTN_USE))
 		return;
+	/* hit use on a train? */
+	if (p->m_afButtonPressed & IN_BTN_USE)
+	{
+		if (p->m_afPhysicsFlags & PFLAG_ONTRAIN)
+		{
+			p->m_afPhysicsFlags &= ~PFLAG_ONTRAIN;
+			p->m_iTrain = TRAIN_NEW | TRAIN_OFF;
+			return;
+		}
+		else
+		{
+			/* start controlling the train! */
+			int pTrain = PlayerGround(pl);
+
+			if (pTrain >= 0 && !(p->button & IN_BTN_JUMP) && (pl->flags & FL_ONGROUND)
+				&& OnTrainControls(pTrain, pl))
+			{
+				p->m_afPhysicsFlags |= PFLAG_ONTRAIN;
+				p->m_iTrain = (uint8_t)(TrainSpeed((int)CBase(pTrain)->speed,
+					TrackTrain_Impulse(pTrain)) | TRAIN_NEW);
+				EMIT_SOUND(ENT_PLAYER, CHAN_ITEM, RESID(TRAIN_USE1), 0.8f, ATTN_NORM);
+				log_printf("player: train %d controls\n", pTrain);
+				return;
+			}
+		}
+	}
 	make_vectors();
 	VecAdd(pl->origin, pl->view_ofs, eye);
 	while ((e = UTIL_FindEntityInSphere(e, pl->origin, PLAYER_SEARCH_RADIUS)) >= 0)

@@ -60,7 +60,8 @@ typedef struct {
 	int		nhist;
 	/* flashlight */
 	uint8_t		flash_on, flash_bat;
-	uint8_t		select_id, pad;
+	uint8_t		select_id;
+	uint8_t		train_pos;		/* CHudTrain m_iPos */
 	float		select_time;
 	/* geiger */
 	int		geiger_range;

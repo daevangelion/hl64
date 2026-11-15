@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: MIT
+# Scene hazard-tram (test/README.md): the Hazard Course end tram in t0a0d,
+# test/routes/hazard.route's ride (the lines after `stats t0a0d`, with
+# shots): func_tracktrain *23 (trainingtrain) waits on path_track train1
+# (184 -1076 -104, height 40: origin 184 -1076 -64, yaw 90). From the
+# platform (shot `platform`, looking south down the track at the tram)
+# the player boards it, takes the controls (+use: `player: train N
+# controls`, the HUD's train indicator at stop), pushes forward four
+# times (50, 100, 150, 200 u/s, HLSDK CFuncTrackTrain::Use USE_SET) and
+# rides south to the dead end (GoldSrc: fixture physics-movetypes/
+# P-tracktrain t0a0d `drive`: 200 u/s, 100 u every 0.5 s, stop at
+# 184 -2506 -64, the rider at the train's origin + 36.03 u). Shots
+# `aboard` (on the tram at train1, looking down at its deck), `moving-1`
+# .. `moving-3` (along the ride, looking ahead and down at the deck), `end`
+# (at the dead end).
+# scene-window: hazard t0a0d t0a0d-walked
+startmap t0a0d
+waitmap t0a0d 60
+god 1
+setpos 176 -808 -23 10 270
+wait 1
+stats begin
+shot platform
+setpos 184 -1076 -27 30 270
+wait 0.5
+stats aboard
+shot aboard
++use
+wait 0.1
+-use
+wait 0.2
++forward
+wait 0.1
+-forward
+wait 0.2
++forward
+wait 0.1
+-forward
+wait 0.2
++forward
+wait 0.1
+-forward
+wait 0.2
++forward
+wait 0.1
+-forward
+wait 1
+stats moving-1
+shot moving-1
+waitnear 184 -1800 -28 120 10
+shot moving-2
+waitnear 184 -2300 -28 120 10
+shot moving-3
+waitnear 184 -2506 -28 4 15
+wait 0.5
+shot end
+stats end
+wait 0.2
+pass

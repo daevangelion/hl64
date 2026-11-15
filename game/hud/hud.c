@@ -19,7 +19,8 @@
  * here as direct calls from the player): pickup history (ammohistory.cpp
  * AddToHistory), damage (health.cpp MsgFunc_Damage), flashlight
  * (flashlight.cpp MsgFunc_Flashlight / FlashBat), geiger (geiger.cpp
- * MsgFunc_Geiger), weapon selection.
+ * MsgFunc_Geiger), train controls (train.cpp MsgFunc_Train), weapon
+ * selection.
  */
 #include <math.h>
 #include <string.h>
@@ -78,6 +79,12 @@ void hud_weapon_select(int id)
 void hud_geiger(int range)
 {
 	hud.geiger_range = range;
+}
+
+/* CHudTrain::MsgFunc_Train */
+void hud_train(int pos)
+{
+	hud.train_pos = (uint8_t)pos;
 }
 
 /* ---- CHudHealth messages (health.cpp) ------------------------------------------- */
@@ -510,6 +517,20 @@ static void draw_flashlight(const CBasePlayer *p)
 			D2_ADD);
 }
 
+/* CHudTrain::Draw: sprites/320_train.spr frame m_iPos - 1 (hud.def
+ * 320_TRAIN, rects train_pos1..5), right of the screen's first third,
+ * one font height above the bottom */
+static void draw_train(void)
+{
+	const hl_rect_t *r;
+
+	if (!hud.train_pos || hud.train_pos > 5)
+		return;
+	r = &hl_rects[HR_train_pos1 + hud.train_pos - 1];
+	spr(HR_train_pos1 + hud.train_pos - 1, SCREEN_W / 3 + r->w / 4,
+		SCREEN_H - r->h - font_h(), RGB_YELLOWISH);
+}
+
 static void draw_history(const CBasePlayer *p)
 {
 	int i, gap = 20 + 5, pick = 32 + 20 * 2;
@@ -853,6 +874,7 @@ void game_hud_draw(void)
 	draw_ammo(p);
 	draw_crosshair(p);
 	draw_flashlight(p);
+	draw_train();
 	draw_history(p);
 	draw_selection(p);
 	draw_title();

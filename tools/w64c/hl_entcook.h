@@ -23,7 +23,8 @@
  *             "\n" escapes are expanded
  *   rewrites  trigger_changelevel landmark → message; info_landmark
  *             targetname copied to message; multi_manager non-field keys
- *             → fire list (name up to '#', delay), stable-sorted by delay
+ *             → fire list (name up to '#', delay), stable-sorted by delay;
+ *             func_tracktrain gets "#trackorigin" (hle_trackorigin)
  *   prune     logic classes that only act when used and have no
  *             targetname; info_target / path_corner /
  *             info_teleport_destination whose name nothing in the map
@@ -403,6 +404,7 @@ static const struct { const char *name; uint16_t flags; } hle_classes[] = {
 	{"func_door", 0}, {"func_door_rotating", 0}, {"func_wall", 0},
 	{"func_wall_toggle", 0}, {"func_button", 0}, {"func_rot_button", 0},
 	{"momentary_door", 0}, {"momentary_rot_button", 0}, {"func_train", 0},
+	{"func_tracktrain", 0},
 	{"func_plat", 0}, {"func_illusionary", 0}, {"func_water", 0},
 	{"func_breakable", 0}, {"func_pushable", 0}, {"func_rotating", 0},
 	{"func_pendulum", 0}, {"func_healthcharger", 0}, {"func_recharge", 0},
@@ -554,6 +556,11 @@ static const struct { const char *name; uint16_t kind; } hle_xkeys[] = {
 	/* infodecal (CDecal::KeyValue): the decals.wad name; the id step
 	 * writes its decal id (hle-format-v1.md "Ids") */
 	{"texture",HLE_KS},
+	/* func_tracktrain / path_track (plats.cpp CFuncTrackTrain::KeyValue,
+	 * pathcorner.cpp CPathTrack::KeyValue) */
+	{"wheels",HLE_KF}, {"startspeed",HLE_KF}, {"bank",HLE_KF}, {"altpath",HLE_KN},
+	/* cook-made, never read from a map (hle_trackorigin) */
+	{"#trackorigin",HLE_KV},
 	{NULL, 0}
 };
 
@@ -574,6 +581,7 @@ typedef struct
 	int		nkv;
 	hlec_fire_t	*fire;
 	int		nfire;
+	char		trackorg[64];	/* hle_trackorigin's value */
 } hlec_ent_t;
 
 typedef struct
@@ -785,6 +793,9 @@ static int hlec_parse_block (hlec_t *c, const char *p, const char *end,
 			continue;
 		memcpy (key, ks, (size_t)kl);
 		key[kl] = 0;
+		/* '#' keys are cook-made (hle_trackorigin), never a map's */
+		if (key[0] == '#' && !is_mm)
+			continue;
 
 		if (is_mm && !hlec_in (hle_mm_fields, key))
 		{
@@ -839,6 +850,58 @@ static int hlec_parse_block (hlec_t *c, const char *p, const char *end,
 		}
 	}
 	return n;
+}
+
+static const char *hlec_kv (const hlec_ent_t *e, const char *k)
+{
+	int	i;
+
+	for (i = 0; i < e->nkv; i++)
+		if (!strcmp (e->kv[i].k, k))
+			return e->kv[i].v;
+	return NULL;
+}
+
+/*
+ * A kept func_tracktrain gets "#trackorigin": where CFuncTrackTrain::Find
+ * puts it 0.1 s after spawn, the origin of the first entity named by its
+ * target (when that is a path_track) raised by its height. GoldSrc spawns
+ * the whole map at load; hl64 hydrates a record near the player, and its
+ * box is this point (engine/ent/rec.c cooked_bounds), not the model's
+ * storage place. Runs after the prune (e->kv has room: classname left it).
+ */
+static void hle_trackorigin (hlec_t *c)
+{
+	int	i, j;
+
+	for (i = 0; i < c->nents; i++)
+	{
+		hlec_ent_t	*e = &c->ents[i];
+		const char	*t, *o, *h;
+		float		v[3];
+
+		if (!e->keep || strcmp (hle_classes[e->cls].name, "func_tracktrain")
+			|| !(t = hlec_kv (e, "target")))
+			continue;
+		for (j = 0; j < c->nents; j++)
+			if (c->ents[j].tname && !strcmp (c->ents[j].tname, t))
+				break;
+		if (j == c->nents || c->ents[j].cls < 0
+			|| strcmp (hle_classes[c->ents[j].cls].name, "path_track"))
+			continue;
+		o = hlec_kv (&c->ents[j], "origin");
+		if (!o || sscanf (o, "%f %f %f", &v[0], &v[1], &v[2]) != 3)
+			continue;
+		h = hlec_kv (e, "height");
+		if (h)
+			v[2] += (float)atof (h);
+		snprintf (e->trackorg, sizeof (e->trackorg), "%.9g %.9g %.9g",
+			(double)v[0], (double)v[1], (double)v[2]);
+		e->kv[e->nkv].k = "#trackorigin";
+		e->kv[e->nkv].v = e->trackorg;
+		e->kv[e->nkv].kind = HLE_KV;
+		e->nkv++;
+	}
 }
 
 static void hlec_put (hlec_buf_t *b, const void *p, size_t n)
@@ -1174,6 +1237,7 @@ static const char *hle_build (const char *src, int len, int big_endian,
 		}
 	} while (changed);
 	/* env_global without targetname still sets its initial state */
+	hle_trackorigin (&c);
 
 	/* ---- intern */
 	for (i = 0; i < c.nents; i++)

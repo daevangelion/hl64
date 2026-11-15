@@ -3,8 +3,8 @@
 //	Half Life 1 SDK licence: game/LICENSE-HLSDK. hl64 game definitions.
 //
 // The HUD's 2D sheets (include/hl64/draw2d.h sheet ids = line order of the
-// HUD lines; the first five follow tools/cook/bake_hlhud.py SHEETS, the
-// sheet field of the generated HUD rectangles): HUD(IDENT, "gfx file").
+// HUD and FONT lines; tools/cook/bake_hlhud.py HUD_DEF follows that order,
+// the sheet field of the generated HUD rectangles): HUD(IDENT, "gfx file").
 // engine/render/draw2d.c loads them into the HUD region at boot. FONT
 // lines are cooked WAD3 fonts with their glyph table (gfx/<name>.fnt).
 // Append only.
@@ -16,3 +16,6 @@ HUD(320_PAIN, "gfx/320_pain.ui8")
 // The text font: creditsfont, the white anti-aliased font of GoldSrc's text
 // messages (titles.txt; conchars is the console's outlined font).
 FONT(CREDITSFONT, "gfx/creditsfont.ui8")
+// The train control indicator (CHudTrain: sprites/320_train.spr, five
+// frames packed by tools/cook/bake_hlhud.py, rects train_pos1..5).
+HUD(320_TRAIN, "gfx/320_train.ui8")

@@ -1595,11 +1595,15 @@ static int16_t s16_hi(float v)
 
 static void thaw(rmap_t *m);
 
-/* a record's cooked bounds: its origin, plus its brush model's box */
+/* a record's cooked bounds: its origin, plus its brush model's box; a
+ * record with `#trackorigin` (the cook's: a func_tracktrain, which its
+ * Find moves there and turns at spawn) is boxed there by its model's
+ * largest extent on every axis */
 static void cooked_bounds(const rmap_t *m, int ri, int16_t lo[3], int16_t hi[3])
 {
 	const wld_layer_t *L = wld_layer(m->slot);
-	const hle_key_t *key = rkey(m, ri, RK_ORIGIN);
+	const hle_key_t *so = rkey(m, ri, RK_TRACKORIGIN);
+	const hle_key_t *key = so && rkind(m, so) == HLE_KV ? so : rkey(m, ri, RK_ORIGIN);
 	const hle_key_t *mk = rkey(m, ri, RK_MODEL);
 	float org[3] = { 0, 0, 0 }, l[3], h[3];
 	int k;
@@ -1611,11 +1615,19 @@ static void cooked_bounds(const rmap_t *m, int ri, int16_t lo[3], int16_t hi[3])
 	/* the brush model's box as an entity gets it (col_model_bounds:
 	 * the file's bounds 1 u wider on every side) */
 	if (L && mk && rkind(m, mk) == HLE_KS && RES_KIND(mk->id) == RES_K_SUBMODEL)
+	{
+		const float *mn = L->models[RES_SUB_NUM(mk->id)].mins;
+		const float *mx = L->models[RES_SUB_NUM(mk->id)].maxs;
+		float r = 0;
+
+		for (k = 0; k < 3; k++)
+			r = fmaxf(r, fmaxf(fabsf(mn[k]), fabsf(mx[k])));
 		for (k = 0; k < 3; k++)
 		{
-			l[k] += L->models[RES_SUB_NUM(mk->id)].mins[k] - 1;
-			h[k] += L->models[RES_SUB_NUM(mk->id)].maxs[k] + 1;
+			l[k] += (key == so ? -r : mn[k]) - 1;
+			h[k] += (key == so ? r : mx[k]) + 1;
 		}
+	}
 	for (k = 0; k < 3; k++)
 	{
 		lo[k] = s16_lo(l[k]);

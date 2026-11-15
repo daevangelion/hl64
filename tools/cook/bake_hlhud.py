@@ -10,6 +10,7 @@ gsfx/palette.lmp) instead of the Quake palette.
 Outputs:
   <gfxdir>/320hud1.ui8, 320hud2.ui8, crosshairs.ui8   (CI8, keyed)
   <gfxdir>/320hud4.ui8, 320_pain.ui8                  (I8 intensity)
+  <gfxdir>/320_train.ui8                              (CI8, keyed)
   <header>  hl_hud_rects.h                            (named 320-res rects)
 
 HL sprites are SPR v2 (IDSP/ver2): a 40-byte header, an embedded
@@ -29,7 +30,9 @@ frames, pure red) keep their shading: each texel is its palette entry's
 brightness (ui8 flag 2, I8), drawn as tint x brightness coverage; the hue
 is applied by the caller. The pain frames are packed into one sheet and get
 rects pain_up, pain_right, pain_down, pain_left (frames 0-3, the HL client's
-pain indicator order).
+pain indicator order). The train indicator (320_train, five frames, keyed
+like the CI8 sheets) gets rects train_pos1..5: frame m_iPos - 1 of the HL
+client's CHudTrain.
 
 UI8 (big-endian): u32 magic 'UI8 ', u16 version 1, u16 flags (1 keyed,
 2 intensity), u16 w, h, u32 pix_ofs (68), u32 file_size, char name[48],
@@ -55,14 +58,21 @@ class HudError(ValueError):
 UI8_MAGIC = 0x55493820  # 'UI8 '
 TRANSPARENT = 255       # ui8 colour-key index
 
-# sheet name -> sheet id used by the HUD rects (the 2D renderer's sheet table)
-SHEETS = ["320hud1", "320hud2", "crosshairs", "320hud4", "320_pain"]
+# game/defs/hud.def line order (the 2D renderer's sheet ids, the sheet field
+# of the HUD rects); None is its FONT line (tools/cook/bake_ui.py's)
+HUD_DEF = ["320hud1", "320hud2", "crosshairs", "320hud4", "320_pain", None, "320_train"]
+# the sheets baked here (sprites/<name>.spr)
+SHEETS = [n for n in HUD_DEF if n]
 # I8 brightness sheets (ui8 flag 2) instead of keyed CI8 silhouettes
 INTENSITY = {"320hud4", "320_pain"}
 UI8_FLAG_KEYED = 1
 UI8_FLAG_INTENSITY = 2
 # 320_pain.spr frame order (the HL client's pain indicator)
 PAIN_NAMES = ["pain_up", "pain_right", "pain_down", "pain_left"]
+# multi-frame sheets: rect names of their frames in order (320_train.spr:
+# CHudTrain's m_iPos 1..5 = frames 0..4)
+FRAME_NAMES = {"320_pain": PAIN_NAMES,
+               "320_train": [f"train_pos{i}" for i in range(1, 6)]}
 
 
 def load_palette(d: bytes, what: str):
@@ -200,18 +210,19 @@ def bake_sheet(name: str, spr: bytes, remap):
         if w > 0xFFFF or h > 0xFFFF:
             raise HudError(f"{name}: {w}x{h} too large")
         return ui8_bytes(name, w, h, bytes(lut[p] for p in pixels), flags), []
-    if name != "320_pain" or len(frames) != len(PAIN_NAMES):
+    names = FRAME_NAMES.get(name, [])
+    if len(frames) != len(names):
         raise HudError(f"{name}: unexpected {len(frames)}-frame sheet")
     sw, sh, pos = pack_frames(frames)
     fill = 0 if flags == UI8_FLAG_INTENSITY else TRANSPARENT
     out = bytearray([fill]) * (sw * sh)
     rects = []
-    sid = SHEETS.index(name)
+    sid = HUD_DEF.index(name)
     for i, ((w, h, pixels), (x, y)) in enumerate(zip(frames, pos)):
         for row in range(h):
             out[(y + row) * sw + x:(y + row) * sw + x + w] = \
                 bytes(lut[p] for p in pixels[row * w:(row + 1) * w])
-        rects.append((PAIN_NAMES[i], sid, x, y, w, h))
+        rects.append((names[i], sid, x, y, w, h))
     return ui8_bytes(name, sw, sh, bytes(out), flags), rects
 
 
@@ -239,7 +250,7 @@ def parse_hud_txt(text: str):
         if name in seen:
             continue
         seen.add(name)
-        rects.append((name, SHEETS.index(sheet), x, y, w, h))
+        rects.append((name, HUD_DEF.index(sheet), x, y, w, h))
     return rects
 
 
@@ -289,7 +300,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--hud", type=Path, required=True,
-                    help="directory with the five sheet .spr files and hud.txt")
+                    help="directory with the SHEETS .spr files and hud.txt")
     ap.add_argument("--palette", type=Path, required=True)
     ap.add_argument("--gfxdir", type=Path, required=True)
     ap.add_argument("--header", type=Path, required=True)

@@ -157,3 +157,9 @@ USE(CDecal_TriggerDecal)
 THINK(CGlow_Think)
 // ---- GameCore: trigger_autosave (M6 SaveGame) ----
 TOUCH(CTriggerSave_SaveTouch)
+// ---- GameCore: track trains (trains.c) ----
+THINK(CFuncTrackTrain_Next)
+THINK(CFuncTrackTrain_Find)
+THINK(CFuncTrackTrain_DeadEnd)
+USE(CFuncTrackTrain_Use)
+BLOCKED(CFuncTrackTrain_Blocked)

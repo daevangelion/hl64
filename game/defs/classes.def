@@ -145,3 +145,5 @@ CLASS(WEAPON_TRIPMINE, "weapon_tripmine")
 CLASS(INFODECAL, "infodecal")
 CLASS(ENV_GLOW, "env_glow")
 CLASS(TRIGGER_AUTOSAVE, "trigger_autosave")
+// ---- GameCore: track trains (trains.c; HLSDK plats.cpp / pathcorner.cpp) ----
+CLASS(FUNC_TRACKTRAIN, "func_tracktrain")

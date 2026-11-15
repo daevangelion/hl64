@@ -196,3 +196,11 @@ KEY(AMMO_TRIP_MINE, "Trip Mine")
 KEY(AMMO_SNARKS, "Snarks")
 KEY(AMMO_ARGRENADES, "ARgrenades")
 KEY(TEXTURE, "texture")
+// func_tracktrain (CFuncTrackTrain::KeyValue), path_track (CPathTrack::KeyValue)
+KEY(WHEELS, "wheels")
+KEY(STARTSPEED, "startspeed")
+KEY(BANK, "bank")
+KEY(ALTPATH, "altpath")
+// cook-made (hl_entcook.h hle_trackorigin): where a func_tracktrain's Find
+// puts it (its first path_track + height); the record's hydration box
+KEY(TRACKORIGIN, "#trackorigin")
