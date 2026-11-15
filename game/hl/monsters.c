@@ -937,17 +937,25 @@ static CSound *base_PBestScent(int e)
 
 /* ---- think ------------------------------------------------------------------ */
 
-/* The attack sequences a think can switch to and pose at once (a frame-0
- * event: islave ZAP_POWERUP's arm beams read attachments on the new
- * sequence): their animation is requested while the monster lives, ahead
- * of the think that picks one, so the server pose finds it resident
- * instead of reading it synchronously. Residency only. */
+/* The attack and death sequences a think can switch to and pose at once
+ * (a frame-0 event: islave ZAP_POWERUP's arm beams, hgrunt DROP_GUN on its
+ * death sequences read attachments on the new sequence; TASK_DIE sets
+ * GetDeathActivity's sequence in the think after Killed, often the same
+ * frame): their animation is requested ahead of the think that picks one,
+ * so the server pose finds it resident instead of reading it
+ * synchronously. Attacks while the monster lives, deaths while it has an
+ * enemy (a fight). Residency only. */
 static void mon_want_attacks(int e)
 {
 	static const int acts[] = { ACT_RANGE_ATTACK1, ACT_RANGE_ATTACK2, ACT_MELEE_ATTACK1,
 		ACT_MELEE_ATTACK2, ACT_SPECIAL_ATTACK1, ACT_SPECIAL_ATTACK2 };
+	static const int deaths[] = { ACT_DIESIMPLE, ACT_DIEBACKWARD, ACT_DIEFORWARD,
+		ACT_DIEVIOLENT, ACT_DIE_HEADSHOT, ACT_DIE_CHESTSHOT, ACT_DIE_GUTSHOT,
+		ACT_DIE_BACKSHOT };
 
 	gs_want_activities(ent_rnd(e)->model, acts, (int)(sizeof(acts) / sizeof(acts[0])));
+	if (EHGet(MON(e)->m_hEnemy) >= 0)
+		gs_want_activities(ent_rnd(e)->model, deaths, (int)(sizeof(deaths) / sizeof(deaths[0])));
 }
 
 /* PROFILE builds log a think whose AI work passes these (work units: the
