@@ -6,6 +6,9 @@ as built on ares-host (the tree's testharness.cpp also carries the agent-mode sh
    a <rom>.flash a run left beside the ROM; the guest's exit through the harness device
    writes the chip image to ARES_FLASH_OUT (it ends in _Exit, which skips ares' own
    Cartridge::save / emulator save: those only run at unload and every 30 s).
+   Both files hold the chip's bytes in order (as hl64-host's image and the chip itself):
+   ares keeps the array as host-order 32-bit words, so they are copied byte by byte
+   through Memory::Writable, not as the raw array.
  - flash.cpp: the sector erase (0x4b page, 0x78 / execute) cleared 128 bytes, one page;
    the chip erases the whole 16 KB sector the page lies in.
 Apply with: patch -p1 -d <ares source> < test/ares-flash.patch (test/run/ares.sh ARES_FLASH_*).
@@ -42,7 +45,7 @@ diff --git a/ares/n64/cartridge/testharness.cpp b/ares/n64/cartridge/testharness
  // Register map (32-bit CPU accesses):
  //   +0x00  CMD   (w): 1 = screenshot, 2 = exit
  //   +0x04  ARG0  (w): screenshot: RDRAM byte address of framebuffer
-@@ -42,6 +47,26 @@
+@@ -42,6 +47,30 @@
      }
      fflush(stdout);
    }
@@ -50,18 +53,22 @@ diff --git a/ares/n64/cartridge/testharness.cpp b/ares/n64/cartridge/testharness
 +  //saved games (FlashRAM) of a run: a test run starts from an erased chip, or from the
 +  //raw image ARES_FLASH_IN names, never from a <rom>.flash a previous run left beside the
 +  //ROM; ARES_FLASH_OUT names the file the guest's exit writes the image to (exit does not
-+  //go through the emulator's own save, see exitEmulator)
++  //go through the emulator's own save, see exitEmulator). The image is the chip's bytes in
++  //order (the array keeps host-order words: byte accesses through Memory::Writable)
 +  if(active && cartridge.flash.size) {
 +    cartridge.flash.fill(~0u);
 +    if(auto path = getenv("ARES_FLASH_IN")) {
++      Memory::Writable& chip = cartridge.flash;
++      u32 size = chip.size;
++      std::vector<u8> image(size);
 +      FILE* fp = fopen(path, "rb");
-+      u32 size = cartridge.flash.size;
-+      if(!fp || fread(cartridge.flash.data, 1, size, fp) != size || fgetc(fp) != EOF) {
++      if(!fp || fread(image.data(), 1, size, fp) != size || fgetc(fp) != EOF) {
 +        printf("TESTHARNESS flash in: %s is not a readable %u-byte image\n", path, size);
 +        fflush(stdout);
 +        ::_Exit(2);
 +      }
 +      fclose(fp);
++      for(u32 address : range(size)) chip.write<Byte>(address, image[address]);
 +      printf("TESTHARNESS flash in %s (%u bytes)\n", path, size);
 +      fflush(stdout);
 +    }
@@ -69,14 +76,17 @@ diff --git a/ares/n64/cartridge/testharness.cpp b/ares/n64/cartridge/testharness
  }
  
  auto Cartridge::TestHarness::readWord(u32 address) -> u32 {
-@@ -125,6 +150,20 @@
+@@ -125,6 +154,23 @@
    }
    fflush(stdout);
  
 +  if(auto path = getenv("ARES_FLASH_OUT")) {
 +    if(cartridge.flash.size) {
++      Memory::Writable& chip = cartridge.flash;
++      std::vector<u8> image(chip.size);
++      for(u32 address : range(chip.size)) image[address] = chip.read<Byte>(address);
 +      FILE* fp = fopen(path, "wb");
-+      if(fp && fwrite(cartridge.flash.data, 1, cartridge.flash.size, fp) == cartridge.flash.size && !fclose(fp)) {
++      if(fp && fwrite(image.data(), 1, image.size(), fp) == image.size() && !fclose(fp)) {
 +        printf("TESTHARNESS flash out %s (%u bytes)\n", path, (u32)cartridge.flash.size);
 +      } else {
 +        printf("TESTHARNESS flash out: cannot write %s\n", path);

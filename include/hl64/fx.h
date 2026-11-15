@@ -47,10 +47,17 @@ void	fx_muzzle_flash(int e, int attachment, int type);
 void	fx_particles(const float org[3], const float dir[3], int color, int count);
 /* Beams (TE_BEAMPOINTS / BEAMENTPOINT / BEAMENTS): ends as entity slots
  * (-1: use the point); width / noise / brightness 0-255, scroll speed,
- * life (0.1 s, 0 = until killed); returns a beam id (-1 dropped). */
-int	fx_beam(int e0, const float p0[3], int e1, const float p1[3], res_t sprite, int width,
-		int noise, int r, int g, int b, int brightness, int speed, int life);
-void	fx_beam_kill(int beam);
+ * life (0.1 s, 0 = until killed). key names the beam for fx_beam_kill:
+ * FX_BEAM_KEY(e, n) for entity e's n-th beam (n < FX_BEAM_KEYS_PER_ENT),
+ * -1 for a beam nobody kills; a beam with a live key replaces it. Returns
+ * key, also when the pool is full and the beam is dropped: game state
+ * (private blocks, saved games) holds keys, functions of game state, never
+ * pool slots, which depend on the effects alive (unsaved). */
+#define FX_BEAM_KEYS_PER_ENT	8
+#define FX_BEAM_KEY(e, n)	((e) * FX_BEAM_KEYS_PER_ENT + (n))
+int	fx_beam(int key, int e0, const float p0[3], int e1, const float p1[3], res_t sprite,
+		int width, int noise, int r, int g, int b, int brightness, int speed, int life);
+void	fx_beam_kill(int key);
 /* TE_BEAMCYLINDER: a ring growing to radius over life (0.1 s) */
 void	fx_beam_cylinder(const float org[3], float radius, res_t sprite, int life, int width,
 		int noise, int r, int g, int b, int bright);

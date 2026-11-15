@@ -610,13 +610,13 @@ void phy_motion_prof(phy_motion_prof_t *p, int reset)
 void phy_conv_save(void)
 {
 	sv_tag(SV_TAG('C', 'O', 'N', 'V'));
-	sv_put(conv, sizeof(conv));
+	sv_put_delta(conv, NULL, sizeof(conv));
 }
 
 int phy_conv_load(void)
 {
 	if (sv_expect(SV_TAG('C', 'O', 'N', 'V')))
 		return -1;
-	sv_get(conv, sizeof(conv));
+	sv_get_delta(conv, NULL, sizeof(conv), NULL);
 	return sv_failed() ? -1 : 0;
 }

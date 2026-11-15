@@ -36,13 +36,24 @@
 
 enum { SG_PUT, SG_GET, SG_SIZE };
 
-/* n bytes at p through the stream for SG_PUT / SG_GET; returns n */
+/* n bytes at p through the stream for SG_PUT / SG_GET (from 16 bytes a
+ * delta row against zeros: mostly-zero state costs its mask); returns n */
 static inline uint32_t sg_io(int op, void *p, uint32_t n)
 {
 	if (op == SG_PUT)
-		sv_put(p, n);
+	{
+		if (n >= 16)
+			sv_put_delta(p, NULL, n);
+		else
+			sv_put(p, n);
+	}
 	else if (op == SG_GET)
-		sv_get(p, n);
+	{
+		if (n >= 16)
+			sv_get_delta(p, NULL, n, NULL);
+		else
+			sv_get(p, n);
+	}
 	return n;
 }
 

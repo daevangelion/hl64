@@ -459,27 +459,48 @@ const char *ent_sets_check(void)
 
 /* ---- saved games (architecture.md 14) ------------------------------------------- */
 
-/* The think heap, the sets (with movers' sticky extras and linked) and the
- * grid's bucket heads: the whole region, slot indices only. */
+/* The think heap's entries in heap order (keys, slots) and the sets; a
+ * slot's heap position is rebuilt from the entries (the positions of
+ * slots outside the heap are HEAP_NONE, ent_sets_check). Entries past
+ * the count are never read. The grid's bucket heads go with the grid. */
 void ent_sets_save(void)
 {
-	sv_u32((uint32_t)(H.cur - H.base));
-	sv_put(H.base, (uint32_t)(H.cur - H.base));
-	sv_u32((uint32_t)H.n);
+	sv_u16((uint32_t)H.n);
+	sv_put(H.key, 4u * (uint32_t)H.n);
+	sv_put(H.idx, 2u * (uint32_t)H.n);
+	sv_put(H.movers, ENT_WORDS * 4);
+	sv_put(H.due, ENT_WORDS * 4);
+	sv_put(H.kill, ENT_WORDS * 4);
+	sv_put(H.live, ENT_WORDS * 4);
+	sv_put(H.linked, ENT_WORDS * 4);
 }
 
 int ent_sets_load(void)
 {
-	uint32_t n = sv_get_u32();
+	int p;
 
-	if (n != (uint32_t)(H.cur - H.base))
+	H.n = (int)sv_get_u16();
+	if (H.n > HEAP_MAX)
 	{
-		sv_fail("ent: think / grid layout");
+		sv_fail("ent: think heap size");
 		return -1;
 	}
-	sv_get(H.base, n);
-	H.n = (int)sv_get_u32();
-	if (H.n < 0 || H.n > HEAP_MAX)
-		sv_fail("ent: think heap size");
+	memset(H.key, 0, HEAP_MAX * 4);
+	memset(H.idx, 0, HEAP_MAX * 2);
+	memset(H.pos, 0xFF, HL64_MAX_ENTITIES * 2);
+	sv_get(H.key, 4u * (uint32_t)H.n);
+	sv_get(H.idx, 2u * (uint32_t)H.n);
+	for (p = 0; p < H.n && !sv_failed(); p++)
+	{
+		if (H.idx[p] >= HL64_MAX_ENTITIES || H.pos[H.idx[p]] != HEAP_NONE
+			|| (p && H.key[(p - 1) >> 2] > H.key[p]))
+			sv_fail("ent: think heap");
+		H.pos[H.idx[p]] = (uint16_t)p;
+	}
+	sv_get(H.movers, ENT_WORDS * 4);
+	sv_get(H.due, ENT_WORDS * 4);
+	sv_get(H.kill, ENT_WORDS * 4);
+	sv_get(H.live, ENT_WORDS * 4);
+	sv_get(H.linked, ENT_WORDS * 4);
 	return sv_failed() ? -1 : 0;
 }

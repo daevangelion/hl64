@@ -19,4 +19,9 @@ void	host_io_init_files(const char *root, unsigned extra_files);
  * sys_flash_init. Without it: hl64.fla beside the hl64-host binary. */
 void	host_flash_set_path(const char *path);
 
+/* pak_host.c: what is in controller 1 (hl64-host --pak): "rumble" a
+ * Rumble Pak, else a Controller Pak whose 32 KB is that image file
+ * (formatted when missing). Without it: nothing. */
+void	host_pak_set(const char *arg);
+
 #endif

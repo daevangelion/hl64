@@ -17,7 +17,7 @@
  *
  * triggers.c -- HLSDK dlls/triggers.cpp brush triggers on the hl64 API:
  * trigger_multiple / once / counter / hurt / push / teleport / changelevel
- * / transition / endsection and func_ladder. The logic classes of
+ * / transition / endsection / autosave and func_ladder. The logic classes of
  * triggers.cpp (multi_manager, trigger_relay, trigger_auto) and buttons.cpp
  * (multisource, env_global) are records without entities: logic.c.
  *
@@ -30,6 +30,7 @@
  */
 #include <string.h>
 
+#include "hl64/save.h"
 #include "hl64/seam.h"
 
 #include "engine/in/in.h"
@@ -209,6 +210,37 @@ const game_class_t gc_TRIGGER_MULTIPLE = {
 };
 const game_class_t gc_TRIGGER_ONCE = {
 	.size = sizeof(CBaseTrigger), .Spawn = CTriggerOnce_Spawn, .vt = &CBaseTrigger_vt,
+	.save = &sv_CBaseTrigger,
+};
+
+/* ---- trigger_autosave ----------------------------------------------------- */
+
+/* CTriggerSave::SaveTouch: once, by the player; UTIL_Remove kills the
+ * record (it stays gone across dehydration and saved games), and the
+ * engine takes the autosave at its next quiet frame boundary (HLSDK
+ * SERVER_COMMAND("autosave")). */
+void CTriggerSave_SaveTouch(int e, int other)
+{
+	if (!UTIL_IsMasterTriggered(PRIV(CBaseTrigger, e)->m_sMaster, other))
+		return;
+	if (!IsPlayer(other))
+		return;
+	SetTouch(e, FN_NONE);
+	UTIL_Remove(e);
+	save_autosave();
+}
+
+/* CTriggerSave::Spawn (no deathmatch: the deathmatch removal is not ours) */
+static int CTriggerSave_Spawn(int e, gid_t16 gid)
+{
+	CBaseTrigger_KeyValue(e, gid);
+	InitTrigger(e);
+	SetTouch(e, FN_CTriggerSave_SaveTouch);
+	return 0;
+}
+
+const game_class_t gc_TRIGGER_AUTOSAVE = {
+	.size = sizeof(CBaseTrigger), .Spawn = CTriggerSave_Spawn, .vt = &CBaseTrigger_vt,
 	.save = &sv_CBaseTrigger,
 };
 

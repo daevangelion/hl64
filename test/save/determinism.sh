@@ -1,50 +1,73 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
-# Saved-game determinism (docs/architecture.md 14): a scene saves at frame
-# T into slot 0 and goes on (run A); a fresh boot of the same scene loads
-# slot 0 at frame 1 and goes on (run B); a run that never saves (run C).
-# At frame T+N runs A and B save again into slot 1: their state streams
-# (everything a save holds: components, private blocks, records, timers,
-# the game's globals, clock, random stream, ...) must be equal byte for
-# byte (test/save/svdump.py), and their `stats` entity hash / player /
-# record lines at frames T+1 and T+N equal. C against A tells whether the
-# save itself (its settle: paused AI thinks, opens in flight) changed the
-# game. Every frame a save or load holds is logged with its time
-# (`save: ... worst frame`).
+# Saved-game determinism (docs/architecture.md 14), four runs of a scene:
+#   S  saves at frame T (FlashRAM slot 1; --pak: the Controller Pak's
+#      first entry, list index 3) and quits (the quit waits for the
+#      write): the image B loads;
+#   A  saves into slot 1 at T and goes on;
+#   B  a fresh boot with S's FlashRAM / Pak image: loads S's save at frame
+#      1 and goes on;
+#   C  never saves (seam crossings still autosave, as in A and B).
+# (a) Restore: B's load stages the restored game again at once (test
+#     builds, engine/save/save.c restore_check: the snapshot's sections
+#     right after the restore) and it must be S's saved state byte for byte.
+# (b) Continuation: at frame T+N runs A and B save into slot 1 again: their
+#     state streams (everything a save holds: components, private blocks,
+#     records, timers, the game's globals, clock, random stream, ...) must
+#     be equal byte for byte (test/save/svdump.py), and their `stats`
+#     entity hash / player / record lines at frames T+1 and T+N equal.
+#     SCENE:T:N:report reports (b) without failing on it: a window where a
+#     map opens, whose completion frame follows the render pool's state
+#     (warm in A, cold after B's load), not the game's.
+# C against A tells whether the save itself (its settle: paused AI thinks,
+# opens in flight) changed the game. Gate: a save's, a load's or an
+# autosave's (slot 0, any run) cost per frame <= 67 ms: the larger of its
+# `longest held frame` (frames it held: no game step, all of it ours) and
+# its `worst step` (its own work in a frame the game also ran); its
+# `longest frame` (game included) is in the run logs.
 #
-#   test/save/determinism.sh [--ares] SCENE:T:N [SCENE:T:N ...]
+#   test/save/determinism.sh [--ares] [--pak] SCENE:T:N[:report] ...
 #
-# host (default): hl64-host at a fixed 1/30 s, image files --save.
+# host (default): hl64-host at a fixed 1/30 s, image files --save / --pak.
 # --ares: one HL64_TEST ROM per run (the ELF built once), each ares run
-#   through test/run/ares.sh (HL64_ARES_HOST=ares-host), the chip image carried
-#   from A to B by ARES_FLASH_OUT / ARES_FLASH_IN: B is a fresh ares launch
-#   that loads what A's ares wrote (save, quit, relaunch, load).
+#   through test/run/ares.sh (HL64_ARES_HOST=ares-host), the images carried
+#   from S to B by ARES_FLASH_OUT / ARES_FLASH_IN (ARES_PAK_OUT / _IN): B
+#   is a fresh ares launch that loads what S's ares wrote (save, quit,
+#   relaunch, load).
 # Env: BUILD_DIR (default build), HL64_CONTENT (default
-#   /scratch/hl64/tmp/M5Lead2/c16), ARES_TIMEOUT (s per run, default 1800).
-# Out: $BUILD_DIR/save/<host|ares>/<scene>-<T>/{A,B,C}/ logs, images;
-#   summary.md beside them. Exit 0 every scene equal, 1 a difference, 2 usage.
+#   /scratch/hl64/tmp/Int6/c17), ARES_TIMEOUT (s per run, default 1800).
+# Out: $BUILD_DIR/save/<host|ares>[-pak]/<scene>-<T>/{S,A,B,C}/ logs,
+#   images; summary.md beside them. Exit 0 every scene equal, 1 a
+#   difference or a failed gate, 2 usage.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-build}"
 case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$ROOT/$BUILD_DIR" ;; esac
-CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/M5Lead2/c16}"
+CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/Int6/c17}"
 MODE=host
 CASES=()
-usage() { echo "usage: test/save/determinism.sh [--ares] SCENE:T:N ..." >&2; exit 2; }
+PAK=0
+usage() { echo "usage: test/save/determinism.sh [--ares] [--pak] SCENE:T:N ..." >&2; exit 2; }
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--ares) MODE=ares ;;
 	--host) MODE=host ;;
+	--pak) PAK=1 ;;
 	*:*:*) CASES+=("$1") ;;
 	*) usage ;;
 	esac
 	shift
 done
+# S's slot and B's: FlashRAM slot 1, or the Pak's first entry (after the
+# autosave and the two FlashRAM slots, include/hl64/save.h)
+SL=1
+[[ $PAK == 1 ]] && SL=3
 [[ ${#CASES[@]} -gt 0 ]] || usage
 [[ -f "$CONTENT/campaign.rtb" ]] || { echo "no $CONTENT/campaign.rtb: cook the content" >&2; exit 2; }
 
+mkdir -p "$BUILD_DIR"
 MK=(make --no-print-directory -j"${MAKE_JOBS:-4}" -C "$ROOT")
 HOST="$BUILD_DIR/sh/host/hl64-host"
 "${MK[@]}" BUILD_DIR="$BUILD_DIR/sh" host >"$BUILD_DIR/sh.log" 2>&1 \
@@ -59,22 +82,29 @@ fi
 BE=()
 [[ $MODE == ares ]] && BE=(--be)
 
-# run <dir> <A|B|C> <T> <N>: one run's commands, then host or ares
+# run <dir> <S|A|B|C> <T> <N>: one run's commands, then host or ares
 run() {
 	local d=$1 r=$2 t=$3 n=$4 code=0 cmds
 	local e=$((t + n + 3))
 	mkdir -p "$d/$r"
 	cmds=(--cmd "@1 fixed_dt 33333" --cmd "@$((t + 1)) stats $((1000 + t + 1))"
-		--cmd "@$((t + n)) stats $((1000 + t + n))" --cmd "@$e quit 0")
+		--cmd "@$((t + n)) stats $((1000 + t + n))")
 	case $r in
-	A) cmds+=(--cmd "@$t save 0" --cmd "@$((t + n)) save 1") ;;
-	B) cmds+=(--cmd "@1 load 0" --cmd "@$((t + n)) save 1") ;;
+	S) cmds+=(--cmd "@$t save $SL"); e=$((t + 1)) ;;
+	A) cmds+=(--cmd "@$t save 1" --cmd "@$((t + n)) save 1") ;;
+	B) cmds+=(--cmd "@1 load $SL" --cmd "@$((t + n)) save 1") ;;
 	C) ;;
 	esac
+	cmds+=(--cmd "@$e quit 0")
 	if [[ $MODE == host ]]; then
-		[[ $r == B ]] && cp "$d/A/flash.fla" "$d/B/flash.fla"
-		"$HOST" --root "$CONTENT" --route "$d/route.rbc" --save "$d/$r/flash.fla" "${cmds[@]}" \
-			>"$d/$r/run.log" 2>&1 || code=$?
+		local pk=()
+		[[ $r == B ]] && cp "$d/S/flash.fla" "$d/B/flash.fla"
+		if [[ $PAK == 1 && ( $r == S || $r == B ) ]]; then
+			[[ $r == B ]] && cp "$d/S/pak.img" "$d/B/pak.img"
+			pk=(--pak "$d/$r/pak.img")
+		fi
+		"$HOST" --root "$CONTENT" --route "$d/route.rbc" --save "$d/$r/flash.fla" "${pk[@]}" \
+			"${cmds[@]}" >"$d/$r/run.log" 2>&1 || code=$?
 	else
 		local rd="$BUILD_DIR/sr"
 		"$HOST" --write-cmds "$d/$r/run.cmd" "${cmds[@]}"
@@ -84,8 +114,12 @@ run() {
 			HL64_CMDS="$d/$r/run.cmd" rom >"$d/$r/rom.log" 2>&1 || { tail -20 "$d/$r/rom.log" >&2; return 2; }
 		mv "$rd/hl64.z64" "$d/$r/hl64.z64"
 		(
-			[[ $r == B ]] && export ARES_FLASH_IN="$d/A/flash.fla"
+			[[ $r == B ]] && export ARES_FLASH_IN="$d/S/flash.fla"
 			export ARES_FLASH_OUT="$d/$r/flash.fla"
+			if [[ $PAK == 1 ]]; then
+				[[ $r == B ]] && export ARES_PAK_IN="$d/S/pak.img"
+				export ARES_PAK_OUT="$d/$r/pak.img"
+			fi
 			ares_run "$d/$r" hl64.z64 run.raw.log
 		) || code=$?
 		tr -d '\r' <"$d/$r/run.raw.log" >"$d/$r/run.log" || true
@@ -101,38 +135,73 @@ sim_lines() {	# sim_lines <log> <label>
 }
 
 OUT="$BUILD_DIR/save/$MODE"
+[[ $PAK == 0 ]] || OUT+=-pak
 mkdir -p "$OUT"
 SUM="$OUT/summary.md"
 echo "# saved-game determinism ($MODE, $(date -u +%FT%TZ), content $CONTENT)" >"$SUM"
 echo >>"$SUM"
-echo "| scene | T | N | streams A/B at T+N | stats T+1 | stats T+N | C vs A (save no-op) | worst save frame | worst load frame | image |" >>"$SUM"
-echo "|---|---|---|---|---|---|---|---|---|---|" >>"$SUM"
+echo "| scene | T | N | (a) B's re-save = S's image | (b) streams A/B at T+N | stats T+1 | stats T+N | C vs A (save no-op) | longest save frame | longest load frame | autosaves: longest frame | image |" >>"$SUM"
+echo "|---|---|---|---|---|---|---|---|---|---|---|---|" >>"$SUM"
+# the frame gate (architecture.md 14): a save's, an autosave's or a load's
+# cost per frame, us: max(longest held frame, worst step) of its log line
+cost() { sed -n 's/.*worst step \([0-9]*\) us, longest held frame \([0-9]*\) us.*/\1 \2/p' \
+	| awk '{print ($1 > $2 ? $1 : $2)}'; }
+FRAME_MAX=67000
 FAIL=0
 for c in "${CASES[@]}"; do
-	IFS=: read -r s t n <<<"$c"
+	IFS=: read -r s t n mode <<<"$c"
+	# (b) fails the gate unless the case reports it only
+	CF=1
+	[[ ${mode:-} == report ]] && CF=0
 	d="$OUT/$s-$t"
 	rm -rf "$d"
 	mkdir -p "$d"
 	(cd "$ROOT" && python3 -m tools.routec.routec --rtb "$CONTENT/campaign.rtb" "test/scenes/$s.route" \
 		-o "$d/route.rbc") >"$d/routec.log" 2>&1 || { cat "$d/routec.log" >&2; exit 2; }
+	run "$d" S "$t" "$n"
 	run "$d" A "$t" "$n"
 	run "$d" C "$t" "$n"
 	run "$d" B "$t" "$n"
+	# (a) the game B restored, saved again at once (test builds' re-save
+	# right after the restore, engine/save/save.c restore_check) = the state S saved
+	rs=$(sed -n "s/^load: slot $SL re-save: //p" "$d/B/run.log" | head -1)
+	[[ $rs == equal* ]] || { rs="${rs:-none}"; FAIL=1; }
 	cmp=$(python3 "$ROOT/test/save/svdump.py" "${BE[@]}" "$d/A/flash.fla:1" "$d/B/flash.fla:1" 2>&1) \
-		&& eq=equal || { eq="DIFFER"; FAIL=1; }
+		&& eq=equal || { eq="DIFFER"; [[ $CF == 0 ]] || FAIL=1; }
 	echo "$cmp" >"$d/compare.txt"
 	st=()
 	for k in $((1000 + t + 1)) $((1000 + t + n)); do
 		if diff <(sim_lines "$d/A/run.log" "$k") <(sim_lines "$d/B/run.log" "$k") >"$d/stats-$k.diff" \
-			&& [[ -n "$(sim_lines "$d/A/run.log" "$k")" ]]; then st+=(equal); else st+=(DIFFER); FAIL=1; fi
+			&& [[ -n "$(sim_lines "$d/A/run.log" "$k")" ]]; then st+=(equal); else st+=(DIFFER); [[ $CF == 0 ]] || FAIL=1; fi
 	done
 	if diff <(sim_lines "$d/A/run.log" $((1000 + t + n))) <(sim_lines "$d/C/run.log" $((1000 + t + n))) \
 		>"$d/noop.diff"; then noop=same; else noop="differs (settle)"; fi
-	ws=$(grep -E "^save: save slot 0 ok" "$d/A/run.log" | sed -n 's/.*worst frame \([0-9]*\) us.*/\1 us/p' | head -1)
-	wl=$(grep -E "^save: load slot 0 " "$d/B/run.log" | sed -n 's/.*worst frame \([0-9]*\) us.*/\1 us/p' | head -1)
-	img=$(grep -E "^save: slot 0 seq" "$d/A/run.log" | sed -n 's/.*: \([0-9]* B state -> [0-9]* B image\).*/\1/p' | head -1)
-	echo "| $s | $t | $n | $eq | ${st[0]} | ${st[1]} | $noop | ${ws:-?} | ${wl:-?} | ${img:-?} |" >>"$SUM"
-	echo "save: $s T=$t N=$n: streams $eq, stats ${st[*]}, C vs A $noop, save ${ws:-?}, load ${wl:-?}, ${img:-?}"
+	# longest whole frame of the saves (S's, A's two) and of B's load
+	ws=$( { grep -hE "^save: save slot $SL (ok|FAILED)" "$d/S/run.log" || true;
+		grep -hE "^save: save slot 1 (ok|FAILED)" "$d/A/run.log" || true; } \
+		| cost | sort -n | tail -1)
+	wl=$( (grep -E "^save: load slot $SL " "$d/B/run.log" || true) \
+		| cost | head -1)
+	img=$( (grep -E "^save: slot 1 seq" "$d/A/run.log" || true) \
+		| sed -n 's/.*: \([0-9]* B state -> [0-9]* B image\).*/\1/p' | head -1)
+	nok=$(( $(grep -c "^save: save slot $SL ok" "$d/S/run.log" || true) \
+		+ $(grep -c "^save: save slot 1 ok" "$d/A/run.log" || true) ))
+	[[ $nok == 3 ]] || { ws="$ws (a save FAILED)"; FAIL=1; }
+	grep -q "^save: load slot $SL ok" "$d/B/run.log" || { wl="$wl (load FAILED)"; FAIL=1; }
+	# the autosaves of every run (slot 0: trigger_autosave, seam crossings)
+	wa=$( (grep -hE "^save: save slot 0 (ok|FAILED)" "$d"/{S,A,B,C}/run.log || true) \
+		| cost | sort -n | tail -1)
+	na=$(cat "$d"/{S,A,B,C}/run.log | grep -c "^save: save slot 0 ok" || true)
+	for v in "${ws%% *}" "${wl%% *}" ${wa:+"$wa"}; do
+		[[ -n $v && $v -le $FRAME_MAX ]] || FAIL=1
+	done
+	wa="${na} ok${wa:+, $wa us}"
+	for r in S A B C; do
+		[[ $(cat "$d/$r/exit") == 0 ]] || { eq="$eq, run $r exit $(cat "$d/$r/exit")"; FAIL=1; }
+	done
+	[[ $CF == 1 ]] || eq="$eq (reported)"
+	echo "| $s | $t | $n | $rs | $eq | ${st[0]} | ${st[1]} | $noop | ${ws:-?} us | ${wl:-?} us | $wa | ${img:-?} |" >>"$SUM"
+	echo "save: $s T=$t N=$n: restore $rs, streams $eq, stats ${st[*]}, C vs A $noop, save ${ws:-?} us, load ${wl:-?} us, autosaves $wa, ${img:-?}"
 done
 cat "$SUM"
 exit $FAIL

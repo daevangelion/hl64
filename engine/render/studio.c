@@ -1033,6 +1033,7 @@ static smodel_t *mesh_of(res_t r)
 
 
 static void unpack_init(void);
+static void probe_cache_reset(void);
 
 void studio_init(void)
 {
@@ -1042,6 +1043,7 @@ void studio_init(void)
 
 	for (k = 0; k < ILOADS; k++)
 		iloads[k].idx = -1;
+	probe_cache_reset();
 	mem_pool_init(&pool, "studio", mem_region(MEM_POOL_STUDIO),
 		mem_region_bytes(MEM_POOL_STUDIO), desc, HL64_STUDIO_BLOCKS);
 	if (scb < (MAT_KB + VIEW_KB + 16) * 1024u)
@@ -1257,9 +1259,151 @@ static void placement(int e, double time, float org[3], float ang[3])
 
 /* ---- light (lightstyles.md 4, dlights.md 4) -------------------------------------------------- */
 
+/* The lattice cell of map-local p in a probe block at org with dims n: the
+ * low corner c and the weights fr (trilinear over the 64 u lattice). */
+static void probe_cell(const int16_t org[3], const uint8_t n[3], const float p[3], int c[3],
+	float fr[3])
+{
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		float g = (p[k] - org[k]) / 64.0f;
+
+		if (g < 0)
+			g = 0;
+		if (g > n[k] - 1)
+			g = (float)(n[k] - 1);
+		c[k] = (int)g;
+		if (c[k] > n[k] - 2)
+			c[k] = n[k] > 1 ? n[k] - 2 : 0;
+		fr[k] = n[k] > 1 ? g - c[k] : 0;
+	}
+}
+
+/* Corner k (bit 0 x, 1 y, 2 z) of the cell at c: its lattice index. */
+static uint32_t probe_corner(const uint8_t n[3], const int c[3], int k)
+{
+	int x = c[0] + (k & 1 && n[0] > 1), y = c[1] + ((k >> 1) & 1 && n[1] > 1);
+	int z = c[2] + ((k >> 2) & 1 && n[2] > 1);
+
+	return ((uint32_t)z * n[1] + (uint32_t)y) * n[0] + (uint32_t)x;
+}
+
+static int probe_blend(const uint8_t v[8], const float fr[3])
+{
+	float acc = 0;
+	int k;
+
+	for (k = 0; k < 8; k++)
+		acc += ((k & 1) ? fr[0] : 1 - fr[0]) * (((k >> 1) & 1) ? fr[1] : 1 - fr[1])
+			* (((k >> 2) & 1) ? fr[2] : 1 - fr[2]) * v[k];
+	return (int)(acc + 0.5f);
+}
+
+/* A sector's probes when its REND chunk is not resident, for the game's
+ * ent_illum (a simulation input: its value must not depend on residency,
+ * as COLL's wld_chunk_sync for traces): the chunk header, the lattice
+ * origin and the cell's 8 values read straight from the cart (blocking
+ * reads of 24, 8 and 4 x 4 bytes; a cache of the last headers and cells
+ * keeps a monster standing in one cell from reading again). Big-endian
+ * as on the cart; the reads stay inside the chunk's 16-byte rounded
+ * extent the streamer reads too. */
+#define PROBE_HDRS	8
+#define PROBE_CELLS	8
+static struct {
+	int16_t		map;		/* -1 empty */
+	uint16_t	chunk;
+	uint32_t	ofs;		/* the lattice from the chunk start, 0 = none */
+	int16_t		org[3];
+	uint8_t		dims[3];
+} probe_hdr[PROBE_HDRS];
+static struct {
+	int16_t		map;		/* -1 empty */
+	uint16_t	chunk;
+	uint32_t	cell;		/* the low corner's lattice index */
+	uint8_t		v[8];
+} probe_vals[PROBE_CELLS];
+static uint8_t	probe_rr_hdr, probe_rr_vals;
+static uint8_t	probe_buf[32] __attribute__((aligned(16)));
+
+static void probe_cache_reset(void)
+{
+	int i;
+
+	for (i = 0; i < PROBE_HDRS; i++)
+		probe_hdr[i].map = -1;
+	for (i = 0; i < PROBE_CELLS; i++)
+		probe_vals[i].map = -1;
+}
+
+static uint32_t rd_be32(const uint8_t *b)
+{
+	return (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3];
+}
+
+static int probe_cart(wld_layer_t *L, int chunk, const float p[3])
+{
+	const w64_chunk_t *ck = &L->chunks[chunk];
+	const uint32_t rom = L->rom + ck->ofs, end = (ck->size + 15u) & ~15u;
+	uint8_t v[8];
+	float fr[3];
+	int c[3], i, k, h = -1;
+	uint32_t cell;
+
+	for (i = 0; i < PROBE_HDRS; i++)
+		if (probe_hdr[i].map == L->map && probe_hdr[i].chunk == chunk)
+			h = i;
+	if (h < 0)
+	{
+		h = probe_rr_hdr++ % PROBE_HDRS;
+		io_read_sync(probe_buf, rom, 24, "probe header");
+		probe_hdr[h].map = (int16_t)L->map;
+		probe_hdr[h].chunk = (uint16_t)chunk;
+		probe_hdr[h].ofs = rd_be32(probe_buf + 16);
+		memcpy(probe_hdr[h].dims, probe_buf + 20, 3);
+		if (probe_hdr[h].ofs)
+		{
+			io_read_sync(probe_buf, rom + probe_hdr[h].ofs, 8, "probe origin");
+			for (k = 0; k < 3; k++)
+				probe_hdr[h].org[k] = (int16_t)(probe_buf[2 * k] << 8 | probe_buf[2 * k + 1]);
+			probe_hdr[h].ofs += 6;
+		}
+	}
+	if (!probe_hdr[h].ofs)
+		return -1;
+	probe_cell(probe_hdr[h].org, probe_hdr[h].dims, p, c, fr);
+	cell = probe_corner(probe_hdr[h].dims, c, 0);
+	for (i = 0; i < PROBE_CELLS; i++)
+		if (probe_vals[i].map == L->map && probe_vals[i].chunk == chunk
+			&& probe_vals[i].cell == cell)
+			return probe_blend(probe_vals[i].v, fr);
+	/* the x pair of each (y, z) corner row in one even-aligned read */
+	for (k = 0; k < 8; k += 2)
+	{
+		uint32_t at = probe_hdr[h].ofs + probe_corner(probe_hdr[h].dims, c, k);
+		uint32_t a2 = at & ~1u;
+
+		if (a2 + 4 > end)
+			sys_error("studio: map %d chunk %d: probe lattice outside the chunk", L->map,
+				chunk);
+		io_read_sync(probe_buf, rom + a2, 4, "probe cell");
+		v[k] = probe_buf[at - a2];
+		v[k + 1] = probe_hdr[h].dims[0] > 1 ? probe_buf[at - a2 + 1] : v[k];
+	}
+	i = probe_rr_vals++ % PROBE_CELLS;
+	probe_vals[i].map = (int16_t)L->map;
+	probe_vals[i].chunk = (uint16_t)chunk;
+	probe_vals[i].cell = cell;
+	memcpy(probe_vals[i].v, v, 8);
+	return probe_blend(v, fr);
+}
+
 /* REND probe value at map-local p of layer L (trilinear over the 64 u
- * lattice of a visible sector containing p); -1 when none is resident. */
-static int probe_at(wld_layer_t *L, const uint16_t *list, int cnt, const float p[3])
+ * lattice of a visible sector containing p); -1 when none contains p or
+ * its chunk is not resident (cart = 0; ent_illum: 1 reads it from the
+ * cart then). */
+static int probe_at(wld_layer_t *L, const uint16_t *list, int cnt, const float p[3], int cart)
 {
 	int i, k;
 
@@ -1268,10 +1412,10 @@ static int probe_at(wld_layer_t *L, const uint16_t *list, int cnt, const float p
 		const w64_sector_t *s = &L->sects[list[i]];
 		const w64_rend_t *r;
 		const int16_t *org;
-		const uint8_t *v;
-		uint8_t *ch;
-		float g[3], fr[3], acc = 0;
-		int c[3], n[3];
+		const uint8_t *lat;
+		uint8_t *ch, v[8];
+		float fr[3];
+		int c[3];
 
 		for (k = 0; k < 3; k++)
 			if (p[k] < s->bbox[k] || p[k] > s->bbox[k + 3])
@@ -1279,35 +1423,16 @@ static int probe_at(wld_layer_t *L, const uint16_t *list, int cnt, const float p
 		if (k < 3)
 			continue;
 		if (!(ch = wld_chunk_use(L, s->rend_chunk)))
-			return -1;
+			return cart ? probe_cart(L, s->rend_chunk, p) : -1;
 		r = (const w64_rend_t *)ch;
 		if (!r->probe_ofs)
 			return -1;
 		org = (const int16_t *)(ch + r->probe_ofs);
-		v = (const uint8_t *)(org + 3);
-		for (k = 0; k < 3; k++)
-		{
-			n[k] = r->probe_dims[k];
-			g[k] = (p[k] - org[k]) / 64.0f;
-			if (g[k] < 0)
-				g[k] = 0;
-			if (g[k] > n[k] - 1)
-				g[k] = (float)(n[k] - 1);
-			c[k] = (int)g[k];
-			if (c[k] > n[k] - 2)
-				c[k] = n[k] > 1 ? n[k] - 2 : 0;
-			fr[k] = n[k] > 1 ? g[k] - c[k] : 0;
-		}
+		lat = (const uint8_t *)(org + 3);
+		probe_cell(org, r->probe_dims, p, c, fr);
 		for (k = 0; k < 8; k++)
-		{
-			int x = c[0] + (k & 1 && n[0] > 1), y = c[1] + ((k >> 1) & 1 && n[1] > 1);
-			int z = c[2] + ((k >> 2) & 1 && n[2] > 1);
-			float w = ((k & 1) ? fr[0] : 1 - fr[0]) * (((k >> 1) & 1) ? fr[1] : 1 - fr[1])
-				* (((k >> 2) & 1) ? fr[2] : 1 - fr[2]);
-
-			acc += w * v[(z * n[1] + y) * n[0] + x];
-		}
-		return (int)(acc + 0.5f);
+			v[k] = lat[probe_corner(r->probe_dims, c, k)];
+		return probe_blend(v, fr);
 	}
 	return -1;
 }
@@ -1318,26 +1443,24 @@ static int probe_at(wld_layer_t *L, const uint16_t *list, int cnt, const float p
 static int light_at(int e, wld_layer_t *L, const uint16_t *list, int cnt, const float local[3],
 	const float global[3])
 {
-	int base = probe_at(L, list, cnt, local);
+	int base = probe_at(L, list, cnt, local, 0);
 
 	return ren_model_light(e, global, base < 0 ? 128.0f : (float)base, -1, 0);
 }
 
-/* pfnGetEntityIllum (ent.h): the light a studio entity is drawn with, or
- * the model light at a non-studio entity's origin, from the sectors its
- * leaf sees; an entity whose probe chunk is not resident keeps its last
- * value (128 before the first). */
-static uint8_t	illum[HL64_MAX_ENTITIES];
-
 /* New Game (after ent_reset): entity serials restart with the slots, so
- * no STEP placement or probe value of an old entity is kept (boot state) */
+ * no STEP placement of an old entity is kept (boot state) */
 void studio_new_game(void)
 {
 	memset(steps, 0, sizeof(steps));
 	memset(step_on, 0, sizeof(step_on));
-	memset(illum, 0, sizeof(illum));
 }
 
+/* pfnGetEntityIllum (ent.h): the model light at the entity's origin, from
+ * the sectors its leaf sees. The game decides on it (monster_cockroach), so
+ * the probe comes from the cart when its chunk is not resident (the same
+ * value in every run: before and after a load, near the view or not);
+ * 128 where no sector's probes cover the origin. */
 int ent_illum(int e)
 {
 	const col_ent_t *cv;
@@ -1350,13 +1473,12 @@ int ent_illum(int e)
 		return 0;
 	cv = ent_cv(e);
 	list = wld_leaf_sectors(L, wld_point_leaf(L, cv->origin), &cnt);
-	base = probe = probe_at(L, list, cnt, cv->origin);
+	base = probe = probe_at(L, list, cnt, cv->origin, 1);
 	if (base < 0)
-		base = illum[e] ? illum[e] : 128;
+		base = 128;
 	for (k = 0; k < 3; k++)
 		g[k] = cv->origin[k] + L->gofs[k];
 	v = ren_model_light(e, g, (float)base, -1, 0);
-	illum[e] = (uint8_t)(base > 0 ? base : 1);
 	if (dbg_trace())
 		log_printf("trace %lu illum e=%d probe=%d base=%d v=%d\n",
 			(unsigned long)dbg_trace_frame(), e, probe, base, v);

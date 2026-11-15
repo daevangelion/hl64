@@ -14,6 +14,7 @@
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/ent/ent.h"
+#include "engine/ent/rec_int.h"
 #include "engine/mem/carve.h"
 #include "engine/save/sv.h"
 #include "engine/save/svmod.h"
@@ -195,10 +196,11 @@ void ent_priv_stats(ent_priv_stats_t *s)
 /* ---- saved games (architecture.md 14) ------------------------------------------- */
 
 /* Every page in use: its free-block mask, then block by block a free
- * block as its free-list link only, a used one whole after the game
- * turned its pointers into ids (game_priv_save on a copy). With the page
- * classes, use counts and free-list heads, handles and every later
- * allocation come back exactly. */
+ * block as its free-list link only (alloc zeroes the rest before use), a
+ * used one as a delta row against zeros after the game turned its
+ * pointers into ids (game_priv_save on a copy). With the page classes,
+ * use counts and free-list heads, handles and every later allocation
+ * come back exactly. */
 #define BLOCKS_MAX	(HL64_GAME_PRIVATE_KB * 1024u / 32u)
 #define PAGE_MASK	(PAGE_BYTES / 32u / 8u)	/* mask bytes of a 32-byte-block page */
 static uint32_t freebit[(BLOCKS_MAX + 31) / 32];
@@ -233,9 +235,40 @@ static int owner_of(uint16_t h)
 	return -1;
 }
 
+static uint32_t priv_size(uint16_t h)
+{
+	return class_bytes(S.cls[(uint32_t)(block(h) - S.base) / PAGE_BYTES]);
+}
+
+/* The entity class of block b's owner, -1 none; *e the owner. */
+static int block_class(const uint8_t *b, int *e)
+{
+	*e = owner_of(handle_of(b));
+	return *e >= 0 && ent_c.id[*e].cls < RC__N ? (int)ent_c.id[*e].cls : -1;
+}
+
+/* Per entity class the handle of its last block saved / loaded (0 none):
+ * a block is a delta row against it (blocks of a class share most of
+ * their fields), the first of a class against zeros. */
+static uint16_t cls_last[RC__N];
+
+/* A used block as it is saved: the game's ids for its pointers. */
+static int priv_copy(int e, const uint8_t *b, uint8_t *copy, uint32_t bs)
+{
+	memcpy(copy, b, bs);
+	if (e >= 0 && game_priv_save(e, copy, bs))
+	{
+		log_printf("save: entity %d (%s): private block not savable\n", e, ent_class_name(e));
+		sv_fail("private block not savable");
+		return -1;
+	}
+	return 0;
+}
+
 void ent_priv_save_all(void)
 {
 	static uint8_t tmp[1024] __attribute__((aligned(16)));
+	static uint8_t ref[1024] __attribute__((aligned(16)));
 	uint32_t p;
 
 	sv_u32(S.npages);
@@ -243,6 +276,7 @@ void ent_priv_save_all(void)
 	sv_put(S.used, 2u * S.npages);
 	sv_put(S.head, sizeof(S.head));
 	mark_free();
+	memset(cls_last, 0, sizeof(cls_last));
 	for (p = 0; p < S.npages; p++)
 	{
 		uint8_t mask[PAGE_MASK];
@@ -263,21 +297,29 @@ void ent_priv_save_all(void)
 		for (o = 0, k = 0; o < PAGE_BYTES; o += bs, k++)
 		{
 			uint8_t *b = S.base + p * PAGE_BYTES + o;
-			int e;
+			const uint8_t *r = NULL;
+			int e, c;
 
 			if (mask[k >> 3] & (1u << (k & 7)))
 			{
 				sv_put(b, 2);
 				continue;
 			}
-			memcpy(tmp, b, bs);
-			if ((e = owner_of(handle_of(b))) >= 0 && game_priv_save(e, tmp, bs))
+			c = block_class(b, &e);
+			if (priv_copy(e, b, tmp, bs))
+				continue;
+			if (c >= 0 && cls_last[c] && priv_size(cls_last[c]) == bs)
 			{
-				log_printf("save: entity %d (%s): private block not savable\n", e,
-					ent_class_name(e));
-				sv_fail("private block not savable");
+				const uint8_t *pb = block(cls_last[c]);
+				int pe;
+
+				block_class(pb, &pe);
+				if (!priv_copy(pe, pb, ref, bs))
+					r = ref;
 			}
-			sv_put(tmp, bs);
+			sv_put_delta(tmp, r, bs);
+			if (c >= 0)
+				cls_last[c] = handle_of(b);
 		}
 	}
 }
@@ -296,7 +338,16 @@ int ent_priv_load_all(void)
 	sv_get(S.used, 2u * S.npages);
 	sv_get(S.head, sizeof(S.head));
 	memset(&S.st, 0, sizeof(S.st));
+	memset(cls_last, 0, sizeof(cls_last));
 	S.st.pages_total = S.npages;
+	for (p = 0; p < S.npages && !sv_failed(); p++)
+	{
+		if (S.cls[p] != CLASS_NONE && S.cls[p] >= NCLASS)
+		{
+			sv_fail("ent: private page class");
+			break;
+		}
+	}
 	for (p = 0; p < S.npages && !sv_failed(); p++)
 	{
 		uint8_t mask[PAGE_MASK];
@@ -304,19 +355,26 @@ int ent_priv_load_all(void)
 
 		if (S.cls[p] == CLASS_NONE)
 			continue;
-		if (S.cls[p] >= NCLASS)
-		{
-			sv_fail("ent: private page class");
-			break;
-		}
 		bs = class_bytes(S.cls[p]);
 		sv_get(mask, (PAGE_BYTES / bs + 7) / 8);
 		for (o = 0, k = 0; o < PAGE_BYTES; o += bs, k++)
 		{
 			uint8_t *b = S.base + p * PAGE_BYTES + o;
+			const uint8_t *r = NULL;
+			int e, cl;
 
-			memset(b, 0, bs);
-			sv_get(b, mask[k >> 3] & (1u << (k & 7)) ? 2 : bs);
+			if (mask[k >> 3] & (1u << (k & 7)))
+			{
+				memset(b, 0, bs);
+				sv_get(b, 2);
+				continue;
+			}
+			cl = block_class(b, &e);
+			if (cl >= 0 && cls_last[cl] && priv_size(cls_last[cl]) == bs)
+				r = block(cls_last[cl]);
+			sv_get_delta(b, r, bs, NULL);
+			if (cl >= 0)
+				cls_last[cl] = handle_of(b);
 		}
 		S.st.pages++;
 		S.st.live[S.cls[p]] += S.used[p];
@@ -332,11 +390,6 @@ int ent_priv_load_all(void)
 	S.st.pages_peak = S.st.pages;
 	S.st.bytes_peak = S.st.bytes_live;
 	return sv_failed() ? -1 : 0;
-}
-
-static uint32_t priv_size(uint16_t h)
-{
-	return class_bytes(S.cls[(uint32_t)(block(h) - S.base) / PAGE_BYTES]);
 }
 
 int ent_priv_fixup(void)

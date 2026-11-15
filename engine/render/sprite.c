@@ -57,6 +57,14 @@ static uint32_t		frame;
 
 void sprite_init(void)
 {
+	int i;
+
+	/* again (fx_init: an end-section restart, a load): the reads still in
+	 * flight leave the I/O queue first (their requests are linked there;
+	 * an active one's piece lands before the pool is set up again) */
+	for (i = 0; i < HL64_FX_SPRITE_MODELS; i++)
+		if (ent[i].state == SE_LOADING)
+			io_cancel(&ent[i].req);
 	memset(ent, 0, sizeof(ent));
 	memset(&st, 0, sizeof(st));
 	mem_pool_init(&pool, "sprites", mem_region(MEM_SPRITE_CACHE),

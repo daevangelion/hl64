@@ -34,7 +34,7 @@ typedef struct {
 	float		m_vecEnd[3];
 	float		m_flBeamLength;
 	ent_h		m_hOwner;
-	int		m_pBeam;		/* fx beam id, -1 none */
+	int		m_pBeam;		/* fx beam key, -1 none */
 	float		m_posOwner[3];
 	float		m_angleOwner[3];
 	int		m_pRealOwner;		/* entity slot, -1 none */
@@ -61,7 +61,8 @@ static int beam_issue(int e)
 	float end[3];
 
 	VecMA(ent_cv(e)->origin, 2048 * t->m_flBeamLength, t->m_vecDir, end);
-	return fx_beam(-1, end, e, NULL, RESID(SPR_LASERBEAM), 10, 0, 0, 214, 198, 64, 255, 0);
+	return fx_beam(FX_BEAM_KEY(e, 0), -1, end, e, NULL, RESID(SPR_LASERBEAM), 10, 0, 0, 214,
+		198, 64, 255, 0);
 }
 
 static void MakeBeam(int e)
@@ -82,8 +83,8 @@ static void MakeBeam(int e)
  * again at the saved length, without MakeBeam's trace or think. A mine
  * whose beam the saving game had (m_pBeam >= 0) keeps one: BeamBreakThink
  * remakes a beam (re-measuring, re-owning) only for m_pBeam < 0, a
- * simulation decision. A full beam pool leaves HL64_FX_BEAMS, an id no
- * beam has (fx_beam_kill ignores it). */
+ * simulation decision. The key is the mine's (also with a full beam
+ * pool), so m_pBeam is the saved value. */
 void CTripmineGrenade_LoadDone(int e)
 {
 	CTripmineGrenade *t = TM(e);
@@ -91,8 +92,6 @@ void CTripmineGrenade_LoadDone(int e)
 	if (t->m_pBeam < 0)
 		return;
 	t->m_pBeam = beam_issue(e);
-	if (t->m_pBeam < 0)
-		t->m_pBeam = HL64_FX_BEAMS;
 }
 
 /* m_hOwner as CBaseEntity::Instance does: the world (slot 0, no live

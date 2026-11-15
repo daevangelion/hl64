@@ -24,6 +24,17 @@ void		sv_u16(uint32_t v);
 void		sv_u32(uint32_t v);
 void		sv_f32(float v);
 void		sv_f64(double v);
+/* n bytes against ref (NULL: zeros): per 8 32-bit words a mask byte of
+ * the words that differ, then those words; the n % 4 tail as it is. The
+ * cost of a row near its reference is about n / 32 bytes. */
+void		sv_put_delta(const void *p, const void *ref, uint32_t n);
+/* Test builds: a part of the stream starts here (name: a static string)
+ * for the per-part size log; the stream's bytes are unchanged. */
+#ifdef HL64_TEST
+void		sv_part(const char *name);
+#else
+#define sv_part(name)	((void)(name))
+#endif
 
 /* ---- reader ------------------------------------------------------------- */
 
@@ -35,6 +46,9 @@ uint32_t	sv_get_u16(void);
 uint32_t	sv_get_u32(void);
 float		sv_get_f32(void);
 double		sv_get_f64(void);
+/* A sv_put_delta row: p = ref (NULL: zeros; p may be ref) with the saved
+ * words; mask (NULL: not wanted) gets the (n / 4 + 7) / 8 mask bytes. */
+void		sv_get_delta(void *p, const void *ref, uint32_t n, uint8_t *mask);
 /* Mark the save being read corrupt (a value out of range), with a reason
  * for the log; the first reason is kept. */
 void		sv_fail(const char *why);

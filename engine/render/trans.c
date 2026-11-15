@@ -580,13 +580,13 @@ int trans_last_order(uint8_t *kind, uint16_t *id, uint8_t *blend, int max)
 void trans_save(void)
 {
 	sv_tag(SV_TAG('T', 'R', 'N', '1'));
-	sv_put(frac, sizeof(frac));
+	sv_put_delta(frac, NULL, sizeof(frac));
 }
 
 int trans_load(void)
 {
 	if (sv_expect(SV_TAG('T', 'R', 'N', '1')))
 		return -1;
-	sv_get(frac, sizeof(frac));
+	sv_get_delta(frac, NULL, sizeof(frac), NULL);
 	return sv_failed() ? -1 : 0;
 }

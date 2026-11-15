@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 
+#include "hl64/ent.h"
 #include "hl64/limits.h"
 #include "hl64/types.h"
 
@@ -109,5 +110,13 @@ void		rec_reset(void);
 /* PROFILE / DBG_MEM lines: `prof rec_us ...`, `mem rec ...`. */
 void		rec_prof_line(void);
 void		rec_mem_line(void);
+/* Saved games (ent.c rows): per slot the map record whose live entity
+ * its record row names (gid | handle serial << 16), GID_NONE none; the
+ * fields hydrate gives that record's entity: id layer, gid, class and
+ * targetname, the rank when the record has one (else *rank is left),
+ * origin and angles. -1 when gid is no physical record of an open map. */
+void		rec_slot_records(uint32_t *out);
+int		rec_entity_ref(gid_t16 gid, ent_id_t *id, uint32_t *rank, float org[3],
+			float ang[3]);
 
 #endif

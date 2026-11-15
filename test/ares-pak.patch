@@ -1,0 +1,88 @@
+Controller Pak saves for the test harness (hl64 M6, SaveGame): on top of ares-testharness.patch
+and ares-flash.patch as built on ares-host.
+
+ - gamepad.cpp: with ARES_TEST_HARNESS set a Controller Pak starts formatted (ares' own format,
+   one bank), never from a <rom>.pak a run left beside the ROM; controller 1's is loaded from
+   the raw image ARES_PAK_IN names (exactly the Pak's size, 32 KB; else exit 2). ares attaches
+   a Controller Pak to controller 1 by itself for our ROM: its advanced homebrew header names no
+   controllers (N64_ROM_CONTROLLER1 unset), and ares' default for that is controller 1 with a
+   Controller Pak, controller 2 with a Rumble Pak (mia/medium/nintendo-64.cpp).
+ - testharness.cpp: the guest's exit through the harness device writes controller 1's Pak to
+   ARES_PAK_OUT (the exit ends in _Exit, which skips ares' own save of save.pak).
+Apply with: patch -p1 -d <ares source> < test/ares-pak.patch (test/run/ares.sh ARES_PAK_*).
+
+--- a/ares/n64/controller/gamepad/gamepad.cpp
++++ b/ares/n64/controller/gamepad/gamepad.cpp
+@@ -113,6 +113,34 @@
+         ram.save(pak->write("save.pak"));
+       }
+     }
++
++    //test harness (ARES_TEST_HARNESS): a run's Controller Paks start formatted, never from a
++    //save.pak a previous run left; controller 1's from the raw image ARES_PAK_IN names when
++    //set (ARES_PAK_OUT gets it at the guest's exit: Cartridge::TestHarness::exitEmulator).
++    //The image is the Pak's bytes in order (ram keeps host-order words: byte accesses)
++    if(getenv("ARES_TEST_HARNESS")) {
++      system.controllerPakBankCount = system.configuredControllerPakBankCount;
++      ram.allocate(system.controllerPakBankCount * 32_KiB);
++      formatControllerPak();
++      auto path = getenv("ARES_PAK_IN");
++      if(controllerPort1.device.get() == this) {
++        if(path) {
++          std::vector<u8> image(ram.size);
++          FILE* fp = fopen(path, "rb");
++          if(!fp || fread(image.data(), 1, ram.size, fp) != ram.size || fgetc(fp) != EOF) {
++            printf("TESTHARNESS pak in: %s is not a readable %u-byte image\n", path, (u32)ram.size);
++            fflush(stdout);
++            ::_Exit(2);
++          }
++          fclose(fp);
++          for(u32 address : range(ram.size)) ram.write<Byte>(address, image[address]);
++          printf("TESTHARNESS pak in %s (%u bytes)\n", path, (u32)ram.size);
++        } else {
++          printf("TESTHARNESS pak: controller 1 has a formatted Controller Pak\n");
++        }
++        fflush(stdout);
++      }
++    }
+   }
+   if(slot->name() == "Rumble Pak") {
+     motor = node->append<Node::Input::Rumble>("Rumble");
+--- a/ares/n64/cartridge/testharness.cpp
++++ b/ares/n64/cartridge/testharness.cpp
+@@ -16,6 +16,10 @@
+ // image when the guest exits through this device (the exit does not run the emulator's
+ // own save, which only autosaves every 30 s and at unload).
+ //
++// Controller Pak (controller 1; ares gives one to every ROM whose homebrew header names no
++// controllers): a run's Pak starts formatted, or from the raw image ARES_PAK_IN names
++// (Gamepad::connect); ARES_PAK_OUT=<file> gets the Pak's image when the guest exits here.
++//
+ // Register map (32-bit CPU accesses):
+ //   +0x00  CMD   (w): 1 = screenshot, 2 = exit
+ //   +0x04  ARG0  (w): screenshot: RDRAM byte address of framebuffer
+@@ -171,6 +175,24 @@
+     fflush(stdout);
+   }
+ 
++  if(auto path = getenv("ARES_PAK_OUT")) {
++    auto gamepad = dynamic_cast<Gamepad*>(controllerPort1.device.get());
++    if(gamepad && gamepad->slot && gamepad->slot->name() == "Controller Pak") {
++      //the Pak's bytes in order (its ram keeps host-order words: byte accesses)
++      std::vector<u8> image(gamepad->ram.size);
++      for(u32 address : range(gamepad->ram.size)) image[address] = gamepad->ram.read<Byte>(address);
++      FILE* fp = fopen(path, "wb");
++      if(fp && fwrite(image.data(), 1, image.size(), fp) == image.size() && !fclose(fp)) {
++        printf("TESTHARNESS pak out %s (%u bytes)\n", path, (u32)gamepad->ram.size);
++      } else {
++        printf("TESTHARNESS pak out: cannot write %s\n", path);
++      }
++    } else {
++      printf("TESTHARNESS pak out: no Controller Pak in controller 1\n");
++    }
++    fflush(stdout);
++  }
++
+   if(Agent::active()) {
+     char text[96];
+     snprintf(text, sizeof(text), "TESTHARNESS exit %u", arg0);

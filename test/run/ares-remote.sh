@@ -30,9 +30,13 @@
 #       ARES_FLASH_IN / ARES_FLASH_OUT (ares.sh: the saved-game chip image
 #       before / after the run; IN is staged to <id>/flash/in.fla, OUT
 #       fetched from <id>/flash/out.fla).
+#       ARES_PAK_IN / ARES_PAK_OUT (ares.sh: controller 1's Controller Pak
+#       image before / after; IN staged to <id>/pak/in.pak, OUT fetched
+#       from <id>/pak/out.pak).
 # Host setup (once): the patched ares at ~/hl64-ares/build/desktop-ui/ares
 # (test/ares-testharness.patch, test/ares-large-rom-isviewer.patch,
-# test/ares-flash.patch; same CMake options as the local build), its
+# test/ares-flash.patch, test/ares-pak.patch; same CMake options as the
+# local build), its
 # settings in ~/hl64-ares/xdg/ares
 # (XDG_DATA_HOME of every remote run), Xvfb, a Vulkan ICD. Measured on
 # ares-host (hl2-yard scene ROM): the NVIDIA ICD and Mesa lavapipe (what a
@@ -64,6 +68,8 @@ if [[ "${1:-}" == --remote-side ]]; then
 	[[ -n "${ARES_HOST_SHOT_DIR:-}" ]] && { mkdir -p "$R/shots"; export ARES_HOST_SHOT_DIR="$R/shots"; }
 	[[ -n "${ARES_FLASH_IN:-}" ]] && export ARES_FLASH_IN="$R/$ARES_FLASH_IN"
 	[[ -n "${ARES_FLASH_OUT:-}" ]] && { mkdir -p "$R/flash"; export ARES_FLASH_OUT="$R/$ARES_FLASH_OUT"; }
+	[[ -n "${ARES_PAK_IN:-}" ]] && export ARES_PAK_IN="$R/$ARES_PAK_IN"
+	[[ -n "${ARES_PAK_OUT:-}" ]] && { mkdir -p "$R/pak"; export ARES_PAK_OUT="$R/$ARES_PAK_OUT"; }
 	mkdir -p "$R/run"
 	c=0
 	if ares_slot_take "$HOME/hl64-runs/.slot" "${HL64_ARES_REMOTE_SLOTS:-8}"; then
@@ -145,6 +151,18 @@ if [[ -n "${ARES_FLASH_OUT:-}" ]]; then
 	FLASH_OUT="$(abs "$ARES_FLASH_OUT")"
 	FWD+=(ARES_FLASH_OUT=flash/out.fla)
 fi
+PAK_OUT=
+if [[ -n "${ARES_PAK_IN:-}" ]]; then
+	PIN="$(abs "$ARES_PAK_IN")"
+	[[ -f "$PIN" ]] || { echo "ares-remote: no ARES_PAK_IN file $PIN" >&2; exit 2; }
+	mkdir -p "$ST/pak"
+	ln -s "$PIN" "$ST/pak/in.pak"
+	FWD+=(ARES_PAK_IN=pak/in.pak)
+fi
+if [[ -n "${ARES_PAK_OUT:-}" ]]; then
+	PAK_OUT="$(abs "$ARES_PAK_OUT")"
+	FWD+=(ARES_PAK_OUT=pak/out.pak)
+fi
 # shellcheck source=ares.sh
 . "$HERE/ares.sh"
 for v in "${ARES_FWD_VARS[@]}"; do
@@ -215,6 +233,14 @@ if [[ "$(cat "$ST/back/exit")" != 143 ]] || "${SSH[@]}" -n "$SSH_TO" "test -f $R
 			rsync -tz "$SSH_TO:$RR/flash/out.fla" "$FLASH_OUT" || { echo "ares-remote: copy back of the flash image failed" >&2; exit 255; }
 		else
 			echo "ares-remote: the run left no flash image (ROM without save type flashram, or no exit through the harness)" >&2
+		fi
+	fi
+	if [[ -n "$PAK_OUT" ]]; then
+		mkdir -p "$(dirname "$PAK_OUT")"
+		if "${SSH[@]}" -n "$SSH_TO" "test -f $RR/pak/out.pak"; then
+			rsync -tz "$SSH_TO:$RR/pak/out.pak" "$PAK_OUT" || { echo "ares-remote: copy back of the Pak image failed" >&2; exit 255; }
+		else
+			echo "ares-remote: the run left no Pak image (no exit through the harness)" >&2
 		fi
 	fi
 fi

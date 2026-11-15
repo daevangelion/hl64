@@ -155,3 +155,5 @@ USE(CFuncConveyor_Use)
 THINK(CDecal_StaticDecal)
 USE(CDecal_TriggerDecal)
 THINK(CGlow_Think)
+// ---- GameCore: trigger_autosave (M6 SaveGame) ----
+TOUCH(CTriggerSave_SaveTouch)

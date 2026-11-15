@@ -1433,7 +1433,7 @@ void CHGruntRepel_RepelUse(int e, int activator, int caller, int useType, float 
 	VecCopy(ent_cv(e)->origin, top);
 	top[2] += 112;
 	life = -4096.0f * tr.frac / v[2] + 0.5f;
-	fx_beam(-1, top, g, NULL, RESID(MON_ROPE_SPR), 10, 0, 255, 255, 255, 255, 0,
+	fx_beam(-1, -1, top, g, NULL, RESID(MON_ROPE_SPR), 10, 0, 255, 255, 255, 255, 0,
 		(int)(life * 10 + 0.5f));
 	UTIL_Remove(e);
 }

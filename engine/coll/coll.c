@@ -1398,6 +1398,7 @@ void col_contents_save(void)
 {
 	int i;
 
+	sv_part("cbr");
 	sv_tag(SV_TAG('C', 'B', 'R', '1'));
 	sv_u32((uint32_t)ncbrush);
 	for (i = 0; i < ncbrush; i++)

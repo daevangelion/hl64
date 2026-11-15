@@ -50,7 +50,7 @@
 #include "game/hud/hud.h"
 
 /* GAME section version: a change of what or how the sections write */
-#define GAME_SAVE_VERSION	1
+#define GAME_SAVE_VERSION	2
 
 /* ---- schedule registry ------------------------------------------------------- */
 
@@ -200,10 +200,10 @@ static uint32_t Sight_SaveState(int op)
 	{
 		memset(&sh, 0, sizeof(sh));
 		Mon_SharedSave(&sh);
-		sv_put(&sh, sizeof(sh));
+		sv_put_delta(&sh, NULL, sizeof(sh));
 		return 0;
 	}
-	sv_get(&sh, sizeof(sh));
+	sv_get_delta(&sh, NULL, sizeof(sh), NULL);
 	if (sh.lm_depth != 0 || sh.sight_count < 0 || sh.sight_count > SIGHT_MAX ||
 		sh.sight_owner < -1 || sh.sight_owner >= HL64_MAX_ENTITIES)
 	{
@@ -217,30 +217,31 @@ static uint32_t Sight_SaveState(int op)
 typedef struct {
 	uint32_t	tag;
 	uint32_t	(*io)(int op);
+	const char	*part;		/* test builds' size log */
 } section_t;
 
 /* the order of the GAME sections in a save (a change: GAME_SAVE_VERSION) */
 static const section_t sections[] = {
-	{ SV_TAG('G', 'u', 't', 'l'), Util_SaveState },
-	{ SV_TAG('G', 's', 'n', 'd'), SoundEnt_SaveState },
-	{ SV_TAG('G', 's', 'g', 't'), Sight_SaveState },
-	{ SV_TAG('G', 'g', 'r', 'f'), Graph_SaveState },
-	{ SV_TAG('G', 's', 'n', 't'), SENTENCEG_SaveState },
-	{ SV_TAG('G', 't', 'l', 'k'), Tlk_SaveState },
-	{ SV_TAG('G', 'g', 'r', 'u'), Grunt_SaveState },
-	{ SV_TAG('G', 'f', 'b', 'l'), FireBullets_SaveState },
-	{ SV_TAG('G', 'm', 'm', 'c'), MM_SaveState },
-	{ SV_TAG('G', 'e', 'n', 'd'), EndSection_SaveState },
-	{ SV_TAG('G', 'w', 'l', 'd'), World_SaveState },
-	{ SV_TAG('G', 's', 'u', 'm'), Sv_SpawnSumState },
-	{ SV_TAG('G', 'p', 'l', 'r'), Player_SaveState },
-	{ SV_TAG('G', 'w', 'p', 'n'), W_SaveState },
-	{ SV_TAG('G', 'c', 'b', 'r'), W_CrowbarSaveState },
-	{ SV_TAG('G', 'p', 'm', 'h'), Pm_HostSaveState },
-	{ SV_TAG('G', 'p', 'm', 's'), Pm_SharedSaveState },
-	{ SV_TAG('G', 'p', 's', 'e'), Gs_PoseSaveState },
-	{ SV_TAG('G', 'h', 'u', 'd'), Hud_SaveState },
-	{ SV_TAG('G', 'v', 'i', 'w'), View_SaveState },
+	{ SV_TAG('G', 'u', 't', 'l'), Util_SaveState, "game utl" },
+	{ SV_TAG('G', 's', 'n', 'd'), SoundEnt_SaveState, "game snd" },
+	{ SV_TAG('G', 's', 'g', 't'), Sight_SaveState, "game sgt" },
+	{ SV_TAG('G', 'g', 'r', 'f'), Graph_SaveState, "game grf" },
+	{ SV_TAG('G', 's', 'n', 't'), SENTENCEG_SaveState, "game snt" },
+	{ SV_TAG('G', 't', 'l', 'k'), Tlk_SaveState, "game tlk" },
+	{ SV_TAG('G', 'g', 'r', 'u'), Grunt_SaveState, "game gru" },
+	{ SV_TAG('G', 'f', 'b', 'l'), FireBullets_SaveState, "game fbl" },
+	{ SV_TAG('G', 'm', 'm', 'c'), MM_SaveState, "game mmc" },
+	{ SV_TAG('G', 'e', 'n', 'd'), EndSection_SaveState, "game end" },
+	{ SV_TAG('G', 'w', 'l', 'd'), World_SaveState, "game wld" },
+	{ SV_TAG('G', 's', 'u', 'm'), Sv_SpawnSumState, "game sum" },
+	{ SV_TAG('G', 'p', 'l', 'r'), Player_SaveState, "game plr" },
+	{ SV_TAG('G', 'w', 'p', 'n'), W_SaveState, "game wpn" },
+	{ SV_TAG('G', 'c', 'b', 'r'), W_CrowbarSaveState, "game cbr" },
+	{ SV_TAG('G', 'p', 'm', 'h'), Pm_HostSaveState, "game pmh" },
+	{ SV_TAG('G', 'p', 'm', 's'), Pm_SharedSaveState, "game pms" },
+	{ SV_TAG('G', 'p', 's', 'e'), Gs_PoseSaveState, "game pse" },
+	{ SV_TAG('G', 'h', 'u', 'd'), Hud_SaveState, "game hud" },
+	{ SV_TAG('G', 'v', 'i', 'w'), View_SaveState, "game viw" },
 };
 #define NSECTIONS	((int)(sizeof(sections) / sizeof(sections[0])))
 
@@ -248,10 +249,12 @@ void game_save_globals(void)
 {
 	int i;
 
+	sv_part("game head");
 	sv_tag(SV_TAG('G', 'A', 'M', 'E'));
 	sv_u32(GAME_SAVE_VERSION);
 	for (i = 0; i < NSECTIONS; i++)
 	{
+		sv_part(sections[i].part);
 		sv_tag(sections[i].tag);
 		sections[i].io(SG_PUT);
 	}

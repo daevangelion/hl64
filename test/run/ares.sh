@@ -35,6 +35,12 @@
 # work (test/ares-flash.patch): its harness device loads the image at cart
 # connect and dumps it at the guest's exit, which skips ares' own save.
 #
+# Controller Pak (controller 1; ares gives our ROM one): a run starts from a
+# formatted Pak, never from a <rom>.pak a previous run left.
+# ARES_PAK_IN=<file> loads that raw 32 KB image (hl64-host --pak writes the
+# same layout) before boot; ARES_PAK_OUT=<file> gets the Pak's image when the
+# guest exits through the harness, like ARES_FLASH_* (test/ares-pak.patch).
+#
 # Where: HL64_ARES_HOST unset / empty / local: on this machine, holding one
 # of ARES_SLOTS (default 2) slot locks /tmp/hl64-ares.slot<i> while ares
 # runs (every ares user on the machine takes one). HL64_ARES_HOST=<host>
@@ -56,6 +62,20 @@ ares_flash_check() {
 	fi
 	if [[ -n "${ARES_FLASH_OUT:-}" ]]; then
 		f=$(ares_abs "$dir" "$ARES_FLASH_OUT")
+		mkdir -p "$(dirname "$f")" && rm -f "$f"
+	fi
+}
+
+# ares_pak_check DIR: ARES_PAK_IN must be a file (else 2); ARES_PAK_OUT's
+# directory is made and a stale file there removed.
+ares_pak_check() {
+	local dir=$1 f
+	if [[ -n "${ARES_PAK_IN:-}" ]]; then
+		f=$(ares_abs "$dir" "$ARES_PAK_IN")
+		[[ -f "$f" ]] || { echo "ares: ARES_PAK_IN $f is not a file" >&2; return 2; }
+	fi
+	if [[ -n "${ARES_PAK_OUT:-}" ]]; then
+		f=$(ares_abs "$dir" "$ARES_PAK_OUT")
 		mkdir -p "$(dirname "$f")" && rm -f "$f"
 	fi
 }
@@ -160,7 +180,7 @@ ares_exec() {
 ares_run() {
 	local dir=$1 rom=$2 log=$3 to=${4:-${ARES_TIMEOUT:-1800}} c=0
 	ARES_STOP=0
-	ares_flash_check "$dir" || { ARES_WALL=0; ARES_LOAD=-; return 2; }
+	{ ares_flash_check "$dir" && ares_pak_check "$dir"; } || { ARES_WALL=0; ARES_LOAD=-; return 2; }
 	ARES_RAN_ON=$(ares_host)
 	if [[ $ARES_RAN_ON != local ]]; then
 		local st
@@ -186,6 +206,9 @@ ares_run() {
 	ares_slot_drop
 	if [[ -n "${ARES_FLASH_OUT:-}" && ! -f "$(ares_abs "$dir" "$ARES_FLASH_OUT")" ]]; then
 		echo "ares: the run left no flash image $ARES_FLASH_OUT (ROM without save type flashram, or no exit through the harness)" >&2
+	fi
+	if [[ -n "${ARES_PAK_OUT:-}" && ! -f "$(ares_abs "$dir" "$ARES_PAK_OUT")" ]]; then
+		echo "ares: the run left no Pak image $ARES_PAK_OUT (no exit through the harness)" >&2
 	fi
 	return "$c"
 }

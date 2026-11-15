@@ -13,13 +13,16 @@
  * serial and records the free time (f32 frame time).
  */
 #include <math.h>
+#include <stddef.h>
 #include <string.h>
 
 #include "hl64/ent.h"
+#include "hl64/rec.h"
 #include "hl64/snd.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
 #include "engine/ent/ent.h"
+#include "engine/ent/rec_int.h"
 #include "engine/mem/carve.h"
 #include "engine/phys/player.h"
 #include "engine/phys/phys.h"
@@ -679,39 +682,291 @@ void ent_mem_log(void)
 
 /* ---- saved games (architecture.md 14) ------------------------------------------- */
 
-/* The components region is index-based (slots, cell pool indices, ranks,
- * free times): it goes out byte for byte, so slots, serials, links and
- * the slot-reuse rule's inputs come back exactly. */
+/* A slot as the save sees it: the components, the touch rank and free
+ * time, the contents flag and the grid node without its query stamp (a
+ * load zeroes the stamps: every stamp a run holds is below the next
+ * query's, so a query visits the same nodes either way; the box only
+ * when the node is in the grid -- ent_link writes it before it is read).
+ * A live slot's free time is not kept (create reads it only for free
+ * slots, ent_free writes it): 0. Its memberships go with the grid
+ * (ent_grid_save). */
+typedef struct {
+	col_ent_t	cv;
+	ent_mot_t	mot;
+	ent_phys_t	phys;
+	ent_tm_t	tm;
+	ent_rnd_t	rnd;
+	ent_id_t	id;
+	uint32_t	rank;
+	float		freetime;
+	uint8_t		kind, contents;
+	uint16_t	cells;
+	int16_t		lo[3], hi[3];
+} srow_t;
+_Static_assert(sizeof(srow_t) == sizeof(col_ent_t) + sizeof(ent_mot_t) + sizeof(ent_phys_t)
+	+ sizeof(ent_tm_t) + sizeof(ent_rnd_t) + sizeof(ent_id_t) + 24, "srow_t has no padding");
+#define SROW_WORDS	(sizeof(srow_t) / 4)
+#define SROW_ABS	((offsetof(srow_t, cv) + offsetof(col_ent_t, absmin)) / 4)	/* 6 words */
+#define SROW_BOX	(offsetof(srow_t, lo) / 4)					/* 3 words */
+_Static_assert(offsetof(col_ent_t, absmax) == offsetof(col_ent_t, absmin) + 12
+	&& offsetof(srow_t, lo) % 4 == 0 && sizeof(srow_t) == offsetof(srow_t, lo) + 12,
+	"srow_t derived words");
+
+/* Per slot the map record whose record row names its entity (rec.c
+ * rec_slot_records), for the rows' references. */
+static uint32_t slot_rec[HL64_MAX_ENTITIES];
+
+/* The reference a slot's row is saved against: slot i never used
+ * (clear_slot's state, serial and free time 0); a slot a map record's row
+ * names: the entity hydrate made of that record (id, rank, origin,
+ * angles) with the record's model set (ent_set_model). */
+static void srow_ref(int i, srow_t *r)
+{
+	gid_t16 gid = (gid_t16)(slot_rec[i] & 0xFFFFu);
+	int k;
+
+	memset(r, 0, sizeof(*r));
+	r->cv.index = (uint16_t)i;
+	r->cv.owner = COL_NONE;
+	r->cv.model = COL_NONE;
+	r->cv.studio = COL_NONE;
+	r->phys.groundentity = ENT_NONE;
+	r->phys.aiment = ENT_NONE;
+	for (k = 0; k < 4; k++)
+		r->rnd.sectors[k] = ENT_NONE;
+	r->id.state = ENT_ST_FREE;
+	r->id.layer = -1;
+	r->id.cls = CLS_NONE;
+	r->id.gid = GID_NONE;
+	r->id.targetname = NAME_NONE;
+	r->rank = ENT_RANK_RUNTIME;
+	r->cells = ENT_UNLINKED;
+	if (gid != GID_NONE && !rec_entity_ref(gid, &r->id, &r->rank, r->cv.origin, r->cv.angles))
+	{
+		res_t m = rec_key_res(gid, RK_MODEL);
+
+		r->id.serial = (uint16_t)(slot_rec[i] >> 16);
+		r->id.state = ENT_ST_LIVE;
+		r->rnd.model = m;
+		if (m != RES_NONE && RES_KIND(m) == RES_K_SUBMODEL)
+		{
+			r->cv.model = COL_MODEL(RES_SUB_SLOT(m), RES_SUB_NUM(m));
+			if (!col_model_bounds(r->cv.model, r->cv.mins, r->cv.maxs))
+				memset(r->cv.mins, 0, sizeof(r->cv.mins) + sizeof(r->cv.maxs));
+		}
+		else if (m != RES_NONE && RES_KIND(m) == RES_K_MODEL)
+			r->cv.studio = m;
+	}
+}
+
+/* The words a row's other words predict: a live slot's absmin / absmax
+ * as ent_link would set them now (grid.c linked_box), a grid node's box
+ * as ent_link rounds that box (+ g_M of the layer). Computed from row
+ * into the derived words of d, absmin / absmax first (the box reads d's). */
+static int32_t srow_coord(float x)
+{
+	if (!(x >= -16777216.0f))
+		x = -16777216.0f;
+	if (x > 16777216.0f)
+		x = 16777216.0f;
+	return (int32_t)x;
+}
+
+static int16_t srow_s16(int32_t v)
+{
+	return (int16_t)(v < -32768 ? -32768 : v > 32767 ? 32767 : v);
+}
+
+static void srow_abs(const srow_t *row, srow_t *d)
+{
+	const col_ent_t *e = &row->cv;
+	float *mn = d->cv.absmin, *mx = d->cv.absmax;
+	int i;
+
+	if (row->id.state != ENT_ST_LIVE)
+		return;
+	if (e->solid == COL_SOLID_BSP
+		&& (e->angles[0] != 0.0f || e->angles[1] != 0.0f || e->angles[2] != 0.0f))
+	{
+		float m = 0.0f;
+
+		for (i = 0; i < 3; i++)
+		{
+			float a = fabsf(e->mins[i]), b = fabsf(e->maxs[i]);
+
+			if (a > m)
+				m = a;
+			if (b > m)
+				m = b;
+		}
+		for (i = 0; i < 3; i++)
+		{
+			mn[i] = e->origin[i] - m;
+			mx[i] = e->origin[i] + m;
+		}
+	}
+	else
+		for (i = 0; i < 3; i++)
+		{
+			mn[i] = e->origin[i] + e->mins[i];
+			mx[i] = e->origin[i] + e->maxs[i];
+		}
+	for (i = 0; i < 3; i++)
+	{
+		mn[i] -= 1.0f;
+		mx[i] += 1.0f;
+	}
+}
+
+static void srow_box(const srow_t *row, srow_t *d)
+{
+	const float *gm = eng_layer_origin(row->id.layer);
+	int a;
+
+	if (!row->kind)
+		return;
+	for (a = 0; a < 3; a++)
+	{
+		d->lo[a] = srow_s16(srow_coord(row->cv.absmin[a] + gm[a]) - 1);
+		d->hi[a] = srow_s16(srow_coord(row->cv.absmax[a] + gm[a]) + 1);
+	}
+}
+
+static void srow_get(int i, srow_t *r)
+{
+	const ent_node_t *n = &ent_s.node[i];
+
+	memset(r, 0, sizeof(*r));
+	r->cv = ent_c.cv[i];
+	r->mot = ent_c.mot[i];
+	r->phys = ent_c.phys[i];
+	r->tm = ent_c.tm[i];
+	r->rnd = ent_c.rnd[i];
+	r->id = ent_c.id[i];
+	r->rank = ent_s.rank[i];
+	if (r->id.state != ENT_ST_LIVE)
+		r->freetime = ent_s.freetime[i];
+	r->kind = n->kind;
+	r->contents = ent_s.contents[i];
+	r->cells = n->cells;
+	if (n->kind)
+	{
+		memcpy(r->lo, n->lo, sizeof(r->lo));
+		memcpy(r->hi, n->hi, sizeof(r->hi));
+	}
+}
+
+static void srow_set(int i, const srow_t *r)
+{
+	ent_node_t *n = &ent_s.node[i];
+
+	ent_c.cv[i] = r->cv;
+	ent_c.mot[i] = r->mot;
+	ent_c.phys[i] = r->phys;
+	ent_c.tm[i] = r->tm;
+	ent_c.rnd[i] = r->rnd;
+	ent_c.id[i] = r->id;
+	ent_s.rank[i] = r->rank;
+	ent_s.freetime[i] = r->freetime;
+	ent_s.contents[i] = r->contents;
+	n->kind = r->kind;
+	n->stamp = 0;
+	n->cells = r->cells;
+	memcpy(n->lo, r->lo, sizeof(n->lo));
+	memcpy(n->hi, r->hi, sizeof(n->hi));
+}
+
+/* The words of from whose mask bit is clear go to row (words [w, w + n)). */
+static void srow_fill(srow_t *row, const srow_t *from, const uint8_t *mask, uint32_t w, uint32_t n)
+{
+	for (; n--; w++)
+		if (!(mask[w >> 3] & (1u << (w & 7))))
+			memcpy((uint8_t *)row + 4 * w, (const uint8_t *)from + 4 * w, 4);
+}
+
+/* The slots up to the last one not in its never-used state, each as a
+ * delta row against srow_ref with the derived words (srow_abs, srow_box)
+ * predicted from the row itself: slots, serials, links and the
+ * slot-reuse rule's inputs come back exactly. */
 void ent_save(void)
 {
-	sv_tag(SV_TAG('E', 'N', 'T', '1'));
-	sv_u32(ent_s.region_bytes);
-	sv_put(mem_region(MEM_COMPONENTS), ent_s.region_bytes);
+	srow_t row, ref;
+	int i, n = 0;
+
+	sv_part("ent slots");
+	sv_tag(SV_TAG('E', 'N', 'T', '2'));
 	sv_u32(ent_s.seq);
 	sv_u16(ent_s.top);
 	sv_u16(ent_s.live);
 	sv_u16((uint16_t)(int16_t)frame_layer);
+	rec_slot_records(slot_rec);
+	for (i = 0; i < HL64_MAX_ENTITIES; i++)
+	{
+		srow_get(i, &row);
+		srow_ref(i, &ref);
+		if (memcmp(&row, &ref, sizeof(row)))
+			n = i + 1;
+	}
+	sv_u16((uint32_t)n);
+	for (i = 0; i < n; i++)
+	{
+		srow_get(i, &row);
+		srow_ref(i, &ref);
+		srow_abs(&row, &ref);
+		srow_box(&row, &ref);
+		sv_put_delta(&row, &ref, sizeof(row));
+	}
+	sv_part("ent sets");
 	ent_sets_save();
+	sv_part("ent grid");
 	ent_grid_save();
+	sv_part("ent priv");
 	ent_priv_save_all();
 }
 
 int ent_load(void)
 {
-	if (sv_expect(SV_TAG('E', 'N', 'T', '1')))
+	uint8_t mask[(SROW_WORDS + 7) / 8];
+	srow_t row, d;
+	uint32_t n, live = 0;
+	int i;
+
+	if (sv_expect(SV_TAG('E', 'N', 'T', '2')))
 		return -1;
-	if (sv_get_u32() != ent_s.region_bytes)
-	{
-		sv_fail("ent: components layout");
-		return -1;
-	}
-	sv_get(mem_region(MEM_COMPONENTS), ent_s.region_bytes);
 	ent_s.seq = sv_get_u32();
 	ent_s.top = (uint16_t)sv_get_u16();
 	ent_s.live = (uint16_t)sv_get_u16();
 	frame_layer = (int16_t)sv_get_u16();
-	if (ent_s.top > HL64_MAX_ENTITIES || ent_s.live > ent_s.top)
+	n = sv_get_u16();
+	if (ent_s.top > HL64_MAX_ENTITIES || ent_s.live > ent_s.top || n > HL64_MAX_ENTITIES
+		|| frame_layer < -1 || frame_layer >= HL64_WORLD_LAYERS)
 		sv_fail("ent: slot counts");
+	rec_slot_records(slot_rec);
+	for (i = 0; i < HL64_MAX_ENTITIES && !sv_failed(); i++)
+	{
+		srow_ref(i, &row);
+		if ((uint32_t)i < n)
+		{
+			sv_get_delta(&row, &row, sizeof(row), mask);
+			d = row;
+			srow_abs(&row, &d);
+			srow_fill(&row, &d, mask, SROW_ABS, 6);
+			srow_box(&row, &d);
+			srow_fill(&row, &d, mask, SROW_BOX, 3);
+		}
+		if (row.id.state > ENT_ST_LIVE || row.cv.index != i || row.contents > 1
+			|| row.id.layer < -1 || row.id.layer >= HL64_WORLD_LAYERS
+			|| (row.kind >> 4) > 3 || (row.kind ? row.cells >= ENT_CELLS : row.cells != ENT_UNLINKED)
+			|| (row.id.state == ENT_ST_LIVE && i >= ent_s.top))
+		{
+			sv_fail("ent: slot");
+			break;
+		}
+		live += row.id.state == ENT_ST_LIVE;
+		srow_set(i, &row);
+	}
+	if (!sv_failed() && live != ent_s.live)
+		sv_fail("ent: live count");
 	if (ent_s.live > ent_s.live_peak)
 		ent_s.live_peak = ent_s.live;
 	if (sv_failed() || ent_sets_load() || ent_grid_load() || ent_priv_load_all())

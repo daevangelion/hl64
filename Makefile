@@ -122,6 +122,9 @@ N64_SRC += plat/n64/gpu_fx.c
 HOST_SRC += plat/host/gpu_fx.c
 N64_SRC += plat/n64/gpu_2d.c
 HOST_SRC += plat/host/gpu_2d.c
+# M6 SaveGame: the Controller Pak (plat/pakfs.h: one file system, two backends)
+N64_SRC += plat/n64/pak.c plat/pakfs.c
+HOST_SRC += plat/host/pak_host.c plat/pakfs.c
 
 # Directories built without -ffast-math on the cart (18.2): host and cart
 # must agree bit for bit on collision and physics, on the world draw list
@@ -472,6 +475,15 @@ INTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o,$(HOST_OBJS)) \
 $(INTEST_BIN): $(INTEST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS) -Wl,--wrap=sys_pad_read
 intest: $(INTEST_BIN)
+# Controller Pak driver (test/save/paktest.c, run by test/save/paktest.sh):
+# plat/pakfs.c over the host image backend, the log, nothing else; the
+# driver cuts the power between Pak transfers (pakfs_dev_write --wrap).
+PAKTEST_BIN := $(BUILD_DIR)/host/hl64-paktest
+$(PAKTEST_BIN): $(addprefix $(BUILD_DIR)/host/,plat/pakfs.o plat/host/pak_host.o engine/core/log.o \
+		test/save/paktest.o)
+	$(HOST_CC) -o $@ $^ $(HOST_ARCH) -Wl,--wrap=pakfs_dev_write
+.PHONY: paktest
+paktest: $(PAKTEST_BIN)
 
 # ---- content, routes, gates --------------------------------------------------
 

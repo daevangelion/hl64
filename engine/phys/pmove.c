@@ -926,7 +926,7 @@ void phy_player_save(void)
 	sv_u8(P.active);
 	sv_u32((uint32_t)P.map);
 	sv_u32((uint32_t)sizeof(P.pl));
-	sv_put(&P.pl, sizeof(P.pl));
+	sv_put_delta(&P.pl, NULL, sizeof(P.pl));
 }
 
 int phy_player_load(void)
@@ -943,7 +943,7 @@ int phy_player_load(void)
 	if (sv_failed())
 		return -1;
 	phy_player_reset();
-	sv_get(&P.pl, sizeof(P.pl));
+	sv_get_delta(&P.pl, NULL, sizeof(P.pl), NULL);
 	if (!active)
 		return sv_failed() ? -1 : 0;
 	if (map < 0 || map >= wld_map_count() || !(P.home = wld_layer_of_map(map))

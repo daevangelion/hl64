@@ -1155,8 +1155,8 @@ static void test_x6(void)
 		fx_particles(o, d, 247, 20);
 		fx_implosion(o, 100, 20, 5);
 		fx_beam_cylinder(o, 200, spr, 5, 16, 0, 255, 255, 255, 200);
-		id = fx_beam(-1, o, -1, b, spr, 20, 10, 255, 255, 255, 200, 10, 0);
-		beams += id >= 0;
+		id = fx_beam(i, -1, o, -1, b, spr, 20, 10, 255, 255, 255, 200, 10, 0);
+		beams += id == i;	/* the key, also for a dropped beam */
 		fx_shake(o, 4, 2, 1, 0);
 		fx_fade(0, 0, 0, 255, 1, 1, 1);
 		fx_text(0);
@@ -1191,7 +1191,7 @@ static void test_x6(void)
 	/* infinite-life beams stay until killed */
 	CHECK(tent_live() == 0 && part_live() == 0, "after 10 s: temps %d parts %d", tent_live(),
 		part_live());
-	for (i = 0; i < HL64_FX_BEAMS; i++)
+	for (i = 0; i < 60; i++)
 		fx_beam_kill(i);
 	CHECK(beam_live() == 0, "beams after kill %d", beam_live());
 	snprintf(note, sizeof(note), "60x burst of every effect: drops temps=%lu parts=%lu beams=%lu, "

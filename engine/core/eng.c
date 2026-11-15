@@ -545,8 +545,17 @@ static void trace_frame(void)
 }
 #endif
 
+/* A save or settings write in flight finishes first: the command comes
+ * back next frame (a quit never cuts a flash write). */
 static int cmd_quit(const dbg_cmd_t *c)
 {
+	if (save_busy())
+	{
+		dbg_cmd_t q = *c;
+
+		q.frame = eng.frame + 1;
+		return dbg_push(&q) ? 1 : 0;
+	}
 	sys_exit((int)c->arg[0].u);
 }
 

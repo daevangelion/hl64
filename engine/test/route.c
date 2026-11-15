@@ -35,6 +35,7 @@
 #include "hl64/ent.h"
 #include "hl64/game.h"
 #include "hl64/rec.h"
+#include "hl64/save.h"
 
 #define RBC_MAGIC	0x52424331u
 #define RBC_HDR		48
@@ -916,6 +917,9 @@ void rt_frame(double time)
 			 * by the ops before it (STATS, SHOT) run at that frame's
 			 * boundary */
 			if (time == rt.t0)
+				return;
+			/* a save in flight finishes first (as a quit waits) */
+			if (save_busy())
 				return;
 			log_printf("route PASS\n");
 			log_flush();

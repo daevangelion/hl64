@@ -413,7 +413,7 @@ static const struct { const char *name; uint16_t flags; } hle_classes[] = {
 	{"trigger_push", 0}, {"trigger_counter", 0},
 	{"trigger_auto", HLE_CF_LOGIC}, {"multi_manager", HLE_CF_LOGIC},
 	{"multisource", HLE_CF_LOGIC}, {"env_global", HLE_CF_LOGIC},
-	{"trigger_endsection", 0},
+	{"trigger_endsection", 0}, {"trigger_autosave", 0},
 	/* scripting */
 	{"scripted_sequence", HLE_RF_PIN}, {"aiscripted_sequence", HLE_RF_PIN},
 	{"scripted_sentence", HLE_CF_LOGIC}, {"monstermaker", HLE_CF_LOGIC | HLE_RF_PIN},
