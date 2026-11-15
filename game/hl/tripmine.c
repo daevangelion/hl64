@@ -23,6 +23,7 @@
  */
 #include "game/hl/grenade.h"
 #include "game/hl/player.h"
+#include "game/hl/savegame.h"
 
 #define TRIPMINE_WORLD		7
 
@@ -52,22 +53,46 @@ static void KillBeam(int e)
 	}
 }
 
+/* the laser at the measured length: CBeam::BeamCreate(laserbeam, 10)
+ * PointEntInit(end, self), colour 0 214 198, scroll 255, brightness 64 */
+static int beam_issue(int e)
+{
+	CTripmineGrenade *t = TM(e);
+	float end[3];
+
+	VecMA(ent_cv(e)->origin, 2048 * t->m_flBeamLength, t->m_vecDir, end);
+	return fx_beam(-1, end, e, NULL, RESID(SPR_LASERBEAM), 10, 0, 0, 214, 198, 64, 255, 0);
+}
+
 static void MakeBeam(int e)
 {
 	CTripmineGrenade *t = TM(e);
 	col_trace_t tr;
-	float end[3];
 
 	UTIL_TraceLine(ent_cv(e)->origin, t->m_vecEnd, dont_ignore_monsters, e, &tr);
 	t->m_flBeamLength = tr.frac;
 	SetThink(e, FN_CTripmineGrenade_BeamBreakThink);
 	ThinkIn(e, 0.1f);
-	VecMA(ent_cv(e)->origin, 2048 * t->m_flBeamLength, t->m_vecDir, end);
-	/* CBeam::BeamCreate(laserbeam, 10) PointEntInit(end, self), colour
-	 * 0 214 198, scroll 255, brightness 64 */
-	t->m_pBeam = fx_beam(-1, end, e, NULL, RESID(SPR_LASERBEAM), 10, 0, 0, 214, 198, 64, 255, 0);
+	t->m_pBeam = beam_issue(e);
 	log_printf("tripmine: %d powered up at %.3f, beam %d length %.1f\n", e, (double)gtime(),
 		t->m_pBeam, (double)(2048 * t->m_flBeamLength));
+}
+
+/* After a saved game's load (frame layer: the mine's): the laser made
+ * again at the saved length, without MakeBeam's trace or think. A mine
+ * whose beam the saving game had (m_pBeam >= 0) keeps one: BeamBreakThink
+ * remakes a beam (re-measuring, re-owning) only for m_pBeam < 0, a
+ * simulation decision. A full beam pool leaves HL64_FX_BEAMS, an id no
+ * beam has (fx_beam_kill ignores it). */
+void CTripmineGrenade_LoadDone(int e)
+{
+	CTripmineGrenade *t = TM(e);
+
+	if (t->m_pBeam < 0)
+		return;
+	t->m_pBeam = beam_issue(e);
+	if (t->m_pBeam < 0)
+		t->m_pBeam = HL64_FX_BEAMS;
 }
 
 /* m_hOwner as CBaseEntity::Instance does: the world (slot 0, no live

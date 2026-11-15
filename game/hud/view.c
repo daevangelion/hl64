@@ -33,6 +33,7 @@
 #include "hl64/studio.h"
 #include "game/hl/player.h"
 #include "game/studio/anim.h"
+#include "game/hl/savegame.h"
 
 #define CL_BOB		0.01f
 #define CL_BOBCYCLE	0.8f
@@ -68,20 +69,31 @@ static void angle_vectors(const float *angles, float *forward, float *right, flo
 	up[2] = cr * cp;
 }
 
+/* V_CalcBob's and V_CalcNormalRefdef's statics (file scope: saved games,
+ * so the eye after a load is the one the saving game would have drawn) */
+static struct {
+	double	bobtime;
+	float	bob;
+	float	bob_lasttime;
+	float	oldz, lasttime;
+} vs;
+
+uint32_t View_SaveState(int op)
+{
+	return sg_io(op, &vs, sizeof(vs));
+}
+
 /* V_CalcBob: Quakeworld bob code */
 static float V_CalcBob(float time, float frametime, int onground, const float *simvel)
 {
-	static double bobtime;
-	static float bob;
-	static float lasttime;
 	float cycle;
 
-	if (!onground || time == lasttime)
-		return bob;	/* just use old value */
-	lasttime = time;
+	if (!onground || time == vs.bob_lasttime)
+		return vs.bob;	/* just use old value */
+	vs.bob_lasttime = time;
 
-	bobtime += frametime;
-	cycle = bobtime - (int)(bobtime / CL_BOBCYCLE) * CL_BOBCYCLE;
+	vs.bobtime += frametime;
+	cycle = vs.bobtime - (int)(vs.bobtime / CL_BOBCYCLE) * CL_BOBCYCLE;
 	cycle /= CL_BOBCYCLE;
 	if (cycle < CL_BOBUP)
 		cycle = M_PI * cycle / CL_BOBUP;
@@ -90,13 +102,13 @@ static float V_CalcBob(float time, float frametime, int onground, const float *s
 
 	/* bob is proportional to simulated velocity in the xy plane
 	 * (don't count Z, or jumping messes it up) */
-	bob = sqrt(simvel[0] * simvel[0] + simvel[1] * simvel[1]) * CL_BOB;
-	bob = bob * 0.3 + bob * 0.7 * hl_sin(cycle);
-	if (bob > 4.0f)
-		bob = 4.0f;
-	if (bob < -7.0f)
-		bob = -7.0f;
-	return bob;
+	vs.bob = sqrt(simvel[0] * simvel[0] + simvel[1] * simvel[1]) * CL_BOB;
+	vs.bob = vs.bob * 0.3 + vs.bob * 0.7 * hl_sin(cycle);
+	if (vs.bob > 4.0f)
+		vs.bob = 4.0f;
+	if (vs.bob < -7.0f)
+		vs.bob = -7.0f;
+	return vs.bob;
 }
 
 /* V_CalcRoll */
@@ -167,7 +179,6 @@ static void view_model(const ent_player_t *pl, float wofs, float bob,
 
 void game_calc_view(const ent_player_t *pl, float time, float frametime, game_view_t *out)
 {
-	static float oldz, lasttime;
 	int onground = (pl->flags & FL_ONGROUND) != 0, i;
 	float bob, waterOffset = 0;
 
@@ -229,23 +240,23 @@ void game_calc_view(const ent_player_t *pl, float time, float frametime, game_vi
 		out->ang[i] += pl->punchangle[i];
 
 	/* smooth out stair step ups */
-	if (onground && pl->origin[2] - oldz > 0)
+	if (onground && pl->origin[2] - vs.oldz > 0)
 	{
-		float steptime = time - lasttime;
+		float steptime = time - vs.lasttime;
 
 		if (steptime < 0)
 			steptime = 0;
-		oldz += steptime * 150;
-		if (oldz > pl->origin[2])
-			oldz = pl->origin[2];
-		if (pl->origin[2] - oldz > 18)
-			oldz = pl->origin[2] - 18;
-		out->org[2] += oldz - pl->origin[2];
+		vs.oldz += steptime * 150;
+		if (vs.oldz > pl->origin[2])
+			vs.oldz = pl->origin[2];
+		if (pl->origin[2] - vs.oldz > 18)
+			vs.oldz = pl->origin[2] - 18;
+		out->org[2] += vs.oldz - pl->origin[2];
 	}
 	else
-		oldz = pl->origin[2];
+		vs.oldz = pl->origin[2];
 
-	lasttime = time;
+	vs.lasttime = time;
 
 	/* screen shake (the engine's V_CalcShake / V_ApplyShake, fx.h) */
 	{

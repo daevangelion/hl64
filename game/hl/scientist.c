@@ -151,6 +151,11 @@ static const Schedule_t slScientistStartle[] = {
 static const Task_t tlFear[] = { T(TASK_STOP_MOVING, 0), T(TASK_FACE_ENEMY, 0), T(TASK_SAY_FEAR, 0) };
 static const Schedule_t slFear[] = { SCHED(tlFear, bits_COND_NEW_ENEMY, 0, "Fear") };
 
+/* saved games: append only (monster.h sched_list_t) */
+SCHED_LIST(sched_scientist, slFollow, slFollowScared, slFaceTargetScared, slStopFollowing, slHeal,
+	slFaceTarget, slSciPanic, slIdleSciStand, slScientistCover, slScientistHide,
+	slScientistStartle, slFear);
+
 /* ---- speech ----------------------------------------------------------------------- */
 
 static void Scream(int e)

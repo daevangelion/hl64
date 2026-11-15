@@ -127,4 +127,21 @@ void		sys_pi_set_isr(void (*isr)(void));
 void		sys_irq_off(void);
 void		sys_irq_on(void);
 
+/* ---- FlashRAM save chip (D4, docs/architecture.md 14) --------------------
+ * 128 KB: 8 sectors of 16 KB, pages of 128 B (erase sets 0xFF). The cart
+ * drives the chip's command register at PI 0x08000000 (DOM2) with the io
+ * chain held around each register access / DMA, so streaming pieces never
+ * wait more than one such access; the host keeps the image in a file
+ * (hl64-host --save FILE). Erase and program only start the operation:
+ * sys_flash_poll reports when it ends. One operation at a time. */
+int		sys_flash_init(void);		/* boot: 1 chip present, 0 none */
+/* Blocking read of [off, off + len) into dst: off and len even, dst
+ * 16-aligned; 0 ok, -1 no chip / bad arguments. */
+int		sys_flash_read(void *dst, uint32_t off, uint32_t len);
+int		sys_flash_erase(uint32_t sector);	/* 0 started, -1 no chip / busy */
+/* Program page (128 B) from src (16-aligned); 0 started, -1 no chip / busy. */
+int		sys_flash_program(uint32_t page, const void *src);
+/* 1 the operation runs, 0 it ended ok (or none), -1 it failed. */
+int		sys_flash_poll(void);
+
 #endif

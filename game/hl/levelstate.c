@@ -69,6 +69,7 @@
 #include "engine/world/wld.h"
 #include "game/hl/monster.h"
 #include "game/hl/player.h"
+#include "game/hl/savegame.h"
 
 #define SV_VERSION		1
 #define SV_VERSION_CLOSED	2	/* written by a closing map: references wake */
@@ -912,6 +913,21 @@ static uint32_t fnv(const uint8_t *p, int n)
 	for (i = 0; i < n; i++)
 		h = (h ^ p[i]) * 16777619u;
 	return h ? h : 1;
+}
+
+/* the pristine forms of the live slots (a dead slot's is set at its next
+ * spawn before any read) */
+uint32_t Sv_SpawnSumState(int op)
+{
+	int e;
+
+	if (op == SG_GET)
+		memset(spawn_sum, 0, sizeof(spawn_sum));
+	if (op != SG_SIZE)
+		for (e = 0; e < HL64_MAX_ENTITIES; e++)
+			if (ent_is_live(e))
+				sg_io(op, &spawn_sum[e], sizeof(spawn_sum[e]));
+	return sizeof(spawn_sum[0]);
 }
 
 void sv_spawned(int e)

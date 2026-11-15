@@ -125,7 +125,11 @@
 
 #define HL64_SCRATCH_KB			96	/* per-frame scratch arena; boot: the campaign.rtb cart part (67632 B measured, Uplink + Hazard with the full game res.def); cook-proved: restab fails when the cart part exceeds it */
 #define HL64_RESTAB_KB			56	/* resource table: 44528 B measured (full res.def, Uplink + Hazard cook of main 1a9e4e8: 1192 files, 1015 sounds) x 1.25; cook-proved: restab computes engine/res's table bytes and fails above it */
-#define HL64_SENTENCES_KB		24	/* [EST] word ids, no strings */
+/* Saved games (engine/save, architecture.md 14): one slot's compressed
+ * image, kept while the flash writer programs it over the following
+ * frames (include/hl64/save.h SAVE_SLOT_BYTES); the coder's work memory
+ * is borrowed from the scratch arena during the snapshot / restore. */
+#define HL64_SAVE_KB			112
 #define HL64_LIGHTSTYLE_KB		4	/* patterns + state */
 /* The whole CWG3 campaign graph (engine/world/seam.c; docs/formats/
  * cwg-format.md): Uplink + Hazard c6 cook 4730 B (10 maps, 20 seams, 72

@@ -26,6 +26,7 @@
 #include "engine/core/hlmath.h"
 #include "game/hl/monster.h"
 #include "game/hl/util.h"
+#include "game/hl/savegame.h"
 
 game_globals_t	gpGlobals;
 float		g_vecAttackDir[3];
@@ -1310,6 +1311,29 @@ void GlobalReset(void)
 int game_global_state(int id)
 {
 	return GlobalState(id);
+}
+
+/* gpGlobals (UTIL_MakeVectors' vectors outlive the think that made
+ * them, as in HLSDK), g_vecAttackDir, the pending multidamage and the
+ * env_global states */
+uint32_t Util_SaveState(int op)
+{
+	uint32_t n = 0;
+	int i;
+
+	n += sg_io(op, &gpGlobals, sizeof(gpGlobals));
+	n += sg_io(op, g_vecAttackDir, sizeof(g_vecAttackDir));
+	n += sg_io(op, &gMultiDamage, sizeof(gMultiDamage));
+	n += sg_io(op, global_state, sizeof(global_state));
+	if (op == SG_GET)
+		for (i = 0; i < GAME_MAX_GLOBALS; i++)
+			if (global_state[i] > GLOBAL_DEAD + 1)
+			{
+				sv_fail("game: global state out of range");
+				GlobalReset();
+				break;
+			}
+	return n;
 }
 
 /* ---- effects helpers (util.cpp) ------------------------------------------------ */

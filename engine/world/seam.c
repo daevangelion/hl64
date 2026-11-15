@@ -49,6 +49,8 @@
 #include "engine/mem/carve.h"
 #include "engine/phys/phys.h"
 #include "engine/phys/player.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/world/wld.h"
 
 #define CWG_MAGIC	0x43574733u	/* 'CWG3' */
@@ -103,7 +105,7 @@ typedef struct {
 	float		pos[3];		/* B frame */
 } cont_t;
 
-static struct {
+static struct seam_state {
 	uint8_t		loaded;
 	int		home;			/* CWG map, -1 */
 	int		near;			/* selected seam, -1 */
@@ -1522,4 +1524,52 @@ int seam_anchors(float (*out)[3], int max)
 		n = 2;
 	}
 	return n;
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* The state machine as it is (seam, map and slot numbers, game times,
+ * frame numbers), the pending switch's reason by index. The seam pin is
+ * residency: a load leaves it to the next approach step. */
+static const char *const why_names[] = {
+	"use", "touch", "forced: left the trigger outside the switch box",
+	"forced: in the trigger outside the switch box"
+};
+#define NWHY	((int)(sizeof(why_names) / sizeof(why_names[0])))
+
+void seam_save(void)
+{
+	static struct seam_state t;
+	int w;
+
+	t = S;
+	t.why = NULL;
+	for (w = 0; w < NWHY && S.why && strcmp(S.why, why_names[w]); w++)
+		;
+	sv_tag(SV_TAG('S', 'E', 'A', 'M'));
+	sv_u32((uint32_t)sizeof(t));
+	sv_put(&t, sizeof(t));
+	sv_u8(S.why && w < NWHY ? (uint32_t)w + 1 : 0);
+}
+
+int seam_load(void)
+{
+	static struct seam_state t;
+	uint8_t loaded = S.loaded;
+	uint32_t w;
+
+	if (sv_expect(SV_TAG('S', 'E', 'A', 'M')) || sv_get_u32() != sizeof(t))
+	{
+		sv_fail("seam layout");
+		return -1;
+	}
+	sv_get(&t, sizeof(t));
+	w = sv_get_u8();
+	if (sv_failed() || w > NWHY)
+		return -1;
+	S = t;
+	S.loaded = loaded;
+	S.why = w ? why_names[w - 1] : NULL;
+	S.pinned = -1;
+	return 0;
 }

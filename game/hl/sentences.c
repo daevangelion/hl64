@@ -30,6 +30,7 @@
 #include <string.h>
 
 #include "game/hl/monster.h"
+#include "game/hl/savegame.h"
 
 /* ---- sentence groups ----------------------------------------------------------- */
 
@@ -41,6 +42,52 @@ static uint8_t	sg_init[SG_MAX];
 void SENTENCEG_Init(void)
 {
 	memset(sg_init, 0, sizeof(sg_init));
+}
+
+/* the LRUs of the groups picked from since New Game (the others are
+ * shuffled again at their first pick) */
+uint32_t SENTENCEG_SaveState(int op)
+{
+	uint32_t k, n;
+	int gi, i;
+
+	if (op == SG_SIZE)
+		return sizeof(sg_lru[0]);
+	if (op == SG_PUT)
+	{
+		for (gi = 0, n = 0; gi < SG_MAX; gi++)
+			n += sg_init[gi] != 0;
+		sv_u8(n);
+		for (gi = 0; gi < SG_MAX; gi++)
+			if (sg_init[gi])
+			{
+				sv_u8((uint32_t)gi);
+				sv_put(sg_lru[gi], sizeof(sg_lru[gi]));
+			}
+		return 0;
+	}
+	SENTENCEG_Init();
+	n = sv_get_u8();
+	for (k = 0; k < n; k++)
+	{
+		gi = (int)sv_get_u8();
+		if (gi >= SG_MAX)
+		{
+			sv_fail("game: sentence group out of range");
+			SENTENCEG_Init();
+			return 0;
+		}
+		sv_get(sg_lru[gi], sizeof(sg_lru[gi]));
+		sg_init[gi] = 1;
+		for (i = 0; i < CSENTENCE_LRU_MAX; i++)
+			if (sg_lru[gi][i] >= CSENTENCE_LRU_MAX && sg_lru[gi][i] != 0xFF)
+			{
+				sv_fail("game: sentence LRU entry out of range");
+				SENTENCEG_Init();
+				return 0;
+			}
+	}
+	return 0;
 }
 
 static void InitLRU(uint8_t *plru, int count)

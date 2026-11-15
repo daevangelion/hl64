@@ -28,6 +28,7 @@
 
 #include "hl64/game.h"
 #include "hl64/settings.h"
+#include "game/hl/savegame.h"
 
 #include "mathlib.h"
 #include "const.h"
@@ -53,6 +54,14 @@ static struct model_s	pe_model[MAX_PHYSENTS], me_model[MAX_MOVEENTS];
 static col_hull_t	hulls[2];
 static hull_t		hull_handle[2];
 static int		hull_next;
+
+/* The playermove fields game_pm_move does not set from the player block
+ * and PM_Move reads before setting (the texture type a jump's step sound
+ * uses is the last one categorised); the rest is filled every move. */
+uint32_t Pm_HostSaveState(int op)
+{
+	return sg_io(op, &pm.chtexturetype, sizeof(pm.chtexturetype));
+}
 
 /* usehull -> clip hull (spec 3: 0 -> 1, 1 -> 3, 2 -> 0, 3 -> 2) */
 static const int	usehull_hull[4] = { 1, 3, 0, 2 };

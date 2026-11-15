@@ -15,4 +15,8 @@
 void	host_io_init(const char *root);
 void	host_io_init_files(const char *root, unsigned extra_files);
 
+/* flash_host.c: the FlashRAM image file (hl64-host --save); before
+ * sys_flash_init. Without it: hl64.fla beside the hl64-host binary. */
+void	host_flash_set_path(const char *path);
+
 #endif

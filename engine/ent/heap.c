@@ -16,6 +16,9 @@
 #include "engine/core/sys.h"
 #include "engine/ent/ent.h"
 #include "engine/mem/carve.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
+#include "hl64/game.h"
 
 #define HEAP_MAX	512
 #define HEAP_NONE	0xFFFF
@@ -452,4 +455,31 @@ const char *ent_sets_check(void)
 			return "free slot in a set";
 	}
 	return 0;
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* The think heap, the sets (with movers' sticky extras and linked) and the
+ * grid's bucket heads: the whole region, slot indices only. */
+void ent_sets_save(void)
+{
+	sv_u32((uint32_t)(H.cur - H.base));
+	sv_put(H.base, (uint32_t)(H.cur - H.base));
+	sv_u32((uint32_t)H.n);
+}
+
+int ent_sets_load(void)
+{
+	uint32_t n = sv_get_u32();
+
+	if (n != (uint32_t)(H.cur - H.base))
+	{
+		sv_fail("ent: think / grid layout");
+		return -1;
+	}
+	sv_get(H.base, n);
+	H.n = (int)sv_get_u32();
+	if (H.n < 0 || H.n > HEAP_MAX)
+		sv_fail("ent: think heap size");
+	return sv_failed() ? -1 : 0;
 }

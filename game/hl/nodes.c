@@ -36,6 +36,7 @@
 #include "tools/w64c/hl_nodecook.h"
 #include "game/hl/monster.h"
 #include "engine/res/res.h"	/* rtb_crc32: the CRC-32 of GoldSrc's CRC32_* */
+#include "game/hl/savegame.h"
 
 #define GRAPH_SLOTS		4	/* HLE slots */
 #define CACHE_SIZE		128	/* nodes.h CACHE_SIZE */
@@ -53,6 +54,9 @@ typedef struct {
 	 * the graph: an origin 0,0,0 not yet searched answers node 0, as in
 	 * HLSDK) */
 	struct { float v[3]; int16_t n; } cache[CACHE_SIZE];
+	/* a saved game's lastCoverSearch and cache, waiting for the graph
+	 * (h NULL): its first use keeps them instead of zeroing */
+	int			kept;
 } graph_t;
 
 static graph_t	graphs[GRAPH_SLOTS];
@@ -65,6 +69,23 @@ static float	dist_a[HLN_MAX_NODES], dist_b[HLN_MAX_NODES], dist_r[HLN_MAX_NODES]
 static int16_t	prev[HLN_MAX_NODES];
 static uint16_t	heap[HLN_MAX_NODES * 4];
 static float	heapk[HLN_MAX_NODES * 4];
+
+/* a saved cache naming a node this graph lacks (another cook of the
+ * map): forgotten, as at a graph load */
+static void graph_kept(graph_t *g, int slot)
+{
+	int i;
+
+	for (i = 0; i < CACHE_SIZE; i++)
+		if (g->cache[i].n >= g->n)
+		{
+			log_printf("nodes: slot %d: saved node cache names node %d of %d: cleared\n",
+				slot, g->cache[i].n, g->n);
+			g->lastCoverSearch = 0;
+			memset(g->cache, 0, sizeof(g->cache));
+			return;
+		}
+}
 
 static graph_t *graph(int slot)
 {
@@ -84,8 +105,14 @@ static graph_t *graph(int slot)
 		g->nodes = (const hln_node_t *)((const uint8_t *)p + g->h->ofs_nodes);
 		g->links = (const hln_link_t *)((const uint8_t *)p + g->h->ofs_links);
 		g->n = g->h->numnodes;
-		g->lastCoverSearch = 0;
-		memset(g->cache, 0, sizeof(g->cache));
+		if (g->kept)
+			graph_kept(g, slot);
+		else
+		{
+			g->lastCoverSearch = 0;
+			memset(g->cache, 0, sizeof(g->cache));
+		}
+		g->kept = 0;
 	}
 	return g;
 }
@@ -95,6 +122,69 @@ void Graph_SlotChanged(int slot)
 {
 	if (slot >= 0 && slot < GRAPH_SLOTS)
 		memset(&graphs[slot], 0, sizeof(graphs[slot]));
+}
+
+/* Saved games: per slot whether its graph was read (its caches live:
+ * stale answers persist as in GoldSrc), lastCoverSearch and the cache
+ * entries that are not zero. A load keeps them for the slot's graph,
+ * whose pointers its first use derives again. */
+uint32_t Graph_SaveState(int op)
+{
+	static const uint8_t zero[sizeof(graphs[0].cache[0])];
+	graph_t	*g;
+	int	slot, i;
+	uint32_t	k, nz;
+
+	if (op == SG_SIZE)
+		return sizeof(g->lastCoverSearch) + sizeof(g->cache[0]);
+	for (slot = 0; slot < GRAPH_SLOTS; slot++)
+	{
+		g = &graphs[slot];
+		if (op == SG_PUT)
+		{
+			if (!g->h && !g->kept)
+			{
+				sv_u8(0);
+				continue;
+			}
+			sv_u8(1);
+			sv_u32((uint32_t)g->lastCoverSearch);
+			for (i = 0, nz = 0; i < CACHE_SIZE; i++)
+				nz += memcmp(&g->cache[i], zero, sizeof(zero)) != 0;
+			sv_u8(nz);
+			for (i = 0; i < CACHE_SIZE; i++)
+				if (memcmp(&g->cache[i], zero, sizeof(zero)))
+				{
+					sv_u8((uint32_t)i);
+					sv_put(&g->cache[i], sizeof(g->cache[i]));
+				}
+			continue;
+		}
+		Graph_SlotChanged(slot);
+		if (!sv_get_u8())
+			continue;
+		g->kept = 1;
+		g->lastCoverSearch = (int)sv_get_u32();
+		nz = sv_get_u8();
+		for (k = 0; k < nz; k++)
+		{
+			i = (int)sv_get_u8();
+			if (i >= CACHE_SIZE)
+			{
+				sv_fail("game: node cache entry out of range");
+				return 0;
+			}
+			sv_get(&g->cache[i], sizeof(g->cache[i]));
+			if (g->cache[i].n < NO_NODE || g->cache[i].n >= HLN_MAX_NODES)
+			{
+				sv_fail("game: node cache names no node");
+				return 0;
+			}
+		}
+		if (g->lastCoverSearch < 0 || g->lastCoverSearch > HLN_MAX_NODES)
+			sv_fail("game: lastCoverSearch out of range");
+	}
+	return 0;
 }
 
 int Graph_Available(int slot) { return graph(slot) != 0; }

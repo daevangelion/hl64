@@ -33,6 +33,9 @@
 #include "engine/core/sys.h"
 #include "engine/ent/ent.h"
 #include "engine/mem/carve.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
+#include "hl64/game.h"
 
 #define GRID_BUCKETS	1024		/* power of two */
 #define GRID_HUGE	GRID_BUCKETS	/* extra head: the huge list */
@@ -501,4 +504,23 @@ void ent_grid_stats(ent_grid_stats_t *s)
 		if (len > s->peak_bucket)
 			s->peak_bucket = len;
 	}
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* The bucket heads went with the think / grid region (ent_sets_save);
+ * here the occupancy, the pool's free list and the level counts. */
+void ent_grid_save(void)
+{
+	sv_put(g.occ, sizeof(g.occ));
+	sv_u16(g.freecell);
+	sv_put(g.nlevel, sizeof(g.nlevel));
+}
+
+int ent_grid_load(void)
+{
+	sv_get(g.occ, sizeof(g.occ));
+	g.freecell = (uint16_t)sv_get_u16();
+	sv_get(g.nlevel, sizeof(g.nlevel));
+	return sv_failed() ? -1 : 0;
 }

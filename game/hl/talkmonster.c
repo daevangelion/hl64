@@ -23,6 +23,7 @@
 #include <math.h>
 
 #include "game/hl/monster.h"
+#include "game/hl/savegame.h"
 
 #define VOL_NORM	1.0f
 
@@ -37,6 +38,26 @@ void Tlk_SetFriends(cls_t a, cls_t b, cls_t c)
 	m_szFriends[0] = a;
 	m_szFriends[1] = b;
 	m_szFriends[2] = c;
+}
+
+/* g_talkWaitTime and the friends table (a scientist's TalkInit reorders
+ * it for every talk monster, for good: HLSDK's static) */
+uint32_t Tlk_SaveState(int op)
+{
+	uint32_t n = 0;
+	int i;
+
+	n += sg_io(op, &g_talkWaitTime, sizeof(g_talkWaitTime));
+	n += sg_io(op, m_szFriends, sizeof(m_szFriends));
+	if (op == SG_GET)
+		for (i = 0; i < TLK_CFRIENDS; i++)
+			if (m_szFriends[i] >= CLS__COUNT && m_szFriends[i] != CLS_NONE)
+			{
+				sv_fail("game: talk friend class out of range");
+				Tlk_SetFriends(CLS_MONSTER_BARNEY, CLS_MONSTER_SCIENTIST, CLS_NONE);
+				break;
+			}
+	return n;
 }
 
 #define T(t, d)		{ t, (float)(d) }
@@ -131,6 +152,11 @@ const Schedule_t slTlkIdleEyecontact[] = {
 	SCHED(tlTlkIdleEyecontact, bits_COND_NEW_ENEMY | bits_COND_CLIENT_PUSH | bits_COND_LIGHT_DAMAGE |
 		bits_COND_HEAVY_DAMAGE, 0, "TlkIdleEyecontact")
 };
+
+/* saved games: append only (monster.h sched_list_t) */
+SCHED_LIST(sched_talkmonster, slIdleResponse, slIdleSpeak, slIdleSpeakWait, slIdleHello,
+	slIdleStopShooting, slMoveAway, slMoveAwayFail, slMoveAwayFollow, &slTlkIdleWatchClient[0],
+	&slTlkIdleWatchClient[1], slTlkIdleEyecontact);
 
 /* ---- helpers ------------------------------------------------------------------ */
 

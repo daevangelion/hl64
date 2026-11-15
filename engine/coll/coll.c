@@ -27,6 +27,8 @@
 #include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/world/wld.h"
 
 #define COL_EPS		(1.0f / 32.0f)	/* trace stand-off (DIST_EPSILON) */
@@ -1386,4 +1388,45 @@ void col_stats(col_stats_t *s)
 void col_counts(col_stats_t *s)
 {
 	*s = st;
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* The contents brushes by entity slot, in their order (col_contents
+ * answers the first that holds the point). */
+void col_contents_save(void)
+{
+	int i;
+
+	sv_tag(SV_TAG('C', 'B', 'R', '1'));
+	sv_u32((uint32_t)ncbrush);
+	for (i = 0; i < ncbrush; i++)
+		sv_u16(cbrush[i]->index);
+}
+
+int col_contents_load(void)
+{
+	int i, n;
+
+	if (sv_expect(SV_TAG('C', 'B', 'R', '1')))
+		return -1;
+	n = (int)sv_get_u32();
+	if (n < 0 || n > COL_CBRUSH_MAX)
+	{
+		sv_fail("contents brushes");
+		return -1;
+	}
+	ncbrush = 0;
+	for (i = 0; i < n; i++)
+	{
+		uint32_t e = sv_get_u16();
+
+		if (e >= HL64_MAX_ENTITIES)
+		{
+			sv_fail("contents brush slot");
+			return -1;
+		}
+		cbrush[ncbrush++] = ent_cv((int)e);
+	}
+	return sv_failed() ? -1 : 0;
 }

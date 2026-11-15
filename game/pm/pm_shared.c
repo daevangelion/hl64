@@ -42,6 +42,7 @@
 #include <math.h>   // sqrt
 #include <string.h> // strcpy
 #include <stdlib.h> // atoi
+#include "game/hl/savegame.h"
 
 #ifndef min
 #define min(a,b)  (((a) < (b)) ? (a) : (b))
@@ -146,9 +147,23 @@ static int rgStuckLast[MAX_CLIENTS][2];
 // hl64: no texture name table (materials come from the engine)
 int g_onladder = 0;
 
+// hl64: PM_PlayStepSound's and PM_CheckStuck's statics at file scope (saved games)
+static int iSkipStep = 0;
+static float rgStuckCheckTime[MAX_CLIENTS][2]; // Last time we did a full
+
+uint32_t Pm_SharedSaveState(int op)
+{
+	uint32_t n = 0;
+
+	n += sg_io(op, rgStuckLast, sizeof(rgStuckLast));
+	n += sg_io(op, rgStuckCheckTime, sizeof(rgStuckCheckTime));
+	n += sg_io(op, &iSkipStep, sizeof(iSkipStep));
+	n += sg_io(op, &g_onladder, sizeof(g_onladder));
+	return n;
+}
+
 void PM_PlayStepSound( int step, float fvol )
 {
-	static int iSkipStep = 0;
 	int irand;
 	vec3_t hvel;
 
@@ -1491,8 +1506,6 @@ int PM_CheckStuck (void)
 	float	fTime;
 	int i;
 	pmtrace_t traceresult;
-
-	static float rgStuckCheckTime[MAX_CLIENTS][2]; // Last time we did a full
 
 	// If position is okay, exit
 	hitent = pmove->PM_TestPlayerPosition (pmove->origin, &traceresult );

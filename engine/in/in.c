@@ -11,6 +11,8 @@
 #include "engine/core/dbg.h"
 #include "engine/core/sys.h"
 #include "engine/in/in.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 
 #define FORWARD_SPEED	400.0f	/* cl_forwardspeed, cl_backspeed */
 #define SIDE_SPEED	400.0f	/* cl_sidespeed */
@@ -209,4 +211,28 @@ void in_init(void)
 	memset(&in, 0, sizeof(in));
 	dbg_handler_set(DBG_BUTTONS, cmd_buttons);
 	dbg_handler_set(DBG_IMPULSE, cmd_impulse);
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+void in_save(void)
+{
+	sv_tag(SV_TAG('I', 'N', 'P', '1'));
+	sv_put(in.ang, sizeof(in.ang));
+	sv_u16(in.held);
+	sv_u8(in.impulse);
+	sv_u16(in.pend);
+}
+
+/* The pad's last buttons are the pad's: a held button reads as held, not
+ * as a new press, on the first frame after the load. */
+int in_load(void)
+{
+	if (sv_expect(SV_TAG('I', 'N', 'P', '1')))
+		return -1;
+	sv_get(in.ang, sizeof(in.ang));
+	in.held = (uint16_t)sv_get_u16();
+	in.impulse = (uint8_t)sv_get_u8();
+	in.pend = (uint16_t)sv_get_u16();
+	return sv_failed() ? -1 : 0;
 }

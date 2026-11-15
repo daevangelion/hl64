@@ -26,6 +26,7 @@
 #include "hl64/settings.h"
 #include "game/hl/monster.h"
 #include "game/hl/player.h"
+#include "game/hl/savegame.h"
 
 #define ISLAVE_AE_CLAW		1
 #define ISLAVE_AE_CLAWRAKE	2
@@ -78,6 +79,9 @@ static const Schedule_t slSlaveAttack1[] = {
 	SCHED(tlSlaveAttack1, bits_COND_CAN_MELEE_ATTACK1 | bits_COND_HEAR_SOUND |
 		bits_COND_HEAVY_DAMAGE, bits_SOUND_DANGER, "Slave Range Attack1")
 };
+
+/* saved games: append only (monster.h sched_list_t) */
+SCHED_LIST(sched_islave, slSlaveAttack1);
 
 static int Slv_Classify(int e) { (void)e; return CLASS_ALIEN_MILITARY; }
 
@@ -513,6 +517,20 @@ static const sv_field_t f_CISlave[] = {
 };
 static const sv_table_t sv_CISlave = SV_TABLE(&sv_CSquadMonster, f_CISlave,
 	.released = Slv_ClearBeams);
+
+/* After a saved game's load (frame layer: the slave's): its zap beams
+ * (until killed) issued again from what the block keeps of them, so the
+ * kills of its next ClearBeams / BeamGlow name its own beams. */
+void CISlave_LoadDone(int e)
+{
+	CISlave *s = SLV(e);
+	int i;
+
+	if (s->m_iBeams < 0 || s->m_iBeams > ISLAVE_MAX_BEAMS)
+		s->m_iBeams = 0;
+	for (i = 0; i < s->m_iBeams; i++)
+		beam_issue(&s->m_pBeam[i]);
+}
 
 const game_class_t gc_MONSTER_ALIEN_SLAVE = {
 	.size = sizeof(CISlave),

@@ -28,6 +28,7 @@
 #include "hl64/seam.h"
 #include "hl64/settings.h"
 #include "hl64/snd.h"
+#include "hl64/save.h"
 #include "engine/core/dbg.h"
 #include "engine/core/eng.h"
 #include "engine/core/hlmath.h"
@@ -50,6 +51,8 @@
 #include "engine/render/trans.h"
 #include "engine/render/ren.h"
 #include "engine/world/wld.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/in/in.h"
 #include "engine/phys/phys.h"
 #include "engine/phys/player.h"
@@ -666,6 +669,8 @@ void eng_boot(const char *platform)
 	phy_player_init();
 	/* game/: dispatch tables, engine hooks (think / touch / blocked) */
 	game_init();
+	/* saved games and the settings block (FlashRAM, architecture.md 14) */
+	save_init();
 	if (eng.world)
 	{
 		int r = rt_load(eng_route_path);
@@ -884,6 +889,44 @@ uint32_t eng_frame_count(void)
 	return eng.frame;
 }
 
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+void eng_save_state(void)
+{
+	sv_tag(SV_TAG('E', 'N', 'G', '1'));
+	sv_u32(eng.frame);
+	sv_u32(eng.restart_frame);
+}
+
+int eng_load_state(void)
+{
+	if (sv_expect(SV_TAG('E', 'N', 'G', '1')))
+		return -1;
+	eng.frame = sv_get_u32();
+	eng.restart_frame = sv_get_u32();
+	eng.time = eng_clock_time();
+	eng.last_vi = sys_vi_count();
+	return sv_failed() ? -1 : 0;
+}
+
+/* A frame a save or a load holds (save_frame): no game step, no world, no
+ * route or debug commands, the frame count stays; I/O and the present go
+ * on so the chain keeps moving and the screen stays live. */
+static void eng_save_hold_frame(uint32_t dt)
+{
+	io_frame_begin(dt);
+	io_pump();
+	while (!sys_frame_try_begin())
+		io_pump();
+	if (eng.world)
+	{
+		d2_begin();
+		d2_end();
+	}
+	sys_frame_end();
+	log_flush();
+}
+
 void eng_frame(void)
 {
 	uint32_t vi = sys_vi_count();
@@ -902,6 +945,12 @@ void eng_frame(void)
 		dt = eng.fixed_dt_us;
 	if (eng.timescale != 1.0f)
 		dt = (uint32_t)(dt * eng.timescale + 0.5f);
+	/* a save's snapshot or a load in progress holds the frame */
+	if (save_frame())
+	{
+		eng_save_hold_frame(dt);
+		return;
+	}
 	/* the end section fired last frame (the route VM saw it at step 13):
 	 * disconnect; New Game RESTART_FRAMES frames later */
 	if (eng.restart_frame && eng.frame >= eng.restart_frame)

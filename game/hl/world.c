@@ -23,6 +23,7 @@
  * origin and angles are read by name (util.c UTIL_NamedOrigin).
  */
 #include "game/hl/util.h"
+#include "game/hl/savegame.h"
 
 #define SF_WORLD_DARK		0x0001
 #define SF_WORLD_TITLE		0x0002
@@ -42,6 +43,18 @@ void	ShowChapterTitle(int title);
 /* rec_logic-free state of the world: the chapter title shown 0.3 s after
  * the world spawned (CWorld::Precache's one-shot env_message) */
 static int	world_chapter_title = -1;
+
+uint32_t World_SaveState(int op)
+{
+	uint32_t n = sg_io(op, &world_chapter_title, sizeof(world_chapter_title));
+
+	if (op == SG_GET && (world_chapter_title < -1 || world_chapter_title > 0xFFFF))
+	{
+		sv_fail("game: chapter title out of range");
+		world_chapter_title = -1;
+	}
+	return n;
+}
 
 void CWorld_ChapterTitle(int e)
 {

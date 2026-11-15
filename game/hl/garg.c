@@ -35,6 +35,7 @@
 #include "game/hl/breakable.h"
 #include "game/hl/gib.h"
 #include "game/hl/monster.h"
+#include "game/hl/savegame.h"
 
 #define GARG_ATTACKDIST		80.0f
 #define GARG_AE_SLASH_LEFT	1
@@ -107,6 +108,9 @@ static const Task_t tlGargSwipe[] = {
 static const Schedule_t slGargSwipe[] = {
 	SCHED(tlGargSwipe, bits_COND_CAN_MELEE_ATTACK2, 0, "GargSwipe")
 };
+
+/* saved games: append only (monster.h sched_list_t) */
+SCHED_LIST(sched_garg, slGargFlame, slGargSwipe);
 
 /* TE_STREAK_SPLASH */
 static void StreakSplash(const float org[3], const float dir[3], int color, int count)
@@ -969,6 +973,19 @@ static void CGargantua_restored(int e)
 	for (i = 0; i < 4; i++)
 		g->m_pFlame[i] = -1;
 	g->m_flameOn = 0;
+}
+
+/* After a saved game's load: the flame beams (0.2 s each, made again by
+ * every FlameUpdate) are gone with the effects; their ids name nothing,
+ * and killing them would kill another beam. m_flameOn stays: the next
+ * FlameUpdate makes them, as the saving game's would. */
+void CGargantua_LoadDone(int e)
+{
+	CGargantua *g = GARG(e);
+	int i;
+
+	for (i = 0; i < 4; i++)
+		g->m_pFlame[i] = -1;
 }
 
 static const sv_field_t f_CGargantua[] = {

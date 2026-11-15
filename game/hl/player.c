@@ -39,6 +39,7 @@
 
 #include "game/hl/player.h"
 #include "game/hl/gib.h"
+#include "game/hl/savegame.h"
 
 #define ARMOR_RATIO		0.2f	/* armor takes 80% of the damage */
 #define ARMOR_BONUS		0.5f	/* each point of armor is worth 1/x points of health */
@@ -71,6 +72,26 @@
 static CBasePlayer	pl_state;
 static float		geiger_range = 1000, geiger_delay;
 static int		geiger_range_prev = 1000;
+
+/* CBasePlayer and the geiger counter (the player entity's CBaseMonster
+ * block is a private block: the engine saves it) */
+uint32_t Player_SaveState(int op)
+{
+	CBasePlayer *p = &pl_state;
+	uint32_t n = 0;
+
+	n += sg_io(op, p, sizeof(*p));
+	n += sg_io(op, &geiger_range, sizeof(geiger_range));
+	n += sg_io(op, &geiger_delay, sizeof(geiger_delay));
+	n += sg_io(op, &geiger_range_prev, sizeof(geiger_range_prev));
+	if (op == SG_GET && (p->m_pActiveItem >= WPN_SLOTS || p->m_pLastItem >= WPN_SLOTS ||
+		p->m_iSuitPlayNext < 0 || p->m_iSuitPlayNext >= CSUITPLAYLIST))
+	{
+		sv_fail("game: player weapon or suit index out of range");
+		memset(p, 0, sizeof(*p));
+	}
+	return n;
+}
 
 CBasePlayer *Player(void)
 {

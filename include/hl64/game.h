@@ -113,6 +113,37 @@ int	game_carry(int e);
  * (enemy, target ent, cine links) as if out of range. */
 void	game_cut_refs(int slot);
 
+/* ---- saved games (architecture.md 14; engine/save) ----------------------------
+ * A save restores every entity into its own slot with its serial, every
+ * layer into its own slot, the clock and the random stream exactly; the
+ * engine copies components and private blocks byte for byte, so ent_h,
+ * name_t, gid_t16 and res_t values in game state stay valid as they are.
+ * The game converts what is not position-independent (code / rodata
+ * pointers) and writes its file-scope state through engine/save/sv.h. */
+
+/* Before a snapshot, at a frame boundary: end every paused or queued
+ * monster think now (deterministic: the same in a run that saves and goes
+ * on as in one that loads the save), so no game state lives on a
+ * coroutine stack or in the held queue. */
+void	game_save_settle(void);
+/* e's private block (size bytes, a copy about to be written): pointers to
+ * ids. 0, or -1 when it cannot be saved. */
+int	game_priv_save(int e, void *copy, uint32_t size);
+/* The restored block of e, in place: ids back to pointers; 0, or -1 when
+ * the block does not belong to this build (the load fails as corrupt). */
+int	game_priv_load(int e, void *blk, uint32_t size);
+/* The game's file-scope state (sv.h writer / reader); load returns 0, or
+ * -1 corrupt. Called after the entities are restored. */
+void	game_save_globals(void);
+int	game_load_globals(void);
+/* Last step of a load, before its first frame: client-side state (HUD,
+ * view, effects the private blocks name) from the restored game. */
+void	game_load_done(void);
+/* The game's save layout id: its save version and the sizes of what it
+ * saves (private structs, globals), hashed. The slot header carries it; a
+ * save of another layout shows as corrupt and is never loaded. */
+uint32_t game_save_layout(void);
+
 /* ---- residency inputs (architecture.md 5.3) ---------------------------------- */
 
 /* A moving monster's current route waypoint (e's map-local frame) into

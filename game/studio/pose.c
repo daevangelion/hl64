@@ -48,6 +48,7 @@
 #include "hl64/game.h"
 #include "hl64/studio.h"
 #include "game/studio/pose.h"
+#include "game/hl/savegame.h"
 
 #ifndef M_PI
 #define M_PI	3.14159265358979323846
@@ -778,6 +779,7 @@ static void sv_bone(const sv_ctx_t *c, int i, float (*out)[3][4])
 typedef struct {
 	game_pose_t	in;
 	int		valid;
+	int		stale;	/* a saved game's entry: its have bones not computed yet */
 	uint32_t	have[GS_MAXBONES / 32];
 	float		bones[GS_MAXBONES][3][4];
 } pose_memo_t;
@@ -803,6 +805,28 @@ static int has_bone(const pose_memo_t *m, int i)
 	return (m->have[i >> 5] >> (i & 31)) & 1;
 }
 
+/* A loaded entry's bones, computed again from its key where its first use
+ * finds it (bit for bit those of the saving game, the same function of
+ * the same input), counting nothing: the saving game found them made.
+ * Parents first (lower indices). Its animation not resident (the loading
+ * game's residency differs): forgotten. */
+static void sv_unstale(pose_memo_t *m, const sfmt_info_t *hdr)
+{
+	sv_ctx_t c;
+	int i;
+
+	m->stale = 0;
+	sv_ctx(&c, hdr, &m->in);
+	if (!c.chunk)
+	{
+		m->valid = 0;
+		return;
+	}
+	for (i = 0; i < hdr->numbones; i++)
+		if (has_bone(m, i))
+			sv_bone(&c, i, m->bones);
+}
+
 static void sv_open(sv_pose_t *sp, const game_pose_t *p, const sfmt_info_t *hdr)
 {
 	int c;
@@ -814,6 +838,63 @@ static void sv_open(sv_pose_t *sp, const game_pose_t *p, const sfmt_info_t *hdr)
 	for (c = 0; c < SV_CACHE; c++)
 		if (sv_cache[c].valid && !memcmp(&sv_cache[c].in, p, sizeof(*p)))
 			sp->m = &sv_cache[c];
+	if (sp->m && sp->m->stale)
+	{
+		sv_unstale(sp->m, hdr);
+		if (!sp->m->valid)
+			sp->m = NULL;
+	}
+}
+
+/* Saved games: the memo decides how many bones a think computes, so the
+ * work units it counts (Mon_FrameUnits: the AI budget). Saved are the
+ * entries' keys and bone masks, not their bones (sv_unstale). */
+uint32_t Gs_PoseSaveState(int op)
+{
+	pose_memo_t *m;
+	int c;
+
+	if (op == SG_SIZE)
+		return sizeof(m->in) + sizeof(m->have) + sizeof(sv_next);
+	if (op == SG_PUT)
+	{
+		sv_u8((uint32_t)sv_next);
+		for (c = 0; c < SV_CACHE; c++)
+		{
+			m = &sv_cache[c];
+			sv_u8(m->valid != 0);
+			if (m->valid)
+			{
+				sv_put(&m->in, sizeof(m->in));
+				sv_put(m->have, sizeof(m->have));
+			}
+		}
+		return 0;
+	}
+	sv_next = (int)sv_get_u8();
+	if (sv_next >= SV_CACHE)
+	{
+		sv_fail("game: pose memo index out of range");
+		sv_next = 0;
+	}
+	for (c = 0; c < SV_CACHE; c++)
+	{
+		m = &sv_cache[c];
+		m->valid = (int)sv_get_u8();
+		if (m->valid > 1)
+		{
+			sv_fail("game: pose memo entry flag out of range");
+			m->valid = 0;
+		}
+		m->stale = m->valid;
+		memset(m->have, 0, sizeof(m->have));
+		if (m->valid)
+		{
+			sv_get(&m->in, sizeof(m->in));
+			sv_get(m->have, sizeof(m->have));
+		}
+	}
+	return 0;
 }
 
 static void sv_need_ctx(sv_pose_t *sp)
@@ -842,6 +923,7 @@ static float (*sv_need(sv_pose_t *sp, int i))[3][4]
 			sv_next = (sv_next + 1) % SV_CACHE;
 			m->in = *sp->p;
 			m->valid = 1;
+			m->stale = 0;
 		}
 		else
 			m = &sv_scratch;
@@ -1397,6 +1479,50 @@ int game_studio_setup_bones(int e, float (*out)[3][4], int max)
 		L->prevframe = f;
 	build_matrices(hdr, out);
 	return hdr->numbones;
+}
+
+/* After a load: every live entity's latch as a fresh one (latch_update)
+ * that drew its current state at the restored clock: its client events up
+ * to the current frame count as played (none replays at the first draw),
+ * and its current sequence holds while its animation is not resident yet.
+ * The other slots' latches are forgotten (the loading game's own). */
+void Gs_LatchLoadDone(void)
+{
+	const ent_rnd_t *r;
+	const sfmt_info_t *hdr;
+	gs_clent_t cl;
+	latch_t *L;
+	double time = eng_time();
+	float f;
+	int e, seq;
+
+	for (e = 0; e < HL64_MAX_ENTITIES; e++)
+	{
+		L = &latch[e];
+		memset(L, 0, sizeof(*L));
+		if (!ent_is_live(e))
+			continue;
+		r = ent_rnd(e);
+		hdr = gs_info(r->model);
+		if (!hdr || !hdr->numbones || !hdr->numseq)
+			continue;
+		latch_update(L, e, r, time);
+		seq = r->sequence < hdr->numseq ? r->sequence : 0;
+		cl.curstate.frame = r->frame;
+		cl.curstate.animtime = r->animtime;
+		cl.curstate.framerate = r->framerate;
+		f = gs_estimate_frame(&SFMT_SEQS(hdr)[seq], &cl, time, 1);
+		L->prevframe = f;
+		L->ev_ok = 1;
+		L->evseq = (uint16_t)seq;
+		L->evframe = f;
+		if (studio_anim_now(r->model, seq, NULL))
+		{
+			L->heldseq = (uint16_t)seq;
+			L->heldframe = f;
+			L->held_ok = 1;
+		}
+	}
 }
 
 /* ---- chrome (HLSDK utils/mdlviewer/studio_render.cpp StudioModel::Chrome) ---- */

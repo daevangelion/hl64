@@ -13,6 +13,9 @@
  * values cost nothing.
  */
 #include "engine/core/sys.h"
+#include "engine/mem/carve.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/world/wld.h"
 
 #define UNSET_VALUE	256
@@ -152,4 +155,62 @@ void wld_style_reset(void)
 	}
 	epoch = 1;
 	tick = ~(uint64_t)0;
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* Every set slot's letters by value (the patterns live in the resource
+ * table, a layer's ENTS keys or code: none of that is a saved address);
+ * a load keeps them in the lightstyle region, which nothing else uses,
+ * and the next set of a slot points it elsewhere again. */
+void wld_style_save(void)
+{
+	int i;
+
+	sv_tag(SV_TAG('S', 'T', 'Y', '1'));
+	sv_put(&tick, sizeof(tick));
+	for (i = 0; i < WLD_STYLE_SLOTS_ALL; i++)
+	{
+		sv_u8(slots[i].len);
+		if (slots[i].len)
+			sv_put(slots[i].letters, slots[i].len);
+	}
+}
+
+int wld_style_load(void)
+{
+	uint8_t *own = mem_region(MEM_LIGHTSTYLE);
+	uint32_t used = 0, cap = mem_region_bytes(MEM_LIGHTSTYLE);
+	int i;
+
+	if (sv_expect(SV_TAG('S', 'T', 'Y', '1')))
+		return -1;
+	sv_get(&tick, sizeof(tick));
+	epoch++;
+	for (i = 0; i < WLD_STYLE_SLOTS_ALL && !sv_failed(); i++)
+	{
+		slot_t *s = &slots[i];
+		uint32_t len = sv_get_u8(), k;
+
+		s->len = 0;
+		s->letters = 0;
+		if (len)
+		{
+			if (used + len > cap)
+			{
+				sv_fail("lightstyles past their region");
+				break;
+			}
+			sv_get(own + used, len);
+			for (k = 0; k < len; k++)
+				if (own[used + k] > 25)
+					sv_fail("lightstyle letter");
+			s->letters = own + used;
+			s->len = (uint8_t)len;
+			used += len;
+		}
+		s->value = eval(s);
+		s->changed = epoch;
+	}
+	return sv_failed() ? -1 : 0;
 }

@@ -6,7 +6,7 @@
  * commands the cart's channels deliver.
  *
  *   hl64-host [--root DIR] [--frames N] [--route FILE.rbc] [--play]
- *             [--cmd "[@FRAME] NAME ARGS..."]... [--write-cmds FILE]
+ *             [--save FILE] [--cmd "[@FRAME] NAME ARGS..."]... [--write-cmds FILE]
  *
  * --root        cart root (the DFS image source; mounted like the cart's
  *               DFS, plat/host/host.h); default "." with no DFS
@@ -18,6 +18,11 @@
  *               working directory's; a missing FILE fails (exit 2)
  * --play        without a route: New Game at the campaign start and play
  *               (eng_play; the playable build's boot), not the free camera
+ * --save        the FlashRAM image file (128 KB, created filled 0xFF when
+ *               missing; saved games and settings, engine/save). Default:
+ *               hl64.fla beside the hl64-host binary, so a second run of
+ *               the same build sees the first's saves; give a fresh FILE
+ *               to start from an empty chip (plat/host/flash_host.c)
  * --write-cmds  write the parsed commands as a cart command file
  *               (dbg.h DBG_FILE_*) and exit instead of running.
  */
@@ -74,7 +79,7 @@ static const char *route_path(const char *file)
 static int usage(void)
 {
 	fprintf(stderr, "usage: hl64-host [--root DIR] [--frames N] [--route FILE.rbc] [--play] "
-		"[--cmd \"[@FRAME] NAME ARGS...\"]... [--write-cmds FILE]\n");
+		"[--save FILE] [--cmd \"[@FRAME] NAME ARGS...\"]... [--write-cmds FILE]\n");
 	return 2;
 }
 
@@ -189,6 +194,8 @@ int main(int argc, char **argv)
 			cmd = argv[++i];
 		else if (!strcmp(argv[i], "--write-cmds") && i + 1 < argc)
 			out = argv[++i];
+		else if (!strcmp(argv[i], "--save") && i + 1 < argc)
+			host_flash_set_path(argv[++i]);
 		else if (!strcmp(argv[i], "--route") && i + 1 < argc)
 		{
 			if (!(eng_route_path = route_path(argv[++i])))

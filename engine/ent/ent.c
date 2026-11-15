@@ -23,6 +23,8 @@
 #include "engine/mem/carve.h"
 #include "engine/phys/player.h"
 #include "engine/phys/phys.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/world/wld.h"
 
 ent_comp_t	ent_c;
@@ -673,4 +675,46 @@ void ent_mem_log(void)
 		(unsigned long)ps.peak[4], (unsigned long)ps.live[5], (unsigned long)ps.peak[5]);
 	log_printf("mem: ent sets heap %d movers %d (think/grid region %lu B)\n",
 		ent_heap_count(), ent_movers_count(), (unsigned long)ent_sets_region_bytes());
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* The components region is index-based (slots, cell pool indices, ranks,
+ * free times): it goes out byte for byte, so slots, serials, links and
+ * the slot-reuse rule's inputs come back exactly. */
+void ent_save(void)
+{
+	sv_tag(SV_TAG('E', 'N', 'T', '1'));
+	sv_u32(ent_s.region_bytes);
+	sv_put(mem_region(MEM_COMPONENTS), ent_s.region_bytes);
+	sv_u32(ent_s.seq);
+	sv_u16(ent_s.top);
+	sv_u16(ent_s.live);
+	sv_u16((uint16_t)(int16_t)frame_layer);
+	ent_sets_save();
+	ent_grid_save();
+	ent_priv_save_all();
+}
+
+int ent_load(void)
+{
+	if (sv_expect(SV_TAG('E', 'N', 'T', '1')))
+		return -1;
+	if (sv_get_u32() != ent_s.region_bytes)
+	{
+		sv_fail("ent: components layout");
+		return -1;
+	}
+	sv_get(mem_region(MEM_COMPONENTS), ent_s.region_bytes);
+	ent_s.seq = sv_get_u32();
+	ent_s.top = (uint16_t)sv_get_u16();
+	ent_s.live = (uint16_t)sv_get_u16();
+	frame_layer = (int16_t)sv_get_u16();
+	if (ent_s.top > HL64_MAX_ENTITIES || ent_s.live > ent_s.top)
+		sv_fail("ent: slot counts");
+	if (ent_s.live > ent_s.live_peak)
+		ent_s.live_peak = ent_s.live;
+	if (sv_failed() || ent_sets_load() || ent_grid_load() || ent_priv_load_all())
+		return -1;
+	return 0;
 }

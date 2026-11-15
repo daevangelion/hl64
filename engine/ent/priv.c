@@ -15,6 +15,9 @@
 #include "engine/core/sys.h"
 #include "engine/ent/ent.h"
 #include "engine/mem/carve.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
+#include "hl64/game.h"
 
 #define PAGE_BYTES	4096u
 #define PAGES_MAX	((HL64_GAME_PRIVATE_KB * 1024u) / PAGE_BYTES)
@@ -187,4 +190,177 @@ void ent_priv_free(int e)
 void ent_priv_stats(ent_priv_stats_t *s)
 {
 	*s = S.st;
+}
+
+/* ---- saved games (architecture.md 14) ------------------------------------------- */
+
+/* Every page in use: its free-block mask, then block by block a free
+ * block as its free-list link only, a used one whole after the game
+ * turned its pointers into ids (game_priv_save on a copy). With the page
+ * classes, use counts and free-list heads, handles and every later
+ * allocation come back exactly. */
+#define BLOCKS_MAX	(HL64_GAME_PRIVATE_KB * 1024u / 32u)
+#define PAGE_MASK	(PAGE_BYTES / 32u / 8u)	/* mask bytes of a 32-byte-block page */
+static uint32_t freebit[(BLOCKS_MAX + 31) / 32];
+
+static void mark_free(void)
+{
+	int c;
+
+	memset(freebit, 0, sizeof(freebit));
+	for (c = 0; c < NCLASS; c++)
+	{
+		uint16_t h = S.head[c];
+		uint32_t guard = 0;
+
+		while (h != FREE_END && guard++ < BLOCKS_MAX)
+		{
+			uint32_t i = (uint32_t)(h - 1) / 2u;	/* 32-byte block index */
+
+			freebit[i >> 5] |= 1u << (i & 31);
+			memcpy(&h, block(h), 2);
+		}
+	}
+}
+
+static int owner_of(uint16_t h)
+{
+	int e;
+
+	for (e = ent_next_live(-1); e >= 0; e = ent_next_live(e))
+		if (ent_c.id[e].priv == h)
+			return e;
+	return -1;
+}
+
+void ent_priv_save_all(void)
+{
+	static uint8_t tmp[1024] __attribute__((aligned(16)));
+	uint32_t p;
+
+	sv_u32(S.npages);
+	sv_put(S.cls, S.npages);
+	sv_put(S.used, 2u * S.npages);
+	sv_put(S.head, sizeof(S.head));
+	mark_free();
+	for (p = 0; p < S.npages; p++)
+	{
+		uint8_t mask[PAGE_MASK];
+		uint32_t bs, o, k;
+
+		if (S.cls[p] == CLASS_NONE)
+			continue;
+		bs = class_bytes(S.cls[p]);
+		memset(mask, 0, sizeof(mask));
+		for (o = 0, k = 0; o < PAGE_BYTES; o += bs, k++)
+		{
+			uint32_t i = (p * PAGE_BYTES + o) / 32u;
+
+			if (freebit[i >> 5] & (1u << (i & 31)))
+				mask[k >> 3] |= (uint8_t)(1u << (k & 7));
+		}
+		sv_put(mask, (PAGE_BYTES / bs + 7) / 8);
+		for (o = 0, k = 0; o < PAGE_BYTES; o += bs, k++)
+		{
+			uint8_t *b = S.base + p * PAGE_BYTES + o;
+			int e;
+
+			if (mask[k >> 3] & (1u << (k & 7)))
+			{
+				sv_put(b, 2);
+				continue;
+			}
+			memcpy(tmp, b, bs);
+			if ((e = owner_of(handle_of(b))) >= 0 && game_priv_save(e, tmp, bs))
+			{
+				log_printf("save: entity %d (%s): private block not savable\n", e,
+					ent_class_name(e));
+				sv_fail("private block not savable");
+			}
+			sv_put(tmp, bs);
+		}
+	}
+}
+
+int ent_priv_load_all(void)
+{
+	uint32_t p, n = sv_get_u32();
+	int c;
+
+	if (n != S.npages)
+	{
+		sv_fail("ent: private region size");
+		return -1;
+	}
+	sv_get(S.cls, S.npages);
+	sv_get(S.used, 2u * S.npages);
+	sv_get(S.head, sizeof(S.head));
+	memset(&S.st, 0, sizeof(S.st));
+	S.st.pages_total = S.npages;
+	for (p = 0; p < S.npages && !sv_failed(); p++)
+	{
+		uint8_t mask[PAGE_MASK];
+		uint32_t bs, o, k;
+
+		if (S.cls[p] == CLASS_NONE)
+			continue;
+		if (S.cls[p] >= NCLASS)
+		{
+			sv_fail("ent: private page class");
+			break;
+		}
+		bs = class_bytes(S.cls[p]);
+		sv_get(mask, (PAGE_BYTES / bs + 7) / 8);
+		for (o = 0, k = 0; o < PAGE_BYTES; o += bs, k++)
+		{
+			uint8_t *b = S.base + p * PAGE_BYTES + o;
+
+			memset(b, 0, bs);
+			sv_get(b, mask[k >> 3] & (1u << (k & 7)) ? 2 : bs);
+		}
+		S.st.pages++;
+		S.st.live[S.cls[p]] += S.used[p];
+		S.st.bytes_live += S.used[p] * bs;
+	}
+	for (c = 0; c < NCLASS; c++)
+	{
+		S.st.peak[c] = S.st.live[c];
+		if (S.head[c] != FREE_END && (S.head[c] == 0
+			|| (uint32_t)(S.head[c] - 1) * 16u >= S.npages * PAGE_BYTES))
+			sv_fail("ent: private free list");
+	}
+	S.st.pages_peak = S.st.pages;
+	S.st.bytes_peak = S.st.bytes_live;
+	return sv_failed() ? -1 : 0;
+}
+
+static uint32_t priv_size(uint16_t h)
+{
+	return class_bytes(S.cls[(uint32_t)(block(h) - S.base) / PAGE_BYTES]);
+}
+
+int ent_priv_fixup(void)
+{
+	int e;
+
+	for (e = ent_next_live(-1); e >= 0; e = ent_next_live(e))
+	{
+		uint16_t h = ent_c.id[e].priv;
+
+		if (!h)
+			continue;
+		if ((uint32_t)(h - 1) * 16u >= S.npages * PAGE_BYTES
+			|| S.cls[(uint32_t)(h - 1) * 16u / PAGE_BYTES] >= NCLASS)
+		{
+			log_printf("load: entity %d: private handle %u\n", e, (unsigned)h);
+			return -1;
+		}
+		if (game_priv_load(e, block(h), priv_size(h)))
+		{
+			log_printf("load: entity %d (%s): private block of another build\n", e,
+				ent_class_name(e));
+			return -1;
+		}
+	}
+	return 0;
 }

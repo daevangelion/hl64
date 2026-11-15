@@ -35,6 +35,7 @@
 #include "engine/in/in.h"
 #include "engine/phys/player.h"
 #include "game/hl/util.h"
+#include "game/hl/savegame.h"
 
 #define SF_TRIGGER_PUSH_ONCE		1
 #define SF_TRIGGER_PUSH_START_OFF	2
@@ -652,6 +653,11 @@ int game_end_section(void)
 void EndSectionReset(void)
 {
 	end_section_fires = 0;
+}
+
+uint32_t EndSection_SaveState(int op)
+{
+	return sg_io(op, &end_section_fires, sizeof(end_section_fires));
 }
 
 /* pfnEndSection: the menu's end of a section (M5); logged and counted. */

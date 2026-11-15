@@ -100,6 +100,9 @@ ENGINE_SRC += engine/test/seamprof.c
 GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO) $(GAME_SRC_LS)
 # M4 Stream: residency classes, target set, pins, prefetch, pop-in
 ENGINE_SRC += engine/world/stream.c
+# M6 SaveGame: saved games and settings on FlashRAM (architecture.md 14)
+ENGINE_SRC += engine/save/save.c engine/save/sv.c engine/save/flq.c
+GAME_SRC += game/hl/savegame.c
 # HLSDK sources kept as Valve wrote them: their unused locals, MSVC
 # pragmas and array-parameter styles are not ours to fix; HLSDK builds
 # them without strict aliasing (mathlib.h IS_NAN)
@@ -108,9 +111,9 @@ HLSDK_CFLAGS := -fno-strict-aliasing -Wno-unused-variable -Wno-unused-but-set-va
 ENGINE_SRC += $(GAME_SRC)
 N64_SRC := plat/n64/cart.c plat/n64/fpu_shim.c plat/n64/gpu.c plat/n64/gpu_studio.c plat/n64/main.c \
 	plat/n64/sys.c \
-	plat/n64/vid.c
+	plat/n64/vid.c plat/n64/flash.c
 HOST_SRC := plat/host/gpu.c plat/host/gpu_studio.c plat/host/heap_host.c plat/host/io_host.c plat/host/main.c \
-	plat/host/sys.c
+	plat/host/sys.c plat/host/flash_host.c
 # the Snd slice's audio backends (engine/snd/snd_hw.h)
 N64_SRC += plat/n64/audio.c
 HOST_SRC += plat/host/audio_host.c
@@ -128,7 +131,7 @@ HOST_SRC += plat/host/gpu_2d.c
 # engine/in (the usercmd), engine/view (the drawn eye: residency input,
 # flashlight) and engine/test (route conditions) feed the simulation too.
 NOFASTMATH_DIRS := engine/coll engine/phys engine/render engine/world engine/ent engine/res \
-	engine/snd engine/core engine/in engine/view engine/test game/pm game/hl game/studio game/hud
+	engine/snd engine/core engine/in engine/view engine/test engine/save game/pm game/hl game/studio game/hud
 
 HL64_WARN := -Wall -Wextra -Werror
 HL64_DEFS :=
@@ -228,6 +231,9 @@ $(BUILD_DIR)/hl64.dfs: FORCE
 
 # Explicit ROM rule (n64.mk's %.z64 writes into the working directory).
 $(ROM): N64_ROM_TITLE = "hl64"
+# The ROM header's save type: ares and flashcarts give a flashram ROM the
+# 128 KB FlashRAM (D4); n64.mk applies it with ed64romconfig after n64tool.
+$(ROM): N64_ROM_SAVETYPE = flashram
 $(ROM): $(ELF) $(DFS)
 	@echo "    [Z64] $@"
 	$(N64_SYM) --all $< $<.sym
@@ -237,6 +243,7 @@ $(ROM): $(ELF) $(DFS)
 	@rm -f $@
 	$(N64_TOOL) $(N64_TOOLFLAGS) --output $@.tmp --align 256 $<.stripped $<.sym $(DFS) \
 		$(N64_TOOLFILES)
+	$(N64_ED64ROMCONFIG) $(N64_ED64ROMCONFIGFLAGS) $@.tmp
 	@mv $@.tmp $@
 
 rom: $(ROM)
