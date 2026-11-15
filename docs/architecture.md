@@ -1041,7 +1041,7 @@ line for the highlighted button, the menu sounds of the player's
 ## 14. Save and level state
 
 Level state is the dehydrate store (6.4). A saved game (D4, `engine/save/`,
-`include/hl64/save.h`) is a 128 B header (magic, format 5, layout id,
+`include/hl64/save.h`) is a 128 B header (magic, format 6, layout id,
 logical slot, sequence, its sectors, sizes, CRC-32 of the image, display
 info, the open layers with their directory CRCs), on the flash a 384 B
 settings block (its own CRC), and a compressed image of the sections every
@@ -1049,7 +1049,8 @@ engine module writes (`engine/save/svmod.h`, in `save.c` order: clock,
 engine frame, rng, settings; records with HLE slots, timers, uses, frozen
 maps and the dehydrate store; entity components, sets, grid and private
 blocks; contents brushes, player, input, conveyors, render fades, decals,
-seam state, lightstyles, looping sounds), then the game's globals
+seam state, lightstyles, looping sounds, ready studio animations), then
+the game's globals
 (`game/hl/savegame.c`) and, in test builds, the route VM's position.
 Entity rows are stored as differences from their cooked records; empty
 slots, capacity-sized tables, grid query stamps and timing stats are not
@@ -1080,6 +1081,25 @@ its sheet read, under its own work cap (175 units a frame), never the
 placement budget, so the game's placements and infodecal's retries go as
 in the run that saved. A full pool (96) is 2606 B; after the late-Uplink
 load all 96 rebuild within 100 frames (host).
+
+**Ready animations** (`engine/render/studio.c`, STU1): the hitbox source
+poses an entity's hitboxes only while its sequence's animation is
+resident (the box stands for them otherwise, `studio_hitboxes`), so which
+animations are resident decides traces, and through them damage and the
+AI's work units and pause points. A playing game has every live entity's
+current animation wanted and its models' other animations kept while the
+model is in use; a loaded game would get them over the following frames,
+behind the cold world's reads (seam-2to3 with fall damage: an idle
+grunt's animation landed ten frames after the load, a bullet met its box
+where the saving game posed its hitboxes, and the AI's pause points
+parted). The save's settle finishes the animation reads in flight and
+reads every live entity's current animation; the save holds the keys
+(model, sequence: 4 B each, by model then sequence) of the ready
+animations of the models live entities use (the others' 5 s grace
+follows the render clock's history, and nothing traces them); a load
+drops the other animations and reads those (load I/O): seam-2to3 810,
+41 animations, 133616 B. Not saved: animation reads asked for after the
+load land later behind the cold world's (below).
 
 **Media** (user decisions 2026-11-15):
 
@@ -1130,7 +1150,7 @@ load all 96 rebuild within 100 frames (host).
 **Save** (`save_write`, `save_autosave`): at the next frame boundary
 (`save_frame`, first in `eng_frame`) what is in flight settles (paused
 monster thinks finish, layer / HLE slot opens complete, precache holds
-land; the same settle runs in every load of it), the snapshot frame copies
+land, animation reads finish; the same settle runs in every load of it), the snapshot frame copies
 the state into the save region and writes the header's description of it
 (layers, map, time), then the coder runs in 8 ms steps over the following
 frames and the flash writer programs it (4 ms per frame) or the Pak writer
@@ -1180,8 +1200,9 @@ after the switch, room for the 72-frame save at T); on the cart the T+N
 save may queue behind an autosave, so ares runs quit 90 frames later.
 Earlier seam-2to3 windows (before the switch) meet game rules that
 follow residency, warm in A, cold
-after B's load: infodecal retries change free times, the hitbox pose
-memo forgets entries whose animation is not resident. Reported only for
+after B's load: infodecal retries change free times, animations a
+sequence change asks for after the load land later behind the cold
+world's reads (the box stands for their hitboxes longer). Reported only for
 hl2-return-battle (`:report`), where a map opens inside the window and
 its completion frame follows the render pool's state, so hydration and
 AI-think drops land at other frames. Cost: every autosave ok and every

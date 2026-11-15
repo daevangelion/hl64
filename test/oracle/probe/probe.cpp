@@ -61,6 +61,7 @@ static const ProbeCapture s_caps[] =
 	{ "A-touch",    "area-links-and-touch", Cap_ATouch, G_M2 },
 	{ "A-shape",    "area-links-and-touch", Cap_AShape, G_M2 },
 	{ "PM-bot",     "pmove-host",           Cap_PMBot, G_M2 },
+	{ "PM-fall",    "pmove-host",           Cap_PMFall, G_M2 },
 	{ "K-settle",   "think-and-time",       Cap_KSettle, G_M3 },
 	{ "K-alloc",    "think-and-time",       Cap_KAlloc, G_M3 },
 	{ "K-think",    "think-and-time",       Cap_KThink, G_M3 },

@@ -24,7 +24,9 @@ here).
    set or cleared here from the water level the **previous** move left
    (`WaterMove`), not by pmove or the engine; a player entering water gets
    FL_INWATER on the frame after the move that put him there
-   **[probe:measured PM-bot]**.
+   **[probe:measured PM-bot]**. Off the ground (FL_ONGROUND clear) it
+   stores the game's `m_flFallVelocity` := −velocity.z (the velocity the
+   previous move left).
 3. Player think if due (think-and-time.md 2).
 4. Base velocity: if the ground entity has FL_CONVEYOR, add
    `ground.speed · ground.movedir` to `basevelocity`; triggers that push
@@ -47,8 +49,11 @@ here).
    the player's velocity during each being the entry's `deltavelocity`
    (its velocity when it hit), restored to the move's result afterwards
    **[probe:measured P-botpush walk_0]** (area-links-and-touch.md 4).
-8. `game_player_postthink` (fall damage from `flFallVelocity`, weapons,
-   use).
+8. `game_player_postthink` (weapons, use, fall damage from the game's
+   `m_flFallVelocity` of step 2: pmove's `flFallVelocity` is already 0
+   after a landing move, PM_CheckFalling zeroes it; single-player damage
+   `int((m_flFallVelocity − 580) · 100 / 444)` above 580
+   **[probe:measured PM-fall]**).
 
 ## 2. Physents
 
@@ -117,7 +122,7 @@ PM2, home-local leaves 2 (M2Close, measured).
 | trace line (start, end, flags, hull, ignore) | the same with an explicit hull |
 | test player position (pos) | physent index of the first solid the player box at pos is inside, −1 if free |
 | stuck touch (hit index, trace) | append to the touch list (deduplicated) |
-| play sound (channel, name, volume, attenuation, flags, pitch) | engine emit on the player entity; pm_shared passes literal names (footsteps, ladder, wade, jump-land), so the adapter maps them to `res_t` through a small cooked table (≈ 40 names, perfect hash built by `restab`) |
+| play sound (channel, name, volume, attenuation, flags, pitch) | engine emit on the player entity (GoldSrc channels: steps / ladder / wade on CHAN_BODY, fall pain on CHAN_VOICE); pm_shared passes literal names (footsteps per material, ladder, wade, landing, fall pain), so the adapter maps them to `res_t` through a compiled table of their res.def lines (38 names, binary search; the tfc-only `plyrjmp8` is not in Half-Life's data) |
 | trace texture (physent, start, end) | material code of the surface hit (trace-and-hulls.md 4.7) as the HLSDK texture-type character |
 | random long / float | engine random stream |
 | model type / bounds | from the resource table / submodel table |

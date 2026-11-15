@@ -67,6 +67,11 @@ int	seam_load(void);
 /* engine/snd/snd.c: looping sounds (restarted on load) */
 void	snd_save(void);
 int	snd_load(void);
+/* engine/render/studio.c: the ready animations of the models live entities
+ * use (the hitbox source poses only those; a load reads them, load I/O,
+ * and drops the others) */
+void	studio_save(void);
+int	studio_load(void);
 /* engine/test/route.c (test builds): the route VM's position */
 void	rt_save(void);
 int	rt_load_state(void);

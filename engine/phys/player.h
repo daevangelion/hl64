@@ -55,7 +55,7 @@ typedef struct {
 	uint32_t	us_sum, us_max;	/* step 5 CPU */
 	uint32_t	physents_max;
 	uint32_t	overflow;	/* frames that dropped physents / ladders */
-	uint32_t	sounds;		/* pm_shared sound requests (no audio before M3) */
+	uint32_t	sounds;		/* pm_shared sound requests */
 	/* the services under the move, timed where pm_shared calls them */
 	uint32_t	traces, trace_us;	/* player traces and position tests */
 	uint32_t	clips;			/* physent clips inside them */

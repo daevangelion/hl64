@@ -25,11 +25,11 @@ SECTOR = 16 * 1024
 POOL_SECTORS = 8
 HDR = 128
 FLASH_HDR = 512        # header + the 384 B settings block before a flash copy's image
-FORMAT = 5
+FORMAT = 6
 SLOT_MAGIC = 0x484C5356
 SET_SLOT = 0xFE
 TAGS = ["HL64", "ENG1", "CLK1", "RNG1", "SET1", "REC2", "ENT2", "CBR1", "PLR1", "INP1",
-        "CONV", "TRN1", "DCL2", "SEAM", "STY1", "SND1", "GAME", "RTE1", "END!"]
+        "CONV", "TRN1", "DCL2", "SEAM", "STY1", "SND1", "STU1", "GAME", "RTE1", "END!"]
 
 
 def header(img, sect, e):

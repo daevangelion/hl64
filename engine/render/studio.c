@@ -54,6 +54,8 @@
 #include "engine/render/gpu_studio.h"
 #include "engine/render/ren.h"
 #include "engine/render/trans.h"
+#include "engine/save/sv.h"
+#include "engine/save/svmod.h"
 #include "engine/world/wld.h"
 
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -895,6 +897,128 @@ const void *studio_anim_now(res_t model, int sequence, uint32_t *size)
 void studio_want(res_t model, int sequence)
 {
 	anim_get(model, sequence, NULL, 1, 0);
+}
+
+/* ---- saved games ------------------------------------------------------------------------ */
+
+/* Saved games (docs/architecture.md 14): the hitbox source poses an
+ * entity's hitboxes only while its sequence's animation is resident (the
+ * box stands otherwise: studio_hitboxes), so which animations are
+ * resident decides traces, and through them damage and the AI's work
+ * units: the live entities' models' ready animations are saved, as their
+ * keys. A playing game has every live entity's current animation wanted
+ * (studio_frame) and keeps its models' others while the model is in use
+ * (soft_residency); a loaded game would get them over the following
+ * frames, behind the cold world's reads (seam-2to3: an idle grunt's
+ * animation landed ten frames after the load, a bullet met its box where
+ * the saving game posed its hitboxes, and the AI's work units and pause
+ * points parted). The animations of models no live entity uses are left
+ * out: their 5 s grace follows the render clock's history, and nothing
+ * traces them. */
+
+/* every animation read in flight finished (landed) */
+static void anims_finish(void)
+{
+	int k;
+
+	for (k = 0; k < REQS; k++)
+		if (reqs[k].kind == 2)
+			io_finish(&reqs[k].r, "studio anim (save)");
+	io_pump();
+}
+
+void studio_save_settle(void)
+{
+	int e;
+
+	anims_finish();
+	/* the current sequences studio_frame has not asked for yet (changed
+	 * after its last pass) */
+	for (e = ent_next_live(0); e >= 0; e = ent_next_live(e))
+	{
+		const ent_rnd_t *r = ent_rnd(e);
+		const smodel_t *m;
+
+		if (RES_KIND(r->model) != RES_K_MODEL || !(m = info_of(r->model)))
+			continue;
+		/* the sequence as anim_ready picks it */
+		anim_get(r->model, r->sequence < m->numseq ? r->sequence : 0, NULL, 1, 1);
+	}
+}
+
+/* STU1: per ready animation (landed or resident, its model's info
+ * resident: what anim_ready finds) of a model a live entity uses, its
+ * model index + 1 and sequence, by model then sequence (not the hash
+ * table's order); 0 ends. */
+void studio_save(void)
+{
+	uint32_t used[(HL64_STUDIO_MODELS + 31) / 32];
+	int n = res_count(RES_K_MODEL), i, s, e;
+
+	if (n > HL64_STUDIO_MODELS)
+		n = HL64_STUDIO_MODELS;
+	memset(used, 0, sizeof(used));
+	for (e = ent_next_live(0); e >= 0; e = ent_next_live(e))
+		if ((i = model_index(ent_rnd(e)->model)) >= 0)
+			used[i >> 5] |= 1u << (i & 31);
+	sv_tag(SV_TAG('S', 'T', 'U', '1'));
+	for (i = 0; i < n; i++)
+	{
+		if (!(used[i >> 5] >> (i & 31) & 1) || models[i].info_st != U_RESIDENT)
+			continue;
+		for (s = 0; s < models[i].numseq; s++)
+		{
+			const sanim_t *a = anim_slot(i, s, 0);
+
+			if (a && (a->st == U_LANDED || a->st == U_RESIDENT))
+			{
+				sv_u16((uint32_t)i + 1);
+				sv_u16((uint32_t)s);
+			}
+		}
+	}
+	sv_u16(0);
+}
+
+/* The loaded game's animations are the saved ones (load I/O): the others
+ * leave the pool, the saved ones are read now. */
+int studio_load(void)
+{
+	int n = res_count(RES_K_MODEL), i, prev = -1, got = 0;
+	uint32_t bytes = 0;
+
+	if (n > HL64_STUDIO_MODELS)
+		n = HL64_STUDIO_MODELS;
+	if (sv_expect(SV_TAG('S', 'T', 'U', '1')))
+		return -1;
+	io_set_load(1);
+	anims_finish();
+	for (i = 0; i < HL64_STUDIO_ANIMS; i++)
+		if (anims[i].blk)
+			mem_pool_free(&pool, anims[i].blk, 0);
+	memset(anims, 0, sizeof(anims));
+	while (!sv_failed())
+	{
+		int mi = (int)sv_get_u16() - 1, s, key;
+		uint32_t size = 0;
+
+		if (mi < 0)
+			break;
+		s = (int)sv_get_u16();
+		key = mi * 65536 + s;
+		if (mi >= n || key <= prev)
+		{
+			sv_fail("studio: saved animation out of range or order");
+			break;
+		}
+		prev = key;
+		anim_get(RES_MAKE(RES_K_MODEL, mi), s, &size, 1, 1);
+		got += size != 0;
+		bytes += size;
+	}
+	io_set_load(0);
+	log_printf("studio: load: %d animations read (%lu B)\n", got, (unsigned long)bytes);
+	return sv_failed() ? -1 : 0;
 }
 
 static int reqs_free(void)
@@ -2290,7 +2414,9 @@ int studio_hitboxes(const col_ent_t *e, const float start[3], const float end[3]
 	/* never a synchronous read in a playing frame's trace: while the
 	 * current sequence's animation (or the info) is still landing (a
 	 * sequence change a frame or two ago; requested here), the box stands
-	 * for the hitboxes; load I/O (boot, tools, map loads) reads it */
+	 * for the hitboxes; load I/O (boot, tools, map loads) reads it.
+	 * Which animations are ready is saved (STU1: a loaded game finds
+	 * those of the game that saved) */
 	ready = anim_ready(r->model, r->sequence);
 	if ((!ready && !io_loading()) || !(m = info_of(r->model)) || !m->info->numhitboxes)
 		return 0;

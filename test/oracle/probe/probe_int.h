@@ -186,6 +186,7 @@ bool Cap_THitbox( int step );
 bool Cap_ATouch( int step );
 bool Cap_AShape( int step );
 bool Cap_PMBot( int step );
+bool Cap_PMFall( int step );
 bool Cap_AOrder( int step );
 bool Cap_PToss( int step );
 bool Cap_PBounce( int step );

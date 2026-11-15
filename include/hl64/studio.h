@@ -53,6 +53,11 @@ void		studio_flush(void);
  * models' infos asynchronously (no mid-game synchronous info read once
  * the interest precedes the use). */
 void		studio_preload(void);
+/* A save's settle (load I/O, docs/architecture.md 14): the animation reads
+ * in flight finished and every live entity's current animation read, so
+ * the ready animations the save holds (STU1, engine/save/svmod.h) are the
+ * same in the game that saves and goes on as in every load of the save. */
+void		studio_save_settle(void);
 /* Models with residency interest whose info is still on its way (the
  * async prefetch has it queued or not yet started); rec holds a newly
  * opened map's hydration until 0 (level-load precache before spawns). */
