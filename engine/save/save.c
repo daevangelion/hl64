@@ -70,7 +70,7 @@
 #include "engine/world/wld.h"
 #include "engine/world/wld_int.h"
 
-#define SAVE_FORMAT	4
+#define SAVE_FORMAT	5
 #define SLOT_MAGIC	0x484C5356u	/* 'HLSV' */
 #define SET_MAGIC	0x484C5354u	/* 'HLST' */
 #define HDR_BYTES	128u		/* the slot header */

@@ -30,14 +30,28 @@
  * same frames, K10); one whose sector is not resident waits (4 retried per
  * frame) and is dropped after 2 s.
  *
+ * Order: every placement request (a queued one when the game makes it,
+ * fx_decal_static / decal_place_now when placed) takes the next request
+ * number; a decal's `seq` is that number's block (SEQ_SUB bits for the
+ * decals one placement commits), and "oldest" means the lowest seq. The
+ * queue is kept in request order (compacted, oldest first). So which
+ * decals the pool holds and the queue's order follow the game's requests,
+ * not which chunks were resident when a placement could run (a load
+ * leaves them cold): a placement that waited a frame lands with its
+ * request's seq, one older than every decal of a full pool is not placed
+ * (it would have been replaced already), and a world placement commits
+ * nothing until every chunk it needs, in every layer, is resident.
+ *
  * Saved games (decal_save / decal_load, docs/architecture.md 14): every
- * placed decal is saved as its placement (pool index, order, model, layer,
- * chunk, texture, the point and normal in the model's frame quantized,
- * the winding), not its pieces, and the pending placements as they are. A
- * loaded decal is rebuilt from it (walk_chunk on its one chunk) once that
- * chunk is resident and its sheet read, under its own work cap
- * (REBUILD_WORK), never the placement budget, so the game's placements
- * (and infodecal's retries) go as in the run that saved.
+ * placed decal is saved as its placement (order, model, layer, chunk,
+ * texture, the point and normal in the model's frame quantized, the
+ * winding), not its pieces, oldest first (not by pool index: which index
+ * a placement got follows the residency it met), and the pending
+ * placements in request order. A loaded decal is rebuilt from it
+ * (walk_chunk on its one chunk) once that chunk is resident and its sheet
+ * read, under its own work cap (REBUILD_WORK), never the placement budget,
+ * so the game's placements (and infodecal's retries) go as in the run that
+ * saved.
  */
 #include <math.h>
 #include <string.h>
@@ -75,7 +89,8 @@
 #define BUDGET_WORK	350
 #define RETRIES		4
 #define QUEUE_LIFE	2.0
-#define MAX_CHUNKS	16		/* chunks one placement may touch */
+#define MAX_CHUNKS	16		/* chunks one placement may touch, a layer */
+#define SEQ_SUB		5		/* seq bits of the decals one placement commits */
 #define REBUILD_WORK	175		/* loaded decals' rebuild work a frame (as BUDGET_WORK) */
 #define NORM_SCALE	16384.0f	/* a saved normal's unit */
 #define DF_FACING	0x01		/* hit normal known */
@@ -94,7 +109,7 @@ typedef struct {
 } dvert_t;				/* 10 */
 
 typedef struct {
-	uint32_t	seq;		/* placement order (oldest replaced) */
+	uint32_t	seq;		/* request << SEQ_SUB | commit (oldest replaced) */
 	ent_h		owner;		/* mover; 0 = world */
 	uint16_t	chunk;		/* REND / MOVR chunk the pieces lie on */
 	uint8_t		live, layer, tex, nverts;
@@ -110,9 +125,10 @@ typedef struct {
 typedef struct {
 	float		p[3], n[3];	/* global */
 	double		t0;
+	uint32_t	rq;		/* request number */
 	ent_h		owner;
 	int16_t		decal;
-	uint8_t		live, tries;
+	uint8_t		live, tries;	/* live 0: removed at the next squeeze */
 } pend_t;
 
 static dtex_t		tex[TEXES];
@@ -132,9 +148,23 @@ static uint32_t		work;			/* placement work this frame (BUDGET_WORK) */
 static uint32_t		sheet_bytes, vert_bytes, region_bytes;
 static fxdecal_t	pool[HL64_FX_DECALS];
 static dvert_t		*verts;			/* HL64_FX_DECALS x HL64_FX_DECAL_VERTS */
-static pend_t		queue[HL64_FX_DECAL_QUEUE];
-static uint32_t		seq;
+static pend_t		queue[HL64_FX_DECAL_QUEUE];	/* [0, nq): request order */
+static int		nq;
+static uint32_t		seq;			/* requests made */
 static decal_stats_t	st;
+
+/* Drop the queue's removed entries, keeping request order. */
+static void squeeze(void)
+{
+	int i, n = 0;
+
+	for (i = 0; i < nq; i++)
+		if (queue[i].live)
+			queue[n++] = queue[i];
+	if (n < nq)
+		memset(&queue[n], 0, (size_t)(nq - n) * sizeof(queue[0]));
+	nq = n;
+}
 
 /* ---- sheet ------------------------------------------------------------------------ */
 
@@ -185,6 +215,7 @@ void decal_init(void)
 	memset(tex, 0, sizeof(tex));
 	ntex = 0;
 	seq = 0;
+	nq = 0;
 	frames = spent_us = work = 0;
 	sheet_bytes = 0;
 	vert_bytes = vbytes;
@@ -254,9 +285,10 @@ static void slot_sync(int s)
 			for (i = 0; i < HL64_FX_DECALS; i++)
 				if (pool[i].live && pool[i].tex >= lo && pool[i].tex < lo + SHEET_MAX)
 					pool[i].live = 0;
-			for (i = 0; i < HL64_FX_DECAL_QUEUE; i++)
-				if (queue[i].live && queue[i].decal >= lo && queue[i].decal < lo + SHEET_MAX)
+			for (i = 0; i < nq; i++)
+				if (queue[i].decal >= lo && queue[i].decal < lo + SHEET_MAX)
 					queue[i].live = 0;
+			squeeze();
 		}
 		slots[s].keep = -1;
 		memset(&tex[lo], 0, SHEET_MAX * sizeof(tex[0]));
@@ -392,6 +424,7 @@ typedef struct {
 	int		facing;		/* hit normal known */
 	int		sign;		/* winding -> face normal sign */
 	float		reach2;		/* bbox reach */
+	uint32_t	seq;		/* the next commit's seq (request << SEQ_SUB) */
 	/* output of the current chunk */
 	dvert_t		v[HL64_FX_DECAL_VERTS];
 	uint8_t		piece[PIECES];
@@ -622,7 +655,10 @@ static void walk_chunk(place_t *P, const wld_layer_t *L, const uint8_t *ch, uint
 	}
 }
 
-static int alloc_slot(void)
+/* Pool index for a decal of order s: a free one, else the oldest's; -1
+ * when s is older than every decal of the full pool (it would have been
+ * replaced already: a placement that waited for residency). */
+static int alloc_slot(uint32_t s)
 {
 	int i, old = 0;
 
@@ -634,7 +670,7 @@ static int alloc_slot(void)
 			old = i;
 	}
 	st.replaced++;
-	return old;
+	return pool[old].seq < s ? old : -1;
 }
 
 /* The decal's bounding sphere in its model frame (quarter units): the
@@ -678,10 +714,15 @@ static int commit(place_t *P, int layer, int map, int chunk, ent_h owner)
 
 	if (!P->nv)
 		return 0;
-	i = alloc_slot();
+	i = alloc_slot(P->seq);
+	if (i < 0)
+	{
+		P->nv = P->np = 0;
+		return 0;
+	}
 	d = &pool[i];
 	memset(d, 0, sizeof(*d));
-	d->seq = ++seq;
+	d->seq = P->seq++;
 	d->owner = owner;
 	d->chunk = (uint16_t)chunk;
 	d->live = 1;
@@ -810,12 +851,16 @@ static int winding_sign(const place_t *P, const wld_layer_t *L, const uint8_t *c
 	return votes < 0 ? -1 : votes > 0 ? 1 : 0;
 }
 
-/* Place now. Returns pieces placed (>= 0), -1 when a needed chunk is not
- * resident (retry later). decal = texture (resolve). */
-static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
+/* Place now, as request rq (its decals' seq block). Returns pieces placed
+ * (>= 0), -1 when a needed chunk is not resident (retry later; nothing
+ * committed). decal = texture (resolve). */
+static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal, uint32_t rq)
 {
 	place_t P;
 	int li, k, placed = 0, missing = 0, sheet;
+	uint16_t chunks[HL64_WORLD_LAYERS][MAX_CHUNKS];
+	const uint8_t *chp[HL64_WORLD_LAYERS][MAX_CHUNKS];
+	int nch[HL64_WORLD_LAYERS];
 
 	if (decal < 0 || decal >= TEXES || !tex[sheet = decal].tw)
 	{
@@ -823,6 +868,7 @@ static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
 		return 0;
 	}
 	memset(&P, 0, sizeof(P));
+	P.seq = rq << SEQ_SUB;
 	P.t = &tex[sheet];
 	P.tex = sheet;
 	P.facing = (n_g[0] != 0 || n_g[1] != 0 || n_g[2] != 0);
@@ -878,25 +924,23 @@ static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
 			return placed;
 		}
 	}
-	/* the world: sectors of every open layer around the point */
+	/* the world: sectors of every open layer around the point, every
+	 * chunk resident before any is committed (a retry places it once) */
 	for (li = 0; li < HL64_WORLD_LAYERS; li++)
 	{
 		wld_layer_t *L = wld_layer(li);
-		int s, sign = 0;
-		uint16_t chunks[MAX_CHUNKS];
-		int nch = 0;
+		int s;
 
+		nch[li] = 0;
 		if (!L || L->reencode)
 			continue;
 		for (k = 0; k < 3; k++)
-		{
 			P.q[k] = p_g[k] - L->gofs[k];
-			P.n[k] = n_g[k];
-		}
 		for (s = 0; s < L->dir->nsect; s++)
 		{
 			const w64_sector_t *sc = &L->sects[s];
 			float r = sqrtf(P.reach2);
+			const uint8_t *ch;
 			int c;
 
 			for (k = 0; k < 3; k++)
@@ -905,43 +949,49 @@ static int place(const float p_g[3], const float n_g[3], ent_h owner, int decal)
 			if (k < 3)
 				continue;
 			c = sc->rend_chunk;
-			for (k = 0; k < nch; k++)
-				if (chunks[k] == c)
+			for (k = 0; k < nch[li]; k++)
+				if (chunks[li][k] == c)
 					break;
-			if (k < nch || nch >= MAX_CHUNKS)
+			if (k < nch[li] || nch[li] >= MAX_CHUNKS)
 				continue;
-			if (!landed(L, c))
+			if (!(ch = landed(L, c)))
 			{
 				wld_chunk_use(L, c);	/* ask for it; retry later */
 				missing = 1;
 				continue;
 			}
-			chunks[nch++] = (uint16_t)c;
+			chp[li][nch[li]] = ch;
+			chunks[li][nch[li]++] = (uint16_t)c;
 		}
-		if (missing)
-			return -1;
-		for (k = 0; k < nch && P.facing && !sign; k++)
-		{
-			const uint8_t *ch = landed(L, chunks[k]);
+	}
+	if (missing)
+		return -1;
+	for (li = 0; li < HL64_WORLD_LAYERS; li++)
+	{
+		wld_layer_t *L = wld_layer(li);
+		int sign = 0;
 
-			if (ch)
-				sign = winding_sign(&P, L, ch, L->chunks[chunks[k]].size);
+		if (!nch[li])
+			continue;
+		for (k = 0; k < 3; k++)
+		{
+			P.q[k] = p_g[k] - L->gofs[k];
+			P.n[k] = n_g[k];
 		}
+		for (k = 0; k < nch[li] && P.facing && !sign; k++)
+			sign = winding_sign(&P, L, chp[li][k], L->chunks[chunks[li][k]].size);
 		/* each chunk's own vote first: the cook's strip winding is not one
 		 * convention across chunks (measured: hldemo1 a wall at x -1504 in
 		 * one chunk winds inward, a plaque 1 u off it in another outward) */
-		for (k = 0; k < nch; k++)
+		for (k = 0; k < nch[li]; k++)
 		{
-			const uint8_t *ch = landed(L, chunks[k]);
-			int own;
+			const uint8_t *ch = chp[li][k];
+			int own = P.facing ? winding_sign(&P, L, ch, L->chunks[chunks[li][k]].size) : 0;
 
-			if (!ch)
-				return -1;
-			own = P.facing ? winding_sign(&P, L, ch, L->chunks[chunks[k]].size) : 0;
 			P.sign = own ? own : sign ? sign : 1;
 			reset_out(&P);
-			walk_chunk(&P, L, ch, L->chunks[chunks[k]].size);
-			if (commit(&P, L->slot, L->map, chunks[k], 0))
+			walk_chunk(&P, L, ch, L->chunks[chunks[li][k]].size);
+			if (commit(&P, L->slot, L->map, chunks[li][k], 0))
 				placed++;
 		}
 	}
@@ -998,25 +1048,30 @@ static void rebuild(int i)
 #endif
 }
 
+/* Every live decal oldest first, then the queue in request order: a
+ * function of the game's requests, whatever pool index residency gave a
+ * placement. */
 void decal_save(void)
 {
-	int i, n = 0, s;
+	uint32_t last = 0;	/* seq >= 1 << SEQ_SUB: requests count from 1 */
+	int i, j, n = 0, s;
 
-	sv_tag(SV_TAG('D', 'C', 'L', '1'));
+	sv_tag(SV_TAG('D', 'C', 'L', '2'));
 	sv_u32(seq);
 	for (s = 0; s < HL64_WORLD_LAYERS; s++)	/* a load's slot keeps its map until synced */
 		sv_u16((uint16_t)(slots[s].map >= 0 ? slots[s].map : slots[s].keep));
 	for (i = 0; i < HL64_FX_DECALS; i++)
 		n += pool[i].live;
 	sv_u8((uint32_t)n);
-	for (i = 0; i < HL64_FX_DECALS; i++)
+	for (j = 0; j < n; j++)
 	{
-		const fxdecal_t *d = &pool[i];
+		const fxdecal_t *d = NULL;
 		int k;
 
-		if (!d->live)
-			continue;
-		sv_u8((uint32_t)i);
+		for (i = 0; i < HL64_FX_DECALS; i++)
+			if (pool[i].live && pool[i].seq > last && (!d || pool[i].seq < d->seq))
+				d = &pool[i];
+		last = d->seq;
 		sv_u32(d->seq);
 		sv_u32(d->owner);
 		sv_u16(d->chunk);
@@ -1029,16 +1084,12 @@ void decal_save(void)
 		for (k = 0; k < 3; k++)
 			sv_u16((uint16_t)d->n[k]);
 	}
-	for (i = n = 0; i < HL64_FX_DECAL_QUEUE; i++)
-		n += queue[i].live;
-	sv_u8((uint32_t)n);
-	for (i = 0; i < HL64_FX_DECAL_QUEUE; i++)
+	sv_u8((uint32_t)nq);
+	for (i = 0; i < nq; i++)
 	{
 		const pend_t *q = &queue[i];
 
-		if (!q->live)
-			continue;
-		sv_u8((uint32_t)i);
+		sv_u32(q->rq);
 		sv_put(q->p, sizeof(q->p));
 		sv_put(q->n, sizeof(q->n));
 		sv_f64(q->t0);
@@ -1048,31 +1099,30 @@ void decal_save(void)
 	}
 }
 
-/* After decal_init (the session's drop): the pool and the queue at their
- * own indices; each slot keeps the decals of the map it followed when the
- * game saved (slot_sync then reads that map's sheet again). */
+/* After decal_init (the session's drop): the decals at pool indices 0.. in
+ * their order, the queue in its; each slot keeps the decals of the map it
+ * followed when the game saved (slot_sync then reads that map's sheet
+ * again). Orders strictly rising and within the requests made. */
 int decal_load(void)
 {
-	uint32_t n, i, k;
+	uint32_t n, i, k, last = 0;
 	int s;
 
-	if (sv_expect(SV_TAG('D', 'C', 'L', '1')))
+	if (sv_expect(SV_TAG('D', 'C', 'L', '2')))
 		return -1;
 	seq = sv_get_u32();
 	for (s = 0; s < HL64_WORLD_LAYERS; s++)
 		slots[s].keep = (int16_t)sv_get_u16();
 	n = sv_get_u8();
+	if (n > HL64_FX_DECALS)
+	{
+		sv_fail("decal count");
+		return -1;
+	}
 	for (i = 0; i < n && !sv_failed(); i++)
 	{
-		uint32_t at = sv_get_u8();
-		fxdecal_t *d;
+		fxdecal_t *d = &pool[i];
 
-		if (at >= HL64_FX_DECALS || pool[at].live)
-		{
-			sv_fail("decal index");
-			return -1;
-		}
-		d = &pool[at];
 		memset(d, 0, sizeof(*d));
 		d->live = 1;
 		d->seq = sv_get_u32();
@@ -1086,24 +1136,25 @@ int decal_load(void)
 			d->q[k] = (int16_t)sv_get_u16();
 		for (k = 0; k < 3; k++)
 			d->n[k] = (int16_t)sv_get_u16();
-		if (d->layer >= HL64_WORLD_LAYERS || d->tex >= TEXES)
+		if (d->seq <= last || d->seq >> SEQ_SUB > seq || d->layer >= HL64_WORLD_LAYERS
+			|| d->tex >= TEXES)
 		{
 			sv_fail("decal");
 			return -1;
 		}
+		last = d->seq;
 	}
 	n = sv_get_u8();
-	for (i = 0; i < n && !sv_failed(); i++)
+	if (n > HL64_FX_DECAL_QUEUE)
 	{
-		uint32_t at = sv_get_u8();
-		pend_t *q;
+		sv_fail("decal queue count");
+		return -1;
+	}
+	for (i = 0, last = 0; i < n && !sv_failed(); i++)
+	{
+		pend_t *q = &queue[i];
 
-		if (at >= HL64_FX_DECAL_QUEUE || queue[at].live)
-		{
-			sv_fail("decal queue index");
-			return -1;
-		}
-		q = &queue[at];
+		q->rq = sv_get_u32();
 		sv_get(q->p, sizeof(q->p));
 		sv_get(q->n, sizeof(q->n));
 		q->t0 = sv_get_f64();
@@ -1111,12 +1162,14 @@ int decal_load(void)
 		q->decal = (int16_t)sv_get_u16();
 		q->tries = (uint8_t)sv_get_u8();
 		q->live = 1;
-		if (q->decal < 0 || q->decal >= TEXES)
+		if (q->rq <= last || q->rq > seq || q->decal < 0 || q->decal >= TEXES)
 		{
 			sv_fail("decal queue");
 			return -1;
 		}
+		last = q->rq;
 	}
+	nq = (int)n;
 	return sv_failed() ? -1 : 0;
 }
 
@@ -1124,31 +1177,34 @@ int decal_load(void)
 
 void decal_queue(const float p_g[3], const float n[3], int e, int decal)
 {
-	pend_t *q = NULL;
-	int i, old = -1;
+	pend_t *q;
 
-	for (i = 0; i < HL64_FX_DECAL_QUEUE; i++)
+	if (nq == HL64_FX_DECAL_QUEUE)
 	{
-		if (!queue[i].live)
-		{
-			q = &queue[i];
-			break;
-		}
-		if (old < 0 || queue[i].t0 < queue[old].t0)
-			old = i;
-	}
-	if (!q)
-	{
-		q = &queue[old];	/* full: the oldest pending one is dropped */
+		queue[0].live = 0;	/* full: the oldest pending one is dropped */
+		squeeze();
 		st.dropped++;
 	}
+	q = &queue[nq++];
 	memcpy(q->p, p_g, sizeof(q->p));
 	memcpy(q->n, n, sizeof(q->n));
+	q->rq = ++seq;
 	q->owner = e > 0 && ent_is_live(e) ? ent_handle_of(e) : 0;
 	q->decal = (int16_t)decal;
 	q->t0 = fx_s.now;
 	q->tries = 0;
 	q->live = 1;
+}
+
+/* A placement made now takes the next request number unless it must be
+ * retried (nothing committed): the game's retry asks again. */
+static int place_request(const float p_g[3], const float n[3], ent_h owner, int t)
+{
+	int r = place(p_g, n, owner, t, seq + 1);
+
+	if (r >= 0)
+		seq++;
+	return r;
 }
 
 int decal_place_now(const float p_g[3], const float n[3], int e, int decal)
@@ -1157,7 +1213,7 @@ int decal_place_now(const float p_g[3], const float n[3], int e, int decal)
 
 	if (t < 0)
 		return t == -2 ? -1 : 0;
-	return place(p_g, n, e > 0 && ent_is_live(e) ? ent_handle_of(e) : 0, t);
+	return place_request(p_g, n, e > 0 && ent_is_live(e) ? ent_handle_of(e) : 0, t);
 }
 
 static void queue_id(const float p_g[3], const float n[3], int e, int decal)
@@ -1212,7 +1268,7 @@ int fx_decal_static(int e, const float org[3], int decal)
 	}
 	t0 = sys_time_us();
 	fx_global(org, p);
-	r = place(p, none, e > 0 && ent_is_live(e) ? ent_handle_of(e) : 0, t);
+	r = place_request(p, none, e > 0 && ent_is_live(e) ? ent_handle_of(e) : 0, t);
 	spent_us += (uint32_t)(sys_time_us() - t0);
 	if (r > 0)
 	{
@@ -1241,13 +1297,11 @@ void decal_frame(void)
 		else if (d->live && (d->flags & DF_STALE) && rebuilt < REBUILD_WORK)
 			rebuild(i);
 	}
-	for (i = 0; i < HL64_FX_DECAL_QUEUE; i++)
+	for (i = 0; i < nq; i++)
 	{
 		pend_t *q = &queue[i];
 		int r;
 
-		if (!q->live)
-			continue;
 		if (fx_s.now - q->t0 > QUEUE_LIFE)
 		{
 			q->live = 0;
@@ -1265,7 +1319,7 @@ void decal_frame(void)
 			continue;
 		if (q->tries)
 			retries++;
-		r = place(q->p, q->n, q->owner, q->decal);
+		r = place(q->p, q->n, q->owner, q->decal, q->rq);
 		if (r < 0)
 		{
 			q->tries++;
@@ -1276,6 +1330,7 @@ void decal_frame(void)
 		if (r > 0)
 			st.placed++;
 	}
+	squeeze();
 	st.pending = (uint16_t)n;
 	t0 = sys_time_us() - t0 + spent_us;
 	if (dbg_trace() && work)
@@ -1473,6 +1528,7 @@ int decal_info(int i, int *owner, int *nverts, float (*out)[3], int max)
 #ifdef HL64_HOST
 _Static_assert(HL64_FX_DECAL_VERTS % 3 == 0 && HL64_FX_DECAL_VERTS / 3 <= PIECES,
 	"worst-case decal as fans of 3");
+_Static_assert(HL64_WORLD_LAYERS * MAX_CHUNKS <= 1 << SEQ_SUB, "a placement's commits fit its seq block");
 
 int decal_test_fill_worst(int i)
 {
@@ -1487,7 +1543,7 @@ int decal_test_fill_worst(int i)
 	for (j = 0; j < HL64_FX_DECALS; j++)
 	{
 		pool[j] = src;
-		pool[j].seq = ++seq;
+		pool[j].seq = ++seq << SEQ_SUB;
 		pool[j].nverts = HL64_FX_DECAL_VERTS;
 		pool[j].npieces = HL64_FX_DECAL_VERTS / 3;
 		for (k = 0; k < PIECES; k++)
