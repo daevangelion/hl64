@@ -39,13 +39,16 @@
  * m6-sdk) boots with 3448 B more (m3-a PROFILE ROM: cart 1886776 B after
  * the carve, host 1890224 B at the old value). Menu + saved games (m6-int6s,
  * full m5 --ares gate) boot with 64 B more (uplink PROFILE ROM: cart 1612792
- * B after the carve, host 1612856 B at 757776). The host build reads
+ * B after the carve, host 1612856 B at 757776). The m6-int7 merge set
+ * (TexAnim, Pushable, FallDamage; full m5 --ares gate) boots with 8 B more
+ * (uplink PROFILE ROM: cart 1603936 B after the carve, host 1603944 B at
+ * 757840). The host build reads
  * __bss_end from its HL64_TEST cart ELF (Makefile, cart_image.h) and
  * plat/host/io_host.c mounts the same table for its content root.
  * test/run/m3.sh --ares asserts host == cart to the byte.
  */
 #define HL64_CART_STACK_BYTES		0x10000		/* libdragon STACK_SIZE */
-#define HL64_CART_BOOT_BYTES		757840
+#define HL64_CART_BOOT_BYTES		757848
 
 /* Image (code + data + bss) budget, 4.1 first row; boot logs the size. */
 #define HL64_IMAGE_BUDGET_KB		900

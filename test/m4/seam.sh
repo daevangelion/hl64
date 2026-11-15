@@ -24,7 +24,7 @@
 #     BUILD_DIR (env) the build directory (default /scratch/hl64/builds/Seam)
 set -eu
 cd "$(dirname "$0")/../.."
-CONTENT=${1:-${HL64_CONTENT:-/scratch/hl64/tmp/Int6/c20}}
+CONTENT=${1:-${HL64_CONTENT:-/scratch/hl64/tmp/Int7/c21}}
 STAGING=${2:-$CONTENT.stage}
 B=${BUILD_DIR:-/scratch/hl64/builds/Seam}
 T=$(mktemp -d "${TMPDIR:-/tmp}/seamtest.XXXXXX")

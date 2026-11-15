@@ -14,8 +14,8 @@
 # them.
 #
 # Usage: test/m5/controls_ares.sh
-# Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c20
-#        cook /scratch/hl64/tmp/Int6/c20), READY_TIMEOUT (s of real
+# Env:   BUILD_DIR (scratch), HL64_CONTENT (cooked content, default the c21
+#        cook /scratch/hl64/tmp/Int7/c21), READY_TIMEOUT (s of real
 #        time from ares' first log line until padready, default 900),
 #        EVENT_TIMEOUT (s a button is held at most waiting for its event,
 #        default 300), GAP (s released after each press, default 8), and
@@ -28,7 +28,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-build}"
 case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$ROOT/$BUILD_DIR" ;; esac
-CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/Int6/c20}"
+CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/Int7/c21}"
 READY_TIMEOUT="${READY_TIMEOUT:-900}"
 EVENT_TIMEOUT="${EVENT_TIMEOUT:-300}"
 GAP="${GAP:-8}"
