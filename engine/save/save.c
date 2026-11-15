@@ -70,7 +70,7 @@
 #include "engine/world/wld.h"
 #include "engine/world/wld_int.h"
 
-#define SAVE_FORMAT	5
+#define SAVE_FORMAT	6
 #define SLOT_MAGIC	0x484C5356u	/* 'HLSV' */
 #define SET_MAGIC	0x484C5354u	/* 'HLST' */
 #define HDR_BYTES	128u		/* the slot header */
@@ -831,7 +831,8 @@ static const char *title_of(const char *map)
 
 /* Settle what is in flight (the same in the run that saves and goes on as
  * in every load of the save): monster thinks, layer and HLE opens, map
- * precache holds. */
+ * precache holds, the live entities' current animations (load I/O, last:
+ * the sequences the settled thinks and hydrations left). */
 static void settle(void)
 {
 	int s;
@@ -845,6 +846,9 @@ static void settle(void)
 			wld_open(L->map);
 	}
 	rec_settle();
+	io_set_load(1);
+	studio_save_settle();
+	io_set_load(0);
 }
 
 /* Nothing for settle to do now: no monster think paused or queued, every
@@ -892,6 +896,8 @@ static void sections_save(void)
 	wld_style_save();
 	sv_part("snd");
 	snd_save();
+	sv_part("studio");
+	studio_save();
 	sv_part("game");
 	sv_tag(SV_TAG('G', 'A', 'M', 'E'));
 	game_save_globals();
@@ -906,6 +912,7 @@ static int sections_load(void)
 		|| rng_load() || settings_section_load() || rec_load() || ent_load()
 		|| col_contents_load() || phy_player_load() || in_load() || phy_conv_load()
 		|| trans_load() || decal_load() || seam_load() || wld_style_load() || snd_load()
+		|| studio_load()
 		|| sv_expect(SV_TAG('G', 'A', 'M', 'E')) || game_load_globals() || rt_load_state()
 		|| sv_expect(SV_TAG('E', 'N', 'D', '!')) || ent_priv_fixup())
 		return -1;
