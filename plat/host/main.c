@@ -5,7 +5,7 @@
  * line as text, parsed here only (architecture 12) into the binary
  * commands the cart's channels deliver.
  *
- *   hl64-host [--root DIR] [--frames N] [--route FILE.rbc] [--play]
+ *   hl64-host [--root DIR] [--frames N] [--route FILE.rbc] [--play] [--title]
  *             [--cmd "[@FRAME] NAME ARGS..."]... [--write-cmds FILE]
  *
  * --root        cart root (the DFS image source; mounted like the cart's
@@ -17,7 +17,9 @@
  *               route.rbc (engine/test/route.c); a relative FILE is the
  *               working directory's; a missing FILE fails (exit 2)
  * --play        without a route: New Game at the campaign start and play
- *               (eng_play; the playable build's boot), not the free camera
+ *               (eng_play), not the free camera
+ * --title       without a route: boot to the title menu (eng_title; the
+ *               playable build's boot); the `pad` command presses its keys
  * --write-cmds  write the parsed commands as a cart command file
  *               (dbg.h DBG_FILE_*) and exit instead of running.
  */
@@ -74,7 +76,7 @@ static const char *route_path(const char *file)
 static int usage(void)
 {
 	fprintf(stderr, "usage: hl64-host [--root DIR] [--frames N] [--route FILE.rbc] [--play] "
-		"[--cmd \"[@FRAME] NAME ARGS...\"]... [--write-cmds FILE]\n");
+		"[--title] [--cmd \"[@FRAME] NAME ARGS...\"]... [--write-cmds FILE]\n");
 	return 2;
 }
 
@@ -200,6 +202,8 @@ int main(int argc, char **argv)
 		}
 		else if (!strcmp(argv[i], "--play"))
 			eng_play = 1;
+		else if (!strcmp(argv[i], "--title"))
+			eng_title = 1;
 		else
 			return usage();
 		if (!cmd)

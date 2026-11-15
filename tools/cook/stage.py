@@ -25,6 +25,8 @@ sounds are derived from those maps' entity lumps, the class table
                         or --ref-palette)
   gfx/*.ui8             HUD sheets (tools/cook/bake_hlhud.py) and the
                         gfx.wad pictures (tools/cook/bake_ui.py)
+  gfx/logo.lg4          the title menu's animated banner from media/logo.avi
+                        (tools/cook/bake_logo.py; ffmpeg, else gfx/lambda.bmp)
   sound/**/*.wav64      wav64 of every referenced sample
                         (tools/cook/hl_sound_refs.py, hl_sound_classes.py);
                         one the player's data lacks gets a warning naming
@@ -75,7 +77,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-from tools.cook import bake_hlhud, bake_ui, hl_classes, hl_sound_classes, hl_sound_refs
+from tools.cook import bake_hlhud, bake_logo, bake_ui, hl_classes, hl_sound_classes, hl_sound_refs
 from tools.cook import decals, hl_sprite_cook
 from tools.cook.data import Data, DataError
 from tools.cook.hl_classes import BspError
@@ -343,6 +345,16 @@ def stage_2d(data: Data, ct: Content, staging: Path, ref_palette: Optional[bytes
         ct.put(f"gfx/{n}", b)
     (staging / "hl_hud_rects.h").write_text(header)
     log(f"    {len(files)} ui8 sheets; HUD rects -> {staging / 'hl_hud_rects.h'}")
+    avi, bmp = data.read("media/logo.avi"), data.read("gfx/lambda.bmp")
+    if avi is None and bmp is None:
+        log("    menu logo: none (no media/logo.avi, no gfx/lambda.bmp)")
+        return
+    try:
+        logo, what = bake_logo.bake(avi, bmp)
+    except bake_logo.LogoError as e:
+        raise CookError(str(e)) from None
+    ct.put("gfx/logo.lg4", logo)
+    log(f"    menu logo gfx/logo.lg4: {what}, {len(logo)} B")
 
 
 def stage_sounds(data: Data, maps: List[str], ents, models: Dict[str, bytes],

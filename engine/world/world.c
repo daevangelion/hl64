@@ -57,7 +57,7 @@ typedef struct {
 } wld_map_t;
 
 static wld_map_t	maps[HL64_MAX_MAPS];
-static int		nmaps, start_map;
+static int		nmaps, start_map, training_map;
 wld_layer_t		wld_layers[HL64_WORLD_LAYERS];
 /* tools/cook/layerdirs.py proves the layer region with these sizes */
 _Static_assert(sizeof(wld_chunk_t) == 20, "wld_chunk_t: update tools/cook/layerdirs.py");
@@ -216,6 +216,7 @@ int wld_init(void)
 	n_lm = be16(b + 10);
 	n_ln = be16(b + 12);
 	start_map = be16(b + 14);
+	training_map = be16(b + 16);
 	n_seam = be16(b + 20);
 	n_twin = be16(b + 22);
 	n_pool = be16(b + 24);
@@ -227,6 +228,8 @@ int wld_init(void)
 		bad(path, 28, "table sizes");
 	if (start_map >= nmaps)
 		start_map = 0;
+	if (training_map >= nmaps)
+		training_map = -1;
 	for (i = 0; i < (uint32_t)nmaps; i++)
 	{
 		const uint8_t *m = b + 32 + 48 * i;
@@ -285,6 +288,11 @@ int wld_map_find(const char *name)
 int wld_start_map(void)
 {
 	return start_map;
+}
+
+int wld_training_map(void)
+{
+	return training_map;
 }
 
 /* ---- directory ------------------------------------------------------------ */

@@ -3,10 +3,12 @@
 #
 # Playable-ROM boot-and-play check (by hand, before delivering a ROM): ares
 # (test/run/ares.sh: here, or on HL64_ARES_HOST=ares-host in about 2 min) boots
-# a playable ROM (no HL64_TEST). Once the cart logs PLAY_AT (default the
-# intro's `teleport: player`: hldemo1's title room hands the player to the
-# corridor) and PLAY_DELAY s more have passed, the patched ares'
-# ARES_TEST_INPUT pad file plays a fixed schedule (host seconds, 42 s):
+# a playable ROM (no HL64_TEST) to its title menu; the pad picks New Game,
+# Easy (A, A: each pressed until the cart logs the menu's answer). Once
+# the cart logs PLAY_AT (default the intro's `teleport: player`:
+# hldemo1's title room hands the player to the corridor) and PLAY_DELAY s
+# more have passed, the patched ares' ARES_TEST_INPUT pad file plays a
+# fixed schedule (host seconds, 42 s):
 # walk forward, turn right, strafe right (C-right), walk forward turning
 # left, look up (C-up), walk back; TAIL s later ares is stopped. The VI
 # framebuffer is saved every SHOT_MS ms of host time.
@@ -21,7 +23,8 @@
 #        of ares at most, default 300 remote, 2400 local: a loaded
 #        build-vm had not reached the teleport after 900 s), PLAY_AT
 #        (log regex), PLAY_DELAY (s, default 3), TAIL (s, default 6),
-#        SHOT_MS (default 4000)
+#        SHOT_MS (default 4000), PLAY_TITLE (1 default: through the title
+#        menu; 0: a ROM that boots straight into the game)
 # Out:   $BUILD_DIR/play/{hl64.z64,pad.in,ares.log,rom.log,input.log,vi/,
 #        sheet.png}
 # Exit:  0 pass, 1 failure, 2 prerequisite missing.
@@ -34,6 +37,7 @@ PLAY_AT="${PLAY_AT:-^teleport: player}"
 PLAY_DELAY="${PLAY_DELAY:-3}"
 TAIL="${TAIL:-6}"
 SHOT_MS="${SHOT_MS:-4000}"
+PLAY_TITLE="${PLAY_TITLE:-1}"
 OUT="$BUILD_DIR/play"
 fail() { echo "PLAY FAIL: $*" >&2; exit 1; }
 
@@ -87,11 +91,27 @@ waitfor() {	# waitfor REGEX: 0 once the log has it, 1 when ares ended first
 		sleep 0.5
 	done
 }
+tap() {	# tap PAD REGEX: hold PAD until the log has one more REGEX line
+	local n0
+	n0=$(grep -cE "$2" "$LOG" 2>/dev/null || true)
+	pad "$1" 0 0
+	until (( $(grep -cE "$2" "$LOG" 2>/dev/null || true) > n0 )); do
+		kill -0 "$APID" 2>/dev/null || { pad 0 0 0; return 1; }
+		sleep 0.2
+	done
+	pad 0 0 0
+	sleep 0.5
+}
 BOOT=-
 AT=-
 if waitfor '^boot ok'; then
 	BOOT=$(el "$T0")
 	echo "t=$BOOT boot ok" >>"$INLOG"
+	# the title menu: New Game, Easy
+	if [[ $PLAY_TITLE -eq 1 ]] && waitfor '^menu: title' &&
+		tap 80000000 '^menu: screen newgame' && tap 80000000 '^menu: play'; then
+		echo "t=$(el "$T0") title: New Game, Easy" >>"$INLOG"
+	fi
 	if waitfor "$PLAY_AT"; then
 		AT=$(el "$T0")
 		echo "t=$AT $PLAY_AT" >>"$INLOG"

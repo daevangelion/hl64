@@ -35,6 +35,8 @@ const char	*wld_map_name(int map);
 const float	*wld_map_origin(int map);
 int		wld_map_find(const char *name);	/* -1 none */
 int		wld_start_map(void);
+/* The CWG training map (Hazard Course), -1 when the campaign has none. */
+int		wld_training_map(void);
 
 /* ---- layers -------------------------------------------------------------- */
 

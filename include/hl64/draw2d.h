@@ -29,6 +29,16 @@ int	d2_text(int x, int y, const char *s, uint8_t r, uint8_t g, uint8_t b, uint8_
 void	d2_screen(int *w, int *h);
 /* Row height of the text font, 0 when the font is missing. */
 int	d2_text_height(void);
+/* Width d2_text would draw. */
+int	d2_text_width(const char *s);
+
+/* Engine UI (engine/ui, boot only): bytes of the HUD region after the
+ * sheets (16-aligned, NULL when they do not fit), and a sheet over I4
+ * texels there (two a byte, high nibble first, (w + 15) / 16 * 8 bytes a
+ * row; the owner rewrites them only while no frame drawing them is in
+ * flight): its sheet id, -1 when none is left. */
+void	*d2_region_alloc(uint32_t bytes);
+int	d2_dyn_sheet(const uint8_t *i4, int w, int h);
 
 /* Engine: boot (sheets resident in the HUD region), frame begin / flush
  * after the 3D draw. */

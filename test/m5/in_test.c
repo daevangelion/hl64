@@ -3,10 +3,13 @@
  * in_test.c -- host test of the pad binding (engine/in/in.c,
  * docs/controls.md), run by test/run/m5.sh. The driver is the pad
  * (sys_pad_read --wrap): held buttons hold their command button while
- * down, D-up / D-left / D-right / Start send impulse 100 / 7 / 6 / 8 once
- * per press, presses of the same frame go out one per command in table
- * order, and a route / debug impulse goes before them. Exit 0 and
- * `in_test PASS` when every check passes; each failure prints one line.
+ * down, D-up / D-left / D-right send impulse 100 / 7 / 6 once per press,
+ * presses of the same frame go out one per command in table order, and a
+ * route / debug impulse goes before them; Start is no command (the pause
+ * menu's key); the menu keys (in_keys) fire on the press and repeat held
+ * directions; buttons held when the menu closes (in_hold) do nothing
+ * until released; the look speed scales turning. Exit 0 and `in_test
+ * PASS` when every check passes; each failure prints one line.
  */
 #include <stdio.h>
 #include <string.h>
@@ -17,6 +20,7 @@
 
 static int fails;
 static uint16_t pad;
+static int8_t stick_y;
 
 #define CHECK(cond, ...) do { if (!(cond)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); \
 	printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -25,7 +29,7 @@ void __wrap_sys_pad_read(sys_pad_t *p);
 void __wrap_sys_pad_read(sys_pad_t *p)
 {
 	p->stick_x = 0;
-	p->stick_y = 0;
+	p->stick_y = stick_y;
 	p->buttons = pad;
 }
 
@@ -94,7 +98,6 @@ static void test_edges(void)
 		{ SYS_PAD_D_UP, 100, "D-up flashlight" },
 		{ SYS_PAD_D_LEFT, 7, "D-left invprev" },
 		{ SYS_PAD_D_RIGHT, 6, "D-right invnext" },
-		{ SYS_PAD_START, 8, "Start lastinv" },
 	};
 	unsigned i, k;
 
@@ -155,12 +158,81 @@ static void test_queue(void)
 		"route +forward + D-down: buttons %#x", c.buttons);
 }
 
+static void test_menu(void)
+{
+	in_cmd_t c;
+	uint16_t k;
+	int i, reps;
+	float yaw0, a;
+
+	/* Start: no command */
+	in_init();
+	c = frame(SYS_PAD_START);
+	CHECK(!c.impulse && !c.buttons, "Start: impulse %u buttons %#x", c.impulse, c.buttons);
+
+	/* menu keys: one press each, A / B / Start, no repeat while held */
+	in_init();
+	pad = SYS_PAD_A | SYS_PAD_START;
+	k = in_keys(33333);
+	CHECK(k == (IN_KEY_A | IN_KEY_START), "A + Start keys %#x", k);
+	k = in_keys(33333);
+	CHECK(!k, "A + Start held: keys %#x", k);
+	pad = 0;
+	in_keys(33333);
+	pad = SYS_PAD_B;
+	k = in_keys(33333);
+	CHECK(k == IN_KEY_B, "B keys %#x", k);
+	/* a held direction: the press, then a repeat once 0.4 s have passed and
+	 * every 0.12 s after (at 30 fps: the 13th frame, then every 4th) */
+	pad = 0;
+	in_keys(33333);
+	pad = SYS_PAD_D_DOWN;
+	k = in_keys(33333);
+	CHECK(k == IN_KEY_DOWN, "D-down press keys %#x", k);
+	for (i = reps = 0; i < 30; i++)	/* 1 s more */
+		reps += in_keys(33333) == IN_KEY_DOWN;
+	CHECK(reps == 5, "D-down held 1 s: %d repeats, want 5", reps);
+	/* the stick past the key threshold is a direction */
+	pad = 0;
+	in_keys(33333);
+	stick_y = 60;
+	k = in_keys(33333);
+	CHECK(k == IN_KEY_UP, "stick up keys %#x", k);
+	stick_y = 0;
+	in_keys(33333);
+
+	/* in_hold: A held as the menu closes does not jump until released */
+	in_init();
+	pad = SYS_PAD_A;
+	in_hold();
+	c = frame(SYS_PAD_A);
+	CHECK(!(c.buttons & IN_BTN_JUMP), "A held through in_hold: buttons %#x", c.buttons);
+	frame(0);
+	c = frame(SYS_PAD_A);
+	CHECK(c.buttons & IN_BTN_JUMP, "A pressed again: buttons %#x", c.buttons);
+	frame(0);
+
+	/* look speed: 200 % turns twice as far */
+	in_init();
+	in_buttons(IN_BTN_LEFT, 0);
+	yaw0 = in_angles()[1];
+	frame(0);
+	a = in_angles()[1] - yaw0;
+	settings.look_sens = 200;
+	yaw0 = in_angles()[1];
+	frame(0);
+	CHECK(in_angles()[1] - yaw0 > 1.99f * a && in_angles()[1] - yaw0 < 2.01f * a,
+		"look 200%%: turned %g, want %g", (double)(in_angles()[1] - yaw0), (double)(2 * a));
+	settings.look_sens = 100;
+}
+
 int main(void)
 {
 	settings_reset();
 	test_held();
 	test_edges();
 	test_queue();
+	test_menu();
 	printf("in_test %s (%d failures)\n", fails ? "FAIL" : "PASS", fails);
 	return fails != 0;
 }

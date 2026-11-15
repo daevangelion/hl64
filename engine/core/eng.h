@@ -27,5 +27,20 @@ extern const char *eng_route_path;
  * Playable builds 1; HL64_TEST builds 0 (their routeless boots fly the
  * free camera) unless the platform sets it before eng_boot (host --play). */
 extern int eng_play;
+/* Without a route: boot to the title menu (engine/ui/menu.c) instead,
+ * which starts the game. Playable builds 1; HL64_TEST builds 0 unless the
+ * platform sets it (host --title). */
+extern int eng_title;
+
+/* The front end's session control (engine/ui/menu.c), at step 2: */
+/* 1 when New Game may start now (no session; the last one's layers have
+ * retired their fenced frees). */
+int		eng_can_start(void);
+/* New Game on CWG map (eng_can_start() must hold). */
+void		eng_start_game(int map);
+/* End the session (Quit to title): sounds, effects, entities, player,
+ * records and layers dropped as at an end of section; the regions return
+ * to their boot state (checked: `mem: title ...` line). */
+void		eng_to_title(void);
 
 #endif

@@ -69,7 +69,7 @@ typedef struct {
 	uint8_t		left;		/* words still to start */
 	uint8_t		wpitch;		/* word modifiers, % (100 = none) */
 	uint8_t		wvol;
-	uint8_t		pad;
+	uint8_t		paused;		/* snd_pause: 1 was playing (stopped), 2 was not */
 	uint32_t	end_pos;	/* word end (sample), 0 = the wave's end */
 	float		gap;		/* s between the last word's end and this one, -1 */
 } voice_t;
@@ -96,6 +96,7 @@ typedef struct {
 	float		lis[3], right[3];
 	uint32_t	seq, clock, frame;
 	double		last_dt;
+	int		paused;		/* snd_pause */
 	int		keep;		/* voice a wave-cap steal must not take */
 	int		log;
 	uint32_t	tables;		/* region bytes used by this file */
@@ -411,7 +412,8 @@ static int voice_pick(int steal)
 		if (!S->v[v].busy)
 			return v;
 	for (v = 0; v < SND_VOICES; v++)
-		if (S->v[v].loop < 0 && S->v[v].sent == SENT_NONE && !snd_hw_playing(v))
+		if (S->v[v].loop < 0 && S->v[v].sent == SENT_NONE && !S->v[v].paused &&
+			!snd_hw_playing(v))
 		{
 			voice_free(v, "end");
 			return v;
@@ -835,11 +837,62 @@ void snd_stop_all(void)
 
 	if (!S)
 		return;
+	S->paused = 0;
 	for (i = 0; i < SND_LOOPS; i++)
 		S->l[i].used = 0;
 	for (i = 0; i < SND_VOICES; i++)
 		if (S->v[i].busy)
 			voice_free(i, "new game");
+}
+
+void snd_pause(int on)
+{
+	int v;
+
+	if (!S || !on == !S->paused)
+		return;
+	S->paused = on != 0;
+	for (v = 0; v < SND_VOICES; v++)
+	{
+		voice_t *p = &S->v[v];
+
+		if (!p->busy)
+			continue;
+		if (on)
+		{
+			p->paused = 2;
+			if (p->wave >= 0 && snd_hw_playing(v))
+			{
+				p->paused = 1;
+				snd_hw_stop(v);
+			}
+			continue;
+		}
+		/* a VADPCM wave seeks only to its start or its loop start: a loop
+		 * resumes at its loop start (virtual until loop_update gives it a
+		 * voice), a sentence with its next word, a stopped one-shot ends */
+		if (p->paused == 1 && p->loop >= 0)
+			voice_free(v, "pause-loop");
+		else if (p->paused == 1 && p->sent != SENT_NONE)
+		{
+			p->paused = 0;
+			p->wave = -1;
+			sentence_next(v, 0.0);
+		}
+		else if (p->paused == 1)
+			voice_free(v, "pause-cut");
+		else
+			p->paused = 0;
+	}
+	snd_logf("snd %lu %s\n", (unsigned long)S->frame, on ? "pause" : "resume");
+}
+
+void snd_ui(res_t sound, float vol)
+{
+	if (!S)
+		return;
+	S->st.emits++;
+	start_sample(ENT_NONE, CHAN_AUTO, sound, vol, ATTN_NONE, PITCH_NORM, S->lis, 0);
 }
 
 void snd_voice_info(int v, snd_voice_info_t *o)
@@ -955,7 +1008,7 @@ void snd_frame(const float listener[3], const float right[3], double dt)
 	{
 		voice_t *p = &S->v[i];
 
-		if (!p->busy || p->loop >= 0)
+		if (!p->busy || p->loop >= 0 || p->paused)
 			continue;
 		if (p->ent == SND_SELF)
 			memcpy(p->org, S->lis, sizeof(p->org));
@@ -984,7 +1037,7 @@ void snd_frame(const float listener[3], const float right[3], double dt)
 		voice_apply(i);
 	}
 	for (i = 0; i < SND_LOOPS; i++)
-		if (S->l[i].used)
+		if (S->l[i].used && !S->paused)
 		{
 			int had = S->l[i].voice >= 0;
 

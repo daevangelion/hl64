@@ -2,7 +2,9 @@
 /*
  * in.c -- pad -> usercmd (docs/architecture.md 11; docs/specs/pmove-host.md
  * 1 step 1). One command per frame from the pad, the held route / debug
- * buttons and the view angles kept here (the HLSDK client's view angles).
+ * buttons and the view angles kept here (the HLSDK client's view angles);
+ * and the menu's keys (engine/ui/menu.c): Start, A, B and the D-pad /
+ * stick directions with auto-repeat.
  */
 #include <math.h>
 #include <string.h>
@@ -17,14 +19,18 @@
 #define WALK_SCALE	0.3f	/* cl_movespeedkey (IN_BTN_RUN, "+speed") */
 #define STICK_FULL	80.0f
 #define PITCH_LIMIT	89.0f	/* cl_pitchup / cl_pitchdown */
-
 /* Impulses the pad sends (game/hl/player.c ImpulseCommands): HLSDK 100
- * flashlight; hl64's 6 / 7 / 8 = the HLSDK client's invnext / invprev /
- * lastinv. */
+ * flashlight; hl64's 6 / 7 = the HLSDK client's invnext / invprev. Start
+ * is the pause menu's (in_keys), not a binding. */
 #define IMP_INVNEXT	6
 #define IMP_INVPREV	7
-#define IMP_LASTINV	8
 #define IMP_FLASHLIGHT	100
+
+/* Menu keys: a direction repeats after REPEAT_FIRST us held, then every
+ * REPEAT_NEXT us; the stick counts as a direction past STICK_KEY. */
+#define REPEAT_FIRST	400000u
+#define REPEAT_NEXT	120000u
+#define STICK_KEY	40
 
 /* The pad binding (docs/controls.md). A button with a command button
  * holds it while down; one with an impulse sends it once per press (the
@@ -45,7 +51,6 @@ static const struct {
 	{ SYS_PAD_D_UP, 0, IMP_FLASHLIGHT },
 	{ SYS_PAD_D_LEFT, 0, IMP_INVPREV },
 	{ SYS_PAD_D_RIGHT, 0, IMP_INVNEXT },
-	{ SYS_PAD_START, 0, IMP_LASTINV },
 };
 #define NBIND	(sizeof(bind) / sizeof(bind[0]))
 _Static_assert(NBIND <= 16, "pending presses are a 16-bit mask over bind[]");
@@ -56,7 +61,26 @@ static struct {
 	uint8_t		impulse;	/* route / debug impulse */
 	uint16_t	pad_last;	/* pad buttons of the last frame */
 	uint16_t	pend;		/* bind[] impulse presses not yet sent */
+	uint16_t	mask;		/* held at in_hold: ignored until released */
+	uint16_t	keys_last;	/* in_keys: keys held last call */
+	uint32_t	rep_us;		/* in_keys: time to the next repeat */
+#ifdef HL64_TEST
+	sys_pad_t	dbg;		/* DBG_PAD: the pad as a debug command holds it */
+#endif
 } in;
+
+/* Port 1 (test builds: with the DBG_PAD pad over it). */
+static void pad_read(sys_pad_t *p)
+{
+	sys_pad_read(p);
+#ifdef HL64_TEST
+	p->buttons |= in.dbg.buttons;
+	if (in.dbg.stick_x)
+		p->stick_x = in.dbg.stick_x;
+	if (in.dbg.stick_y)
+		p->stick_y = in.dbg.stick_y;
+#endif
+}
 
 static float stick(int v)
 {
@@ -101,12 +125,15 @@ uint16_t in_held(void)
 void in_frame(uint32_t dt_us, float maxspeed, in_cmd_t *cmd)
 {
 	sys_pad_t p;
-	float dt = (float)dt_us * 1e-6f, sx, sy, fm, sm, spd;
+	float dt = (float)dt_us * 1e-6f, sx, sy, fm, sm, spd, look;
 	uint32_t ms = (dt_us + 500u) / 1000u;
 	uint16_t b = in.held;
 	unsigned i;
 
-	sys_pad_read(&p);
+	pad_read(&p);
+	/* buttons held when the menu closed stay ignored until released */
+	in.mask &= p.buttons;
+	p.buttons &= (uint16_t)~in.mask;
 	for (i = 0; i < NBIND; i++)
 	{
 		if (!(p.buttons & bind[i].pad))
@@ -128,15 +155,18 @@ void in_frame(uint32_t dt_us, float maxspeed, in_cmd_t *cmd)
 	sx = stick(p.stick_x);
 	sy = stick(p.stick_y);
 
-	/* view: stick x and the turn buttons yaw, C-up / C-down pitch */
-	in.ang[1] -= sx * settings.yawspeed * dt;
+	/* view: stick x and the turn buttons yaw, C-up / C-down pitch, at the
+	 * menu's look sensitivity (percent) */
+	look = (float)settings.look_sens / 100.0f;
+	in.ang[1] -= sx * settings.yawspeed * look * dt;
 	if (b & IN_BTN_LEFT)
-		in.ang[1] += settings.yawspeed * dt;
+		in.ang[1] += settings.yawspeed * look * dt;
 	if (b & IN_BTN_RIGHT)
-		in.ang[1] -= settings.yawspeed * dt;
+		in.ang[1] -= settings.yawspeed * look * dt;
 	if (p.buttons & (SYS_PAD_C_UP | SYS_PAD_C_DOWN))
 	{
-		float d = settings.pitchspeed * dt * ((p.buttons & SYS_PAD_C_UP) ? -1.0f : 1.0f);
+		float d = settings.pitchspeed * look * dt *
+			((p.buttons & SYS_PAD_C_UP) ? -1.0f : 1.0f);
 
 		in.ang[0] += settings.invert_y ? -d : d;
 	}
@@ -187,6 +217,63 @@ void in_frame(uint32_t dt_us, float maxspeed, in_cmd_t *cmd)
 	in.impulse = 0;
 }
 
+uint16_t in_keys(uint32_t dt_us)
+{
+	static const uint16_t dir[4][2] = {
+		{ IN_KEY_UP, SYS_PAD_D_UP }, { IN_KEY_DOWN, SYS_PAD_D_DOWN },
+		{ IN_KEY_LEFT, SYS_PAD_D_LEFT }, { IN_KEY_RIGHT, SYS_PAD_D_RIGHT },
+	};
+	sys_pad_t p;
+	uint16_t held = 0, down, out;
+	int k;
+
+	pad_read(&p);
+	for (k = 0; k < 4; k++)
+		if (p.buttons & dir[k][1])
+			held |= dir[k][0];
+	if (p.stick_y >= STICK_KEY)
+		held |= IN_KEY_UP;
+	else if (p.stick_y <= -STICK_KEY)
+		held |= IN_KEY_DOWN;
+	if (p.stick_x >= STICK_KEY)
+		held |= IN_KEY_RIGHT;
+	else if (p.stick_x <= -STICK_KEY)
+		held |= IN_KEY_LEFT;
+	if (p.buttons & SYS_PAD_A)
+		held |= IN_KEY_A;
+	if (p.buttons & SYS_PAD_B)
+		held |= IN_KEY_B;
+	if (p.buttons & SYS_PAD_START)
+		held |= IN_KEY_START;
+	down = (uint16_t)(held & ~in.keys_last);
+	out = down;
+	/* directions: a new one starts the repeat clock; a held one repeats */
+	if (down & IN_KEY_DIRS)
+		in.rep_us = REPEAT_FIRST;
+	else if (held & IN_KEY_DIRS)
+	{
+		if (in.rep_us > dt_us)
+			in.rep_us -= dt_us;
+		else
+		{
+			in.rep_us = REPEAT_NEXT;
+			out |= (uint16_t)(held & IN_KEY_DIRS);
+		}
+	}
+	in.keys_last = held;
+	return out;
+}
+
+void in_hold(void)
+{
+	sys_pad_t p;
+
+	pad_read(&p);
+	in.mask = p.buttons;
+	in.pad_last = 0;
+	in.pend = 0;
+}
+
 /* buttons down up */
 static int cmd_buttons(const dbg_cmd_t *c)
 {
@@ -204,9 +291,28 @@ static int cmd_impulse(const dbg_cmd_t *c)
 	return 0;
 }
 
+#ifdef HL64_TEST
+/* pad buttons stick_x stick_y: the pad held as given (SYS_PAD_* bits, stick
+ * -128..127) until the next pad command */
+static int cmd_pad(const dbg_cmd_t *c)
+{
+	float x = c->arg[1].f, y = c->arg[2].f;
+
+	if (c->arg[0].u > 0xFFFFu || !(x >= -128 && x <= 127) || !(y >= -128 && y <= 127))
+		return -1;
+	in.dbg.buttons = (uint16_t)c->arg[0].u;
+	in.dbg.stick_x = (int8_t)x;
+	in.dbg.stick_y = (int8_t)y;
+	return 0;
+}
+#endif
+
 void in_init(void)
 {
 	memset(&in, 0, sizeof(in));
 	dbg_handler_set(DBG_BUTTONS, cmd_buttons);
 	dbg_handler_set(DBG_IMPULSE, cmd_impulse);
+#ifdef HL64_TEST
+	dbg_handler_set(DBG_PAD, cmd_pad);
+#endif
 }

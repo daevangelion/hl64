@@ -1338,6 +1338,37 @@ void studio_new_game(void)
 	memset(illum, 0, sizeof(illum));
 }
 
+/* Quit to title (engine/core/eng.c, once no frame in flight draws a
+ * model): reads in flight are cancelled and every model, animation and GPU
+ * state leaves the pools, which return to their boot state. */
+void studio_flush(void)
+{
+	uint8_t *sc = mem_region(MEM_STUDIO_SCRATCH);
+	uint32_t scb = mem_region_bytes(MEM_STUDIO_SCRATCH);
+	int i;
+
+	for (i = 0; i < REQS; i++)
+		if (reqs[i].kind)
+			io_cancel(&reqs[i].r);
+	for (i = 0; i < ILOADS; i++)
+		if (iloads[i].idx >= 0)
+			io_cancel(&iloads[i].r);
+	for (i = 0; i < HL64_STUDIO_MODELS; i++)
+		if (models[i].mesh_st == U_RESIDENT && models[i].gstate)
+			gpu_studio_release(models[i].gstate);
+	memset(models, 0, sizeof(models));
+	memset(anims, 0, sizeof(anims));
+	memset(reqs, 0, sizeof(reqs));
+	memset(iloads, 0, sizeof(iloads));
+	for (i = 0; i < ILOADS; i++)
+		iloads[i].idx = -1;
+	view_set = 0;
+	mem_pool_init(&pool, "studio", mem_region(MEM_POOL_STUDIO),
+		mem_region_bytes(MEM_POOL_STUDIO), desc, HL64_STUDIO_BLOCKS);
+	mem_pool_init(&spool, "studiogpu", sc + (MAT_KB + VIEW_KB) * 1024u,
+		scb - (MAT_KB + VIEW_KB) * 1024u, sdesc, 256);
+}
+
 int ent_illum(int e)
 {
 	const col_ent_t *cv;

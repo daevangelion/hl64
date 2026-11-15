@@ -65,7 +65,16 @@ typedef struct {
 	uint8_t		ai_spread;
 	float		ai_budget;
 	float		ai_hold;
+	/* menu (engine/ui/menu.c): brightness 0..100 (a black-level lift of
+	 * the 3D passes, SETTINGS_BRIGHT_LIFT, 0 = the cooked light), look
+	 * sensitivity in percent of yawspeed / pitchspeed */
+	uint8_t		brightness;
+	uint8_t		look_sens;
 } settings_t;
+
+/* The 3D passes' colour lift (of 255) at brightness b: added to every
+ * opaque world / studio pixel by the combiner. */
+#define SETTINGS_BRIGHT_LIFT(b)	((int)(b) * 48 / 100)
 
 extern settings_t settings;
 
@@ -104,7 +113,9 @@ extern settings_t settings;
 	X(R_DITHER, r_dither, U8, 0, 1, 0) \
 	X(AI_SPREAD, ai_spread, U8, 0, 2, 0) \
 	X(AI_BUDGET, ai_budget, F32, 0, 1000000, 0) \
-	X(AI_HOLD, ai_hold, F32, 0, 2, 0)
+	X(AI_HOLD, ai_hold, F32, 0, 2, 0) \
+	X(BRIGHTNESS, brightness, U8, 0, 100, 1) \
+	X(LOOK_SENS, look_sens, U8, 25, 200, 1)
 
 enum {
 #define SETTINGS_ENUM(id, field, type, lo, hi, persist) SET_##id,

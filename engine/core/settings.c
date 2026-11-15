@@ -51,6 +51,7 @@ void settings_reset(void)
 	settings.ai_spread = 1;
 	settings.ai_budget = HL64_AI_BUDGET;
 	settings.ai_hold = HL64_AI_HOLD;
+	settings.look_sens = 100;
 }
 
 int settings_set(int id, float v)

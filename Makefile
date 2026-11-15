@@ -100,6 +100,10 @@ ENGINE_SRC += engine/test/seamprof.c
 GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO) $(GAME_SRC_LS)
 # M4 Stream: residency classes, target set, pins, prefetch, pop-in
 ENGINE_SRC += engine/world/stream.c
+# M6 Menu: the front end (title, pause, settings, save / load screens)
+ENGINE_SRC += engine/ui/menu.c
+# TEMPORARY until m6-savegame lands (never committed)
+ENGINE_SRC += engine/ui/save_stub.c
 # HLSDK sources kept as Valve wrote them: their unused locals, MSVC
 # pragmas and array-parameter styles are not ours to fix; HLSDK builds
 # them without strict aliasing (mathlib.h IS_NAN)

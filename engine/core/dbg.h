@@ -42,7 +42,8 @@
 	X(ENTS_DUMP, "entsdump", "u", 1)	/* K10 triage: stats records also log one hash line per live entity */ \
 	X(SOUND, "sound", "uuu", 1)		/* res_t (SOUND / SENTENCE), entity (0 = the listener), pitch (0 = 100) */ \
 	X(SEAMPROF_MARK, "seamprof_mark", "", 1)	/* open a seam-window profile at this frame (engine/test/seamprof, PROFILE) */ \
-	X(TRACE, "trace", "uu", 1)		/* K10 triage: frames FIRST..LAST log `trace F` decision lines (dbg_trace) */
+	X(TRACE, "trace", "uu", 1)		/* K10 triage: frames FIRST..LAST log `trace F` decision lines (dbg_trace) */ \
+	X(PAD, "pad", "uff", 1)			/* port 1 held as SYS_PAD_* buttons, stick x, y (-128..127) until the next pad command (engine/in) */
 
 enum {
 #define DBG_ENUM(id, name, args, test) DBG_##id,

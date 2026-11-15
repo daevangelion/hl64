@@ -8,9 +8,9 @@
 # D-up twice, D-right, D-left, Start twice, D-down (reload), each held
 # until the cart logs its event. Passes when, after the padready line, the
 # cart logs in this order: `flashlight: on`, `flashlight: off`, a deploy
-# of another weapon (next), a deploy of the handgun (previous), the other
-# weapon again (Start: last), the handgun again (Start), and `weapon:
-# reload weapon_9mmhandgun`, with no other flashlight or deploy line among
+# of another weapon (next), a deploy of the handgun (previous), `menu:
+# pause` (Start), `menu: resume` (Start again) and `weapon: reload
+# weapon_9mmhandgun`, with no other flashlight, deploy or menu line among
 # them.
 #
 # Usage: test/m5/controls_ares.sh
@@ -102,8 +102,8 @@ press 08000000 '^flashlight: on' "D-up (flashlight)"
 press 08000000 '^flashlight: off' "D-up (flashlight)"
 press 01000000 '^weapon: deploy ' "D-right (next weapon)"
 press 02000000 '^weapon: deploy ' "D-left (previous weapon)"
-press 10000000 '^weapon: deploy ' "Start (last weapon)"
-press 10000000 '^weapon: deploy ' "Start (last weapon)"
+press 10000000 '^menu: pause' "Start (pause)"
+press 10000000 '^menu: resume' "Start (resume)"
 press 04000000 '^weapon: reload ' "D-down (reload)"
 echo "t=$((SECONDS - t0)) done" >>"$ROMDIR/input.log"
 kill "$APID" 2>/dev/null || true	# ares_run stops ares (remote: on the host), copies back
@@ -114,7 +114,8 @@ tr -d '\r' <"$LOG" >"$ROMDIR/ares-clean.log"
 
 # the cart's events after padready, in order
 sed -n '/padready/,$p' "$ROMDIR/ares-clean.log" \
-	| grep -E '^(flashlight: (on|off)|weapon: (deploy|reload) )' >"$ROMDIR/events.log" || true
+	| grep -E '^(flashlight: (on|off)|weapon: (deploy|reload) |menu: (pause|resume))' \
+	>"$ROMDIR/events.log" || true
 cat "$ROMDIR/events.log"
 python3 - "$ROMDIR/events.log" "$ROMDIR/ares-clean.log" <<'EOF' || fail "pad events (see $ROMDIR/events.log)"
 import re, sys
@@ -129,7 +130,7 @@ if len(ev) < 7:
     sys.exit("%d events, want 7: %s" % (len(ev), ev))
 nxt = ev[2].split()[-1]
 want = ["flashlight: on", "flashlight: off", "weapon: deploy " + nxt, "weapon: deploy " + h,
-        "weapon: deploy " + nxt, "weapon: deploy " + h, "weapon: reload " + h]
+        "menu: pause", "menu: resume", "weapon: reload " + h]
 if nxt == h or ev[:7] != want or len(ev) != 7:
     sys.exit("events %s, want %s" % (ev, want))
 print("controls ares: PASS (next weapon %s)" % nxt)

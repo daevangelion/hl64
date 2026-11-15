@@ -35,6 +35,7 @@
 #include "engine/core/rng.h"
 #include "engine/core/sys.h"
 #include "engine/ent/rec_int.h"
+#include "engine/ent/ent.h"
 #include "engine/io/io.h"
 #include "engine/res/res.h"
 #include "engine/mem/carve.h"
@@ -57,13 +58,27 @@
 #include "engine/test/route.h"
 #include "engine/test/seamprof.h"
 #include "engine/view/view.h"
+#include "engine/ui/menu.h"
+#include "hl64/save.h"
 
 const char *eng_route_path = "route.rbc";
 #ifdef HL64_TEST
 int eng_play;
+int eng_title;
 #else
 int eng_play = 1;
+int eng_title = 1;
 #endif
+
+/* The regions' use at the title (Quit to title's check against boot):
+ * heap blocks / KB, live entities, game private bytes, HLE / dehydrate
+ * bytes, world pools render / texture / collision and layer directories,
+ * studio pool, sound voices and region bytes */
+#define MEMSIG	13
+static const char *const memsig_name[MEMSIG] = {
+	"heap_blocks", "heap_kb", "ents", "priv", "hle", "dehydrate", "render", "texture",
+	"collision", "layerdirs", "studio_pool", "snd_voices", "snd_mem"
+};
 
 static struct {
 	uint32_t	frame;		/* frames completed */
@@ -79,6 +94,9 @@ static struct {
 	uint64_t	rollup_t0;
 	uint64_t	rollup_world_us;	/* world draw CPU in the roll-up window */
 	uint32_t	rollup_world_max;
+	uint32_t	title_frame;	/* New Game may start from this frame (eng_can_start) */
+	uint8_t		mem_check;	/* eng_to_title: compare with boot at title_frame */
+	uint32_t	mem_boot[MEMSIG];
 } eng;
 
 /* ---- stats record (15) ------------------------------------------------- */
@@ -572,22 +590,22 @@ static void eng_new_game(int map)
 }
 
 /* The end of a section (trigger_endsection, HLSDK pfnEndSection: the
- * engine disconnects and the demo ends): the game starts over with New
- * Game on the campaign's start map, as at boot. The disconnect drops
- * everything of the session: sounds, effects, lights, entities and the
- * player, every HLE slot and open layer, the stream's pins and teleport
- * window. New Game follows once the closed layers' fenced pool frees have
- * retired (RESTART_FRAMES world frames, no world drawn meanwhile): the
- * clock restarts at 1.0 with its settle frames, the random stream at its
- * boot seed, rec_new_campaign drops the frozen maps. */
+ * engine disconnects and the demo ends): the playable build returns to
+ * the title menu; test builds start over with New Game on the campaign's
+ * start map, as at boot. The disconnect drops everything of the session:
+ * sounds, effects, lights, entities and the player, every HLE slot and
+ * open layer, the stream's pins and teleport window. A New Game follows
+ * once the closed layers' fenced pool frees have retired (RESTART_FRAMES
+ * world frames, no world drawn meanwhile): the clock restarts at 1.0 with
+ * its settle frames, the random stream at its boot seed,
+ * rec_new_campaign drops the frozen maps. Quit to title (the pause menu)
+ * is the same disconnect. */
 #define RESTART_FRAMES	3
 
-static void eng_disconnect(void)
+static void session_end(void)
 {
 	int m;
 
-	log_printf("eng: end of section: disconnect, New Game on %s\n",
-		wld_map_name(wld_start_map()));
 	snd_stop_all();
 	fx_init();
 	ren_dlight_reset();
@@ -599,18 +617,107 @@ static void eng_disconnect(void)
 		wld_close(wld_layer_of_map(m));
 	wld_stream_new_game();
 	ren_cam.map = -1;
+}
+
+static void mem_sig(uint32_t s[MEMSIG])
+{
+	unsigned mal, fr, fl, live_n, live_kb, peak_kb;
+	ent_priv_stats_t ps;
+	wld_stats_t w;
+	studio_stats_t st;
+	snd_stats_t ss;
+
+	mem_heap_lifetime(&mal, &fr, &fl, &live_n, &live_kb, &peak_kb);
+	ent_priv_stats(&ps);
+	wld_stats(&w);
+	studio_stats(&st, 0);
+	snd_stats(&ss, 0);
+	s[0] = live_n;
+	s[1] = live_kb;
+	s[2] = ent_s.live;
+	s[3] = ps.bytes_live;
+	rec_mem_use(&s[4], &s[5]);
+	s[6] = w.pool_used[0];
+	s[7] = w.pool_used[1];
+	s[8] = w.pool_used[2];
+	s[9] = w.dirs_used;
+	s[10] = st.pool_used;
+	s[11] = ss.voices;
+	s[12] = ss.mem;
+}
+
+/* The title settled (its closed layers' fenced frees retired, no frame in
+ * flight draws anything 3D): after boot, record the regions' use; after a
+ * session, drop the studio cache and check every region is back to it. */
+static void title_settle(void)
+{
+	uint32_t s[MEMSIG];
+	int i, diff = 0;
+
+	if (eng.mem_check == 2)
+	{
+		eng.mem_check = 0;
+		mem_sig(eng.mem_boot);
+		log_printf("mem: title boot (heap %lu blocks %lu KB)\n",
+			(unsigned long)eng.mem_boot[0], (unsigned long)eng.mem_boot[1]);
+		return;
+	}
+	eng.mem_check = 0;
+	studio_flush();
+	mem_sig(s);
+	for (i = 0; i < MEMSIG; i++)
+		if (s[i] != eng.mem_boot[i])
+		{
+			log_printf("mem: title %s boot=%lu now=%lu\n", memsig_name[i],
+				(unsigned long)eng.mem_boot[i], (unsigned long)s[i]);
+			diff++;
+		}
+	log_printf("mem: title %s boot (heap %lu blocks %lu KB, %d fields)\n",
+		diff ? "DIFFERS from" : "same as", (unsigned long)s[0], (unsigned long)s[1], MEMSIG);
+}
+
+static void eng_disconnect(void)
+{
+	if (eng_title)
+	{
+		log_printf("eng: end of section: disconnect, title\n");
+		eng_to_title();
+		menu_to_title();
+		return;
+	}
+	log_printf("eng: end of section: disconnect, New Game on %s\n",
+		wld_map_name(wld_start_map()));
+	session_end();
 	eng.restart_frame = eng.frame + RESTART_FRAMES;
+}
+
+void eng_start_game(int map)
+{
+	double old = eng.time;
+
+	hl64_rand_seed(0);
+	eng_new_game(map);
+	eng.time = eng_clock_time();
+	rt_new_game(old, eng.time);
 }
 
 static void eng_restart(void)
 {
-	double old = eng.time;
-
 	eng.restart_frame = 0;
-	hl64_rand_seed(0);
-	eng_new_game(wld_start_map());
-	eng.time = eng_clock_time();
-	rt_new_game(old, eng.time);
+	eng_start_game(wld_start_map());
+}
+
+int eng_can_start(void)
+{
+	return eng.world && !phy_player_active() && !eng.restart_frame && !eng.mem_check;
+}
+
+void eng_to_title(void)
+{
+	log_printf("eng: session end, title\n");
+	session_end();
+	eng.title_frame = eng.frame + RESTART_FRAMES;
+	eng.mem_check = 1;
 }
 
 void eng_boot(const char *platform)
@@ -666,6 +773,10 @@ void eng_boot(const char *platform)
 	phy_player_init();
 	/* game/: dispatch tables, engine hooks (think / touch / blocked) */
 	game_init();
+	/* FlashRAM saves and stored settings (include/hl64/save.h) */
+	save_init();
+	if (!eng.world)
+		eng_title = 0;
 	if (eng.world)
 	{
 		int r = rt_load(eng_route_path);
@@ -676,12 +787,18 @@ void eng_boot(const char *platform)
 			log_flush();
 			sys_exit(1);
 		}
+		/* a route plays its own game: no title */
+		if (r > 0)
+			eng_title = 0;
+		/* the front end: the title screen (playable builds, host
+		 * --title) or only the pause menu */
+		menu_init(eng_title);
 		/* New Game (architecture 3.1 step 5): a route plays from the
 		 * campaign start (test builds: its START map instead); without a
-		 * route the playable build starts there too (test builds only
-		 * when asked, eng_play: their routeless boots fly the free
-		 * camera) */
-		if (r > 0 || eng_play)
+		 * route the playable build boots to the title menu, which starts
+		 * the game (test builds play at once only when asked, eng_play:
+		 * their routeless boots fly the free camera) */
+		if (r > 0 || (eng_play && !eng_title))
 		{
 			int map = wld_start_map();
 
@@ -709,6 +826,16 @@ void eng_boot(const char *platform)
 #endif
 	eng.rollup_t0 = sys_time_us();
 	eng.last_vi = sys_vi_count();
+	/* the title: no layer open (the free camera's start map closes); its
+	 * region use is recorded once the fenced frees retire, and Quit to
+	 * title must return to it */
+	if (eng_title)
+	{
+		wld_close(wld_layer_of_map(ren_cam.map));
+		ren_cam.map = -1;
+		eng.title_frame = RESTART_FRAMES;
+		eng.mem_check = 2;
+	}
 	log_printf("boot ok\n");
 	log_flush();
 }
@@ -884,6 +1011,49 @@ uint32_t eng_frame_count(void)
 	return eng.frame;
 }
 
+/* Step 10 sound: listener = the view (global eye, right vector) of the
+ * last drawn frame. */
+static void snd_step(uint32_t dt)
+{
+	float yaw = ren_cam.ang[1] * (3.14159265f / 180.0f);
+	float pitch = ren_cam.ang[0] * (3.14159265f / 180.0f);
+	float roll = ren_cam.ang[2] * (3.14159265f / 180.0f);
+	float sy = hl_sinf(yaw), cy = hl_cosf(yaw), sp = hl_sinf(pitch), cp = hl_cosf(pitch);
+	float sr = hl_sinf(roll), cr = hl_cosf(roll);
+	float right[3] = { -sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp };
+
+	snd_frame(ren_cam.org, right, (double)dt * 1e-6);
+}
+
+/* A frame without the simulation (architecture 13): the title or pause
+ * menu (tick: a counted frame with the debug commands and the roll-up)
+ * or a save / load step in progress (not counted). I/O, sound (the
+ * game's paused) and the menu's 2D over the cleared frame; at the title
+ * the closed layers' fenced frees retire. */
+static void menu_only_frame(uint32_t dt, int tick)
+{
+	io_frame_begin(dt);
+	io_pump();
+	if (!phy_player_active())
+		wld_frame(eng.frame);
+	snd_step(dt);
+	io_pump();
+	while (!sys_frame_try_begin())
+		io_pump();
+	io_pump();
+	d2_begin();
+	menu_draw();
+	d2_end();
+	sys_frame_end();
+	if (tick)
+	{
+		eng.frame++;
+		dbg_run(eng.frame);
+		rollup();
+	}
+	log_flush();
+}
+
 void eng_frame(void)
 {
 	uint32_t vi = sys_vi_count();
@@ -902,13 +1072,30 @@ void eng_frame(void)
 		dt = eng.fixed_dt_us;
 	if (eng.timescale != 1.0f)
 		dt = (uint32_t)(dt * eng.timescale + 0.5f);
+	/* a save's snapshot or a load's restore in progress (save.h): no
+	 * simulation; the menu shows its progress */
+	if (eng.world && save_frame())
+	{
+		menu_only_frame(dt, 0);
+		return;
+	}
 	/* the end section fired last frame (the route VM saw it at step 13):
-	 * disconnect; New Game RESTART_FRAMES frames later */
+	 * disconnect; New Game RESTART_FRAMES frames later (playable: the
+	 * title menu) */
 	if (eng.restart_frame && eng.frame >= eng.restart_frame)
 		eng_restart();
 	else if (!eng.restart_frame && eng.world && game_end_section() > 0)
 		eng_disconnect();
 
+	/* the title settled after boot or a session: the regions' check */
+	if (eng.mem_check && (int32_t)(eng.frame - eng.title_frame) >= 0 && !phy_player_active())
+		title_settle();
+	/* 2 menu: Start pauses; the title and pause menus freeze the game */
+	if (eng.world && menu_frame(dt) != MENU_PLAY)
+	{
+		menu_only_frame(dt, 1);
+		return;
+	}
 	/* 2 in: pad -> usercmd once the player exists; before: the free camera */
 	if (phy_player_active())
 		in_frame(dt, phy_player()->maxspeed, &cmd);
@@ -991,18 +1178,8 @@ void eng_frame(void)
 	 * placements, persistent render fades, shake */
 	fx_frame(eng.time, gdt);
 	SEAMPROF_STEP(FXSIM);
-	/* 10 sound: listener = the view (global eye, right vector) of the last
-	 * drawn frame */
-	{
-		float yaw = ren_cam.ang[1] * (3.14159265f / 180.0f);
-		float pitch = ren_cam.ang[0] * (3.14159265f / 180.0f);
-		float roll = ren_cam.ang[2] * (3.14159265f / 180.0f);
-		float sy = hl_sinf(yaw), cy = hl_cosf(yaw), sp = hl_sinf(pitch), cp = hl_cosf(pitch);
-		float sr = hl_sinf(roll), cr = hl_cosf(roll);
-		float right[3] = { -sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp };
-
-		snd_frame(ren_cam.org, right, (double)dt * 1e-6);
-	}
+	/* 10 sound */
+	snd_step(dt);
 	SEAMPROF_STEP(SND);
 	io_pump();
 

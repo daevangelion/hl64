@@ -43,6 +43,13 @@ void	snd_stop(int e, int chan);
 /* Every voice and loop stops (New Game after an end section; GoldSrc
  * stops all sounds at disconnect). */
 void	snd_stop_all(void);
+/* Pause menu (engine/ui/menu.c): on, every playing voice (loops and
+ * sentences too) stops and nothing of the game's advances; off, loops
+ * resume at their loop start and sentences with their next word (a VADPCM
+ * wave seeks only to its start or loop start); a stopped one-shot ends. */
+void	snd_pause(int on);
+/* A menu sound: not positioned, vol x master volume, plays while paused. */
+void	snd_ui(res_t sound, float vol);
 
 /* Engine: boot, step 10 (listener = view origin + right vector, global),
  * free entity e's voices' positions when it is freed. */

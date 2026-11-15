@@ -55,11 +55,15 @@ static const uint8_t sheet_font[D2S_COUNT] = {
 #define UI8_KEYED	1
 #define UI8_INTENSITY	2
 #define CHUNK		16384u
+/* sheets after the HUD's: engine UI texels (d2_dyn_sheet) */
+#define D2_DYN		2
+#define D2_SHEETS	(D2S_COUNT + D2_DYN)
 
 static struct {
-	uint16_t	w[D2S_COUNT], h[D2S_COUNT];
-	uint8_t		ok[D2S_COUNT];
-	uint8_t		inten[D2S_COUNT];	/* I8 intensity sheet (UI8_INTENSITY) */
+	uint16_t	w[D2_SHEETS], h[D2_SHEETS];
+	uint8_t		ok[D2_SHEETS];
+	uint8_t		inten[D2_SHEETS];	/* I8 intensity sheet (UI8_INTENSITY) */
+	int		ndyn;
 	int		font;			/* sheet id of the text font, -1 none */
 	uint16_t	rowh;
 	uint16_t	gofs[256];
@@ -214,14 +218,39 @@ void d2_init(void)
 		(unsigned long)room, D2S_COUNT, D.font >= 0 ? "yes" : "no");
 }
 
+void *d2_region_alloc(uint32_t bytes)
+{
+	uint8_t *base = mem_region(MEM_HUD);
+	uint32_t room = mem_region_bytes(MEM_HUD), n = (bytes + 15) & ~15u;
+
+	if (n > room - D.used)
+		return NULL;
+	D.used += n;
+	return base + D.used - n;
+}
+
+int d2_dyn_sheet(const uint8_t *i4, int w, int h)
+{
+	int id = D2S_COUNT + D.ndyn;
+
+	if (D.ndyn >= D2_DYN || w <= 0 || h <= 0 || w > 1024 || h > 1024)
+		return -1;
+	D.ndyn++;
+	D.w[id] = (uint16_t)w;
+	D.h[id] = (uint16_t)h;
+	D.ok[id] = 1;
+	gpu_2d_sheet(id, i4, w, h, (w + 15) / 16 * 8);
+	return id;
+}
+
 int d2_sheet_w(int sheet)
 {
-	return sheet >= 0 && sheet < D2S_COUNT ? D.w[sheet] : 0;
+	return sheet >= 0 && sheet < D2_SHEETS ? D.w[sheet] : 0;
 }
 
 int d2_sheet_h(int sheet)
 {
-	return sheet >= 0 && sheet < D2S_COUNT ? D.h[sheet] : 0;
+	return sheet >= 0 && sheet < D2_SHEETS ? D.h[sheet] : 0;
 }
 
 void d2_screen(int *w, int *h)
@@ -235,7 +264,7 @@ void d2_pic(int sheet, int sx, int sy, int w, int h, int x, int y, uint8_t r, ui
 {
 	uint8_t c[4] = { r, g, b, a };
 
-	if (sheet < 0 || sheet >= D2S_COUNT || !D.ok[sheet] || w <= 0 || h <= 0)
+	if (sheet < 0 || sheet >= D2_SHEETS || !D.ok[sheet] || w <= 0 || h <= 0)
 		return;
 	/* clip the source to the sheet and the destination to the screen */
 	if (sx < 0 || sy < 0 || sx + w > D.w[sheet] || sy + h > D.h[sheet])
@@ -292,6 +321,17 @@ int d2_text(int x, int y, const char *s, uint8_t r, uint8_t g, uint8_t b, uint8_
 int d2_text_height(void)
 {
 	return D.rowh;
+}
+
+int d2_text_width(const char *s)
+{
+	int w = 0;
+
+	if (D.font < 0 || !s)
+		return 0;
+	for (; *s; s++)
+		w += D.gw[(uint8_t)*s];
+	return w;
 }
 
 void d2_begin(void)
