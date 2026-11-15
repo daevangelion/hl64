@@ -578,7 +578,14 @@ static void test_campaign(void)
 			uses = G.uses;
 			CHECK(uses == rec_name_count(n) - best + 2 || uses >= 2, "in-call uses %d", uses);
 			CHECK(G.last_caller == named(slot, "hldemo_init_mm", 0), "caller gid");
+			/* the deferred uses go out in FIFO order within each frame's
+			 * entity budget (REC_BUDGET_HOST, less the frame's box wakes):
+			 * hldemo1's 'debris' (9 pending with its env_beams) needs two */
 			frame(&t, 1.0 / 30, far, slot);
+			CHECK(G.uses - uses <= REC_BUDGET_HOST, "deferred uses in one frame %d",
+				G.uses - uses);
+			for (j = 0; j < 4 && G.uses < uses + best - 2; j++)
+				frame(&t, 1.0 / 30, far, slot);
 			CHECK(G.uses >= uses + best - 2, "deferred uses delivered (%d of %d)",
 				G.uses - uses, best - 2);
 		}

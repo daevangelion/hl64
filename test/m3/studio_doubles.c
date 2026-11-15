@@ -66,3 +66,8 @@ __attribute__((weak)) int eng_load_state(void)
 {
 	return -1;
 }
+
+/* engine/core/eng.c's reload (game/hl/env.c player_loadsaved calls it) */
+__attribute__((weak)) void eng_reload(void)
+{
+}

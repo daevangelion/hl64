@@ -1092,8 +1092,7 @@ const game_class_t gc_ENV_SHOOTER = {
 	uint8_t		m_flags;	/* FX_BEAM_SHADE* (SetFlags) */ \
 	uint8_t		m_width, m_noise, m_frame, m_scroll; \
 	uint8_t		m_decalSet;	/* m_decalAt holds a decal [own] */ \
-	float		m_decalAt[3];	/* the beam's last decal point [own] */ \
-	float		m_sparkTime;	/* no end sparks before [own] */
+	float		m_decalAt[3];	/* the beam's last decal point [own] */
 
 typedef struct {
 	CBASEENTITY_FIELDS
@@ -1116,7 +1115,6 @@ static const sv_field_t f_CBeam[] = {
 	SVF(CBeam, m_scroll, SV_U8, SVK),
 	SVF(CBeam, m_decalSet, SV_U8, 0),
 	SVF(CBeam, m_decalAt, SV_POS, 0),
-	SVF(CBeam, m_sparkTime, SV_TIME, 0),
 };
 
 /* GetStartPos / GetEndPos (they ignore attachments, as HLSDK's) */
@@ -1221,22 +1219,10 @@ static int IsPointEntity(int e)
 	return c == CLS_INFO_TARGET || c == CLS_INFO_LANDMARK || c == CLS_PATH_CORNER;
 }
 
-/* A beam's end sparks at most every BEAM_SPARK_GAP s [own]: HLSDK sparks
- * at every strike (CBeam::DoSparks; an env_laser strikes every 0.1 s), each
- * a TE_SPARKS of 8 streaks, a ricochet sprite and a ricochet sound. Every
- * other strike of a laser keeps 5 a second: the hldemo3 welder's window
- * on the cart, render-fx.md 5. Only the effects random stream is skipped:
- * the game's draws are the same. */
-#define BEAM_SPARK_GAP	0.15f
-
 static void DoSparks(int e, const float start[3], const float end[3])
 {
 	uint32_t sf = CBase(e)->spawnflags;
-	CBeam *b = BEAM(e);
 
-	if (!(sf & (SF_BEAM_SPARKSTART | SF_BEAM_SPARKEND)) || gtime() < b->m_sparkTime)
-		return;
-	b->m_sparkTime = gtime() + BEAM_SPARK_GAP;
 	if (sf & SF_BEAM_SPARKSTART)
 		UTIL_Sparks(start);
 	if (sf & SF_BEAM_SPARKEND)
@@ -1683,8 +1669,12 @@ void CLightning_LoadDone(int e)
 	CLightning_restored(e);
 }
 
+/* CBeam::ObjectCaps: no level transitions (SF_BEAM_TEMPORARY's
+ * FCAP_DONT_SAVE has no case: a temporary beam is an engine fx_beam here,
+ * never an entity) */
 static const game_vt_t CLightning_vt = {
 	.Activate = CLightning_Activate,
+	.ObjectCaps = NoTransition_ObjectCaps,
 };
 
 /* HLSDK CLightning::m_SaveData (m_spriteTexture, m_iszSpriteName: the
@@ -1882,8 +1872,13 @@ static const sv_field_t f_CLaser[] = {
 static const sv_table_t sv_CLaser = SV_TABLE(&sv_CBeam, f_CLaser,
 	.flags = SVT_MSG_NAME, .released = CLaser_released, .restored = CLaser_restored);
 
+static const game_vt_t CLaser_vt = {
+	.ObjectCaps = NoTransition_ObjectCaps,	/* CBeam's, as env_beam's */
+};
+
 const game_class_t gc_ENV_LASER = {
-	.size = sizeof(CLaser), .Spawn = CLaser_Spawn, .save = &sv_CLaser,
+	.size = sizeof(CLaser), .Spawn = CLaser_Spawn, .vt = &CLaser_vt,
+	.save = &sv_CLaser,
 };
 
 /* ---- env_bubbles (CBubbling) ---------------------------------------------------- */

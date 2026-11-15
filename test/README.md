@@ -35,7 +35,8 @@ Game seconds are the whole scene (prelude + window) at the fixed 1/30 s
 frame; wall seconds are one ares run on ares-host (`HL64_ARES_HOST=ares-host`, all
 17 scenes 8 at a time: 18 min for the set, ROM builds included) and, for a
 few, on build-vm (load 8-23, one at a time), measured on main
-a09abb2 + m5-remote (ares-host) and 30f8f01 (build-vm).
+a09abb2 + m5-remote (ares-host) and 30f8f01 (build-vm); the `fx-beams*` and
+`fx-bubbles` rows on m6-envfx (ares-host, 6 at a time with their main runs).
 
 | scene | map | what | window (uplink.route) | game s | ares-host s | build-vm s |
 |---|---|---|---|---:|---:|---:|
@@ -62,6 +63,10 @@ a09abb2 + m5-remote (ares-host) and 30f8f01 (build-vm).
 | `hl1-chargers` | hldemo1 | '+' alternates (world-surfaces.md 4): HEV charger drained (frame 1, +arecharge), health charger in use (full health: frame 0); shots chargers-full, hev-empty, health-inuse | whole scene (off-route) | 19 | 26 | |
 | `hl1-button` | hldemo1 | '+' sequences over time: dome monitors shot 0.3 s apart (screens-a/b); the elevator button before / right after +use (frame 1, +aelev_up2) | SHOT start .. SHOT elevator (+ the press) | 50 | 58 | |
 | `player-fall` | hldemo3 | fall damage on GoldSrc PM-fall's floor spot: 444 u and 256 u drops, HUD health 100 → 47 → 35, `player: fall` log lines; shots standing-100, landed-444, landed-256 | whole scene (off-route) | 4 | 7 | |
+| `fx-beams1` | hldemo1 | env_beam 'smoke' (faint by design: <= 17 of 255 over main's shot, seen in the difference), cave-in 'debris' beams; shots smoke-beam, debris-zaps-west/east | ops 512 .. 515 (+ the off-route smoke pose) | 15 | 23 | |
+| `fx-beams2` | hldemo2 | second-battle teleport beams ('teleport_beams' on 0..1 s, 'teleport_beam_chaos'); shots teleport-beams, teleport-beams-2, teleport-after | uplink.route lines 539 .. 577 | 12 | 21 | |
+| `fx-beams3` | hldemo3 | welder env_laser + torch env_beam (sparks, ricochets, beam decals; window `welder` .. `welder-late`), tripbomb beams after the weld door; shots welder, welder-near, welder-late, tripbomb | hl3-welder's prelude (uplink.route lines 366 .. 406), then off-route | 72 | 85 | |
+| `fx-bubbles` | t0a0b | env_bubbles #230 / #231 (TE_FIZZ) under water; shots bubbles-a/b | whole scene (off-route) | 13 | 19 | |
 
 Deviations from the whole route inside a window: `hl2-return-battle` puts
 the player past the tripmine corridor (its barriers stand on New Game) and

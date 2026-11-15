@@ -163,12 +163,14 @@ int __wrap_seam_changelevel(gid_t16 trigger, int use)
 /* 1 crosses, 0 does not; a class missing here fails (the table must cover
  * every class the maps spawn). CBaseEntity's default is ACROSS; CPointEntity,
  * CBaseTrigger, CBaseDoor, CBaseButton, CBasePlatTrain, CFuncWall, CBreakable,
- * CAmbientGeneric, CSpeaker, CSprite, CGlow, CCineMonster, the chargers,
- * CFuncRotating, CPendulum, CFuncIllusionary, CFuncMonsterClip remove it;
+ * CAmbientGeneric, CSpeaker, CSprite, CGlow, CBeam (CLightning, CLaser),
+ * CBubbling, CCineMonster, the chargers, CFuncRotating, CPendulum,
+ * CFuncIllusionary, CFuncMonsterClip (CFuncWall) remove it;
  * FCAP_DONT_SAVE classes (CGib, CShower, CStomp, CPlatTrigger, CCorpse) never
  * cross; the world is not in any PVS list. */
 static const struct { const char *name; int carry; } hlsdk_carry[] = {
 	{ "ambient_generic", 0 }, { "speaker", 0 }, { "env_sprite", 0 }, { "env_glow", 0 },
+	{ "env_beam", 0 }, { "env_laser", 0 }, { "env_bubbles", 0 }, { "player_loadsaved", 0 },
 	{ "env_beverage", 1 }, { "item_sodacan", 1 }, { "env_explosion", 1 },
 	{ "spark_shower", 0 }, { "gib", 0 }, { "garg_stomp", 0 }, { "streak_spiral", 1 },
 	{ "env_smoker", 1 }, { "bodyque", 0 }, { "worldspawn", 0 }, { "infodecal", 1 },
@@ -177,7 +179,8 @@ static const struct { const char *name; int carry; } hlsdk_carry[] = {
 	{ "func_door_rotating", 0 }, { "func_water", 0 }, { "momentary_door", 0 },
 	{ "func_guntarget", 0 }, { "func_plat", 0 }, { "func_train", 0 }, { "plat_trigger", 0 },
 	{ "func_healthcharger", 0 }, { "func_recharge", 0 }, { "func_illusionary", 0 },
-	{ "func_wall", 0 }, { "func_wall_toggle", 0 }, { "func_conveyor", 0 },
+	{ "func_wall", 0 }, { "func_wall_toggle", 0 }, { "func_monsterclip", 0 },
+	{ "func_conveyor", 0 },
 	{ "func_ladder", 0 }, { "func_pendulum", 0 }, { "func_rotating", 0 },
 	{ "path_corner", 0 }, { "path_track", 0 }, { "trigger_multiple", 0 },
 	{ "trigger_once", 0 }, { "trigger_counter", 0 }, { "trigger_hurt", 0 },

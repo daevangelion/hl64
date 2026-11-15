@@ -16,10 +16,12 @@ drop item_suit -2048 744 36
 drop weapon_crowbar -2048 744 36
 wait 1
 god 1
-# the smoke beam side on from the info_node 84 u west, against the dark
-# corridor beyond it (from the doorway and from the south it is behind the
-# lit consoles or lost against them: it adds ~8 of 255)
-setpos -776 64 36 0 0
+# the smoke beam side on from 43 u west, against the dark corridor beyond
+# it (from the doorway and from the south it is behind the lit consoles or
+# lost against them). Additive grey 70 at 70 adds <= 17 of 255 per channel
+# (2001 pixels changed against main's shot from 84 u: 830): seen in the
+# before / after difference rather than by eye
+setpos -735 64 36 0 0
 wait 5
 shot smoke-beam
 stats begin

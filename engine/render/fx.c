@@ -22,6 +22,7 @@
 #include "hl64/rec.h"
 #include "hl64/settings.h"
 #include "hl64/snd.h"
+#include "engine/core/hlmath.h"
 #include "engine/core/sys.h"
 #include "engine/render/fx_int.h"
 #include "engine/render/ren.h"
@@ -638,8 +639,8 @@ void fx_fizz(int e, res_t sprite, int density)
 		t->rendermode = FX_RM_TRANSALPHA;
 		t->amt = 255;
 		t->scale = fx_randf(0.3f, 0.6f);
-		t->vel[0] = cur * cosf(yaw);
-		t->vel[1] = cur * sinf(yaw);
+		t->vel[0] = cur * hl_cosf(yaw);
+		t->vel[1] = cur * hl_sinf(yaw);
 		t->vel[2] = rise;
 		t->frame = (float)fx_randi(0, res_model_frames(sprite) > 1
 			? res_model_frames(sprite) - 1 : 0);

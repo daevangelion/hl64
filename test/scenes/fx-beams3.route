@@ -89,12 +89,13 @@ shot welder-near
 wait 5
 shot welder-late
 # weld_door_mm (path end, ~13.3 s): door blown at 3 s, tripbomb beams on
-# (x -601, y -72..79, z -482 / -433); then to the hellbox side of them
-# (info_node -688 -24), looking east down the corridor the grunts come
-# along: the beams 79 u ahead (from the door side a grunt fills the view)
+# (x -601, y -72..79, z -482 / -433, in front of intro_domedoor_1 at x
+# -632, closed: from the hellbox side the door hides them); from inside
+# the corridor 61 u east of them, looking west-northwest across both
+# (straight down the corridor from the welder door a grunt fills the view)
 setpos -250 -32 -470 5 180
 wait 9
-setpos -680 0 -476 0 0
+setpos -540 -50 -476 0 160
 wait 0.5
 shot tripbomb
 stats end
