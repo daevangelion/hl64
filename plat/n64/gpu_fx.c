@@ -76,13 +76,11 @@ void gpu_fx_end(void)
 	/* the world's state for whoever draws next (view model, HUD) */
 	rdpq_set_mode_standard();
 	rdpq_mode_dithering(N64_DITHER_MODE());
-	rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
 	rdpq_mode_tlut(TLUT_RGBA16);
 	rdpq_mode_filter(FILTER_BILINEAR);
 	rdpq_mode_persp(true);
 	rdpq_mode_zbuf(true, true);
-	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
-		| T3D_FLAG_NO_LIGHT | N64_CULL);
+	gpu_world_state();
 	gpu_state_lost();	/* alpha compare now off, whatever the world's cache says */
 	cur.pairs = (uint32_t)used;
 	done = cur;
@@ -113,18 +111,31 @@ void gpu_fx_mode(int m, const uint8_t prim[4])
 {
 	const gpu_fx_rdp_t *r;
 	uint32_t flags = T3D_FLAG_SHADED | T3D_FLAG_DEPTH | T3D_FLAG_NO_LIGHT;
+	int nvg;
 
 	if (m < 0 || m >= GPU_FX_MODES)
 		return;
 	r = &gpu_fx_rdp[m];
-	if (prim)
+	/* night vision: a TransAlpha brush (lit page) draws as the world does,
+	 * without its fog */
+	nvg = gpu_nvg() && m == GPU_FX_BRUSH_SOLID;
+	if (nvg)
+	{
+		rdpq_set_prim_color(RGBA32(GPU_NVG_PRIM_R, GPU_NVG_PRIM_G, GPU_NVG_PRIM_B, 255));
+		rdpq_set_env_color(RGBA32(GPU_NVG_ENV_R, GPU_NVG_ENV_G, GPU_NVG_ENV_B, 255));
+	}
+	else if (prim)
 		rdpq_set_prim_color(RGBA32(prim[0], prim[1], prim[2], prim[3]));
 	if (m == mode)
 		return;
 	mode = m;
+	/* the effects' shade alpha is their own: no tiny3d fog (night vision
+	 * turned it on for the world and studio passes) */
+	if (gpu_nvg())
+		t3d_fog_set_enabled(false);
 	rdpq_set_mode_standard();
 	rdpq_mode_dithering(N64_DITHER_MODE());
-	rdpq_mode_combiner(combiner(r->combiner));
+	rdpq_mode_combiner(nvg ? N64_CC_NVG : combiner(r->combiner));
 	rdpq_mode_blender(r->blender == GPU_FX_BL_ALPHA ? RDPQ_BLENDER_MULTIPLY : 0);
 	rdpq_mode_zbuf(r->ztest, r->zwrite);
 	if (r->zdecal)

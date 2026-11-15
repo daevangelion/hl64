@@ -11,7 +11,8 @@
  * world pass made before it (camera at the origin, rotation-only view;
  * TEX_SHADE, RGBA16 TLUT, bilinear, perspective, Z on, front-face cull for
  * the BSP face order). Quake bindings (cvars, Con_*, Sys_Error, the old
- * profiler) are gone.
+ * profiler) are gone. Night vision (gpu_world_state, architecture.md
+ * D12) is new here.
  */
 #include <string.h>
 
@@ -60,6 +61,8 @@ static int		fence = -1;
 static gpu_stats_t	cur, done;
 static uint8_t		ramp_tb[4];	/* gpu_page_ramp tint + blend */
 static int		ramp_on;
+static int		nvg;		/* this frame: night vision (gpu_view_t.nvg) */
+static int		nvg_range;	/* the tiny3d fog range is set */
 
 /* ---- strip index encoding ------------------------------------------------- */
 
@@ -121,14 +124,44 @@ void gpu_begin(const gpu_view_t *v)
 		pv.m[c][2] = VIEW_DEPTH * pv.m[c][2] + (VIEW_DEPTH - 1) * pv.m[c][3];
 	t3d_mat4_to_fixed(&proj[2 * mat_frame], &vp.matProj);
 	t3d_mat4_to_fixed(&proj[2 * mat_frame + 1], &pv);
+	/* the fog writes vertex alpha in every tiny3d pass while on: off
+	 * again on the first lit frame (gpu_world_state turns it on) */
+	if (nvg && !v->nvg)
+		t3d_fog_set_enabled(false);
+	nvg = v->nvg;
+	if (nvg && !nvg_range)
+	{
+		t3d_fog_set_range(GPU_NVG_NEAR, GPU_NVG_FAR);
+		nvg_range = 1;
+	}
 	rdpq_set_mode_standard();
 	rdpq_mode_dithering(N64_DITHER_MODE());
-	rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
 	rdpq_mode_tlut(TLUT_RGBA16);
 	rdpq_mode_filter(FILTER_BILINEAR);
 	rdpq_mode_persp(true);
 	rdpq_mode_zbuf(true, true);
 	fence = -1;
+	gpu_world_state();
+}
+
+int gpu_nvg(void)
+{
+	return nvg;
+}
+
+void gpu_world_state(void)
+{
+	if (nvg)
+	{
+		rdpq_mode_combiner(N64_CC_NVG);
+		rdpq_set_prim_color(RGBA32(GPU_NVG_PRIM_R, GPU_NVG_PRIM_G, GPU_NVG_PRIM_B, 255));
+		rdpq_set_env_color(RGBA32(GPU_NVG_ENV_R, GPU_NVG_ENV_G, GPU_NVG_ENV_B, 255));
+		rdpq_set_fog_color(RGBA32(0, 0, 0, 255));
+		rdpq_mode_fog(RDPQ_FOG_STANDARD);
+		t3d_fog_set_enabled(true);
+	}
+	else
+		rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
 	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
 		| T3D_FLAG_NO_LIGHT | N64_CULL);
 }
@@ -251,12 +284,6 @@ void gpu_page_ramp(const uint8_t tint_blend[4])
 void gpu_state_lost(void)
 {
 	fence = -1;
-}
-
-void gpu_decal_depth(int on)
-{
-	rdpq_mode_zbuf(true, !on);
-	rdpq_mode_zmode(on ? ZMODE_DECAL : ZMODE_STANDARD);
 }
 
 /* ---- meshlets --------------------------------------------------------------- */

@@ -28,19 +28,43 @@ random stream):
 | entity EF_MUZZLEFLASH | origin + (0,0,16) + 18·forward(angles) | 200 + rand32, minlight 32 | 0.1 s |
 | entity EF_BRIGHTLIGHT | origin + (0,0,16) | 400 + rand32 | one frame |
 | entity EF_DIMLIGHT (not the local player) | origin | 200 + rand32 | one frame |
-| local player EF_DIMLIGHT | flashlight (2) | 80 | one frame |
+| local player EF_DIMLIGHT | none: night vision (2) | | |
 | game effect "dlight" (HLSDK TE_DLIGHT: radius in tens, colour, life in tenths, decay in tens) | given | given ×10 | given ×0.1, decay ×10 |
 | game effect "elight" (HLSDK TE_ELIGHT) | entity attachment | given | models only (does not light the world) |
 | explosions, muzzle flashes of the view model | render-fx.md | | |
 
-## 2. Flashlight (retail Half-Life behaviour, [retail D-flash])
+## 2. Night vision (hl64 departure, architecture.md D12)
 
-While the local player has EF_DIMLIGHT: a line trace (NORMAL, pass the
-player) from the eye (origin + view height) 2000 u along the view
-direction (pitch and yaw only). The light sits at the trace end point; if
-the trace hit a studio or sprite entity, at that entity's origin instead.
-Radius 80. Brightness 1 up to 500 u from the eye; beyond, (500 / d)² where
-d = 2000·fraction, quantised to 1/255. Recomputed every frame.
+**Not GoldSrc.** Retail Half-Life draws the HEV flashlight as a light at
+the end of a 2000 u view trace ([retail D-flash]). hl64 replaces it, by
+the user's decision D12 (2026-11-15), with an Opposing Force-style
+night-vision goggle: the same `impulse 100` toggle, battery drain /
+recharge, HUD icon and sound (HLSDK player.cpp FlashlightTurnOn / Off,
+the game sets EF_DIMLIGHT on the player), but while the local player has
+EF_DIMLIGHT the frame is drawn in night vision instead of lighting
+anything:
+
+- The world, its movers (opaque and TransAlpha) and the opaque /
+  TransTexture studio models draw rgb = texel × a bright green constant
+  + a dim green floor, ignoring vertex light and model light; alpha is
+  the texel's (fence cutouts stay; studio models keep their blend
+  alpha). The opaque world and opaque models darken to black with eye
+  depth from 64 u to 1024 u (RDP fog); blended models and TransAlpha
+  brushes get no fog. Constants: `engine/render/gpu.h` `GPU_NVG_*`.
+- No dynamic light touches the world (no vertex dlight scratch copies)
+  and styled meshlets are not recoloured while it is on (they catch up
+  on the first lit frame).
+- Additive / glow / sprite / particle / decal passes and the HUD draw as
+  without it.
+- Cost: the same one-cycle RDP mode as the lit world, no framebuffer
+  read (cart SOM read back: cycle 1, fog blender, image read off, lit
+  and night vision alike), no extra pass or geometry; ares does not time
+  the RDP, so that read-back is the fill-rate evidence. ares, ares-host, cook
+  c16, against the same scene without `impulse 100` (D6): dark duct
+  frame avg / p90 33.5 / 34.0 ms both, world 2.4 / 2.4 ms, studio 4.7 /
+  4.5 ms; hldemo1 corridor 33.4 / 33.5 both; dome talk 38.0 / 42.0 vs
+  37.8 / 41.8 ms. With the cone flashlight it replaced, the world zone
+  took 9.4–12.8 ms in the same windows (duct frames 41.6 / 48.1 ms).
 
 ## 3. On the world
 
@@ -55,21 +79,7 @@ d = 2000·fraction, quantised to 1/255. Recomputed every frame.
   vertex's base intensity before the light scale, then clamp 255.
   (Back faces are culled anyway.)
 - Brush movers are lit by the same rule in their local frame (GoldSrc
-  lights brush entities' lightmaps too); the flashlight pool covers them.
-- **Flashlight pool**: because the world's faces are not subdivided, a
-  vertex-only light leaves most of an 80 u spot dark. The flashlight is
-  drawn instead as a second pass over the base triangles within its
-  radius: on each face plane near the light, the falloff (radius − plane
-  distance − in-plane distance) forms a cone over the light's foot,
-  approximated by a fan of 8 wedge triangles (chord sag 7.6 % of the
-  radius); each wedge piece cut by a base triangle is drawn with decal
-  depth, shade = base light + falloff, texture coordinates from the base
-  triangle's affine gradients, so it joins the base exactly where the
-  falloff ends. Pool vertices are stored relative to the light at 1/64 u
-  under one extra matrix so pieces stay on their base plane. Each draw
-  batch's strip starts 8-byte aligned in the pool's index buffer (the
-  cart DMAs it; engine/render/gpu.h `gpu_draw`). Counters: pool verts and
-  triangles drawn per frame.
+  lights brush entities' lightmaps too).
 
 ## 4. On models
 
@@ -85,7 +95,6 @@ entity they were attached to.
 | D1 | pool: key reuse, oldest-dead reuse, decay to death at radius 0, one-frame lights vanish next frame | self-contained |
 | D2 | vertex falloff formula for synthetic planes (p, q grid) including the minlight cutoff | self-contained |
 | D3 | only meshlets meeting a light sphere are copied; the cooked meshlet bytes are unchanged after the frame | synthetic + memory compare |
-| D4 | flashlight: end point and brightness for traces at 100, 500, 1000, 2000 u and on a monster | synthetic |
-| D5 | flashlight in the dark duct and the room: spot size, falloff and brightness match retail screenshots at the same pose (SSIM ≥ 0.9) | retail D-flash |
-| D6 | muzzle flash light lasts 0.1 s per shot and brightens nearby walls as in retail | retail D-flash |
-| D7 | cost: dlight + flashlight work ≤ the old cart's measured per-frame µs in the dark duct (`rflash` zone) | M6 |
+| D4 | night vision: the local player's EF_DIMLIGHT makes no light; the frame draws night vision (`ren` stats `nvg`), no world vertex dlight, no restyle; the same dlight without it lights vertices | self-contained |
+| D5 | muzzle flash light lasts 0.1 s per shot and brightens nearby walls as in retail | retail D-flash |
+| D6 | cost: a night-vision frame ≤ the lit frame + 1 ms in the dark duct (`hl2-duct-flashlight` against the same scene without `impulse 100`, ares) | M6 |

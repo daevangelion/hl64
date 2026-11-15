@@ -23,7 +23,7 @@ follows GoldSrc.
 | [pmove-host.md](pmove-host.md) | engine side of HLSDK player movement | M2 |
 | [precache-and-resources.md](precache-and-resources.md) | cooked resource ids, precache semantics, residency interest | M3 |
 | [lightstyles.md](lightstyles.md) | style patterns, timing, values, switchable lights, model lighting | M1/M3 |
-| [dlights.md](dlights.md) | dynamic lights, flashlight, falloff on vertex-lit world and models | M3 |
+| [dlights.md](dlights.md) | dynamic lights, night vision (the flashlight, D12), falloff on vertex-lit world and models | M3 |
 | [sound.md](sound.md) | channels, attenuation, stereo, pitch, loops, sentences | M3 |
 | [render-fx.md](render-fx.md) | render modes / fx blend, sprites, decals, temporary effects | M3 |
 | [world-surfaces.md](world-surfaces.md) | cooked vertex light, light probes, texture animation | M1 |
