@@ -61,8 +61,8 @@ static int beam_issue(int e)
 	float end[3];
 
 	VecMA(ent_cv(e)->origin, 2048 * t->m_flBeamLength, t->m_vecDir, end);
-	return fx_beam(FX_BEAM_KEY(e, 0), -1, end, e, NULL, RESID(SPR_LASERBEAM), 10, 0, 0, 214,
-		198, 64, 255, 0);
+	return fx_beam(FX_BEAM_KEY(e, 0), -1, end, e, NULL, RESID(SPR_LASERBEAM), 0, 0, 10, 0, 0,
+		214, 198, 64, 255, 0, 0);
 }
 
 static void MakeBeam(int e)

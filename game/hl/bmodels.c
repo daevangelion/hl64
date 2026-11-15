@@ -16,7 +16,8 @@
  * hl64 game/, Half Life 1 SDK licence (game/LICENSE-HLSDK).
  *
  * bmodels.c -- HLSDK dlls/bmodels.cpp: func_wall, func_wall_toggle,
- * func_conveyor, func_illusionary, func_rotating, func_pendulum.
+ * func_monsterclip, func_conveyor, func_illusionary, func_rotating,
+ * func_pendulum.
  * (RampPitchVol / SpinUp's
  * abs() of floats are taken as fabsf: the float value, as HLSDK means.)
  */
@@ -112,6 +113,25 @@ static int CFuncWallToggle_Spawn(int e, gid_t16 gid)
 
 const game_class_t gc_FUNC_WALL_TOGGLE = {
 	.size = sizeof(CBaseEntity), .Spawn = CFuncWallToggle_Spawn, .vt = &bmodel_vt,
+};
+
+/* ---- func_monsterclip (CFuncMonsterClip) ------------------------------------ */
+
+/* A func_wall solid only to movers carrying FL_MONSTERCLIP (monsters with
+ * SF_MONSTER_HITMONSTERCLIP): engine/coll skips it for every other trace
+ * and pmove never lists it (trace-and-hulls.md 4, pmove-host.md 2). Not
+ * drawn (showtriggers 0); its Use does nothing. */
+static int CFuncMonsterClip_Spawn(int e, gid_t16 gid)
+{
+	CFuncWall_Spawn(e, gid);
+	ent_rnd(e)->effects = EF_NODRAW;
+	EFlagsSet(e, FL_MONSTERCLIP);
+	SetUse(e, 0);
+	return 0;
+}
+
+const game_class_t gc_FUNC_MONSTERCLIP = {
+	.size = sizeof(CBaseEntity), .Spawn = CFuncMonsterClip_Spawn, .vt = &bmodel_vt,
 };
 
 /* ---- func_conveyor ------------------------------------------------------------ */

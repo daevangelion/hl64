@@ -189,6 +189,11 @@ suite ../m6/menu_host.sh menu-host bash test/m6/menu_host.sh "$BUILD_DIR/host/hl
 # the session's end (needs a cook with media/cd02, cd03)
 suite ../m6/music_host.sh music-host bash test/m6/music_host.sh "$BUILD_DIR/host/hl64-host" \
 	"$CONTENT" "$OUT/music-host"
+# player_loadsaved (game/hl/env.c CRevertSaved, eng_reload, architecture.md
+# 14 Reload): no save -> New Game on the player's map; the newest save
+# (an autosave) -> it loads
+suite ../m6/loadsaved.sh loadsaved bash test/m6/loadsaved.sh "$BUILD_DIR/host/hl64-host" \
+	"$CONTENT" "$OUT/loadsaved"
 # the AI regressions (test/m5/ai_layer.c): a task paused inside StartTask
 # survives a refused release and restarts after a drop; a grunt of hldemo2
 # neither sees, hears, tracks nor fires at the player home in hldemo1

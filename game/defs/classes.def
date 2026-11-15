@@ -157,3 +157,10 @@ CLASS(FUNC_TANKCONTROLS, "func_tankcontrols")
 CLASS(FUNC_MORTAR_FIELD, "func_mortar_field")
 CLASS(MONSTER_MORTAR, "monster_mortar")
 CLASS(RPG_ROCKET, "rpg_rocket")
+// EnvFx (M6): effects.cpp CLightning / CLaser / CBubbling, bmodels.cpp
+// CFuncMonsterClip, player.cpp CRevertSaved.
+CLASS(ENV_BEAM, "env_beam")
+CLASS(ENV_LASER, "env_laser")
+CLASS(ENV_BUBBLES, "env_bubbles")
+CLASS(FUNC_MONSTERCLIP, "func_monsterclip")
+CLASS(PLAYER_LOADSAVED, "player_loadsaved")

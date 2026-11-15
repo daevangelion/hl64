@@ -46,17 +46,24 @@ void	fx_elight(int e, const float org[3], float radius, int r, int g, int b, int
 void	fx_muzzle_flash(int e, int attachment, int type);
 void	fx_particles(const float org[3], const float dir[3], int color, int count);
 /* Beams (TE_BEAMPOINTS / BEAMENTPOINT / BEAMENTS): ends as entity slots
- * (-1: use the point); width / noise / brightness 0-255, scroll speed,
- * life (0.1 s, 0 = until killed). key names the beam for fx_beam_kill:
- * FX_BEAM_KEY(e, n) for entity e's n-th beam (n < FX_BEAM_KEYS_PER_ENT),
- * -1 for a beam nobody kills; a beam with a live key replaces it. Returns
- * key, also when the pool is full and the beam is dropped: game state
- * (private blocks, saved games) holds keys, functions of game state, never
- * pool slots, which depend on the effects alive (unsaved). */
+ * (-1: use the point); frame / framerate the sprite's starting frame and
+ * frame rate (0.1 fps); width / noise / brightness 0-255, scroll speed,
+ * life (0.1 s, 0 = until killed), FX_BEAM_SHADE* flags (brightness ramps
+ * up from the start / down to the end). key names the beam for
+ * fx_beam_kill: FX_BEAM_KEY(e, n) for entity e's n-th beam (n <
+ * FX_BEAM_KEYS_PER_ENT), -1 for a beam nobody kills; a beam with a live key
+ * replaces it, and a keyed beam takes the slot of the unkeyed beam nearest
+ * its end when the pool is full. Returns key, also when the pool is full
+ * and the beam is dropped: game state (private blocks, saved games) holds
+ * keys, functions of game state, never pool slots, which depend on the
+ * effects alive (unsaved). */
 #define FX_BEAM_KEYS_PER_ENT	8
 #define FX_BEAM_KEY(e, n)	((e) * FX_BEAM_KEYS_PER_ENT + (n))
+#define FX_BEAM_SHADEIN		1
+#define FX_BEAM_SHADEOUT	2
 int	fx_beam(int key, int e0, const float p0[3], int e1, const float p1[3], res_t sprite,
-		int width, int noise, int r, int g, int b, int brightness, int speed, int life);
+		int frame, int framerate, int width, int noise, int r, int g, int b, int brightness,
+		int speed, int life, int flags);
 void	fx_beam_kill(int key);
 /* TE_BEAMCYLINDER: a ring growing to radius over life (0.1 s) */
 void	fx_beam_cylinder(const float org[3], float radius, res_t sprite, int life, int width,
@@ -69,6 +76,11 @@ void	fx_implosion(const float org[3], int radius, int count, int life);
  * (a new call replaces it); a full pool (HL64_FX_TRAILS) drops. */
 void	fx_beam_follow(int e, res_t sprite, int life, int width, int r, int g, int b,
 		int brightness);
+/* TE_FIZZ: density + 1 bubbles (sprite) at random points of entity e's
+ * box, rising until the water surface or a solid ceiling; e's speed hack
+ * (HLSDK CBubbling: rendercolor x << 8 | y, z = 1 negative) is the
+ * horizontal current along its yaw. */
+void	fx_fizz(int e, res_t sprite, int density);
 
 /* ---- decals (render-fx.md 4) -------------------------------------------- */
 

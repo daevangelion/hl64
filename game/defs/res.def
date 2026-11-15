@@ -579,3 +579,5 @@ RES(MODEL, RPGROCKET_MDL, "models/rpgrocket.mdl")
 RES(SPRITE, SPR_SMOKE_TRAIL, "sprites/smoke.spr")
 RES(SOUND, W_ROCKET1, "weapons/rocket1.wav")
 RES(SOUND, W_MORTAR, "weapons/mortar.wav")
+// ---- EnvFx (M6): effects.cpp CBubbling ----
+RES(SPRITE, SPR_BUBBLE, "sprites/bubble.spr")

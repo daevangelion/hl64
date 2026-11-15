@@ -10,7 +10,8 @@ CLEAN), retargeted to read the player's data through tools/cook/data.py
 References come from:
   * the maps (BSP30 entity lump of every staged map): every key value that
     names a .wav, "!SENTENCE" values, scripted_sentence "sentence", speaker
-    "message" (sentence group), env_message "message" (titles.txt name),
+    "message" (sentence group), env_message / player_loadsaved "message"
+    (titles.txt name),
     env_shooter "shootmodel" / gibshooter (models/hgibs.mdl);
   * studio model events of the staged models: 1004/1008/5004 (sample) and
     1005/1009 (sentence) options;
@@ -329,7 +330,8 @@ def collect(data: Data, maps: Iterable[str], models: Dict[str, bytes],
                 add_sentence_ref(refs, e.get("sentence", ""), sent_table, groups)
             elif cn == "speaker":
                 add_sentence_ref(refs, e.get("message", ""), sent_table, groups)
-            elif cn == "env_message" and e.get("message", "").upper() in titles:
+            elif cn in ("env_message", "player_loadsaved") and \
+                    e.get("message", "").upper() in titles:
                 refs.titles.add(e["message"].upper())
             elif cn == "worldspawn" and e.get("chaptertitle", "").upper() in titles:
                 refs.titles.add(e["chaptertitle"].upper())
@@ -376,7 +378,8 @@ def sentences_txt(refs: Refs, table: Dict[str, Tuple[str, str]]) -> str:
 
 
 def titles_txt(refs: Refs, titles: Dict[str, Tuple[str, Dict[str, str], str]]) -> str:
-    out = ["// Pruned by tools/cook/hl_sound_refs.py: titles used by env_message."]
+    out = ["// Pruned by tools/cook/hl_sound_refs.py: titles used by env_message / "
+           "player_loadsaved."]
     for key in sorted(refs.titles):
         name, settings, body = titles[key]
         out.extend(settings[k] for k in sorted(settings))

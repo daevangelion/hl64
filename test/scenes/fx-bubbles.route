@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Scene fx-bubbles (test/README.md): t0a0b's env_bubbles #230 (brush *111,
+# x -1730..-1724 y -994..-988 z -452..-132) and #231 (*112, x
+# -1702..-1696 y -398..-392 z -452..-248), density 2, frequency 2: TE_FIZZ
+# every 2.3 s from 2 s after spawn (HLSDK CBubbling; the bubbles' own
+# numbers are render-fx.md 5 [EST]), seen under water. Off-route poses.
+startmap t0a0b
+waitmap t0a0b 60
+god 1
+stats begin
+setpos -1500 -994 -330 -10 180
+wait 10
+shot bubbles-a
+setpos -1716 -660 -359 -15 88
+wait 3
+shot bubbles-b
+stats end
+wait 0.2
+pass

@@ -29,7 +29,7 @@ static const char *str_id_ok(const rec_limits_t *lim, uint16_t key, uint16_t cls
 		return id < lim->globals ? NULL : "global-state id";
 	if (key == RK_MONSTERTYPE)
 		return id < lim->classes ? NULL : "class id";
-	if ((key == RK_MESSAGE && cls == RC_ENV_MESSAGE)
+	if ((key == RK_MESSAGE && (cls == RC_ENV_MESSAGE || cls == RC_PLAYER_LOADSAVED))
 		|| (key == RK_CHAPTERTITLE && cls == RC_WORLDSPAWN))
 		return id < lim->titles ? NULL : "title id";
 	if (key == RK_TEXTURE && cls == RC_INFODECAL)

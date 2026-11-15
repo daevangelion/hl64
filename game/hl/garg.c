@@ -365,10 +365,10 @@ static void Ga_StompAttack(int e)
 static int flame_beam(int e, int i, const float from[3], const float gun[3])
 {
 	if (i < 2)
-		return fx_beam(FX_BEAM_KEY(e, i), -1, from, -1, gun, RESID(GA_BEAM_SPR), 240, 0, 255,
-			130, 90, 190, 20, 2);
-	return fx_beam(FX_BEAM_KEY(e, i), -1, from, -1, gun, RESID(GA_BEAM_SPR), 140, 0, 0, 120,
-		255, 190, 20, 2);
+		return fx_beam(FX_BEAM_KEY(e, i), -1, from, -1, gun, RESID(GA_BEAM_SPR), 0, 0, 240, 0,
+			255, 130, 90, 190, 20, 2, 0);
+	return fx_beam(FX_BEAM_KEY(e, i), -1, from, -1, gun, RESID(GA_BEAM_SPR), 0, 0, 140, 0, 0,
+		120, 255, 190, 20, 2, 0);
 }
 
 static void Ga_FlameCreate(int e)

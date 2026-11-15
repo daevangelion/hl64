@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * audio.c -- the cart's sound backend (engine/snd/snd_hw.h): libdragon
- * mixer voices over cart-streamed wav64 (WAV64_STREAMING_FULL). Retargeted
+ * mixer voices over cart-streamed wav64 (WAV64_STREAMING_FULL; a resident
+ * wave is preloaded whole, WAV64_STREAMING_NONE). Retargeted
  * from the old tree's n64/port/snd_n64.c (audit entry n64/port/snd_n64.c
  * QUAKE-INTERFACE / CLEAN): its per-voice limits (16-bit, the 130 % rate
  * cap), the boot-time voice buffer preallocation and the
@@ -40,6 +41,10 @@
 #define BOUNCE		2048
 #define FILES		16
 #define HDR_BYTES	32
+/* libdragon preview wav64_vadpcm_internal.h: the VADPCM extended header's
+ * flags (big-endian u16 at byte 2: these are in its low byte) */
+#define VADPCM_HUFFMAN	0x01
+#define VADPCM_RESIDENT	0x02
 #define BLK_HDR		16u
 
 /* ---- arena ----------------------------------------------------------------- */
@@ -351,33 +356,57 @@ static uint32_t be32(const uint8_t *p)
 	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
 }
 
+/*
+ * Arena bytes a VADPCM wave's preload takes beyond its streamed block
+ * (libdragon preview wav64_vadpcm_preload): the frames that carry samples
+ * laid out planar (WAV64_VADPCM_FRAMES: len / 16 rounded up, 2 x bits + 1
+ * bytes each, per channel) and the decoder state in the same block; while
+ * it loads, a scratch copy of the file's frames (WAV64_VADPCM_FILE_FRAMES:
+ * whole 32-sample pairs) and, Huffman-coded, a second scratch twice that.
+ * x = the VADPCM extended header's first 8 bytes.
+ */
+static uint32_t preload_bytes(const uint8_t *h, const uint8_t *x)
+{
+	uint32_t len = be32(h + 12), ch = h[6], bits = x[6] ? x[6] : 4u, fb = 2u * bits + 1u;
+	uint32_t body = (((len + 15u) / 16u) * fb * ch + 15u) & ~15u;
+	uint32_t file = ((((len + 31u) / 32u) * 2u * fb * ch) + 15u) & ~15u;
+	uint32_t n = body + ((be32(h + 28) + 15u) & ~15u) + BLK_HDR + file;
+
+	if (x[3] & VADPCM_HUFFMAN)
+		n += BLK_HDR + 2u * file;
+	return n;
+}
+
 /* Open the wav64 at [rom, rom + size) into slot i: 0 ok, -1 not a wave
  * this cart plays, -2 no room. music: the music stream's rules (VADPCM
- * without Huffman, no loop) instead of the sounds' (VADPCM or raw). */
-static int open_slot(int i, uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave,
-	int music)
+ * without Huffman, no loop, always streamed) instead of the sounds'
+ * (VADPCM or raw; resident: see snd_hw_open). */
+static int open_slot(int i, uint32_t rom, uint32_t size, int resident, snd_wave_info_t *info,
+	void **wave, int music)
 {
 	wav64_loadparms_t parms;
 	char path[32];
-	uint8_t h[HDR_BYTES + 4];
+	uint8_t h[HDR_BYTES + 8];
 	uint32_t ext, need, hb = music ? HDR_BYTES + 4 : HDR_BYTES;
 
 	*wave = NULL;
 	if (!rom || size < hb || (rom & 1))
 		return -1;
-	io_read_audio(bounce, rom, hb);
-	memcpy(h, bounce, hb);
+	io_read_audio(bounce, rom, sizeof(h));
+	memcpy(h, bounce, sizeof(h));
 	/* wav64 asserts on what it cannot play: check first (version 10, VADPCM
-	 * or raw, mono / stereo, 16-bit, a loop only at the end, data inside
-	 * the file) */
+	 * (with its extended header) or raw, mono / stereo, 16-bit, a loop only
+	 * at the end, data inside the file) */
 	if (memcmp(h, "WV64", 4) || h[4] != 10 || (h[5] != 0 && h[5] != 1) || (h[6] != 1 && h[6] != 2)
 		|| h[7] != 16 || !be32(h + 8) || !be32(h + 12) || be32(h + 16) > be32(h + 12)
-		|| be32(h + 20) || be32(h + 24) < HDR_BYTES || be32(h + 24) > size)
+		|| be32(h + 20) || be32(h + 24) < HDR_BYTES + (h[5] == 1 ? 8u : 0u)
+		|| be32(h + 24) > size)
 		return -1;
 	/* music: VADPCM whose bits the RSP decodes (a Huffman stream's decode
 	 * runs on the CPU: 0.8 ms more per frame, Music slice bench), played
 	 * once */
-	if (music && (h[5] != 1 || be32(h + 16) || be32(h + 24) < HDR_BYTES + 4 || (h[34] << 8 | h[35]) & 1))
+	if (music && (h[5] != 1 || be32(h + 16) || be32(h + 24) < HDR_BYTES + 4
+		|| (h[34] << 8 | h[35]) & (VADPCM_HUFFMAN | VADPCM_RESIDENT)))
 		return -1;
 	if (waves[i].wav)
 		return -2;
@@ -387,10 +416,28 @@ static int open_slot(int i, uint32_t rom, uint32_t size, snd_wave_info_t *info, 
 	need = 256 + ((ext + 15u) & ~15u) + 3 * 256 + 64;
 	if (arena_largest() < need)
 		return -2;
+	/* resident: VADPCM only, when the largest free block holds the block,
+	 * the preload and its scratch at once (each then fits wherever
+	 * first-fit puts the others); a wave cooked resident (its header flag)
+	 * preloads whatever was asked, so it needs the room too */
+	if (h[5] == 1 && !music)
+	{
+		int room = arena_largest() >= need + preload_bytes(h, h + HDR_BYTES);
+
+		if (h[HDR_BYTES + 3] & VADPCM_RESIDENT)
+		{
+			if (!room)
+				return -2;
+			resident = 1;
+		}
+		resident = resident && room;
+	}
+	else
+		resident = 0;
 	/* wav64 opens (and closes) the file through snd_fs */
 	snprintf(path, sizeof(path), "snd:/%lx/%lx", (unsigned long)rom, (unsigned long)size);
 	memset(&parms, 0, sizeof(parms));
-	parms.streaming_mode = WAV64_STREAMING_FULL;
+	parms.streaming_mode = resident ? WAV64_STREAMING_NONE : WAV64_STREAMING_FULL;
 	redirect.active = 1;
 	waves[i].wav = wav64_load(path, &parms);
 	redirect.active = 0;
@@ -399,6 +446,7 @@ static int open_slot(int i, uint32_t rom, uint32_t size, snd_wave_info_t *info, 
 	memset(info, 0, sizeof(*info));
 	info->format = h[5];
 	info->channels = h[6];
+	info->resident = (uint8_t)resident;
 	info->freq = (uint32_t)waves[i].wav->wave.frequency;
 	info->len = (uint32_t)waves[i].wav->wave.len;
 	info->loop_len = (uint32_t)waves[i].wav->wave.loop_len;
@@ -406,7 +454,7 @@ static int open_slot(int i, uint32_t rom, uint32_t size, snd_wave_info_t *info, 
 	return 0;
 }
 
-int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
+int snd_hw_open(uint32_t rom, uint32_t size, int resident, snd_wave_info_t *info, void **wave)
 {
 	int i;
 
@@ -417,12 +465,12 @@ int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
 		*wave = NULL;
 		return -2;
 	}
-	return open_slot(i, rom, size, info, wave, 0);
+	return open_slot(i, rom, size, resident, info, wave, 0);
 }
 
 int snd_hw_stream_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
 {
-	return open_slot(SND_WAVES, rom, size, info, wave, 1);
+	return open_slot(SND_WAVES, rom, size, 0, info, wave, 1);
 }
 
 void snd_hw_close(void *wave)
@@ -438,6 +486,14 @@ void snd_hw_play(int v, void *wave, uint32_t pos)
 {
 	cwave_t *w = wave;
 
+	/* a resident wave's voice takes its own decoder state from the arena
+	 * (libdragon asserts when it cannot): no room, it stays silent and
+	 * its voice ends at the next frame */
+	if (w->wav->wave.mem && arena_largest() < ((w->wav->wave.state_size + 15u) & ~15u))
+	{
+		mixer_ch_stop(v);
+		return;
+	}
 	redirect.active = 1;	/* a bigger decoder state reallocates the buffer */
 	wav64_play(w->wav, v);
 	redirect.active = 0;

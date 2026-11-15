@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# test/m6/loadsaved.sh runs 1 and 2b: New Game on hldemo1 (`stats start`:
+# the spawn), the dome scientist 'domesci' shot dead from the dome view
+# (hl1-dome): its TriggerCondition 4 (death) fires npc_killed_relay ->
+# player_loadsaved 'npc_killed_ending' (HLSDK CRevertSaved: fade 3 s,
+# title GAMEOVER at 3 s, SERVER_COMMAND "reload" at 9 s). `stats
+# reloaded` 13 s after the shooting holds where the reload put the player.
+startmap hldemo1
+waitmap hldemo1 60
+stats start
+setpos -2048 744 36
+wait 0.3
+drop item_suit -2048 744 36
+drop weapon_9mmAR -2048 744 36
+drop ammo_9mmAR -2048 744 36
+wait 1
+god 1
+setpos -2000 -620 196 0 270
+wait 1
+lookat domesci
++attack
+wait 3
+-attack
+shot killed
+# the GAMEOVER title (3 s after the death)
+wait 1.5
+shot gameover
+wait 11.5
+stats reloaded
+shot reloaded
+wait 0.5
+pass

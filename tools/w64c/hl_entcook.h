@@ -443,14 +443,19 @@ static const struct { const char *name; uint16_t flags; } hle_classes[] = {
 	{"weapon_mp5", 0}, {"weapon_handgrenade", 0}, {"weapon_tripmine", 0},
 	{"weaponbox", 0},
 	{"player_weaponstrip", HLE_CF_LOGIC},
-	/* sound / fx (env_beam, env_laser are dropped: no N64 beam renderer);
-	 * GoldSrc shows placed decals and glows (HLSDK CDecal, CGlow) */
+	/* sound / fx; GoldSrc shows placed decals and glows (HLSDK CDecal,
+	 * CGlow) */
 	{"ambient_generic", 0}, {"speaker", 0}, {"env_beverage", 0},
 	{"env_sprite", 0}, {"env_glow", 0}, {"infodecal", 0},
 	{"env_explosion", HLE_CF_LOGIC}, {"env_shake", HLE_CF_LOGIC},
 	{"env_fade", HLE_CF_LOGIC}, {"env_message", HLE_CF_LOGIC},
 	{"env_render", HLE_CF_LOGIC}, {"env_spark", HLE_CF_LOGIC},
 	{"env_shooter", HLE_CF_LOGIC}, {"gibshooter", HLE_CF_LOGIC},
+	/* M6 EnvFx: beams (HLSDK CLightning, CLaser: game/hl/effects.c on
+	 * engine/render/beam.c), bubbles (CBubbling), the monster-only clip
+	 * brush (CFuncMonsterClip), the game-over reload (CRevertSaved) */
+	{"env_beam", 0}, {"env_laser", 0}, {"env_bubbles", 0},
+	{"func_monsterclip", 0}, {"player_loadsaved", HLE_CF_LOGIC},
 	{NULL, 0}
 };
 
@@ -459,7 +464,7 @@ static const char * const hle_needs_name[] = {
 	"multi_manager", "trigger_relay", "multisource", "env_render",
 	"env_shake", "env_fade", "env_message", "player_weaponstrip",
 	"env_explosion", "env_shooter", "gibshooter", "light", "light_spot",
-	"env_beverage", NULL
+	"env_beverage", "player_loadsaved", NULL
 };
 
 /* point classes that only matter when a key in the map names them */
@@ -576,6 +581,16 @@ static const struct { const char *name; uint16_t kind; } hle_xkeys[] = {
 	{"bullet_damage",HLE_KF}, {"firespread",HLE_KF}, {"minRange",HLE_KF},
 	{"maxRange",HLE_KF}, {"m_iszXController",HLE_KN}, {"m_iszYController",HLE_KN},
 	{"m_flSpread",HLE_KF}, {"m_fControl",HLE_KF}, {"m_iCount",HLE_KF},
+	/* M6 EnvFx: env_beam / env_laser (CLightning / CLaser::KeyValue),
+	 * env_bubbles (CBubbling), player_loadsaved (CRevertSaved); "texture"
+	 * above is their beam sprite, "damage", "frequency", "duration" and
+	 * "holdtime" are shared with earlier classes */
+	{"LightningStart",HLE_KN}, {"LightningEnd",HLE_KN}, {"life",HLE_KF},
+	{"BoltWidth",HLE_KF}, {"NoiseAmplitude",HLE_KF}, {"TextureScroll",HLE_KF},
+	{"StrikeTime",HLE_KF}, {"framestart",HLE_KF}, {"Radius",HLE_KF},
+	{"LaserTarget",HLE_KN}, {"width",HLE_KF}, {"EndSprite",HLE_KS},
+	{"density",HLE_KF}, {"current",HLE_KF}, {"messagetime",HLE_KF},
+	{"loadtime",HLE_KF},
 	{NULL, 0}
 };
 

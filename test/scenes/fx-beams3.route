@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: MIT
+# Scene fx-beams3 (test/README.md): hldemo3's welder beams. hl3-welder's
+# prelude and dish (uplink.route lines 366-406), down the domelift, the
+# welder trigger_once #60 (master welder_master) -> weld_laser_mm:
+# env_laser 'weld_laser_beam_1' #53 (laserbeam.spr, glow01 end sprite, on
+# weld_laser_train_1) and env_beam 'weld_torch_beam_1' #70 (laser train ->
+# torch train, blue) while the trains run their paths; the torch path's
+# end -> weld_door_mm (torch beam off, welder_grunt_spawner_mm ->
+# init_tripmines_mm: tripbomb beams #96 / #102, cyan, x -601 y -72..79).
+# Off-route poses from the inner dome floor (the route walks past).
+startmap hldemo3
+waitmap hldemo3 60
+# the route's player has the suit here (hldemo1's item_suit): drop it on
+# him (HLSDK CBaseEntity::Create, touch pickup)
+setpos -438 -576 -476 0 177
+wait 0.3
+drop item_suit -438 -576 -476
+wait 1
+god 1
+# domelift: bottom button #23 -> func_train domelift p1 -> p2
+setpos 688 0 -470 0 0
+wait 0.5
++use
+wait 0.2
+-use
+waitmoved domelift 20
+# the upper corridor first (hl3-welder: the dish pushable's spawn radius)
+setpos 500 0 46 0 180
+wait 0.3
+setpos 400 0 46 0 180
+wait 0.3
+setpos 360 0 58 0 180
+wait 0.3
+setpos 300 0 46 0 180
+wait 0.3
+setpos 250 150 46 0 135
+wait 0.3
+setpos 0 280 46 0 180
+wait 0.3
+setpos -250 150 46 0 225
+wait 0.3
+# control room: trigger_once #147 -> start_dish_mm (scientist briefing)
+setpos -260 0 46 0 0
+wait 12
+# turn the dish: hold +use on wheel #178 (momentary_rot_button 'dish')
+setpos -224 -37 46 20 0
+wait 0.5
++use
+wait 9
+-use
+wait 0.5
+# dish button #176 (master dish_light_ms) -> dish_mm
+setpos -224 0 46 40 0
+wait 0.5
++use
+wait 0.2
+-use
+waitglobal hldemo_global_dish_ms 30
+wait 13
+# back down: top button #172 calls domelift p2 -> p1
+setpos 300 0 46 0 0
+wait 0.3
+setpos 360 0 58 0 0
+wait 0.3
+setpos 500 0 46 0 0
+wait 0.3
+setpos 688 0 46 10 0
+wait 0.5
++use
+wait 0.2
+-use
+waitnear 688 0 -476 4 20
+stats begin
+# inner dome floor: welder trigger_once #60 (master welder_master)
+setpos 500 0 -470 0 180
+wait 0.3
+setpos 200 0 -470 0 180
+wait 0.3
+# the welder from the dome floor, 170 u east of its door (weld_door_1,
+# x -364..-356 y -64..0 z -502..-402): the torch path runs round it in
+# 13.3 s at 25 u/s, the laser's sparks and decals on the frame
+setpos -180 -32 -470 10 180
+wait 1
+shot welder
+# closer, off the door's axis: the torch beam (x -359 -> -336) side on
+setpos -250 -10 -470 15 195
+wait 3
+shot welder-near
+wait 5
+shot welder-late
+# weld_door_mm (path end, ~13.3 s): door blown at 3 s, tripbomb beams on
+# (x -601, y -72..79, z -482 / -433, in front of intro_domedoor_1 at x
+# -632, closed: from the hellbox side the door hides them); from inside
+# the corridor 61 u east of them, looking west-northwest across both
+# (straight down the corridor from the welder door a grunt fills the view)
+setpos -250 -32 -470 5 180
+wait 9
+setpos -540 -50 -476 0 160
+wait 0.5
+shot tripbomb
+stats end
+wait 0.2
+pass

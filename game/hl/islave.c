@@ -160,7 +160,7 @@ static void beam_issue(int e, int n)
 	slv_beam_t *b = &SLV(e)->m_pBeam[n];
 
 	b->id = (int16_t)fx_beam(FX_BEAM_KEY(e, n), -1, b->p0, -1, b->p1, RESID(SLV_LGTNING_SPR),
-		b->width, b->noise, b->rgb[0], b->rgb[1], b->rgb[2], b->bright, 0, 0);
+		0, 0, b->width, b->noise, b->rgb[0], b->rgb[1], b->rgb[2], b->bright, 0, 0, 0);
 }
 
 /* a beam from p0 to the hand (end attachment side < 0 ? 2 : 1) */

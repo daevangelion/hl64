@@ -183,12 +183,37 @@ All in fixed pools, randomness from the render random stream:
   gravity × `sv_gravity` per type, colour ramp, die time.
 - **Beams**: entity↔entity, entity↔point, point↔point; width, noise
   amplitude (random perpendicular offsets per segment), colour, brightness,
-  scroll speed, life; drawn additive as camera-facing strips of ≤ 16
-  segments. Entity-following trails (TE_BEAMFOLLOW, pool of 4): ≤ 16
-  samples of the entity's position, one per life / 16 s after ≥ 1 u of
-  movement, each dying after life; brightness falls linearly with a
-  segment's age (8 steps); the trail outlives its entity until its last
+  sprite frame (starting frame, rate in 0.1 frames/s, HLSDK `TE_BEAM*`),
+  scroll speed, life, shade in / out (`FBEAM_SHADEIN` / `SHADEOUT`: the
+  brightness ramps along the beam); drawn additive as camera-facing strips
+  of ≤ 16 segments. A shaded beam draws as brightness steps, one per
+  segment, one step per 10 u of length, 2 to 8 [own: the additive ramp
+  combiner has no per-vertex shade; each step is a batch]. Pool
+  32; a game entity's beam (keyed, alive until killed) arriving at a full
+  pool takes the temporary beam that ends first [own]. Beam decals
+  (`env_beam` / `env_laser` `SF_BEAM_DECALS`, HLSDK `CBeam::BeamDamage`:
+  a `{bigshot` decal every damage think, 10 a second for a laser) are
+  skipped within 8 u of the beam's previous decal [own: the hldemo3
+  welder's laser lays a 16 u decal every 2.5 u; half a decal apart keeps
+  the trail and a third of the decals]; the game random draw for the
+  decal is made either way. Entity-following trails (TE_BEAMFOLLOW, pool
+  of 4): ≤ 16 samples of the entity's position, one per life / 16 s after
+  ≥ 1 u of movement, each dying after life; brightness falls linearly with
+  a segment's age (8 steps); the trail outlives its entity until its last
   sample dies [own].
+- **TE_FIZZ** (`env_bubbles`, HLSDK `CBubbling`). HLSDK fixes the game
+  side: the message carries the entity, `sprites/bubble.spr` and the
+  `density` key as a byte; the first think 2 s after spawn (0.1 s after a
+  use turns it on), then every `2.5 − 0.1 × frequency` s, 0.5 s when
+  `frequency` > 19; `current` is stored as |speed| in `rendercolor.x`
+  (high byte) / `.y` (low byte) and its sign in `.z`. The client side
+  (`R_FizzEffect`, engine code, not in the HLSDK) is unknown; hl64 uses
+  **[EST]** values until a retail-client capture: `density + 1` bubbles
+  per message (at most 16), at random points of the brush's box, each
+  rising 30–50 u/s at scale 0.3–0.6 and drifting at `current` u/s along
+  the entity's yaw, removed at the water surface above it (liquid at its
+  spawn point) or at the first solid above (≤ 1024 u); a frame of the
+  sprite at random, alpha-blended (TransAlpha, 255).
 - **Effects catalogue** (one function each, HLSDK `TE_*` semantics):
   sparks, ricochet (sprite + sound), bullet impact (decal + sparks +
   material sound), blood sprite (bloodspray animated 0.25 s + up to 5

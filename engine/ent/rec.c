@@ -651,7 +651,8 @@ res_t rec_key_res(gid_t16 gid, key_t16 k)
 	cls_t c = rec_class(gid);
 
 	if (k == RK_PATTERN || k == RK_GLOBALSTATE || k == RK_MONSTERTYPE
-		|| (k == RK_MESSAGE && c == RC_ENV_MESSAGE) || (k == RK_CHAPTERTITLE && c == RC_WORLDSPAWN)
+		|| (k == RK_MESSAGE && (c == RC_ENV_MESSAGE || c == RC_PLAYER_LOADSAVED))
+		|| (k == RK_CHAPTERTITLE && c == RC_WORLDSPAWN)
 		|| (k == RK_TEXTURE && c == RC_INFODECAL) || typed_id(gid, k, HLE_KS, &key) < 0)
 		return RES_NONE;
 	if (RES_KIND(key->id) == RES_K_SUBMODEL)
@@ -687,7 +688,8 @@ int rec_key_title(gid_t16 gid, key_t16 k)
 	const hle_key_t *key;
 	cls_t c = rec_class(gid);
 
-	if (!((k == RK_MESSAGE && c == RC_ENV_MESSAGE) || (k == RK_CHAPTERTITLE && c == RC_WORLDSPAWN)))
+	if (!((k == RK_MESSAGE && (c == RC_ENV_MESSAGE || c == RC_PLAYER_LOADSAVED))
+		|| (k == RK_CHAPTERTITLE && c == RC_WORLDSPAWN)))
 		return -1;
 	return typed_id(gid, k, HLE_KS, &key) >= 0 ? key->id : -1;
 }

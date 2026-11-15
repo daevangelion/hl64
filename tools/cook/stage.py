@@ -35,7 +35,7 @@ sounds are derived from those maps' entity lumps, the class table
   media/cdNN.wav64      the CD tracks the maps' trigger_cdaudio /
                         target_cdaudio play, from the player's
                         media/*.mp3 (tools/cook/hl_music.py)
-  titles.txt            pruned to the env_message titles
+  titles.txt            pruned to the env_message / player_loadsaved titles
   maps/<m>.w64          layer packages: tools/cook/bake_world_tex.py ->
                         <staging>/maps/<m>.wci4 (embedded and WAD
                         textures), hlecook -> <m>.hle, tools/w64c/touchrank.py

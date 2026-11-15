@@ -278,7 +278,8 @@ def typed(key: str, v: str, cname: str, preset: bool, ids: Ids, at: str) -> Tupl
         if v not in ids.globals_:
             raise IdError(f"{at}: global state {v!r} not in the table")
         return "global", ids.globals_[v]
-    if (key, cname) in (("message", "env_message"), ("chaptertitle", "worldspawn")):
+    if (key, cname) in (("message", "env_message"), ("chaptertitle", "worldspawn"),
+                        ("message", "player_loadsaved")):
         return "title", ids.titles.get(v.upper(), NONE)
     if key in restab.SENTENCE_KEYS and v.startswith("!") and len(v) > 1:
         # one missing here is absent from the player's sentences.txt or

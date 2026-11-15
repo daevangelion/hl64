@@ -61,9 +61,9 @@ const char	*rec_key_str(gid_t16 gid, key_t16 k);	/* NULL absent; spawn only */
  * rec_key_name also resolves a string key whose value is a name of the
  * record's map (changelevel / landmark message, netname): spawn only. */
 int		rec_key_global(gid_t16 gid, key_t16 k);
-/* env_message `message` / worldspawn `chaptertitle`: title id
- * (res_title), -1 when absent or not in titles.txt (rec_key_str then has
- * the text GoldSrc would show). */
+/* env_message / player_loadsaved `message`, worldspawn `chaptertitle`:
+ * title id (res_title), -1 when absent or not in titles.txt (rec_key_str
+ * then has the text GoldSrc would show). */
 int		rec_key_title(gid_t16 gid, key_t16 k);
 int		rec_key_pattern(gid_t16 gid, key_t16 k);
 /* infodecal `texture`: decal id, -1 when absent or not in decals.wad
@@ -287,8 +287,8 @@ int		res_patterns(void);		/* PATN count */
 int		res_globals(void);		/* global-state ids (GLOB count) */
 int		res_classes(void);		/* classes.def lines (CLAS count) */
 /* titles.txt messages (rtb TITL / TTXT; HLSDK client_textmessage_t):
- * title id = staged titles.txt order; env_message `message` and worldspawn
- * `chaptertitle` keys carry it (rec_key_title). */
+ * title id = staged titles.txt order; env_message / player_loadsaved
+ * `message` and worldspawn `chaptertitle` keys carry it (rec_key_title). */
 typedef struct {
 	float		x, y;		/* -1 = centred */
 	float		fadein, fadeout, holdtime, fxtime;

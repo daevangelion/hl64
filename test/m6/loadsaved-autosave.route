@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# test/m6/loadsaved.sh run 2a: New Game on hldemo1, then the player stands
+# in trigger_autosave #257 (*54, x -1664..-1640 y -256..-64 z 0..123):
+# the autosave (architecture.md 14) is the newest save of the chip.
+startmap hldemo1
+waitmap hldemo1 60
+setpos -2048 744 36
+wait 0.3
+drop item_suit -2048 744 36
+wait 1
+god 1
+setpos -1652 -160 36 0 270
+wait 2
+pass

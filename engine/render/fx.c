@@ -8,7 +8,7 @@
  * Written from render-fx.md 5 and the TE_* field descriptions of HLSDK
  * common/const.h (interface); the client effect builders of the old tree
  * (gsfx_cl.c / gsfx_cart.c) are not used. Every effect allocates from a
- * fixed pool (temp entities 48, particles 512, beams 16, decals 96); a
+ * fixed pool (temp entities 48, particles 512, beams 32, decals 96); a
  * full pool drops the rest and counts it. Effect parameters not fixed by
  * the spec (counts, speeds, lives of sparks and debris) are this module's
  * choices, marked "[own]"; they are tuned against retail capture X7.
@@ -22,6 +22,7 @@
 #include "hl64/rec.h"
 #include "hl64/settings.h"
 #include "hl64/snd.h"
+#include "engine/core/hlmath.h"
 #include "engine/core/sys.h"
 #include "engine/render/fx_int.h"
 #include "engine/render/ren.h"
@@ -99,6 +100,9 @@ float fx_gravity(void)
 	return settings.gravity;
 }
 
+/* Rounded half away from zero by a truncating conversion: newlib's lrintf
+ * is a ~60-instruction call on the cart, and every effects vertex comes
+ * through here. */
 int fx_cam_pos(const float g[3], int16_t out[3])
 {
 	int k;
@@ -109,7 +113,7 @@ int fx_cam_pos(const float g[3], int16_t out[3])
 
 		if (v < -32767.0f || v > 32767.0f)
 			return 0;
-		out[k] = (int16_t)lrintf(v);
+		out[k] = (int16_t)(int)(v < 0 ? v - 0.5f : v + 0.5f);
 	}
 	return 1;
 }
@@ -136,6 +140,9 @@ static res_t asset(int set, int pick)
 	return fx.assets[set][pick < 0 ? fx_randi(0, n - 1) : pick % n];
 }
 
+/* The ricochets are held in memory (SND_RESIDENT): sparks start one up to
+ * ten times a second (env_laser's end sparks), and a streamed wave reads
+ * its whole sample from the cart at every start. */
 void fx_play(int set, const float org_g[3], float vol, float attn)
 {
 	res_t s = asset(set, -1);
@@ -145,7 +152,8 @@ void fx_play(int set, const float org_g[3], float vol, float attn)
 		return;
 	frame = eng_frame_layer();
 	eng_set_frame_layer(-1);
-	snd_ambient(org_g, s, vol, attn, 0, 95 + fx_randi(0, 10));
+	snd_ambient(org_g, s, vol, attn, set == FX_A_RICOCHET_SND ? SND_RESIDENT : 0,
+		95 + fx_randi(0, 10));
 	eng_set_frame_layer(frame);
 }
 
@@ -559,6 +567,86 @@ void fx_implosion(const float org[3], int radius, int count, int life)
 		if (!part_add_rgb(p, v, c, PT_TRACER, t))
 			break;
 	}
+}
+
+/* TE_FIZZ bubbles, [EST] values (render-fx.md 5: the client side is not
+ * in the HLSDK): at most 16 a call, rising 30-50 u/s, scale 0.3-0.6,
+ * alive until the water surface over them (liquid at the spawn point) or
+ * the solid above them (a NOMONSTERS trace, 1024 u at most). */
+#define FIZZ_MAX	16
+
+static int liquid(int c)
+{
+	return c == COL_WATER || c == COL_SLIME || c == COL_LAVA;
+}
+
+void fx_fizz(int e, res_t sprite, int density)
+{
+	const col_ent_t *cv;
+	const ent_rnd_t *r;
+	float lo[3], hi[3], cur, yaw;
+	int n, i, frame = eng_frame_layer();
+
+	if (e < 0 || !ent_is_live(e) || !sprite)
+		return;
+	cv = ent_cv(e);
+	r = ent_rnd(e);
+	fx_global(cv->absmin, lo);
+	fx_global(cv->absmax, hi);
+	/* HLSDK CBubbling::Spawn's speed hack */
+	cur = (float)((int)r->rendercolor[0] << 8 | r->rendercolor[1]);
+	if (r->rendercolor[2])
+		cur = -cur;
+	yaw = cv->angles[1] * (3.14159265f / 180.0f);
+	n = density < 0 || density >= FIZZ_MAX ? FIZZ_MAX : density + 1;
+	eng_set_frame_layer(-1);
+	for (i = 0; i < n; i++)
+	{
+		float o[3], up[3], top, rise;
+		col_trace_t tr;
+		fx_tent_t *t;
+		int k;
+
+		o[0] = fx_randf(lo[0], hi[0]);
+		o[1] = fx_randf(lo[1], hi[1]);
+		o[2] = fx_randf(lo[2], hi[2]);
+		up[0] = o[0];
+		up[1] = o[1];
+		up[2] = o[2] + 1024.0f;
+		col_trace_line(o, up, COL_MOVE_NOMONSTERS, NULL, &tr);
+		if (tr.startsolid)
+			continue;
+		top = tr.end[2];
+		if (liquid(col_contents(o)))
+		{
+			float wet = o[2], dry = top;
+
+			/* the surface between: 6 halvings */
+			for (k = 0; k < 6; k++)
+			{
+				float m[3] = { o[0], o[1], 0.5f * (wet + dry) };
+
+				if (liquid(col_contents(m)))
+					wet = m[2];
+				else
+					dry = m[2];
+			}
+			top = wet;
+		}
+		rise = fx_randf(30, 50);
+		if (top - o[2] < 1.0f || !(t = tent_alloc(o, sprite)))
+			continue;
+		t->rendermode = FX_RM_TRANSALPHA;
+		t->amt = 255;
+		t->scale = fx_randf(0.3f, 0.6f);
+		t->vel[0] = cur * hl_cosf(yaw);
+		t->vel[1] = cur * hl_sinf(yaw);
+		t->vel[2] = rise;
+		t->frame = (float)fx_randi(0, res_model_frames(sprite) > 1
+			? res_model_frames(sprite) - 1 : 0);
+		t->die = fx_s.now + (double)((top - o[2]) / rise);
+	}
+	eng_set_frame_layer(frame);
 }
 
 void fx_beam_cylinder(const float org[3], float radius, res_t sprite, int life, int width,

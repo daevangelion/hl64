@@ -30,6 +30,11 @@
 #define SND_CHANGE_PITCH	(1 << 7)
 #define SND_SPAWNING		(1 << 8)
 #define PITCH_NORM		100
+/* hl64 [own]: hold the sound's samples in the SOUND region while its wave
+ * is open (no cart reads per play; such a wave closes after the streamed
+ * ones). For short sounds started several times a second (the sparks'
+ * ricochets); streamed when the region has no room for them. */
+#define SND_RESIDENT		(1 << 9)
 
 /* pfnEmitSound: source = entity e's origin, followed while it plays. */
 void	snd_emit(int e, int chan, res_t sound, float vol, float attn, int flags, int pitch);

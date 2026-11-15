@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT
+# Scene fx-beams1 (test/README.md): hldemo1's env_beams. The always-on
+# smoke beam (env_beam 'smoke' #215, START_ON, lgtning.spr s1b -> s1a,
+# x -692 y 64 z 0..87 over monster_scientist_dead -696 64 0, BoltWidth 100,
+# grey 70 70 60 at 70: faint by design), then the cave-in (trigger_once
+# #319 -> cavein2_mm -> launch_mm at 0.5 s: 'debris' #336 / #337 / #342 /
+# #343 at 1.4 s strike zapend1 -> zapend2 and zapend3 -> zapend4 0.1 s
+# later, plasma.spr frames 3.. at 20 fps, life 2 s): uplink.route lines
+# 696-702 (ops 512-515) with the shots added. Off-route pose for the smoke
+# beam, after the intro titles.
+startmap hldemo1
+waitmap hldemo1 60
+setpos -2048 744 36
+wait 0.3
+drop item_suit -2048 744 36
+drop weapon_crowbar -2048 744 36
+wait 1
+god 1
+# the smoke beam side on from 43 u west, against the dark corridor beyond
+# it (from the doorway and from the south it is behind the lit consoles or
+# lost against them). Additive grey 70 at 70 adds <= 17 of 255 per channel
+# (2001 pixels changed against main's shot from 84 u: 830): seen in the
+# before / after difference rather than by eye
+setpos -735 64 36 0 0
+wait 5
+shot smoke-beam
+stats begin
+setpos 530 -110 36 0 0
+waitgone glimpse_garg 20
+# cave-in trigger (#319) -> cavein2_mm -> launch_mm: the zaps from 2.0 s
+setpos 720 -180 36 0 0
+wait 2.3
+look -40 180
+shot debris-zaps-west
+wait 0.4
+look -20 0
+shot debris-zaps-east
+waitgone pop 5
+waitgone vent_fall_crate_2 10
+stats end
+wait 0.2
+pass

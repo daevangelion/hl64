@@ -856,7 +856,7 @@ void CMortar_MortarExplode(int e)
 	 * brightness 128) */
 	VecCopy(o, top);
 	top[2] += 1024;
-	fx_beam(-1, -1, o, -1, top, RESID(SLV_LGTNING_SPR), 40, 0, 255, 160, 100, 128, 0, 1);
+	fx_beam(-1, -1, o, -1, top, RESID(SLV_LGTNING_SPR), 0, 0, 40, 0, 255, 160, 100, 128, 0, 1, 0);
 	VecCopy(o, bottom);
 	bottom[2] -= 1024;
 	UTIL_TraceLine(top, bottom, dont_ignore_monsters, e, &tr);

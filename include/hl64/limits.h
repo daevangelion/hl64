@@ -118,7 +118,7 @@
 #define HL64_FX_TEMPS			48
 #define HL64_FX_TEMPS_STUDIO		6
 #define HL64_FX_PARTICLES		512
-#define HL64_FX_BEAMS			16
+#define HL64_FX_BEAMS			32
 #define HL64_FX_BEAM_SEGS		16
 /* Entity-following trails (TE_BEAMFOLLOW; engine/render/trail.c), each
  * HL64_FX_BEAM_SEGS samples [own]. */

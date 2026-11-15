@@ -20,8 +20,12 @@
  * env_explosion (CEnvExplosion, also created at run time by ExplosionCreate),
  * spark_shower (CShower), env_shake, env_fade, env_message, env_render
  * (triggers.cpp CRenderFxManager), env_spark (buttons.cpp CEnvSpark),
- * env_beverage, item_sodacan, gibshooter (CGibShooter) and env_shooter
- * (CEnvShooter, gibs through GameMon's game/hl/gib.h CGib). env_shake /
+ * env_beverage, item_sodacan, gibshooter (CGibShooter), env_shooter
+ * (CEnvShooter, gibs through GameMon's game/hl/gib.h CGib), and (M6
+ * EnvFx) env_beam (CLightning), env_laser (CLaser, its end sprite a
+ * temporary CSprite) and env_bubbles (CBubbling): the beam entities draw
+ * as effects beams (engine/render/beam.c) keyed by the entity, their
+ * strikes as TE_BEAM* effects beams, the bubbles as fx_fizz. env_shake /
  * fade / message / render / spark / explosion / shooter map records are
  * logic records (no entity): their state is the record's rec_logic_t and
  * their thinks record timers.
@@ -32,10 +36,13 @@
  * cooked titles (res_title) and fx.h. No line is imported.
  */
 #include <math.h>
+#include <string.h>
 
+#include "engine/core/eng.h"
 #include "game/hl/breakable.h"
 #include "game/hl/doors.h"
 #include "game/hl/gib.h"
+#include "game/hl/savegame.h"
 
 #define SF_SPRITE_STARTON		0x0001
 #define SF_SPRITE_ONCE			0x0002
@@ -242,12 +249,20 @@ static const game_vt_t CSprite_vt = {
 	.ObjectCaps = CSprite_ObjectCaps,
 };
 
+/* SF_SPRITE_TEMPORARY sprites (FCAP_DONT_SAVE: an effect's helper, made
+ * again by its owner) never persist */
+static int CSprite_quiet(int e)
+{
+	return (PRIV(CSprite, e)->spawnflags & SF_SPRITE_TEMPORARY) ? -1 : 1;
+}
+
 /* HLSDK CSprite::m_SaveData */
 static const sv_field_t f_CSprite[] = {
 	SVF(CSprite, m_lastTime, SV_TIME, 0),
 	SVF(CSprite, m_maxFrame, SV_F32, SVK),
 };
-static const sv_table_t sv_CSprite = SV_TABLE(&sv_CBaseEntity, f_CSprite);
+static const sv_table_t sv_CSprite = SV_TABLE(&sv_CBaseEntity, f_CSprite,
+	.quiet = CSprite_quiet);
 
 const game_class_t gc_ENV_SPRITE = {
 	.size = sizeof(CSprite), .Spawn = CSprite_Spawn, .vt = &CSprite_vt,
@@ -1075,4 +1090,966 @@ const game_class_t gc_ENV_SHOOTER = {
 	.LogicSpawn = CGibShooter_LogicSpawn,
 	.LogicUse = CGibShooter_LogicUse,
 	.LogicTimer = CGibShooter_LogicTimer,
+};
+
+/* ---- beams: env_beam (CLightning), env_laser (CLaser) --------------------------- */
+
+#define SF_BEAM_STARTON		0x0001
+#define SF_BEAM_TOGGLE		0x0002
+#define SF_BEAM_RANDOM		0x0004
+#define SF_BEAM_RING		0x0008
+#define SF_BEAM_SPARKSTART	0x0010
+#define SF_BEAM_SPARKEND	0x0020
+#define SF_BEAM_DECALS		0x0040
+#define SF_BEAM_SHADEIN		0x0080
+#define SF_BEAM_SHADEOUT	0x0100
+
+/* CBeam types (HLSDK BEAM_*); BEAM_NONE: the ends did not resolve */
+#define BEAM_POINTS		0
+#define BEAM_ENTPOINT		1
+#define BEAM_ENTS		2
+#define BEAM_NONE		0xFF
+
+/* CBeam: HLSDK keeps a beam's state in its entvars (rendermode type and
+ * flags, origin / angles the points, sequence / skin the end entities,
+ * modelindex, scale, body, frame, animtime); here the members, map-local
+ * in the beam's frame. The beam itself is an effects beam keyed
+ * FX_BEAM_KEY(e, 0) (unsaved: the restore hooks issue it again). */
+#define CBEAM_FIELDS \
+	float		m_vecStart[3];	/* pev->origin: start point */ \
+	float		m_vecEnd[3];	/* pev->angles: end point */ \
+	ent_h		m_hStart, m_hEnd; /* start / end entities (EH_NONE) */ \
+	res_t		m_texture;	/* SetTexture */ \
+	uint8_t		m_type;		/* BEAM_* */ \
+	uint8_t		m_flags;	/* FX_BEAM_SHADE* (SetFlags) */ \
+	uint8_t		m_width, m_noise, m_frame, m_scroll; \
+	uint8_t		m_decalSet;	/* m_decalAt holds a decal [own] */ \
+	float		m_decalAt[3];	/* the beam's last decal point [own] */
+
+typedef struct {
+	CBASEENTITY_FIELDS
+	CBEAM_FIELDS
+} CBeam;
+
+#define BEAM(e)		PRIV(CBeam, e)
+
+static const sv_field_t f_CBeam[] = {
+	SVF(CBeam, m_vecStart, SV_POS, 0),
+	SVF(CBeam, m_vecEnd, SV_POS, 0),
+	SVF(CBeam, m_hStart, SV_EH, 0),
+	SVF(CBeam, m_hEnd, SV_EH, 0),
+	SVF(CBeam, m_texture, SV_RES, SVK),
+	SVF(CBeam, m_type, SV_U8, 0),
+	SVF(CBeam, m_flags, SV_U8, SVK),
+	SVF(CBeam, m_width, SV_U8, SVK),
+	SVF(CBeam, m_noise, SV_U8, SVK),
+	SVF(CBeam, m_frame, SV_U8, SVK),
+	SVF(CBeam, m_scroll, SV_U8, SVK),
+	SVF(CBeam, m_decalSet, SV_U8, 0),
+	SVF(CBeam, m_decalAt, SV_POS, 0),
+};
+
+/* GetStartPos / GetEndPos (they ignore attachments, as HLSDK's) */
+static void BeamStartPos(int e, float out[3])
+{
+	CBeam *b = BEAM(e);
+	int s = b->m_type == BEAM_ENTS ? EHGet(b->m_hStart) : -1;
+
+	VecCopy(s >= 0 ? ent_cv(s)->origin : b->m_vecStart, out);
+}
+
+static void BeamEndPos(int e, float out[3])
+{
+	CBeam *b = BEAM(e);
+	int t = b->m_type == BEAM_POINTS ? -1 : EHGet(b->m_hEnd);
+
+	VecCopy(t >= 0 ? ent_cv(t)->origin : b->m_vecEnd, out);
+}
+
+/* The client's view of the beam entity: drawn unless EF_NODRAW, as long
+ * as its entities exist. */
+static void BeamShow(int e)
+{
+	CBeam *b = BEAM(e);
+	const ent_rnd_t *r = ent_rnd(e);
+	int s = -1, t = -1;
+
+	if (b->m_type != BEAM_NONE && !(r->effects & EF_NODRAW))
+	{
+		if (b->m_type == BEAM_ENTS)
+			s = EHGet(b->m_hStart);
+		if (b->m_type != BEAM_POINTS)
+			t = EHGet(b->m_hEnd);
+		if ((b->m_type != BEAM_ENTS || s >= 0) && (b->m_type == BEAM_POINTS || t >= 0))
+		{
+			fx_beam(FX_BEAM_KEY(e, 0), s, s < 0 ? b->m_vecStart : NULL, t,
+				t < 0 ? b->m_vecEnd : NULL, b->m_texture, b->m_frame,
+				(int)r->framerate, b->m_width, b->m_noise, r->rendercolor[0],
+				r->rendercolor[1], r->rendercolor[2], r->renderamt, b->m_scroll, 0,
+				b->m_flags);
+			return;
+		}
+	}
+	fx_beam_kill(FX_BEAM_KEY(e, 0));
+}
+
+/* released: the effects beam goes with the entity */
+static void CBeam_released(int e)
+{
+	fx_beam_kill(FX_BEAM_KEY(e, 0));
+}
+
+static const sv_table_t sv_CBeam = SV_TABLE(&sv_CBaseEntity, f_CBeam,
+	.released = CBeam_released);
+
+/* An entity a beam names, as HLSDK's searches see it: point records
+ * (info_target, landmarks) and logic records are points at their record
+ * origin (IsPointEntity: no model); physical records wake. *ent -1 for a
+ * point. RandomTargetname (rnd 1): a uniform pick over every match (the
+ * game random stream, one draw per match), else the first match
+ * (FIND_ENTITY_BY_TARGETNAME). 0: no match. */
+static int BeamFind(name_t n, int rnd, int *ent, float org[3])
+{
+	int i, cnt, total = 0;
+
+	*ent = -1;
+	if (n == NAME_NONE)
+		return 0;
+	cnt = rec_name_count(n);
+	for (i = 0; i < cnt; i++)
+	{
+		gid_t16 g = rec_name_gid(n, i);
+		int k = rec_kind(g), e = -1;
+
+		if (k < 0)
+			continue;
+		if (k != REC_KIND_POINT && k != REC_KIND_LOGIC && (e = rec_wake(g)) < 0)
+			continue;
+		total++;
+		if (rnd ? RANDOM_LONG(0, total - 1) < 1 : total == 1)
+		{
+			*ent = e;
+			if (e >= 0)
+				VecCopy(ent_cv(e)->origin, org);
+			else
+				rec_origin(g, org);
+		}
+		if (!rnd)
+			break;
+	}
+	return total > 0;
+}
+
+/* HLSDK IsPointEntity: no model, or a target / landmark / corner */
+static int IsPointEntity(int e)
+{
+	cls_t c;
+
+	if (e < 0 || !ent_rnd(e)->model)
+		return 1;
+	c = ent_idc(e)->cls;
+	return c == CLS_INFO_TARGET || c == CLS_INFO_LANDMARK || c == CLS_PATH_CORNER;
+}
+
+static void DoSparks(int e, const float start[3], const float end[3])
+{
+	uint32_t sf = CBase(e)->spawnflags;
+
+	if (sf & SF_BEAM_SPARKSTART)
+		UTIL_Sparks(start);
+	if (sf & SF_BEAM_SPARKEND)
+		UTIL_Sparks(end);
+}
+
+/* Beam decals closer than this to the beam's last one are skipped [own]:
+ * a beam held on a surface (env_laser at 10 thinks a second, the welder
+ * moving 25 u/s) lays a 16 u decal every 2.5 u; half a decal apart keeps
+ * the trail unbroken with a third of the decals (pool and draw cost). */
+#define BEAM_DECAL_SPACING	8.0f
+
+/* CBeam::BeamDamage: dmg x the time since the last damage to what the
+ * trace hit (the world takes none), decals on brushes with SF_BEAM_DECALS */
+static void BeamDamage(int e, const col_trace_t *tr)
+{
+	CBaseEntity *pev = CBase(e);
+	int hit = tr->ent;
+
+	if (tr->frac != 1.0f && hit >= 0)
+	{
+		if (hit > 0 && ent_is_live(hit))
+		{
+			float start[3], dir[3];
+
+			BeamStartPos(e, start);
+			VecSub(tr->end, start, dir);
+			VecNorm(dir, dir);
+			ClearMultiDamage();
+			TraceAttack(hit, e, pev->dmg * (gtime() - pev->dmgtime), dir, tr,
+				DMG_ENERGYBEAM);
+			ApplyMultiDamage(e, e);
+		}
+		if ((pev->spawnflags & SF_BEAM_DECALS) && (hit == 0 || IsBSPModel(hit)))
+		{
+			CBeam *b = BEAM(e);
+			int d = DECAL_BIGSHOT1 + RANDOM_LONG(0, 4);	/* HLSDK's draw, always */
+			float gap[3];
+
+			VecSub(tr->end, b->m_decalAt, gap);
+			if (!b->m_decalSet || VecLen(gap) >= BEAM_DECAL_SPACING)
+			{
+				UTIL_DecalTrace(tr, d);
+				VecCopy(tr->end, b->m_decalAt);
+				b->m_decalSet = 1;
+			}
+		}
+	}
+	pev->dmgtime = gtime();
+}
+
+typedef struct {
+	CBASEENTITY_FIELDS
+	CBEAM_FIELDS
+	int32_t		m_active;
+	name_t		m_iszStartEntity;
+	name_t		m_iszEndEntity;
+	float		m_life;
+	int32_t		m_boltWidth;
+	int32_t		m_noiseAmplitude;
+	int32_t		m_speed;
+	float		m_restrike;
+	int32_t		m_frameStart;
+	float		m_radius;
+} CLightning;
+
+#define LIGHTNING(e)	PRIV(CLightning, e)
+
+static int ServerSide(int e)
+{
+	return LIGHTNING(e)->m_life == 0 && !(CBase(e)->spawnflags & SF_BEAM_RING);
+}
+
+/* BeamUpdateVars: the beam entity's type, points and entities from the
+ * first entities named (HLSDK at Activate; here at spawn and restore) */
+static void BeamUpdateVars(int e)
+{
+	CLightning *p = LIGHTNING(e);
+	float so[3] = { 0, 0, 0 }, eo[3] = { 0, 0, 0 };
+	int s, t, ps, pe, have;
+
+	have = BeamFind(p->m_iszStartEntity, 0, &s, so);
+	have &= BeamFind(p->m_iszEndEntity, 0, &t, eo);
+	p->m_hStart = p->m_hEnd = EH_NONE;
+	if (!have)
+	{
+		log_printf("env_beam %d: unknown start or end entity\n", e);
+		p->m_type = BEAM_NONE;
+		BeamShow(e);
+		return;
+	}
+	ps = IsPointEntity(s);
+	pe = IsPointEntity(t);
+	p->m_type = BEAM_ENTS;
+	if (ps || pe)
+	{
+		if (!ps)
+		{
+			/* one point entity must be the start */
+			int ts = s, tp = ps;
+			float to[3];
+
+			s = t;
+			t = ts;
+			ps = pe;
+			pe = tp;
+			VecCopy(so, to);
+			VecCopy(eo, so);
+			VecCopy(to, eo);
+		}
+		p->m_type = pe ? BEAM_POINTS : BEAM_ENTPOINT;
+	}
+	if (p->m_type == BEAM_ENTS)
+		p->m_hStart = EHANDLE(s);
+	else
+		VecCopy(so, p->m_vecStart);
+	if (p->m_type == BEAM_ENTPOINT)
+		p->m_hEnd = EHANDLE(t);
+	else if (p->m_type == BEAM_POINTS)
+		VecCopy(eo, p->m_vecEnd);
+	else
+		p->m_hEnd = EHANDLE(t);
+	p->m_width = (uint8_t)p->m_boltWidth;
+	p->m_noise = (uint8_t)p->m_noiseAmplitude;
+	p->m_frame = (uint8_t)p->m_frameStart;
+	p->m_scroll = (uint8_t)p->m_speed;
+	p->m_flags = (p->spawnflags & SF_BEAM_SHADEIN) ? FX_BEAM_SHADEIN
+		: (p->spawnflags & SF_BEAM_SHADEOUT) ? FX_BEAM_SHADEOUT : 0;
+	BeamShow(e);
+}
+
+/* A TE_BEAM* strike (HLSDK StrikeThink / Zap message): life m_life */
+static void Strike(int e, int s, const float a[3], int t, const float b[3])
+{
+	CLightning *p = LIGHTNING(e);
+	const ent_rnd_t *r = ent_rnd(e);
+
+	fx_beam(-1, s, a, t, b, p->m_texture, p->m_frameStart, (int)r->framerate,
+		p->m_boltWidth, p->m_noiseAmplitude, r->rendercolor[0], r->rendercolor[1],
+		r->rendercolor[2], r->renderamt, p->m_speed, (int)(p->m_life * 10.0f), 0);
+}
+
+static void Zap(int e, const float src[3], const float dest[3])
+{
+	Strike(e, -1, src, -1, dest);
+	DoSparks(e, src, dest);
+}
+
+static void RandomDir(float d[3])
+{
+	d[0] = RANDOM_FLOAT(-1.0f, 1.0f);
+	d[1] = RANDOM_FLOAT(-1.0f, 1.0f);
+	d[2] = RANDOM_FLOAT(-1.0f, 1.0f);
+}
+
+static void RandomArea(int e)
+{
+	CLightning *p = LIGHTNING(e);
+	const float *src = ent_cv(e)->origin;
+	int i;
+
+	for (i = 0; i < 10; i++)
+	{
+		float d1[3], d2[3], to[3], gap[3];
+		col_trace_t tr1, tr2;
+
+		RandomDir(d1);
+		VecNorm(d1, d1);
+		VecMA(src, p->m_radius, d1, to);
+		UTIL_TraceLine(src, to, ignore_monsters, e, &tr1);
+		if (tr1.frac == 1.0f)
+			continue;
+		do
+			RandomDir(d2);
+		while (VecDot(d1, d2) > 0);
+		VecNorm(d2, d2);
+		VecMA(src, p->m_radius, d2, to);
+		UTIL_TraceLine(src, to, ignore_monsters, e, &tr2);
+		if (tr2.frac == 1.0f)
+			continue;
+		VecSub(tr1.end, tr2.end, gap);
+		if (VecLen(gap) < p->m_radius * 0.1f)
+			continue;
+		VecCopy(tr2.end, to);
+		UTIL_TraceLine(tr1.end, to, ignore_monsters, e, &tr2);
+		if (tr2.frac != 1.0f)
+			continue;
+		Zap(e, tr1.end, tr2.end);
+		break;
+	}
+}
+
+static void RandomPoint(int e, const float src[3])
+{
+	CLightning *p = LIGHTNING(e);
+	int i;
+
+	for (i = 0; i < 10; i++)
+	{
+		float d1[3], to[3], gap[3];
+		col_trace_t tr1;
+
+		RandomDir(d1);
+		VecNorm(d1, d1);
+		VecMA(src, p->m_radius, d1, to);
+		UTIL_TraceLine(src, to, ignore_monsters, e, &tr1);
+		VecSub(tr1.end, src, gap);
+		if (VecLen(gap) < p->m_radius * 0.1f)
+			continue;
+		if (tr1.frac == 1.0f)
+			continue;
+		Zap(e, src, tr1.end);
+		break;
+	}
+}
+
+void CLightning_StrikeThink(int e)
+{
+	CLightning *p = LIGHTNING(e);
+	float so[3], eo[3];
+	int s, t;
+
+	if (p->m_life != 0)
+	{
+		if (p->spawnflags & SF_BEAM_RANDOM)
+			ent_think_at(e, gtime() + p->m_life + RANDOM_FLOAT(0, p->m_restrike));
+		else
+			ent_think_at(e, gtime() + p->m_life + p->m_restrike);
+	}
+	p->m_active = 1;
+	if (p->m_iszEndEntity == NAME_NONE)
+	{
+		if (p->m_iszStartEntity == NAME_NONE)
+			RandomArea(e);
+		else if (BeamFind(p->m_iszStartEntity, 1, &s, so))
+			RandomPoint(e, so);
+		else
+			log_printf("env_beam %d: unknown start entity\n", e);
+		return;
+	}
+	if (!BeamFind(p->m_iszStartEntity, 1, &s, so) || !BeamFind(p->m_iszEndEntity, 1, &t, eo))
+		return;
+	if (IsPointEntity(s) || IsPointEntity(t))
+	{
+		if (p->spawnflags & SF_BEAM_RING)
+			return;		/* "don't work" */
+		if (!IsPointEntity(t))
+		{
+			/* one point entity must be in pEnd */
+			int ts = s;
+			float to[3];
+
+			s = t;
+			t = ts;
+			VecCopy(so, to);
+			VecCopy(eo, so);
+			VecCopy(to, eo);
+		}
+		if (!IsPointEntity(s))
+			Strike(e, s, NULL, -1, eo);		/* TE_BEAMENTPOINT */
+		else
+			Strike(e, -1, so, -1, eo);		/* TE_BEAMPOINTS */
+	}
+	else if (p->spawnflags & SF_BEAM_RING)
+	{
+		/* TE_BEAMRING: a ring whose diameter is the line between the
+		 * two entities; drawn as the effects' ring at its centre, its
+		 * radius half the line (the effects ring grows to it over the
+		 * life) */
+		const ent_rnd_t *r = ent_rnd(e);
+		float mid[3], d[3];
+
+		VecAdd(so, eo, mid);
+		VecScale(mid, 0.5f, mid);
+		VecSub(eo, so, d);
+		fx_beam_cylinder(mid, 0.5f * VecLen(d), p->m_texture, (int)(p->m_life * 10.0f),
+			p->m_boltWidth, p->m_noiseAmplitude, r->rendercolor[0], r->rendercolor[1],
+			r->rendercolor[2], r->renderamt);
+	}
+	else
+		Strike(e, s, NULL, t, NULL);			/* TE_BEAMENTS */
+	DoSparks(e, so, eo);
+	if (p->dmg > 0)
+	{
+		col_trace_t tr;
+
+		UTIL_TraceLine(so, eo, dont_ignore_monsters, -1, &tr);
+		/* BeamDamageInstant */
+		p->dmgtime = gtime() - 1.0f;
+		BeamDamage(e, &tr);
+	}
+}
+
+void CLightning_DamageThink(int e)
+{
+	float a[3], b[3];
+	col_trace_t tr;
+
+	ThinkIn(e, 0.1f);
+	BeamStartPos(e, a);
+	BeamEndPos(e, b);
+	UTIL_TraceLine(a, b, dont_ignore_monsters, -1, &tr);
+	BeamDamage(e, &tr);
+}
+
+void CLightning_ToggleUse(int e, int activator, int caller, int use_type, float value)
+{
+	CLightning *p = LIGHTNING(e);
+	ent_rnd_t *r = ent_rnd(e);
+
+	(void)activator;
+	(void)caller;
+	(void)value;
+	if (!ShouldToggle(use_type, p->m_active))
+		return;
+	if (p->m_active)
+	{
+		p->m_active = 0;
+		r->effects |= EF_NODRAW;
+		ent_think_at(e, 0);
+	}
+	else
+	{
+		float a[3], b[3];
+
+		p->m_active = 1;
+		r->effects &= (uint16_t)~EF_NODRAW;
+		/* the end entities again by name: one released since Activate
+		 * (out of its spawn radius) left a stale handle; HLSDK's entity
+		 * pointers never go stale, and the first named entity is the
+		 * same entity */
+		BeamUpdateVars(e);
+		BeamStartPos(e, a);
+		BeamEndPos(e, b);
+		DoSparks(e, a, b);
+		if (p->dmg > 0)
+		{
+			ent_think_at(e, gtime());
+			p->dmgtime = gtime();
+		}
+		return;
+	}
+	BeamShow(e);
+}
+
+void CLightning_StrikeUse(int e, int activator, int caller, int use_type, float value)
+{
+	CLightning *p = LIGHTNING(e);
+
+	(void)activator;
+	(void)caller;
+	(void)value;
+	if (!ShouldToggle(use_type, p->m_active))
+		return;
+	if (p->m_active)
+	{
+		p->m_active = 0;
+		SetThink(e, 0);
+	}
+	else
+	{
+		SetThink(e, FN_CLightning_StrikeThink);
+		ThinkIn(e, 0.1f);
+	}
+	if (!(p->spawnflags & SF_BEAM_TOGGLE))
+		SetUse(e, 0);
+}
+
+static int CLightning_Spawn(int e, gid_t16 gid)
+{
+	CLightning *p = LIGHTNING(e);
+
+	/* KeyValue */
+	p->m_iszStartEntity = rec_key_name(gid, K_LIGHTNINGSTART);
+	p->m_iszEndEntity = rec_key_name(gid, K_LIGHTNINGEND);
+	p->m_life = KeyF(gid, K_LIFE, 0);
+	p->m_boltWidth = (int32_t)KeyF(gid, K_BOLTWIDTH, 0);
+	p->m_noiseAmplitude = (int32_t)KeyF(gid, K_NOISEAMPLITUDE, 0);
+	p->m_speed = (int32_t)KeyF(gid, K_TEXTURESCROLL, 0);
+	p->m_restrike = KeyF(gid, K_STRIKETIME, 0);
+	p->m_texture = rec_key_res(gid, K_TEXTURE);	/* m_iszSpriteName, m_spriteTexture */
+	p->m_frameStart = (int32_t)KeyF(gid, K_FRAMESTART, 0);
+	p->m_radius = KeyF(gid, K_RADIUS_BEAM, 0);
+	p->dmg = KeyF(gid, K_DAMAGE, 0);
+	p->m_type = BEAM_NONE;
+	p->m_hStart = p->m_hEnd = EH_NONE;
+	if (!p->m_texture)
+		return SpawnRefuse("env_beam: no texture (HLSDK CLightning::Spawn removes it)");
+	ent_set_solid(e, SOLID_NOT);
+	PRECACHE(p->m_texture);
+	p->dmgtime = gtime();
+	if (ServerSide(e))
+	{
+		SetThink(e, 0);
+		if (p->dmg > 0)
+		{
+			SetThink(e, FN_CLightning_DamageThink);
+			ThinkIn(e, 0.1f);
+		}
+		if (ent_idc(e)->targetname != NAME_NONE)
+		{
+			if (!(p->spawnflags & SF_BEAM_STARTON))
+			{
+				ent_rnd(e)->effects = EF_NODRAW;
+				p->m_active = 0;
+				ent_think_at(e, 0);
+			}
+			else
+				p->m_active = 1;
+			SetUse(e, FN_CLightning_ToggleUse);
+		}
+	}
+	else
+	{
+		p->m_active = 0;
+		if (ent_idc(e)->targetname != NAME_NONE)
+			SetUse(e, FN_CLightning_StrikeUse);
+		if (ent_idc(e)->targetname == NAME_NONE || (p->spawnflags & SF_BEAM_STARTON))
+		{
+			SetThink(e, FN_CLightning_StrikeThink);
+			ThinkIn(e, 1.0f);
+		}
+	}
+	return 0;
+}
+
+static void CLightning_Activate(int e)
+{
+	if (ServerSide(e))
+		BeamUpdateVars(e);
+}
+
+/* restored (a rehydration: a fresh spawn's Activate saw the record, the
+ * saved fields came back after it) and after a saved game's load: the
+ * beam entity is drawn again as the restored fields say */
+static void CLightning_restored(int e)
+{
+	if (ServerSide(e))
+		BeamShow(e);
+}
+
+void CLightning_LoadDone(int e)
+{
+	CLightning_restored(e);
+}
+
+/* CBeam::ObjectCaps: no level transitions (SF_BEAM_TEMPORARY's
+ * FCAP_DONT_SAVE has no case: a temporary beam is an engine fx_beam here,
+ * never an entity) */
+static const game_vt_t CLightning_vt = {
+	.Activate = CLightning_Activate,
+	.ObjectCaps = NoTransition_ObjectCaps,
+};
+
+/* HLSDK CLightning::m_SaveData (m_spriteTexture, m_iszSpriteName: the
+ * cooked texture in CBeam's m_texture; m_brightness: never set) */
+static const sv_field_t f_CLightning[] = {
+	SVF(CLightning, m_active, SV_I32, 0),
+	SVF(CLightning, m_iszStartEntity, SV_NAME, SVK),
+	SVF(CLightning, m_iszEndEntity, SV_NAME, SVK),
+	SVF(CLightning, m_life, SV_F32, SVK),
+	SVF(CLightning, m_boltWidth, SV_I32, SVK),
+	SVF(CLightning, m_noiseAmplitude, SV_I32, SVK),
+	SVF(CLightning, m_speed, SV_I32, SVK),
+	SVF(CLightning, m_restrike, SV_F32, SVK),
+	SVF(CLightning, m_frameStart, SV_I32, SVK),
+	SVF(CLightning, m_radius, SV_F32, SVK),
+};
+static const sv_table_t sv_CLightning = SV_TABLE(&sv_CBeam, f_CLightning,
+	.restored = CLightning_restored);
+
+const game_class_t gc_ENV_BEAM = {
+	.size = sizeof(CLightning), .Spawn = CLightning_Spawn, .vt = &CLightning_vt,
+	.save = &sv_CLightning,
+};
+
+typedef struct {
+	CBASEENTITY_FIELDS
+	CBEAM_FIELDS
+	ent_h		m_pSprite;	/* the end sprite (SF_SPRITE_TEMPORARY), EH_NONE */
+	res_t		m_iszSpriteName;
+	uint16_t	cl_pad;
+	float		m_firePosition[3];
+} CLaser;
+
+#define LASER(e)	PRIV(CLaser, e)
+
+static int CLaser_IsOn(int e)
+{
+	return !(ent_rnd(e)->effects & EF_NODRAW);
+}
+
+/* the end sprite: kRenderGlow in the laser's colour and brightness */
+static void CLaser_MakeSprite(int e, const float org[3])
+{
+	CLaser *p = LASER(e);
+	const ent_rnd_t *r = ent_rnd(e);
+	int s;
+
+	p->m_pSprite = EH_NONE;
+	if (!p->m_iszSpriteName || (s = CSprite_SpriteCreate(p->m_iszSpriteName, org, 1)) < 0)
+		return;
+	/* SetTransparency(kRenderGlow, rendercolor, renderamt, renderfx) */
+	ent_cv(s)->rendermode = kRenderGlow;
+	memcpy(ent_rnd(s)->rendercolor, r->rendercolor, 3);
+	ent_rnd(s)->renderamt = r->renderamt;
+	ent_rnd(s)->renderfx = r->renderfx;
+	p->m_pSprite = EHANDLE(s);
+}
+
+static void CLaser_TurnOff(int e)
+{
+	int s = EHGet(LASER(e)->m_pSprite);
+
+	ent_rnd(e)->effects |= EF_NODRAW;
+	ent_think_at(e, 0);
+	if (s >= 0)
+		CSprite_TurnOff(s);
+	BeamShow(e);
+}
+
+static void CLaser_TurnOn(int e)
+{
+	int s = EHGet(LASER(e)->m_pSprite);
+
+	ent_rnd(e)->effects &= (uint16_t)~EF_NODRAW;
+	if (s >= 0)
+		CSprite_TurnOn(s);
+	CBase(e)->dmgtime = gtime();
+	ent_think_at(e, gtime());
+	BeamShow(e);
+}
+
+void CLaser_Use(int e, int activator, int caller, int use_type, float value)
+{
+	int active = CLaser_IsOn(e);
+
+	(void)activator;
+	(void)caller;
+	(void)value;
+	if (!ShouldToggle(use_type, active))
+		return;
+	if (active)
+		CLaser_TurnOff(e);
+	else
+		CLaser_TurnOn(e);
+}
+
+static void CLaser_FireAtPoint(int e, const col_trace_t *tr)
+{
+	CLaser *p = LASER(e);
+	int s = EHGet(p->m_pSprite);
+
+	VecCopy(tr->end, p->m_vecEnd);		/* SetEndPos */
+	if (s >= 0)
+		UTIL_SetOrigin(s, tr->end);
+	BeamShow(e);
+	BeamDamage(e, tr);
+	DoSparks(e, p->m_vecStart, tr->end);
+}
+
+void CLaser_StrikeThink(int e)
+{
+	CLaser *p = LASER(e);
+	float org[3];
+	col_trace_t tr;
+	int t;
+
+	if (BeamFind(p->message, 1, &t, org))
+		VecCopy(org, p->m_firePosition);
+	UTIL_TraceLine(ent_cv(e)->origin, p->m_firePosition, dont_ignore_monsters, -1, &tr);
+	CLaser_FireAtPoint(e, &tr);
+	ThinkIn(e, 0.1f);
+}
+
+static int CLaser_Spawn(int e, gid_t16 gid)
+{
+	CLaser *p = LASER(e);
+
+	/* KeyValue: LaserTarget -> pev->message (a name), width, noise,
+	 * scroll, texture -> pev->model, EndSprite, framestart, damage */
+	p->message = rec_key_name(gid, K_LASERTARGET);
+	p->m_width = (uint8_t)(int)KeyF(gid, K_WIDTH, 0);
+	p->m_noise = (uint8_t)(int)KeyF(gid, K_NOISEAMPLITUDE, 0);
+	p->m_scroll = (uint8_t)(int)KeyF(gid, K_TEXTURESCROLL, 0);
+	p->m_texture = rec_key_res(gid, K_TEXTURE);
+	p->m_iszSpriteName = rec_key_res(gid, K_ENDSPRITE);
+	p->m_frame = (uint8_t)(int)KeyF(gid, K_FRAMESTART, 0);
+	p->dmg = KeyF(gid, K_DAMAGE, 0);
+	p->m_hStart = p->m_hEnd = EH_NONE;
+	p->m_pSprite = EH_NONE;
+	if (!p->m_texture)
+		return SpawnRefuse("env_laser: no texture (HLSDK CLaser::Spawn removes it)");
+	ent_set_solid(e, SOLID_NOT);
+	PRECACHE(p->m_texture);
+	PRECACHE(p->m_iszSpriteName);
+	SetThink(e, FN_CLaser_StrikeThink);
+	SetUse(e, FN_CLaser_Use);
+	/* PointsInit(origin, origin) */
+	p->m_type = BEAM_POINTS;
+	VecCopy(ent_cv(e)->origin, p->m_vecStart);
+	VecCopy(ent_cv(e)->origin, p->m_vecEnd);
+	VecCopy(ent_cv(e)->origin, p->m_firePosition);
+	CLaser_MakeSprite(e, ent_cv(e)->origin);
+	if (ent_idc(e)->targetname != NAME_NONE && !(p->spawnflags & SF_BEAM_STARTON))
+		CLaser_TurnOff(e);
+	else
+		CLaser_TurnOn(e);
+	return 0;
+}
+
+/* released: the beam and the end sprite go with the laser */
+static void CLaser_released(int e)
+{
+	int s = EHGet(LASER(e)->m_pSprite);
+
+	if (s >= 0)
+		UTIL_Remove(s);
+	LASER(e)->m_pSprite = EH_NONE;
+}
+
+/* restored / after a saved game's load: the end sprite at the last end
+ * point (in the laser's state), the beam as the fields say */
+static void CLaser_restored(int e)
+{
+	CLaser *p = LASER(e);
+	int s = EHGet(p->m_pSprite);
+
+	if (s < 0)
+		CLaser_MakeSprite(e, p->m_vecEnd);
+	s = EHGet(p->m_pSprite);
+	if (s >= 0 && !CLaser_IsOn(e))
+		CSprite_TurnOff(s);
+	BeamShow(e);
+}
+
+void CLaser_LoadDone(int e)
+{
+	CLaser_restored(e);
+}
+
+/* HLSDK CLaser::m_SaveData (m_pSprite: made again on restore) */
+static const sv_field_t f_CLaser[] = {
+	SVF(CLaser, m_iszSpriteName, SV_RES, SVK),
+	SVF(CLaser, m_firePosition, SV_POS, 0),
+};
+static const sv_table_t sv_CLaser = SV_TABLE(&sv_CBeam, f_CLaser,
+	.flags = SVT_MSG_NAME, .released = CLaser_released, .restored = CLaser_restored);
+
+static const game_vt_t CLaser_vt = {
+	.ObjectCaps = NoTransition_ObjectCaps,	/* CBeam's, as env_beam's */
+};
+
+const game_class_t gc_ENV_LASER = {
+	.size = sizeof(CLaser), .Spawn = CLaser_Spawn, .vt = &CLaser_vt,
+	.save = &sv_CLaser,
+};
+
+/* ---- env_bubbles (CBubbling) ---------------------------------------------------- */
+
+#define SF_BUBBLES_STARTOFF	0x0001
+
+typedef struct {
+	CBASEENTITY_FIELDS
+	int32_t		m_density;
+	int32_t		m_frequency;
+	int32_t		m_state;
+} CBubbling;
+
+void CBubbling_FizzThink(int e)
+{
+	CBubbling *p = PRIV(CBubbling, e);
+
+	fx_fizz(e, RESID(SPR_BUBBLE), p->m_density);
+	if (p->m_frequency > 19)
+		ThinkIn(e, 0.5f);
+	else
+		ThinkIn(e, 2.5f - 0.1f * (float)p->m_frequency);
+}
+
+void CBubbling_Use(int e, int activator, int caller, int use_type, float value)
+{
+	CBubbling *p = PRIV(CBubbling, e);
+
+	(void)activator;
+	(void)caller;
+	(void)value;
+	if (ShouldToggle(use_type, p->m_state))
+		p->m_state = !p->m_state;
+	if (p->m_state)
+	{
+		SetThink(e, FN_CBubbling_FizzThink);
+		ThinkIn(e, 0.1f);
+	}
+	else
+	{
+		SetThink(e, 0);
+		ent_think_at(e, 0);
+	}
+}
+
+static int CBubbling_Spawn(int e, gid_t16 gid)
+{
+	CBubbling *p = PRIV(CBubbling, e);
+	ent_rnd_t *r = ent_rnd(e);
+	int speed;
+
+	/* KeyValue (atoi) */
+	p->m_density = (int32_t)KeyF(gid, K_DENSITY, 0);
+	p->m_frequency = (int32_t)KeyF(gid, K_FREQUENCY, 0);
+	p->speed = (float)(int)KeyF(gid, K_CURRENT, 0);
+	PRECACHE(RESID(SPR_BUBBLE));
+	ent_set_model(e, p->model);		/* set size */
+	ent_set_solid(e, SOLID_NOT);		/* remove model & collisions */
+	r->renderamt = 0;			/* not drawn: blending at 0 */
+	ent_cv(e)->rendermode = kRenderTransTexture;
+	/* HACKHACK: the speed in rendercolor (fx_fizz reads it) */
+	speed = p->speed > 0 ? (int)p->speed : -(int)p->speed;
+	r->rendercolor[0] = (uint8_t)(speed >> 8);
+	r->rendercolor[1] = (uint8_t)(speed & 255);
+	r->rendercolor[2] = p->speed < 0 ? 1 : 0;
+	SetUse(e, FN_CBubbling_Use);
+	if (!(p->spawnflags & SF_BUBBLES_STARTOFF))
+	{
+		SetThink(e, FN_CBubbling_FizzThink);
+		ThinkIn(e, 2.0f);
+		p->m_state = 1;
+	}
+	else
+		p->m_state = 0;
+	return 0;
+}
+
+/* CBaseEntity::ObjectCaps() & ~FCAP_ACROSS_TRANSITION */
+static const game_vt_t CBubbling_vt = {
+	.ObjectCaps = NoTransition_ObjectCaps,
+};
+
+/* HLSDK CBubbling::m_SaveData */
+static const sv_field_t f_CBubbling[] = {
+	SVF(CBubbling, m_density, SV_I32, SVK),
+	SVF(CBubbling, m_frequency, SV_I32, SVK),
+	SVF(CBubbling, m_state, SV_I32, 0),
+};
+static const sv_table_t sv_CBubbling = SV_TABLE(&sv_CBaseEntity, f_CBubbling);
+
+const game_class_t gc_ENV_BUBBLES = {
+	.size = sizeof(CBubbling), .Spawn = CBubbling_Spawn, .vt = &CBubbling_vt,
+	.save = &sv_CBubbling,
+};
+
+/* ---- player_loadsaved (player.cpp CRevertSaved) --------------------------------- */
+
+/* A logic record: the fade (UTIL_ScreenFadeAll: rendercolor, duration,
+ * holdtime, renderamt, FFADE_OUT) when used, the title (UTIL_ShowMessageAll
+ * of message) messagetime later, the reload (SERVER_COMMAND "reload":
+ * eng_reload, the newest saved game) loadtime after the use. Timer arg 1
+ * MessageThink, 2 LoadThink. */
+static void CRevertSaved_LogicUse(gid_t16 gid, int activator, int caller, int use_type,
+	float value)
+{
+	float c[3] = { 0, 0, 0 };
+
+	(void)activator;
+	(void)caller;
+	(void)use_type;
+	(void)value;
+	rec_key_v(gid, K_RENDERCOLOR, c);
+	UTIL_ScreenFade((int)c[0], (int)c[1], (int)c[2], (int)KeyF(gid, K_RENDERAMT, 0),
+		KeyF(gid, K_DURATION, 0), KeyF(gid, K_HOLDTIME, 0), FFADE_OUT);
+	rec_timer(gid, gtime() + KeyF(gid, K_MESSAGETIME, 0), 1, -1);
+}
+
+static void CRevertSaved_LogicTimer(gid_t16 gid, uint16_t arg, int activator)
+{
+	float next;
+
+	(void)activator;
+	if (arg == 1)
+	{
+		ShowMessage(rec_key_title(gid, K_MESSAGE), gid);
+		next = KeyF(gid, K_LOADTIME, 0) - KeyF(gid, K_MESSAGETIME, 0);
+		if (next > 0)
+		{
+			rec_timer(gid, gtime() + next, 2, -1);
+			return;
+		}
+	}
+	/* LoadThink: single player */
+	log_printf("player_loadsaved: map %u lump %u: reload\n", (unsigned)GID_SLOT(gid),
+		(unsigned)GID_LUMP(gid));
+	eng_reload();
+}
+
+const game_class_t gc_PLAYER_LOADSAVED = {
+	.LogicUse = CRevertSaved_LogicUse,
+	.LogicTimer = CRevertSaved_LogicTimer,
 };

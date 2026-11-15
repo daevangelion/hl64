@@ -62,8 +62,8 @@ void snd_hw_init(void *mem, uint32_t bytes)
 
 /* Open into slot i (snd_hw_open / snd_hw_stream_open, plat/n64/audio.c
  * open_slot's rules): 0, -1 not a playable wave, -2 no room. */
-static int open_slot(int i, uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave,
-	int music)
+static int open_slot(int i, uint32_t rom, uint32_t size, int resident, snd_wave_info_t *info,
+	void **wave, int music)
 {
 	const uint8_t *h = H->hdr;
 	uint32_t hb = music ? HDR_BYTES + 4 : HDR_BYTES;
@@ -78,6 +78,9 @@ static int open_slot(int i, uint32_t rom, uint32_t size, snd_wave_info_t *info, 
 	memset(info, 0, sizeof(*info));
 	info->format = h[5];
 	info->channels = h[6];
+	/* the cart's choice without its arena: VADPCM is held (no room
+	 * limit modelled here) */
+	info->resident = (uint8_t)(resident && h[5] == 1);
 	info->freq = be32(h + 8);
 	info->len = be32(h + 12);
 	info->loop_len = be32(h + 16);
@@ -96,20 +99,20 @@ static int open_slot(int i, uint32_t rom, uint32_t size, snd_wave_info_t *info, 
 	return 0;
 }
 
-int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
+int snd_hw_open(uint32_t rom, uint32_t size, int resident, snd_wave_info_t *info, void **wave)
 {
 	int i;
 
 	for (i = 0; i < SND_WAVES; i++)
 		if (!H->w[i].used)
-			return open_slot(i, rom, size, info, wave, 0);
+			return open_slot(i, rom, size, resident, info, wave, 0);
 	*wave = NULL;
 	return -2;
 }
 
 int snd_hw_stream_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
 {
-	return open_slot(SND_WAVES, rom, size, info, wave, 1);
+	return open_slot(SND_WAVES, rom, size, 0, info, wave, 1);
 }
 
 void snd_hw_close(void *wave)
