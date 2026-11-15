@@ -84,5 +84,5 @@ list (residency).
 | W1 | rewritten cook produces REND, MOVR, TEXP, styles and texture tables byte-identical to the old cook for all 10 Uplink/Hazard maps; v3 probes evaluate to the old v2 probe values at map-start style values | old-tree cook outputs (local fixtures) |
 | W2 | luxel addressing: synthetic faces with negative and fractional s/t, clamping at grid edges | self-contained |
 | W3 | probe walk: synthetic two-floor BSP — the upper floor is found; a sky face above water is skipped; no lightmap → 0 | self-contained |
-| W4 | texture animation: a 3-frame sequence at t = 1.0, 1.15, 1.2, 1.45, 1.6 shows frames 2, 2, 0, 1, 2 (`floor(10t)` = 10, 11, 12, 14, 16 → r = 4, 5, 0, 2, 4); frame ≠ 0 switches to the alternate | self-contained |
+| W4 | texture animation: a 3-frame sequence at t = 1.0, 1.15, 1.2, 1.45, 1.6 shows frames 2, 2, 0, 1, 2 (`floor(10t)` = 10, 11, 12, 14, 16 → r = 4, 5, 0, 2, 4); frame ≠ 0 switches to the alternate; the renderer binds it: a brush entity of a cooked map with frame 1 binds the alternate's page (at rest and moved), each r10 the page of its sequence frame (test/m3/fx.c TEXANIM) | self-contained; cooked map |
 | W5 | missing animation frame and bad letter fail the cook with the texture name | self-contained |

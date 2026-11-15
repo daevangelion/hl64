@@ -59,6 +59,8 @@ a09abb2 + m5-remote (ares-host) and 30f8f01 (build-vm).
 | `hazard-pushable` | t0a0a | the crate walked into from the east, off its ledge into the pit (GoldSrc P-botpush walk_0 rest place, `waitclass`), then the player on the crate walks west out of the pit (its top a step under the floor with GoldSrc's 66 u box, `waitnear`); shots before, pushing, overview (pit from the west), pit, oncrate, out (pit from the floor); host check also as test/m5/crate-pit.route | (off-route) | 8 | 11 | |
 | `addglow` | hldemo1 | additive env_glow poses, TransTexture strips, MP5 grenade smoke ([addblend.route](routes/addblend.route)'s poses) | whole scene | 14 | 20 | 482 |
 | `alpha-edge` | hldemo2 | '{' fence textures close up: shotgun-room door #659 window ({fence2), east walkway railing #230 ({rail2); shots door-near/far, rail-near/far (blue alpha-edge fringes) | whole scene (off-route poses) | 3 | 5 | |
+| `hl1-chargers` | hldemo1 | '+' alternates (world-surfaces.md 4): HEV charger drained (frame 1, +arecharge), health charger in use (full health: frame 0); shots chargers-full, hev-empty, health-inuse | whole scene (off-route) | 19 | 26 | |
+| `hl1-button` | hldemo1 | '+' sequences over time: dome monitors shot 0.3 s apart (screens-a/b); the elevator button before / right after +use (frame 1, +aelev_up2) | SHOT start .. SHOT elevator (+ the press) | 50 | 58 | |
 
 Deviations from the whole route inside a window: `hl2-return-battle` puts
 the player past the tripmine corridor (its barriers stand on New Game) and

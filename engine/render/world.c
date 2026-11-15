@@ -62,7 +62,10 @@ typedef struct {
 static vis_t		*vis;		/* HL64_REN_VIS_MAX, scratch region */
 static uint16_t		*order;
 static uint16_t		page_count[HL64_REN_PAGES_MAX + 1], page_pos[HL64_REN_PAGES_MAX + 1];
-static uint16_t		tex_page0[HL64_REN_TEX_MAX];	/* per texture: page, entity frame 0 */
+/* per texture: the page shown at this frame's r10 (world-surfaces.md 4)
+ * on the world and frame-0 entities; set per layer by set_pages, read
+ * per meshlet by add_meshlets */
+static uint16_t		tex_page0[HL64_REN_TEX_MAX];
 static const void	*last_bind;
 static float		fr_n[4][3];	/* inward frustum plane normals (n . p >= n . eye) */
 static float		eye_g[3];	/* eye, global */
@@ -81,6 +84,13 @@ static int		ndl;
 static const ren_dlight_t *dl[HL64_DLIGHTS];
 static float		norm5[32], norm6[64];
 static int		nvg;		/* this frame: night vision (gpu_view_t.nvg) */
+/* the layer / map / r10 tex_page0 holds (set_pages); tex_page1: the pages
+ * for entities with frame != 0 (the alternate sequences) of layer
+ * page1_of, built from tex_page0 by the first such entity drawn */
+static const wld_layer_t *page0_of, *page1_of;
+static int		page0_map = -1;
+static uint32_t		page0_r10;
+static uint16_t		tex_page1[HL64_REN_TEX_MAX];
 
 void ren_init(void)
 {
@@ -320,7 +330,9 @@ static const w64_vert_t *dlight_verts(const w64_meshlet_t *m, const w64_vert_t *
 
 /* ---- lists ---------------------------------------------------------------- */
 
-static int add_meshlets(wld_layer_t *L, int n, int c, uint8_t *ch, const float *d)
+/* pages: tex_page0 (the world, frame-0 entities) or tex_page1 */
+static int add_meshlets(wld_layer_t *L, int n, int c, uint8_t *ch, const float *d,
+	const uint16_t *pages)
 {
 	const w64_rend_t *r = (const w64_rend_t *)ch;
 	const w64_meshlet_t *m = (const w64_meshlet_t *)(ch + 24);
@@ -335,7 +347,7 @@ static int add_meshlets(wld_layer_t *L, int n, int c, uint8_t *ch, const float *
 			st.dropped++;
 			continue;
 		}
-		page = tex_page0[m->tex];
+		page = pages[m->tex];
 		if (page == W64_NONE)
 			continue;
 		if (!wld_chunk_use(L, L->dir->texp_first + page))
@@ -550,6 +562,27 @@ static int mover_opaque(int e)
 	return ent_cv(e)->rendermode == 0;	/* Normal */
 }
 
+/* A brush entity's page table (L's tables set): its frame selects the
+ * alternate textures (world-surfaces.md 4; HLSDK buttons and chargers
+ * set frame 1). The alternate table is built once per set_pages, only
+ * when an entity with frame != 0 draws. */
+static const uint16_t *ent_pages(const wld_layer_t *L, int e)
+{
+	const w64_tex_t *x = L->texs;
+	int i, n = L->dir->ntex;
+
+	if (ent_rnd(e)->frame == 0)
+		return tex_page0;
+	if (page1_of != L)
+	{
+		for (i = 0; i < n; i++, x++)
+			tex_page1[i] = (x->flags & W64_TEXF_ANIM) && x->alternate != W64_NONE
+				? L->texs[ren_tex_anim(L->texs, n, i, 1, r10)].page : tex_page0[i];
+		page1_of = L;
+	}
+	return tex_page1;
+}
+
 /* One mover under its own matrix (opaque pass or the translucent pass);
  * off: added to its global place (a seam ghost, seam_ghost), or NULL. */
 static void draw_mover(wld_layer_t *L, int e, int lit, const float *off)
@@ -571,7 +604,7 @@ static void draw_mover(wld_layer_t *L, int e, int lit, const float *off)
 	{
 		static const float none[4] = { -1e30f, -1e30f, -1e30f, -1e30f };
 
-		n = add_meshlets(L, 0, sb->chunk, ch, none);
+		n = add_meshlets(L, 0, sb->chunk, ch, none, ent_pages(L, e));
 	}
 	if (!n)
 		return;
@@ -582,13 +615,23 @@ static void draw_mover(wld_layer_t *L, int e, int lit, const float *off)
 	gpu_matrix_pop();
 }
 
-/* Layer L's texture pages (animation frame 0) for its meshlets. */
+/* Layer L's texture pages at r10 for frame-0 surfaces; kept while the
+ * layer, its map and r10 are those of the last call. A still texture is
+ * its own page; only '+' textures walk a sequence. */
 static void set_pages(const wld_layer_t *L)
 {
-	int i;
+	const w64_tex_t *x = L->texs;
+	int i, n = L->dir->ntex;
 
-	for (i = 0; i < L->dir->ntex; i++)
-		tex_page0[i] = L->texs[ren_tex_anim(L->texs, L->dir->ntex, i, 0, r10)].page;
+	if (L == page0_of && L->map == page0_map && r10 == page0_r10)
+		return;
+	page0_of = L;
+	page0_map = L->map;
+	page0_r10 = r10;
+	page1_of = NULL;
+	for (i = 0; i < n; i++, x++)
+		tex_page0[i] = (x->flags & W64_TEXF_ANIM) ? L->texs[ren_tex_anim(L->texs, n, i, 0, r10)].page
+			: x->page;
 }
 
 void ren_mover_draw(int e, int gpu_mode, const uint8_t prim[4])
@@ -627,8 +670,7 @@ static void draw_layer(wld_layer_t *L)
 		eye_l[i] = eye_g[i] - L->gofs[i];
 	plane_d(L->gofs, d);
 	st.leaf = (uint32_t)wld_point_leaf(L, eye_l);
-	for (i = 0; i < L->dir->ntex; i++)
-		tex_page0[i] = L->texs[ren_tex_anim(L->texs, L->dir->ntex, i, 0, r10)].page;
+	set_pages(L);
 
 	list = wld_leaf_sectors(L, (int)st.leaf, &cnt);
 	for (i = 0; i < cnt; i++)
@@ -645,7 +687,7 @@ static void draw_layer(wld_layer_t *L)
 			continue;
 		}
 		st.sectors++;
-		n = add_meshlets(L, n, s->rend_chunk, ch, d);
+		n = add_meshlets(L, n, s->rend_chunk, ch, d, tex_page0);
 	}
 	collect_movers(L);
 	/* movers at rest at the map origin join the world list */
@@ -668,7 +710,7 @@ static void draw_layer(wld_layer_t *L)
 				continue;
 			}
 			st.movers++;
-			n = add_meshlets(L, n, sb->chunk, ch, d);
+			n = add_meshlets(L, n, sb->chunk, ch, d, ent_pages(L, e));
 		}
 	}
 	else
@@ -687,7 +729,7 @@ static void draw_layer(wld_layer_t *L)
 				continue;
 			}
 			st.movers++;
-			n = add_meshlets(L, n, sb->chunk, ch, d);
+			n = add_meshlets(L, n, sb->chunk, ch, d, tex_page0);
 		}
 	push_translation(L->gofs);
 	draw_list(L, n, L->gofs, 1);
@@ -754,7 +796,7 @@ static void draw_layer(wld_layer_t *L)
 			continue;
 		}
 		st.movers++;
-		n = add_meshlets(L, 0, sb->chunk, ch, dm);
+		n = add_meshlets(L, 0, sb->chunk, ch, dm, tex_page0);
 		if (!n)
 			continue;
 		moved++;
@@ -850,14 +892,13 @@ static void draw_open_seam(wld_layer_t *B, const seam_info_t *s)
 {
 	float org[3], d[4];
 	ren_mat_t mt;
-	int i, j, k, n = 0, wait = 0;
+	int j, k, n = 0, wait = 0;
 	uint32_t before;
 
 	for (k = 0; k < 3; k++)
 		org[k] = B->gofs[k] + oseam.off[k];
 	plane_d(org, d);
-	for (i = 0; i < B->dir->ntex; i++)
-		tex_page0[i] = B->texs[ren_tex_anim(B->texs, B->dir->ntex, i, 0, r10)].page;
+	set_pages(B);
 	for (j = 0; j < s->ndraw && j < s->npool; j++)
 	{
 		uint16_t e = s->pool[j];
@@ -977,8 +1018,7 @@ static void open_seams(const wld_layer_t *A)
 		}
 		draw_open_seam(B, &s);
 		/* A's translucent movers (trans pass) use A's pages again */
-		for (k = 0; k < A->dir->ntex; k++)
-			tex_page0[k] = A->texs[ren_tex_anim(A->texs, A->dir->ntex, k, 0, r10)].page;
+		set_pages(A);
 		return;		/* one approached seam at a time */
 	}
 }

@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: MIT
 """fx.py -- run the effects host tests (test/m3/fx.c: render-fx.md X1-X6,
 dlights.md D1/D2/D4 + model term, lightstyles.md L1/L2 + model term, ADD
-(render-fx.md 2a: the additive ramp and the RDP blender model), and
-PLACED: the infodecal / env_glow records of hldemo1 and hldemo2 placed
-from their DECL sheets) and check that every test reported PASS.
+(render-fx.md 2a: the additive ramp and the RDP blender model), TEXANIM
+(world-surfaces.md 4: the page a brush entity binds for frame 0 / 1 and
+each animation step), and PLACED: the infodecal / env_glow records of
+hldemo1 and hldemo2 placed from their DECL sheets) and check that every
+test reported PASS.
 
   python3 test/m3/fx.py BUILD_DIR CONTENT
 
@@ -14,7 +16,7 @@ cooked content root (`make cook`). Exit 0 when every test passed.
 import subprocess
 import sys
 
-TESTS = ("X1", "X2", "X3", "X4", "X5", "X6", "SCREEN", "DLIGHT", "LSTYLE", "ADD")
+TESTS = ("X1", "X2", "X3", "X4", "X5", "X6", "SCREEN", "DLIGHT", "LSTYLE", "ADD", "TEXANIM")
 PLACED_MAPS = ("hldemo1", "hldemo2")
 
 

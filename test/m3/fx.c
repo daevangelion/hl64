@@ -1767,6 +1767,284 @@ static void test_add(void)
 		"index-alpha levels (render-fx.md 2a, 3)");
 }
 
+/* ---- TEXANIM: '+' sequences and alternates on brush entities (world-surfaces.md 4) ---- */
+
+#define TA_CHUNKS	40
+
+typedef struct {
+	int	e, tex;
+	int	chunks[TA_CHUNKS], nchunks;	/* the MOVR chunk, every page tex can show */
+	float	eye[3], pitch, yaw;
+} ta_view_t;
+
+/* Oracle, independent of ren_tex_anim: the page texture t shows at r10
+ * on an entity with frame `frame`: the alternate sequence when frame != 0
+ * and one exists; then from that sequence's frame 0 (anim_min 0),
+ * (r10 mod anim_total) / 2 steps along anim_next (2 tenths a frame). */
+static int seq_page(int t, int frame, uint32_t r10)
+{
+	const w64_tex_t *x = L->texs;
+	int s, k;
+
+	if (!(x[t].flags & W64_TEXF_ANIM))
+		return x[t].page;
+	if (frame && x[t].alternate != W64_NONE)
+		t = x[t].alternate;
+	if (!x[t].anim_total)
+		return x[t].page;
+	for (s = 0; s < L->dir->ntex && x[t].anim_min; s++)
+		t = x[t].anim_next;
+	for (k = (int)(r10 % x[t].anim_total) / 2; k > 0; k--)
+		t = x[t].anim_next;
+	return x[t].page;
+}
+
+static const void *page_data(int page)
+{
+	return L->ch[L->dir->texp_first + page].data;
+}
+
+static void ta_add(ta_view_t *v, int chunk)
+{
+	int i;
+
+	for (i = 0; i < v->nchunks; i++)
+		if (v->chunks[i] == chunk)
+			return;
+	if (v->nchunks < TA_CHUNKS)
+		v->chunks[v->nchunks++] = chunk;
+}
+
+/* v's chunks requested, the reads pumped until all landed: 0 */
+static int ta_resident(const ta_view_t *v)
+{
+	int it, i, missing = 1;
+
+	for (it = 0; it < 400 && missing; it++)
+	{
+		missing = 0;
+		io_frame_begin(33333);
+		for (i = 0; i < v->nchunks; i++)
+			missing |= !wld_chunk_use(L, v->chunks[i]);
+		io_pump();
+		wld_frame(wld_fr++);
+	}
+	return missing;
+}
+
+/* A pushed brush entity of BSP model sub at origin org (local). */
+static int ta_ent(int sub, const float org[3])
+{
+	int e = ent_create(ENT_ALLOC_GAME);
+
+	ent_idc(e)->layer = (int8_t)L->slot;
+	eng_set_frame_layer(L->slot);
+	ent_set_model(e, RES_SUBMODEL(L->slot, sub));
+	ent_set_movetype(e, MOVETYPE_PUSH);
+	ent_set_solid(e, COL_SOLID_BSP);
+	ent_set_origin(e, org);
+	eng_set_frame_layer(-1);
+	return e;
+}
+
+static void ta_move(int e, float dz)
+{
+	float o[3];
+
+	memcpy(o, ent_cv(e)->origin, sizeof(o));
+	o[2] += dz;
+	eng_set_frame_layer(L->slot);
+	ent_set_origin(e, o);
+	eng_set_frame_layer(-1);
+}
+
+/* An eye in open space level with the entity's box centre, 40-160 u out
+ * from one of its four sides, looking at the centre with no world in
+ * between: 0. */
+static int ta_eye(ta_view_t *v)
+{
+	static const float dirs[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+	const col_ent_t *cv = ent_cv(v->e);
+	float c[3], half[3];
+	int d, k, dist;
+
+	for (k = 0; k < 3; k++)
+	{
+		c[k] = L->gofs[k] + 0.5f * (cv->absmin[k] + cv->absmax[k]);
+		half[k] = 0.5f * (cv->absmax[k] - cv->absmin[k]);
+	}
+	for (dist = 40; dist <= 160; dist += 40)
+		for (d = 0; d < 4; d++)
+		{
+			float p[3], dir[3], hit[3], n[3], len, h;
+
+			p[0] = c[0] + dirs[d][0] * (half[0] + (float)dist);
+			p[1] = c[1] + dirs[d][1] * (half[1] + (float)dist);
+			p[2] = c[2];
+			if (col_true_contents(p) != COL_EMPTY)
+				continue;
+			for (k = 0; k < 3; k++)
+				dir[k] = c[k] - p[k];
+			len = sqrtf(dot3(dir, dir));
+			for (k = 0; k < 3; k++)
+				dir[k] /= len;
+			/* the first hit is the entity's own face, not world before it */
+			if (ray(p, dir, len, hit, n))
+			{
+				for (k = 0; k < 3; k++)
+					hit[k] -= p[k];
+				if ((h = sqrtf(dot3(hit, hit))) < (float)dist - 1)
+					continue;
+			}
+			memcpy(v->eye, p, sizeof(v->eye));
+			v->pitch = 0;
+			v->yaw = atan2f(dir[1], dir[0]) * (180.0f / 3.14159265f);
+			return 0;
+		}
+	return -1;
+}
+
+/* One frame of v at r10 (time (r10 + 0.5) / 10). */
+static void ta_frame(const ta_view_t *v, uint32_t r10)
+{
+	eye(v->eye, v->pitch, v->yaw);
+	ta_resident(v);
+	ren_frame(((double)r10 + 0.5) / 10.0);
+}
+
+/* The first placed brush model of the start layer with a '+' texture
+ * that has an alternate (alt) or a sequence of 2+ frames (!alt), as a
+ * frame-0 entity whose frame-0 page the renderer binds from a free eye:
+ * 0, v filled. Entities of rejected models are freed. */
+static int ta_find(int alt, ta_view_t *v, uint32_t r10)
+{
+	int i, k, f;
+
+	for (i = 0; i < L->nmovers; i++)
+	{
+		const wld_mover_t *mv = &L->movers[i];
+		const w64_sub_t *sb = &L->subs[mv->sub];
+		const w64_meshlet_t *m;
+		const w64_rend_t *r;
+		uint8_t *ch;
+
+		if (sb->kind != W64_SUB_MOVR)
+			continue;
+		memset(v, 0, sizeof(*v));
+		ta_add(v, sb->chunk);
+		if (ta_resident(v) || !(ch = wld_chunk_use(L, sb->chunk)))
+			continue;
+		r = (const w64_rend_t *)ch;
+		m = (const w64_meshlet_t *)(ch + sizeof(w64_rend_t));
+		v->tex = -1;
+		for (k = 0; k < r->nmeshlets && v->tex < 0; k++)
+		{
+			const w64_tex_t *x = &L->texs[m[k].tex];
+
+			if (!(x->flags & W64_TEXF_ANIM))
+				continue;
+			if (alt ? x->alternate != W64_NONE && seq_page(m[k].tex, 0, r10) != seq_page(m[k].tex, 1, r10)
+				&& seq_page(m[k].tex, 1, r10) != W64_NONE
+				: x->anim_total >= 4 && seq_page(m[k].tex, 0, r10) != seq_page(m[k].tex, 0, r10 + 2))
+				v->tex = m[k].tex;
+		}
+		if (v->tex < 0)
+			continue;
+		for (f = 0; f < 2; f++)
+			for (k = 0; k < 20; k++)
+				if (seq_page(v->tex, f, (uint32_t)k) != W64_NONE)
+					ta_add(v, L->dir->texp_first + seq_page(v->tex, f, (uint32_t)k));
+		v->e = ta_ent(mv->sub, mv->origin);
+		if (ta_eye(v) == 0)
+		{
+			ta_frame(v, r10);
+			if (host_gpu_bound(page_data(seq_page(v->tex, 0, r10))))
+				return 0;
+		}
+		ent_destroy(v->e);
+	}
+	return -1;
+}
+
+static void test_texanim(void)
+{
+	const uint32_t r0 = 1000;
+	ta_view_t v;
+	char note[320], part[160];
+	int pass, k;
+
+	begin();
+	kill_all();
+	/* entity frame != 0: the alternate textures, at rest (the world
+	 * list) and moved (its own matrix) */
+	note[0] = 0;
+	if (ta_find(1, &v, r0))
+		CHECK(0, "no placed brush model with an alternate texture drawn");
+	else
+	{
+		const void *p0 = page_data(seq_page(v.tex, 0, r0)), *p1 = page_data(seq_page(v.tex, 1, r0));
+
+		for (pass = 0; pass < 2; pass++)
+		{
+			int b0, a0, b1, a1;
+
+			if (pass)
+				ta_move(v.e, 0.5f);
+			ent_rnd(v.e)->frame = 0;
+			ta_frame(&v, r0);
+			b0 = host_gpu_bound(p0);
+			a0 = host_gpu_bound(p1);
+			ent_rnd(v.e)->frame = 1;
+			ta_frame(&v, r0);
+			b1 = host_gpu_bound(p0);
+			a1 = host_gpu_bound(p1);
+			CHECK(b0 > 0 && a1 > a0 && b1 < b0, "%s, texture %d: frame 0 binds page %d x%d "
+				"(alternate %d x%d), frame 1 page %d x%d (alternate x%d)",
+				pass ? "moved" : "at rest", v.tex, seq_page(v.tex, 0, r0), b0,
+				seq_page(v.tex, 1, r0), a0, seq_page(v.tex, 0, r0), b1, a1);
+			snprintf(part, sizeof(part), "%s%s frame 0/1: page %d x%d/%d, alternate %d x%d/%d",
+				pass ? "; " : "", pass ? "moved" : "at rest", seq_page(v.tex, 0, r0), b0, b1,
+				seq_page(v.tex, 1, r0), a0, a1);
+			strncat(note, part, sizeof(note) - strlen(note) - 1);
+		}
+		ent_destroy(v.e);
+	}
+	/* time: every r10 of a sequence binds the oracle's frame page and no
+	 * other frame of the sequence; all frames in phase with the clock */
+	if (ta_find(0, &v, r0))
+		CHECK(0, "no placed brush model with a 2+ frame sequence drawn");
+	else
+	{
+		int total = L->texs[v.tex].anim_total, shown = 0;
+
+		for (k = 0; k < 2 * total; k++)
+		{
+			uint32_t r = r0 + (uint32_t)k;
+			int want = seq_page(v.tex, 0, r), j;
+
+			ta_frame(&v, r);
+			CHECK(host_gpu_bound(page_data(want)) > 0, "r10 %lu: page %d not bound",
+				(unsigned long)r, want);
+			for (j = 0; j < total; j++)
+			{
+				int q = seq_page(v.tex, 0, r0 + (uint32_t)j);
+
+				if (q != want)
+					CHECK(!host_gpu_bound(page_data(q)), "r10 %lu: page %d of another frame "
+						"bound (want %d)", (unsigned long)r, q, want);
+			}
+			shown |= 1 << (int)((r % (uint32_t)total) / 2);
+		}
+		CHECK(shown == (1 << (total / 2)) - 1, "frames shown %x of %d", shown, total / 2);
+		snprintf(part, sizeof(part), "; texture %d: %d frames over r10 %lu..%lu, each its page",
+			v.tex, total / 2, (unsigned long)r0, (unsigned long)(r0 + 2 * total - 1));
+		strncat(note, part, sizeof(note) - strlen(note) - 1);
+		ent_destroy(v.e);
+	}
+	kill_all();
+	finish("TEXANIM", note);
+}
+
 /* ---- PLACED: infodecal and env_glow of one map (w64-format.md "DECL") ---- */
 
 /* A New Game on map (logic records and those near the start spawn as in a
@@ -1965,6 +2243,7 @@ int main(int argc, char **argv)
 	test_dlights();
 	test_styles();
 	test_add();
+	test_texanim();
 	printf(fails ? "fx FAIL (%d)\n" : "fx ok\n", fails);
 	return fails ? 1 : 0;
 }
