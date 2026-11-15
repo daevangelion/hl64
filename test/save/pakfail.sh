@@ -23,7 +23,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-build}"
 case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$ROOT/$BUILD_DIR" ;; esac
-CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/Int7/c21}"
+CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/Int8/c22}"
 N64_INST="${N64_INST:-$HOME/sdks/n64-sdk-hl64-$(sed -n 's/^LIBDRAGON_REV := \(.\{12\}\).*/\1/p' "$ROOT/Makefile")}"
 CPAK="$N64_INST/bin/cpaktool"
 T=600

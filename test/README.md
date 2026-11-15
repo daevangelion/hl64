@@ -124,7 +124,7 @@ test/run/scene.sh [--ares|--host] [--profile] [--psamp] [--before TREE]
   every scene, e.g. `--cmd "@2 set brightness 50"` to compare a setting's
   cost; repeatable.
 - Env: `BUILD_DIR`, `HL64_CONTENT` (default the main cook
-  `/scratch/hl64/tmp/Int7/c21`), `BEFORE_CONTENT`, `HL64_ARES_HOST`,
+  `/scratch/hl64/tmp/Int8/c22`), `BEFORE_CONTENT`, `HL64_ARES_HOST`,
   `ARES_TIMEOUT` (per scene, 1800 s), `ARES_BIN` / `ARES_SLOTS` (local),
   `MAKE_JOBS`.
 - Out: `$BUILD_DIR/scenes/<host|ares>/<scene>/` (`ares.log` / `host.log`,
