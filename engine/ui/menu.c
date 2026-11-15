@@ -177,7 +177,7 @@ static const char *const scr_title[SCR_N] = {
 	NULL, "New Game", "Configuration", "Save Game", "Load Game", "Quit"
 };
 
-enum { A_SCREEN, A_RESUME, A_START, A_HAZARD, A_SLOT, A_QUIT, A_BACK, A_SET };
+enum { A_SCREEN, A_RESUME, A_START, A_HAZARD, A_SLOT, A_PAK, A_QUIT, A_BACK, A_SET };
 enum { SR_BRIGHT, SR_VOLUME, SR_SENS, SR_INVERT };
 
 typedef struct {
@@ -185,7 +185,8 @@ typedef struct {
 	uint8_t		act, arg;
 } item_t;
 
-#define MAX_ITEMS	8
+#define MAX_ITEMS	(SAVE_SLOTS_MAX + 2)	/* Load Game: every slot, the Pak row, Cancel */
+#define ROWS_VIS	5			/* buttons shown at once (longer lists scroll) */
 
 enum { BUSY_NONE, BUSY_START, BUSY_SAVE, BUSY_LOAD };
 
@@ -194,15 +195,18 @@ static struct {
 	int		title;		/* playable: a title screen exists */
 	int		scr;
 	int		sel[SCR_N];
+	int		top[SCR_N];	/* first item shown */
 	int		busy;		/* BUSY_* */
 	int		start_map;
 	int		busy_frames;
 	uint8_t		dirty;		/* settings changed on the Configuration screen */
-	char		note[48];	/* replaces the description until note_end */
+	const char	*note;		/* replaces the description until note_end */
 	uint64_t	note_end;
 	uint64_t	t_us;		/* menu clock (the banner, notes) */
-	save_info_t	slot[SAVE_SLOTS];
+	save_info_t	slot[SAVE_SLOTS_MAX];
 	int		nslots;
+	int		pak;		/* save_pak_status() at the last listing */
+	int		val_w;		/* Configuration value bar width (menu_init) */
 	res_t		snd[6];		/* S_* sounds, resolved on first use */
 } M;
 
@@ -219,9 +223,37 @@ static void sound(int s)
 		snd_ui(M.snd[s], 1.0f);
 }
 
-static void note(const char *s, uint32_t us)
+/* the notes that replace the description line for a while */
+enum { N_LOADING, N_NOSAVE, N_SAVING, N_SAVED, N_SAVEFAIL, N_LOADFAIL, N_COUNT };
+static const char *const note_text[N_COUNT] = {
+	"Loading...", "The game cannot be saved now.", "Saving...", "Game saved.",
+	"The save failed.", "The game could not be loaded."
+};
+
+/* a save / load slot's description: SD_* */
+enum { SD_SAVE_EMPTY, SD_SAVE_OVER, SD_SAVE_NOTE, SD_LOAD_OK, SD_LOAD_AUTO, SD_LOAD_BAD,
+	SD_LOAD_EMPTY, SD_LOAD_NOAUTO, SD_COUNT };
+static const char *const slot_desc[SD_COUNT] = {
+	"Save the game here.", "Save the game here, over this save.",
+	"Save to a new note on the Controller Pak.", "Load this saved game.",
+	"Load the last automatic save.", "This save is damaged.", "Empty slot.",
+	"No autosave yet."
+};
+
+/* the Controller Pak row (save_pak_status other than SAVE_PAK_OK), by SAVE_PAK_* */
+#define PAK_N	(SAVE_PAK_DAMAGED + 1)
+static const char *const pak_value[PAK_N] = { "", "None", "Full", "Rumble Pak", "Damaged" };
+static const char *const pak_desc[PAK_N] = {
+	"",
+	"Insert a Controller Pak for more slots.",
+	"The Controller Pak has no room for a save.",
+	"Swap the Rumble Pak for a Controller Pak.",
+	"Controller Pak damaged or not formatted."
+};
+
+static void note(int n, uint32_t us)
 {
-	snprintf(M.note, sizeof(M.note), "%s", s);
+	M.note = note_text[n];
 	M.note_end = M.t_us + us;
 }
 
@@ -230,14 +262,47 @@ static int in_game(void)
 	return phy_player_active();
 }
 
-static int items(int scr, item_t *it)
+static const char *const flash_label[SAVE_FLASH_MANUAL] = { "Slot 1", "Slot 2" };
+static const char *const pak_label[SAVE_PAK_SLOTS] = { "Pak 1", "Pak 2", "Pak 3", "Pak 4" };
+
+/* slot i's button label: Autosave, Slot N (Flash), Pak N (Controller Pak) */
+static const char *slot_name(int i)
+{
+	int k, nth = 0;
+
+	if (M.slot[i].flags & SAVE_F_AUTO)
+		return "Autosave";
+	for (k = 0; k < i; k++)
+		if (M.slot[k].source == M.slot[i].source && !(M.slot[k].flags & SAVE_F_AUTO))
+			nth++;
+	if (M.slot[i].source == SAVE_SRC_PAK)
+		return nth < SAVE_PAK_SLOTS ? pak_label[nth] : "Pak";
+	return nth < SAVE_FLASH_MANUAL ? flash_label[nth] : "Slot";
+}
+
+static int slot_desc_of(int scr, int i)
+{
+	const save_info_t *s = &M.slot[i];
+
+	if (scr == SCR_SAVE)
+		return s->state == SAVE_EMPTY ? (s->source == SAVE_SRC_PAK ? SD_SAVE_NOTE : SD_SAVE_EMPTY)
+			: SD_SAVE_OVER;
+	if (s->state == SAVE_OK)
+		return (s->flags & SAVE_F_AUTO) ? SD_LOAD_AUTO : SD_LOAD_OK;
+	if (s->state == SAVE_CORRUPT)
+		return SD_LOAD_BAD;
+	return (s->flags & SAVE_F_AUTO) ? SD_LOAD_NOAUTO : SD_LOAD_EMPTY;
+}
+
+/* screen scr's items (ingame: the pause menu's, else the title's) */
+static int items(int scr, int ingame, item_t *it)
 {
 	int n = 0, i;
 
 	switch (scr)
 	{
 	case SCR_MAIN:
-		if (in_game())
+		if (ingame)
 		{
 			it[n++] = (item_t){ "Resume Game", "Return to the game.", A_RESUME, 0 };
 			it[n++] = (item_t){ "Save Game", "Save the game in progress.", A_SCREEN, SCR_SAVE };
@@ -248,14 +313,14 @@ static int items(int scr, item_t *it)
 				A_SCREEN, SCR_NEWGAME };
 			if (wld_training_map() >= 0)
 				it[n++] = (item_t){ "Hazard Course",
-					"Learn to play in the Black Mesa Hazard Course.", A_HAZARD, 0 };
+					"Learn to play in the Hazard Course.", A_HAZARD, 0 };
 		}
 		it[n++] = (item_t){ "Load Game", "Continue from a saved game.", A_SCREEN, SCR_LOAD };
 		it[n++] = (item_t){ "Configuration", "Brightness, sound volume and look controls.",
 			A_SCREEN, SCR_CONFIG };
-		if (in_game())
+		if (ingame)
 			it[n++] = (item_t){ "Quit to Title",
-				"Leave this game and return to the title screen.", A_SCREEN, SCR_QUIT };
+				"Leave this game for the title screen.", A_SCREEN, SCR_QUIT };
 		break;
 	case SCR_NEWGAME:
 		it[n++] = (item_t){ "Easy", "Enemies are weaker and do less damage.", A_START, 1 };
@@ -266,28 +331,23 @@ static int items(int scr, item_t *it)
 	case SCR_CONFIG:
 		it[n++] = (item_t){ "Brightness", "Lifts dark areas. Left / right to change.",
 			A_SET, SR_BRIGHT };
-		it[n++] = (item_t){ "Sound Volume", "Volume of every sound. Left / right to change.",
+		it[n++] = (item_t){ "Sound Volume", "Sound volume. Left / right to change.",
 			A_SET, SR_VOLUME };
-		it[n++] = (item_t){ "Look Speed", "How fast the stick and C-buttons turn the view.",
+		it[n++] = (item_t){ "Look Speed", "Stick and C-button turning speed.",
 			A_SET, SR_SENS };
-		it[n++] = (item_t){ "Invert Look", "Swap C-up and C-down for looking up and down.",
+		it[n++] = (item_t){ "Invert Look", "C-up looks down, C-down looks up.",
 			A_SET, SR_INVERT };
 		it[n++] = (item_t){ "Done", "Keep these settings.", A_BACK, 0 };
 		break;
 	case SCR_SAVE:
 	case SCR_LOAD:
-		for (i = 0; i < M.nslots && n < MAX_ITEMS - 1; i++)
-		{
-			static const char *const label[] = { "Slot 1", "Slot 2", "Slot 3", "Slot 4",
-				"Slot 5", "Slot 6" };
-
-			it[n++] = (item_t){ i < 6 ? label[i] : "Slot",
-				scr == SCR_SAVE ? (M.slot[i].state == SAVE_EMPTY ? "Save the game here." :
-					"Save the game here, over this save.") :
-				(M.slot[i].state == SAVE_OK ? "Load this saved game." :
-					M.slot[i].state == SAVE_CORRUPT ? "This save is damaged." :
-					"Empty slot."), A_SLOT, (uint8_t)i };
-		}
+		/* Load: every slot (the autosave first); Save: the manual ones */
+		for (i = 0; i < M.nslots && n < MAX_ITEMS - 2; i++)
+			if (scr == SCR_LOAD || !(M.slot[i].flags & SAVE_F_AUTO))
+				it[n++] = (item_t){ slot_name(i), slot_desc[slot_desc_of(scr, i)], A_SLOT,
+					(uint8_t)i };
+		if (M.pak != SAVE_PAK_OK && M.pak > 0 && M.pak < PAK_N)
+			it[n++] = (item_t){ "Controller Pak", pak_desc[M.pak], A_PAK, 0 };
 		it[n++] = (item_t){ "Cancel", "Go back.", A_BACK, 0 };
 		break;
 	case SCR_QUIT:
@@ -299,11 +359,14 @@ static int items(int scr, item_t *it)
 	return n;
 }
 
+/* the slot list and the Pak's state (save.h: list again whenever save_busy
+ * dropped or the Pak may have changed: every frame of these screens) */
 static void slots_refresh(void)
 {
-	M.nslots = save_slots(M.slot, SAVE_SLOTS);
+	M.nslots = save_slots(M.slot, SAVE_SLOTS_MAX);
 	if (M.nslots < 0)
 		M.nslots = 0;
+	M.pak = save_pak_status();
 }
 
 static void open_screen(int scr)
@@ -378,7 +441,7 @@ static void start(int map, const char *what)
 	M.busy = BUSY_START;
 	M.start_map = map;
 	M.busy_frames = 0;
-	note("Loading...", 60000000u);
+	note(N_LOADING, 60000000u);
 	log_printf("menu: %s on %s, skill %u\n", what, wld_map_name(map), settings.skill);
 }
 
@@ -411,12 +474,12 @@ static void activate(const item_t *it)
 			if (save_write(it->arg) != 0)
 			{
 				sound(S_DENY);
-				note("The game cannot be saved now.", 3000000u);
+				note(N_NOSAVE, 3000000u);
 				break;
 			}
 			sound(S_SELECT);
 			M.busy = BUSY_SAVE;
-			note("Saving...", 60000000u);
+			note(N_SAVING, 60000000u);
 			log_printf("menu: save slot %u\n", it->arg);
 			break;
 		}
@@ -427,7 +490,7 @@ static void activate(const item_t *it)
 		}
 		sound(S_SELECT);
 		M.busy = BUSY_LOAD;
-		note("Loading...", 60000000u);
+		note(N_LOADING, 60000000u);
 		log_printf("menu: load slot %u\n", it->arg);
 		break;
 	case A_QUIT:
@@ -436,6 +499,9 @@ static void activate(const item_t *it)
 		M.sel[SCR_MAIN] = 0;
 		open_screen(SCR_MAIN);
 		log_printf("menu: quit to title\n");
+		break;
+	case A_PAK:
+		sound(S_DENY);
 		break;
 	case A_BACK:
 		sound(S_DOWN);
@@ -466,7 +532,7 @@ static int busy_step(void)
 			return 1;
 		M.busy = BUSY_NONE;
 		slots_refresh();
-		note(save_result() == 0 ? "Game saved." : "The save failed.", 3000000u);
+		note(save_result() == 0 ? N_SAVED : N_SAVEFAIL, 3000000u);
 		log_printf("menu: save %s\n", save_result() == 0 ? "done" : "failed");
 		if (save_result() == 0)
 			open_screen(SCR_MAIN);
@@ -482,7 +548,7 @@ static int busy_step(void)
 			close_menu("play");
 			return 1;
 		}
-		note("The game could not be loaded.", 3000000u);
+		note(N_LOADFAIL, 3000000u);
 		log_printf("menu: load failed\n");
 		return 1;
 	}
@@ -517,7 +583,9 @@ int menu_frame(uint32_t dt_us)
 	if (busy_step())
 		return M.on ? (in_game() ? MENU_PAUSE : MENU_TITLE) : MENU_PLAY;
 
-	n = items(M.scr, it);
+	if (M.scr == SCR_SAVE || M.scr == SCR_LOAD)
+		slots_refresh();
+	n = items(M.scr, in_game(), it);
 	sel = &M.sel[M.scr];
 	if (*sel >= n)
 		*sel = n - 1;
@@ -564,14 +632,23 @@ int menu_frame(uint32_t dt_us)
 
 /* ---- drawing ------------------------------------------------------------------- */
 
+/* Layout in framebuffer pixels (320 x 240). The VI scans out every row and
+ * column of it inside libdragon's CRT-safe area (plat/n64/main.c
+ * VI_CRT_MARGIN: the picture is scaled into the screen less a 5% border,
+ * not cropped), so on screen means inside the framebuffer; layout_check
+ * proves every string fits at boot. */
+#define SCR_W		320
+#define SCR_H		240
 #define COL_X		16
+#define RIGHT_X		(SCR_W - COL_X)	/* right edge of values and the description */
 #define HEAD_Y		54
 #define BTN_Y		78
 #define BTN_W		136
 #define BTN_H		21
 #define BTN_PITCH	24
 #define VAL_X		166
-#define VAL_W		120
+#define VAL_GAP		6		/* bar to its value */
+#define VAL_WIDEST	"200%"		/* the widest value text (Look Speed) */
 #define DESC_Y		214
 
 static void frame_box(int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b)
@@ -604,15 +681,17 @@ static void button(int y, const char *label, int hi, int dim)
 		d2_text(COL_X + 8, y + (BTN_H - th) / 2, label, 220, 128, 24, 255);
 }
 
-/* value bar of a Configuration row: v of [lo, hi] */
+/* value bar of a Configuration row: v of [lo, hi]; the text right-aligned
+ * at RIGHT_X, the bar up to VAL_GAP before the widest value (M.val_w) */
 static void bar(int y, int v, int lo, int hi, const char *text)
 {
-	int fill = (v - lo) * (VAL_W - 4) / (hi - lo);
+	int fill = (v - lo) * (M.val_w - 4) / (hi - lo);
 
-	frame_box(VAL_X, y + 5, VAL_W, 11, 92, 60, 16);
+	frame_box(VAL_X, y + 5, M.val_w, 11, 92, 60, 16);
 	if (fill > 0)
 		d2_fill(VAL_X + 2, y + 7, fill, 7, 220, 128, 24, 255, D2_NORMAL);
-	d2_text(VAL_X + VAL_W + 6, y + (BTN_H - d2_text_height()) / 2, text, 200, 190, 170, 255);
+	d2_text(RIGHT_X - d2_text_width(text), y + (BTN_H - d2_text_height()) / 2, text,
+		200, 190, 170, 255);
 }
 
 /* Brightness preview: eight grey steps as the 3D passes draw them at this
@@ -665,18 +744,44 @@ static void row_value(const item_t *it, int y, int hi)
 		uint32_t sec = s->game_time > 0 ? (uint32_t)s->game_time : 0;
 
 		if (s->state == SAVE_OK)
-			snprintf(t, sizeof(t), "%.12s %lu:%02lu", s->title[0] ? s->title : s->map,
-				(unsigned long)(sec / 60), (unsigned long)(sec % 60));
+		{
+			int k;
+
+			/* the title shortened until the line ends by RIGHT_X */
+			for (k = 12; k >= 0; k--)
+			{
+				snprintf(t, sizeof(t), "%.*s %lu:%02lu", k, s->title[0] ? s->title : s->map,
+					(unsigned long)(sec / 60), (unsigned long)(sec % 60));
+				if (VAL_X + d2_text_width(t) <= RIGHT_X)
+					break;
+			}
+		}
 		else
 			snprintf(t, sizeof(t), "%s", s->state == SAVE_CORRUPT ? "Damaged" : "Empty");
 		d2_text(VAL_X, y + (BTN_H - d2_text_height()) / 2, t, 200, 190, 170, 255);
+	}
+	else if (it->act == A_PAK)
+		d2_text(VAL_X, y + (BTN_H - d2_text_height()) / 2, pak_value[M.pak], 96, 88, 72, 255);
+}
+
+/* a 7-px scroll marker beside the button column: more items above (up) or
+ * below */
+static void more_marker(int y, int up)
+{
+	int r;
+
+	for (r = 0; r < 4; r++)
+	{
+		int w = up ? 1 + 2 * r : 7 - 2 * r;
+
+		d2_fill(COL_X + BTN_W + 4 + (7 - w) / 2, y + r, w, 1, 220, 128, 24, 255, D2_NORMAL);
 	}
 }
 
 void menu_draw(void)
 {
 	item_t it[MAX_ITEMS];
-	int n = items(M.scr, it), i, sel = M.sel[M.scr];
+	int n = items(M.scr, in_game(), it), i, sel = M.sel[M.scr], *top = &M.top[M.scr];
 	const char *desc;
 
 	if (!M.on)
@@ -686,17 +791,107 @@ void menu_draw(void)
 		d2_text(COL_X, HEAD_Y, scr_title[M.scr], 255, 255, 255, 255);
 	else if (in_game())
 		d2_text(COL_X, HEAD_Y, "Paused", 255, 255, 255, 255);
-	for (i = 0; i < n; i++)
+	/* at most ROWS_VIS buttons: the window follows the highlight */
+	if (sel < *top)
+		*top = sel;
+	if (sel >= *top + ROWS_VIS)
+		*top = sel - ROWS_VIS + 1;
+	if (*top > n - ROWS_VIS)
+		*top = n - ROWS_VIS;
+	if (*top < 0)
+		*top = 0;
+	for (i = *top; i < n && i < *top + ROWS_VIS; i++)
 	{
-		int y = BTN_Y + i * BTN_PITCH;
-		int dim = M.scr == SCR_LOAD && it[i].act == A_SLOT && M.slot[it[i].arg].state != SAVE_OK;
+		int y = BTN_Y + (i - *top) * BTN_PITCH;
+		int dim = (M.scr == SCR_LOAD && it[i].act == A_SLOT && M.slot[it[i].arg].state != SAVE_OK)
+			|| it[i].act == A_PAK;
 
 		button(y, it[i].label, i == sel && M.busy == BUSY_NONE, dim);
 		row_value(&it[i], y, i == sel);
 	}
+	if (*top > 0)
+		more_marker(BTN_Y + 2, 1);
+	if (*top + ROWS_VIS < n)
+		more_marker(BTN_Y + (ROWS_VIS - 1) * BTN_PITCH + BTN_H - 6, 0);
 	desc = M.note_end > M.t_us ? M.note : sel < n ? it[sel].desc : "";
-	d2_fill(COL_X, DESC_Y - 3, 320 - 2 * COL_X, 1, 92, 60, 16, 255, D2_NORMAL);
+	d2_fill(COL_X, DESC_Y - 3, RIGHT_X - COL_X, 1, 92, 60, 16, 255, D2_NORMAL);
 	d2_text(COL_X, DESC_Y, desc, 200, 190, 170, 255);
+}
+
+/* one string of the layout: logs and counts it when it ends past x1 */
+static int fits(const char *s, int x0, int x1)
+{
+	int w = d2_text_width(s);
+
+	if (x0 + w <= x1)
+		return 0;
+	log_printf("menu: layout: \"%s\" ends at x %d, past %d\n", s, x0 + w, x1);
+	return 1;
+}
+
+/* Boot: every label, value, description and note inside the framebuffer
+ * (the VI shows all of it, SCR_W x SCR_H above); logs `menu: layout ok` or
+ * each string that does not fit. */
+static void layout_check(void)
+{
+	static const char *const values[] = { "100", VAL_WIDEST, "Off", "On", "Damaged", "Empty" };
+	item_t it[MAX_ITEMS];
+	int bad = 0, scr, g, i, n, th = d2_text_height();
+
+	/* ROWS_VIS buttons (longer lists scroll) end above the Configuration
+	 * brightness ramp (DESC_Y - 18) and the description rule below it */
+	if (BTN_Y + (ROWS_VIS - 1) * BTN_PITCH + BTN_H > DESC_Y - 18)
+	{
+		log_printf("menu: layout: %d rows run into the description\n", ROWS_VIS);
+		bad++;
+	}
+	for (scr = 0; scr < SCR_N; scr++)
+		for (g = 0; g < 2; g++)
+		{
+			n = items(scr, g, it);
+			for (i = 0; i < n; i++)
+			{
+				bad += fits(it[i].label, COL_X + 8, COL_X + BTN_W - 4);
+				bad += fits(it[i].desc, COL_X, RIGHT_X);
+			}
+			if (scr_title[scr])
+				bad += fits(scr_title[scr], COL_X, RIGHT_X);
+		}
+	bad += fits("Paused", COL_X, RIGHT_X);
+	/* the slot screens' rows (no slots listed at boot) */
+	bad += fits("Autosave", COL_X + 8, COL_X + BTN_W - 4);
+	bad += fits("Controller Pak", COL_X + 8, COL_X + BTN_W - 4);
+	for (i = 0; i < SAVE_FLASH_MANUAL; i++)
+		bad += fits(flash_label[i], COL_X + 8, COL_X + BTN_W - 4);
+	for (i = 0; i < SAVE_PAK_SLOTS; i++)
+		bad += fits(pak_label[i], COL_X + 8, COL_X + BTN_W - 4);
+	for (i = 1; i < PAK_N; i++)
+	{
+		bad += fits(pak_desc[i], COL_X, RIGHT_X);
+		bad += fits(pak_value[i], VAL_X, RIGHT_X);
+	}
+	for (i = 0; i < SD_COUNT; i++)
+		bad += fits(slot_desc[i], COL_X, RIGHT_X);
+	for (i = 0; i < N_COUNT; i++)
+		bad += fits(note_text[i], COL_X, RIGHT_X);
+	for (i = 0; i < (int)(sizeof(values) / sizeof(values[0])); i++)
+		bad += fits(values[i], VAL_X, RIGHT_X);
+	if (M.val_w < 32)
+	{
+		log_printf("menu: layout: value bar %d px\n", M.val_w);
+		bad++;
+	}
+	if (DESC_Y + th > SCR_H)
+	{
+		log_printf("menu: layout: description rows %d..%d past %d\n", DESC_Y, DESC_Y + th - 1,
+			SCR_H - 1);
+		bad++;
+	}
+	if (bad)
+		log_printf("menu: layout: %d strings / rows do not fit\n", bad);
+	else
+		log_printf("menu: layout ok (description rows %d..%d of %d, value bar %d px)\n", DESC_Y,
+			DESC_Y + th - 1, SCR_H, M.val_w);
 }
 
 void menu_to_title(void)
@@ -713,6 +908,8 @@ void menu_init(int title)
 {
 	memset(&M, 0, sizeof(M));
 	M.title = title;
+	M.val_w = RIGHT_X - VAL_GAP - d2_text_width(VAL_WIDEST) - VAL_X;
+	layout_check();
 	logo_init();
 	if (title && settings_load(&settings) == 0)
 		log_printf("menu: settings loaded: brightness=%u volume=%u look=%u invert=%u\n",

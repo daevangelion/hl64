@@ -33,6 +33,8 @@
 #                      labels the scene shares with route R) likewise
 #   --keep-rom         keep each scene's hl64.z64 (default: removed after
 #                      its run)
+#   --cmd "[@F] CMD"   one more debug command for every scene (hl64-host
+#                      --cmd, e.g. "@2 set brightness 50"); repeatable
 #   -j N               scenes in parallel (default 4; ares runs also wait
 #                      for a slot, test/run/ares.sh)
 #   SCENE ... | all    names under test/scenes (without .route)
@@ -52,7 +54,7 @@ case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$ROOT/$BUILD_DIR" ;; esac
 CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/Int6/c17}"
 usage() {
 	echo "usage: test/run/scene.sh [--ares|--host] [--profile] [--psamp] [--before TREE]" \
-		"[--route-log R=LOG ...] [--keep-rom] [-j N] SCENE... | all" >&2
+		"[--route-log R=LOG ...] [--keep-rom] [--cmd CMD ...] [-j N] SCENE... | all" >&2
 	exit 2
 }
 MODE=host
@@ -62,6 +64,7 @@ BEFORE=
 KEEP=0
 JOBS=4
 SCENES=()
+XCMDS=()
 declare -A RLOG
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -77,6 +80,7 @@ while [[ $# -gt 0 ]]; do
 		RLOG[${2%%=*}]="${2#*=}"
 		shift
 		;;
+	--cmd) [[ -n "${2:-}" ]] || usage; XCMDS+=(--cmd "$2"); shift ;;
 	-j) [[ "${2:-}" =~ ^[0-9]+$ ]] || usage; JOBS=$2; shift ;;
 	-*) usage ;;
 	*) SCENES+=("$1") ;;
@@ -95,7 +99,7 @@ RTB="$CONTENT/campaign.rtb"
 [[ -f "$RTB" && -f "$CONTENT/maps/campaign.cwg" ]] || { echo "no $RTB / campaign.cwg: cook the content" >&2; exit 2; }
 [[ $MODE == ares ]] && PROFILE=1
 TAB="$ROOT/test/scenes/table.py"
-CMDS=(--cmd "@1 fixed_dt 33333")	# fixed frame time (think-and-time.md 1)
+CMDS=(--cmd "@1 fixed_dt 33333" "${XCMDS[@]}")	# fixed frame time (think-and-time.md 1)
 
 # tree id -> source tree, build dir, content; "after" is this tree
 TREES=(after)

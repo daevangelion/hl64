@@ -831,9 +831,13 @@ void snd_stop(int e, int chan)
 		stop_match(e, chan, 0, "stop");
 }
 
+/* The session ended (New Game, end of section, Quit to title): every
+ * voice stops and every wave closes, so the title holds no wave of the
+ * last game (the sound region is back to what the waves cost before it;
+ * eng.c title_settle checks it). */
 void snd_stop_all(void)
 {
-	int i;
+	int i, n = 0;
 
 	if (!S)
 		return;
@@ -843,6 +847,14 @@ void snd_stop_all(void)
 	for (i = 0; i < SND_VOICES; i++)
 		if (S->v[i].busy)
 			voice_free(i, "new game");
+	for (i = 0; i < SND_WAVES; i++)
+		if (S->w[i].hw)
+		{
+			snd_hw_close(S->w[i].hw);
+			S->w[i].hw = NULL;
+			n++;
+		}
+	snd_logf("snd %lu new game: %d waves closed\n", (unsigned long)S->frame, n);
 }
 
 void snd_pause(int on)

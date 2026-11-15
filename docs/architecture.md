@@ -918,9 +918,9 @@ spatialise without conversion.
 
 Pad → `usercmd` (stick turn + forward/back, C-buttons strafe/look, Z
 attack, R attack2, A jump, B use, L duck, D-down reload; D-up night vision
-(the flashlight impulse, D12), D-left/D-right previous/next weapon, Start
-last weapon as one impulse per
-press; one table in `engine/in/in.c`, documented in `docs/controls.md`);
+(the flashlight impulse, D12), D-left/D-right previous/next weapon as one
+impulse per press; Start opens the pause menu (13); one table in
+`engine/in/in.c`, documented in `docs/controls.md`);
 absolute stick turning scales by `dt`. The route VM injects held buttons
 and impulses into the same command; `ARES_TEST_INPUT` injects at the pad.
 
@@ -943,10 +943,74 @@ and impulses into the same command; `ARES_TEST_INPUT` injects at the pad.
 
 ## 13. Menu
 
-Text menu in the player's HL font (cooked from their data) over a dark
-fill; a built-in 8×8 MIT bitmap font for the boot/error screen. Items: New
-Game (Uplink / Hazard Course from the CWG start and training fields),
-Load/Save (D4), Options (settings subset), Quit to title.
+`engine/ui/menu.c` (its own unit so it can move into an overlay, 7.4; it
+keeps no code address in anything saved), drawn through draw2d in the
+style of the 1998 Half-Life menu: black background, the player's
+`media/logo.avi` banner at the top, a column of dark buttons with orange
+labels in the player's creditsfont, values to their right, a description
+line for the highlighted button, the menu sounds of the player's
+`sound/common` (`res.def` Menu block).
+
+- **Banner**: `tools/cook/bake_logo.py` decodes logo.avi (MS RLE, 8-bit
+  grey, 640×100, 24 fps) with ffmpeg into `gfx/logo.lg4`: 110 frames,
+  320×50 I4, dithered to 16 greys (880 KB of ROM); without ffmpeg or the
+  file, one still frame of `gfx/lambda.bmp` (the cook log says which).
+  Two 8000 B buffers in the HUD region: one drawn while the next frame is
+  read from the cart at prefetch priority.
+- **Screens**: the title (playable builds boot to it; New Game → Easy /
+  Medium / Difficult into `settings.skill`, Hazard Course =
+  `wld_training_map()`, Load Game, Configuration); the pause menu (Start in
+  play: Resume Game, Save Game, Load Game, Configuration, Quit to Title with
+  a confirmation). Load Game lists every slot of `save_slots()` (14): the
+  autosave, the Flash slots, the Controller Pak's notes; Save Game the
+  manual ones; a dimmed Controller Pak row gives `save_pak_status()` when
+  no Pak slot can show (none, full, a Rumble Pak, damaged). Lists longer
+  than five buttons scroll with the highlight.
+- **Pause**: the simulation is skipped (no game step, route, AI or
+  physics; eng.c `menu_only_frame` keeps I/O, the sound pump and the 2D);
+  the game's sounds pause: loops restart at their loop start, a sentence
+  goes on with its next word, an interrupted one-shot ends (a VADPCM wave
+  only seeks to its start or loop start). Buttons held as a menu closes
+  are ignored until released.
+- **Configuration**: brightness (0..100), sound volume (`vol_sfx`), look
+  speed (`look_sens`, 25..200 %), invert look; applied as they change,
+  stored through `settings_store` when the screen is left, loaded at boot
+  in playable builds. Brightness lifts the black level: `gpu_view_t.lift`
+  = `SETTINGS_BRIGHT_LIFT` (0..48 of 255) is added as ENV by the world's,
+  the TransAlpha brushes' and the opaque / TransTexture models' combiner
+  (texel × shade or PRIM + ENV), the same one-cycle mode, not under night
+  vision; additive passes and the HUD are not lifted. Measured on ares-host
+  ares (scene.sh `--cmd "@2 set brightness N"`): hl1-start 33.4 / 33.5 ms
+  avg / p90 at 0, 50 and 100; hl2-yard 51.5 / 77.0, 51.5 / 76.6,
+  51.5 / 77.0: no cost. The Configuration screen previews it on a grey
+  ramp. No music volume: the engine has no music path.
+- **Layout**: framebuffer pixels; the VI scans out all 320×240 inside
+  libdragon's CRT-safe area (`VI_CRT_MARGIN`; the cart logs `vi: ...
+  columns 0..319, rows 0..239 shown`), so a string is on screen when it is
+  inside the framebuffer. `layout_check` measures every label, value,
+  description and note at boot (`menu: layout ok`, else each string that
+  does not fit). ares' raw shots read only the first 216 rows (its VI
+  output height), which cuts off the description line (rows 214..232).
+- **Quit to Title** and, in playable builds, an end of section: the
+  session ends as an end of section does (eng.c `session_end`; every voice
+  stops and every wave closes), then `studio_flush` empties the model
+  pools. At the settled title eng.c `title_settle` compares 13 fields
+  (heap blocks / KB, entities, game private data, HLE / dehydrate, the
+  world pools, layer directories, studio pool, sound voices and region)
+  with boot. The first session leaves one-time allocations the first 3D
+  frame makes lazily (cart only; heap map at the first quit, symbolised):
+  plat/n64/gpu.c's tiny3d viewport matrices (256 B), matrix ring (12 KB)
+  and projections (256 B), gpu_fx.c's vertex ring (148 KB), point buffer
+  (12 KB), scale matrix (64 B) and tpx matrix stack (512 B): 7 blocks,
+  173 KB. The first quit's
+  title is then the reference: every later one must equal it (`mem: title
+  same as first quit`). The host has none of them: its first quit equals
+  boot.
+- **Tests**: `test/m6/menu_host.sh` (a suite of `test/run/m5.sh`): the
+  layout, the pause freezing game state and clock, Configuration stored,
+  Quit to Title back to the boot title, New Game after it equal to one
+  from boot. `test/run/menu.sh` (ares, by hand): a playable ROM walked by
+  the pad through every screen and two sessions.
 
 ## 14. Save and level state
 

@@ -139,7 +139,8 @@ void gpu_studio_frame(void)
 	done = cur;
 }
 
-#define CC_TEX_PRIM	RDPQ_COMBINER1((TEX0, 0, PRIM, 0), (TEX0, 0, PRIM, 0))
+/* texel x PRIM (the model light) + ENV (the brightness lift, gpu.h) */
+#define CC_TEX_PRIM	N64_CC_NVG_STUDIO
 /* render-fx.md 2a: rgb = ENV + (PRIM - ENV) x I, a = A x PRIM alpha */
 #define CC_RAMP		RDPQ_COMBINER1((PRIM, ENV, TEX0, ENV), (TEX0, 0, PRIM, 0))
 
@@ -184,15 +185,21 @@ static void set_mode(const gpu_studio_ent_t *e)
 		rdpq_mode_tlut(add ? TLUT_IA16 : TLUT_RGBA16);
 		ramp = add;
 	}
-	/* night vision: the NVG colours instead of the model light (an
-	 * additive page's ramp set ENV), the entity's alpha kept */
+	/* night vision: the NVG colours instead of the model light; else the
+	 * model light and the brightness lift (an additive page's ramp set
+	 * ENV); the entity's alpha kept */
 	if (!add && nvg)
 	{
 		rdpq_set_prim_color(RGBA32(GPU_NVG_PRIM_R, GPU_NVG_PRIM_G, GPU_NVG_PRIM_B, e->rgba[3]));
 		rdpq_set_env_color(RGBA32(GPU_NVG_ENV_R, GPU_NVG_ENV_G, GPU_NVG_ENV_B, 255));
 	}
 	else if (!add)
+	{
+		int l = gpu_lift();
+
 		rdpq_set_prim_color(RGBA32(e->rgba[0], e->rgba[1], e->rgba[2], e->rgba[3]));
+		rdpq_set_env_color(RGBA32(l, l, l, 0));
+	}
 	/* masked skins: half coverage of TEX x PRIM alpha; the additive ramp
 	 * scales the texel alpha by its blend: 1 as before */
 	gpu_fence_ref(add ? 1 : (e->rgba[3] + 1) / 2);

@@ -118,12 +118,18 @@ void gpu_fx_mode(int m, const uint8_t prim[4])
 		return;
 	r = &gpu_fx_rdp[m];
 	/* night vision: a TransAlpha brush (lit page) draws as the world does,
-	 * without its fog */
+	 * without its fog; otherwise it takes the world's brightness lift */
 	nvg = gpu_nvg() && m == GPU_FX_BRUSH_SOLID;
 	if (nvg)
 	{
 		rdpq_set_prim_color(RGBA32(GPU_NVG_PRIM_R, GPU_NVG_PRIM_G, GPU_NVG_PRIM_B, 255));
 		rdpq_set_env_color(RGBA32(GPU_NVG_ENV_R, GPU_NVG_ENV_G, GPU_NVG_ENV_B, 255));
+	}
+	else if (m == GPU_FX_BRUSH_SOLID)
+	{
+		int l = gpu_lift();
+
+		rdpq_set_env_color(RGBA32(l, l, l, 0));
 	}
 	else if (prim)
 		rdpq_set_prim_color(RGBA32(prim[0], prim[1], prim[2], prim[3]));
@@ -136,7 +142,8 @@ void gpu_fx_mode(int m, const uint8_t prim[4])
 		t3d_fog_set_enabled(false);
 	rdpq_set_mode_standard();
 	rdpq_mode_dithering(N64_DITHER_MODE());
-	rdpq_mode_combiner(nvg ? N64_CC_NVG : combiner(r->combiner));
+	rdpq_mode_combiner(nvg ? N64_CC_NVG : m == GPU_FX_BRUSH_SOLID ? N64_CC_LIFT
+		: combiner(r->combiner));
 	rdpq_mode_blender(r->blender == GPU_FX_BL_ALPHA ? RDPQ_BLENDER_MULTIPLY : 0);
 	rdpq_mode_zbuf(r->ztest, r->zwrite);
 	if (r->zdecal)

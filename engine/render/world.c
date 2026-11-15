@@ -1035,6 +1035,8 @@ void ren_frame(double time)
 	 * FlashlightTurnOn); the world then takes no dynamic light */
 	nvg = ent_is_live(ENT_PLAYER) && (ent_rnd(ENT_PLAYER)->effects & EF_DIMLIGHT);
 	v.nvg = (uint8_t)nvg;
+	/* the brightness setting (menu.c): not under night vision */
+	v.lift = nvg ? 0 : (uint8_t)SETTINGS_BRIGHT_LIFT(settings.brightness);
 	st.nvg = (uint32_t)nvg;
 	ndl = 0;
 	for (i = 0; i < HL64_DLIGHTS && !nvg; i++)

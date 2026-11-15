@@ -7,13 +7,19 @@
 # play (once the cart logs PLAY_AT, walk forward) -> Start (pause) ->
 # Configuration (brightness +3 steps, sound volume -2, look speed +1) ->
 # B (stored) -> Save Game -> slot 1 -> Load Game screen -> B -> Start
-# (resume) -> walk -> Start -> Quit to Title -> confirm. Every press is
+# (resume) -> walk -> Start -> Quit to Title -> confirm, then a second
+# session: New Game -> Easy -> play -> Start -> Quit to Title. Every press is
 # held until the cart logs the menu's answer (`menu: ...` lines), so the
 # script follows the cart at any emulation speed. After each step that
 # shows a screen the latest VI shot is kept by name (shots/<name>.ppm) and
-# sheet.png lays them out with their names.
-# PASS: every step answered; `mem: title same as boot` after the quit;
-# no `error:` line, libdragon exception or assertion text.
+# sheet.png lays them out with their names. The shots are ares' raw read
+# of the framebuffer's first 216 rows (its VI output height with the CRT
+# margin), so the description line (rows 214..232, all scanned out by the
+# VI: plat/n64/main.c) is cut off in them; `menu: layout ok` proves it fits.
+# PASS: every step answered; `menu: layout ok`; the second quit's title
+# `mem: title same as first quit` (the first quit's against boot is
+# reported: one-time allocations, eng.c title_settle); no `error:` line,
+# libdragon exception or assertion text.
 #
 # Usage: test/run/menu.sh [ROM]   (no ROM: `make rom` of this tree on HL64_CONTENT)
 # Env:   BUILD_DIR (scratch, default build), HL64_CONTENT (for the build),
@@ -83,8 +89,9 @@ trap "kill \"\$APID\" 2>/dev/null; $XVFB_KILL" EXIT
 echo "ares on $(ares_host), limit $LIMIT s" >"$INLOG"
 
 STEP=start
-waitfor() {	# waitfor REGEX: once the log has it; fails when ares ended first
-	until grep -qE "$1" "$LOG" 2>/dev/null; do
+waitfor() {	# waitfor REGEX [N]: once the log has N (default 1) such lines;
+		# fails when ares ended first
+	until (( $(grep -cE "$1" "$LOG" 2>/dev/null || true) >= ${2:-1} )); do
 		kill -0 "$APID" 2>/dev/null || fail "ares ended at step '$STEP' (waiting for $1)"
 		sleep 0.3
 	done
@@ -170,6 +177,23 @@ tap $A '^menu: quit to title'
 STEP=title-check
 waitfor '^mem: title (same as|DIFFERS from) boot'
 snap title2
+# the second session: New Game again, play, Quit to Title; its title must
+# equal the first quit's (one-time allocations stay, nothing grows)
+tap $A '^menu: screen newgame'
+tap $A '^menu: play'
+STEP=play2
+waitfor "$PLAY_AT" 2
+sleep 3
+walk 3
+snap play2
+tap $START '^menu: pause'
+tap $UP '^menu: select main Quit to Title'
+tap $A '^menu: screen quit'
+tap $UP '^menu: select quit Quit to Title'
+tap $A '^menu: quit to title'
+STEP=title-check2
+waitfor '^mem: title (same as|DIFFERS from) first quit'
+snap title3
 echo "t=$(el "$T0") done" >>"$INLOG"
 kill "$APID" 2>/dev/null || true	# ares_run stops ares (remote: on the host), copies back
 wait "$APID" 2>/dev/null || true
@@ -211,5 +235,7 @@ if grep -E '^error( \(nested\))?: |[Uu]nhandled exception|ASSERTION FAILED|[Aa]s
 	"$OUT/rom.log" >&2; then
 	fail "error on the cart"
 fi
-grep -q '^mem: title same as boot' "$OUT/rom.log" || fail "the title's regions differ from boot"
+grep -q '^menu: layout ok ' "$OUT/rom.log" || fail "menu strings do not fit the screen"
+grep -q '^mem: title same as first quit' "$OUT/rom.log" \
+	|| fail "the second quit's title differs from the first quit's (a leak)"
 echo "menu PASS ($(el "$T0") s on $(ares_host); $OUT)"

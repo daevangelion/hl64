@@ -4,7 +4,9 @@
 # Front-end host test (engine/ui/menu.c, docs/architecture.md 13), a suite
 # of test/run/m5.sh: hl64-host --title at the fixed 1/30 s, the pad driven
 # by `pad` debug commands.
-#  run 1: title -> New Game -> Easy -> play; Start pauses: the game state
+#  run 1: boot: `menu: layout ok` (every menu string and row fits the
+#         framebuffer, menu.c layout_check);
+#         title -> New Game -> Easy -> play; Start pauses: the game state
 #         (stats t=, ents, player, rec) is the same at two frames of the
 #         pause; Configuration: brightness +1 step (`menu: set
 #         brightness=10`), B stores it (`settings store`); Start resumes and
@@ -50,7 +52,8 @@ tap 242 $START
 ARGS+=(--cmd "@300 stats 4")
 "$BIN" --root "$CONTENT" --title "${ARGS[@]}" --frames 302 >"$OUT/run1.log" 2>&1 || fail "run 1 exit $?"
 L1="$OUT/run1.log"
-for want in '^menu: title$' '^menu: screen newgame$' '^menu: new game on [a-z0-9]+, skill 1$' \
+for want in '^menu: layout ok ' '^menu: title$' '^menu: screen newgame$' \
+	'^menu: new game on [a-z0-9]+, skill 1$' \
 	'^menu: play$' '^menu: pause$' '^menu: screen config$' '^menu: set brightness=10 ' \
 	'^menu: settings store started$' '^menu: resume$'; do
 	grep -qE "$want" "$L1" || fail "run 1: no line /$want/"

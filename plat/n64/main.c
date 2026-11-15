@@ -70,6 +70,19 @@ int main(void)
 	audio_init(AUDIO_HZ, AUDIO_INIT_LATENCY_MS(AUDIO_LATENCY_MS));
 	t3d_init((T3DInitParams){});
 	vid_init();
+	{
+		/* what the VI scans out of the framebuffer (the menu's layout,
+		 * engine/ui/menu.c, relies on all of it being on screen): the
+		 * output area in VI dots / half-lines, the scales in 1/1024 */
+		int x0, y0, x1, y1;
+		unsigned xs = vi_read(VI_X_SCALE) & 0xFFF, ys = vi_read(VI_Y_SCALE) & 0xFFF;
+
+		vi_get_output(&x0, &y0, &x1, &y1);
+		log_printf("vi: output %d,%d..%d,%d, x_scale %u y_scale %u: framebuffer columns "
+			"0..%u, rows 0..%u shown\n", x0, y0, x1, y1, xs, ys,
+			((unsigned)(x1 - x0) * xs + 512u) / 1024u - 1u,
+			((unsigned)(y1 - y0) / 2u * ys + 512u) / 1024u - 1u);
+	}
 
 	if (get_memory_size() < HL64_RDRAM_BYTES)
 		sys_error("hl64 needs the Expansion Pak\n(8 MB RDRAM)");

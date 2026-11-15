@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MIT */
-/* save_stub.c -- TEMPORARY (never committed): stands in for SaveGame's
- * backend until m6-savegame lands. RAM slots, nothing restored. */
+/* save_stub.c -- PLACEHOLDER for m6-savegame's backend (include/hl64/save.h
+ * is its interface, byte-identical): RAM slots, nothing restored, no
+ * Controller Pak. The m6-savegame merge deletes this file and its Makefile
+ * line. */
 #include <string.h>
 
 #include "hl64/save.h"
@@ -9,13 +11,16 @@
 #include "engine/phys/player.h"
 #include "engine/world/wld.h"
 
-static save_info_t slots[SAVE_SLOTS];
+#define STUB_SLOTS	(1 + SAVE_FLASH_MANUAL)	/* the autosave, the Flash slots */
+
+static save_info_t slots[STUB_SLOTS];
 static int busy, result;
 static uint32_t seq;
 
 void save_init(void)
 {
 	memset(slots, 0, sizeof(slots));
+	slots[0].flags = SAVE_F_AUTO;
 }
 
 int save_frame(void)
@@ -30,7 +35,7 @@ int save_frame(void)
 
 int save_slots(save_info_t *out, int max)
 {
-	int n = max < SAVE_SLOTS ? max : SAVE_SLOTS;
+	int n = max < STUB_SLOTS ? max : STUB_SLOTS;
 
 	memcpy(out, slots, (size_t)n * sizeof(*out));
 	return n;
@@ -38,7 +43,7 @@ int save_slots(save_info_t *out, int max)
 
 int save_write(int slot)
 {
-	if (slot < 0 || slot >= SAVE_SLOTS || busy)
+	if (slot < 1 || slot >= STUB_SLOTS || busy)
 		return -1;
 	slots[slot].state = SAVE_OK;
 	slots[slot].seq = ++seq;
@@ -53,7 +58,7 @@ int save_write(int slot)
 
 int save_load(int slot)
 {
-	if (slot < 0 || slot >= SAVE_SLOTS || slots[slot].state != SAVE_OK || busy)
+	if (slot < 0 || slot >= STUB_SLOTS || slots[slot].state != SAVE_OK || busy)
 		return -1;
 	busy = 2;
 	result = 0;
@@ -69,6 +74,15 @@ int save_busy(void)
 int save_result(void)
 {
 	return result;
+}
+
+int save_pak_status(void)
+{
+	return SAVE_PAK_ABSENT;
+}
+
+void save_autosave(void)
+{
 }
 
 int settings_load(settings_t *s)

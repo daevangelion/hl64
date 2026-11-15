@@ -171,6 +171,12 @@ RAN+="cpu_table.py "
 suite in_test.c pad-binding bash -c 'make --no-print-directory BUILD_DIR="$1" intest >/dev/null \
 	&& "$1/host/hl64-in"' _ "$BUILD_DIR"
 RAN+="controls_ares.sh "
+# the front end (engine/ui/menu.c, architecture.md 13): title, New Game,
+# pause frozen, Configuration stored, Quit to Title back to the boot
+# title's memory, menu strings fit the screen; its ares walk,
+# test/run/menu.sh, runs by hand (docs/controls.md)
+suite ../m6/menu_host.sh menu-host bash test/m6/menu_host.sh "$BUILD_DIR/host/hl64-host" \
+	"$CONTENT" "$OUT/menu-host"
 for f in "$ROOT"/test/m5/*.py "$ROOT"/test/m5/*.sh; do
 	[[ -e "$f" ]] || continue
 	[[ "$RAN" == *" $(basename "$f") "* ]] || die "test/m5/$(basename "$f") is not wired into test/run/m5.sh"

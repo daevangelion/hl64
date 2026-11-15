@@ -50,11 +50,19 @@ int		vid_gpu_busy(void);
 void		gpu_view_proj(int view);
 /* gpu.c: this frame is night vision (gpu_view_t.nvg, engine/render/gpu.h). */
 int		gpu_nvg(void);
+/* gpu.c: this frame's brightness lift (gpu_view_t.lift; 0 under night
+ * vision). */
+int		gpu_lift(void);
 /* gpu.c: the world pass's combiner, colours, fog and tiny3d flags, set by
  * gpu_begin and put back by the studio and effects passes when they end:
- * texel x vertex shade, or under night vision N64_CC_NVG with the
- * GPU_NVG_* colours and the RDP / tiny3d distance fog to black. */
+ * texel x vertex shade + the brightness lift (ENV), or under night vision
+ * N64_CC_NVG with the GPU_NVG_* colours and the RDP / tiny3d distance fog
+ * to black. */
 void		gpu_world_state(void);
+/* Brightness lift (gpu.h): rgb = texel x shade + ENV (ENV = the lift
+ * grey), alpha = texel x shade as RDPQ_COMBINER_TEX_SHADE, one cycle;
+ * the studio form is N64_CC_NVG_STUDIO with ENV = the lift grey. */
+#define N64_CC_LIFT	RDPQ_COMBINER1((TEX0, 0, SHADE, ENV), (TEX0, 0, SHADE, 0))
 /* Night vision: rgb = texel x PRIM + ENV, alpha = the texel's (the world's
  * fence cutouts; shade alpha carries the fog), one cycle. The studio form
  * keeps the entity's PRIM alpha (its blend) as CC_TEX_PRIM does. Expand

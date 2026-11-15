@@ -26,6 +26,7 @@ typedef struct {
 	float		fov_y;			/* degrees */
 	float		znear, zfar;
 	uint8_t		nvg;			/* night vision (below) */
+	uint8_t		lift;			/* brightness lift (below) */
 } gpu_view_t;
 
 /* Night vision (architecture.md D12, the local player's EF_DIMLIGHT):
@@ -45,6 +46,13 @@ typedef struct {
 #define GPU_NVG_ENV_B	0
 #define GPU_NVG_NEAR	64.0f
 #define GPU_NVG_FAR	1024.0f
+
+/* Brightness (the menu's setting, settings.h SETTINGS_BRIGHT_LIFT):
+ * without night vision the world, its movers (opaque and TransAlpha) and
+ * the opaque / TransTexture studio models draw rgb = their usual colour +
+ * lift (0..255, saturating) in the same one-cycle RDP mode: texel x shade
+ * + ENV for the world, texel x PRIM + ENV for models. 0 draws as before.
+ * Additive and effect passes and the HUD are not lifted. */
 
 /* Index encoding self-check (w64-format.md "Runtime requirements"):
  * nonzero when the running tiny3d encodes strip indices differently from

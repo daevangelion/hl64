@@ -52,7 +52,9 @@ opens the pause menu, which freezes the game and pauses its sounds.
 | Start | resume (title: select) |
 
 Buttons still held when the menu closes do nothing until released (A on
-Resume Game does not jump).
+Resume Game does not jump). Lists longer than five buttons (Load Game:
+the autosave, the Flash slots, the Controller Pak's) scroll with the
+highlight; small arrows beside the buttons show more above or below.
 
 Before the player exists (no map, or the free camera of a world-only
 boot) the pad drives the debug camera instead (`engine/render/cam.c`).
@@ -62,9 +64,13 @@ boot) the pad drives the debug camera instead (`engine/render/cam.c`).
 - Host: `make BUILD_DIR=… intest && …/host/hl64-in` (`test/m5/in_test.c`,
   also a suite of `test/run/m5.sh`): every held binding, one impulse per
   press with no repeat while held, same-frame presses queued, route
-  impulse first.
+  impulse first, the menu keys (auto-repeat, held-on-close), look speed.
+- Host: `test/m6/menu_host.sh` (a suite of `test/run/m5.sh`): the menu
+  driven by `pad` commands on `hl64-host --title` (architecture.md 13).
 - ares (by hand): `BUILD_DIR=… [HL64_ARES_HOST=ares-host] test/m5/controls_ares.sh` runs
   `test/m5/controls.route` on an HL64_TEST ROM and presses the pad through
   the patched ares' `ARES_TEST_INPUT` file; it checks the cart logs
-  `flashlight: on` / `off`, next / previous / last weapon deploys and
-  `weapon: reload` in order.
+  `flashlight: on` / `off`, next / previous weapon deploys, `menu: pause`
+  / `menu: resume` (Start) and `weapon: reload` in order.
+- ares (by hand): `[HL64_ARES_HOST=ares-host] test/run/menu.sh [ROM]` walks
+  a playable ROM's menus with the pad (architecture.md 13).

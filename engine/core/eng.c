@@ -95,8 +95,10 @@ static struct {
 	uint64_t	rollup_world_us;	/* world draw CPU in the roll-up window */
 	uint32_t	rollup_world_max;
 	uint32_t	title_frame;	/* New Game may start from this frame (eng_can_start) */
-	uint8_t		mem_check;	/* eng_to_title: compare with boot at title_frame */
+	uint8_t		mem_check;	/* eng_to_title: compare at title_frame */
+	uint8_t		mem_quits;	/* sessions ended to the title so far (capped) */
 	uint32_t	mem_boot[MEMSIG];
+	uint32_t	mem_quit[MEMSIG];	/* the title after the first session */
 } eng;
 
 /* ---- stats record (15) ------------------------------------------------- */
@@ -646,13 +648,32 @@ static void mem_sig(uint32_t s[MEMSIG])
 	s[12] = ss.mem;
 }
 
+static int mem_cmp(const uint32_t a[MEMSIG], const uint32_t b[MEMSIG], const char *what)
+{
+	int i, diff = 0;
+
+	for (i = 0; i < MEMSIG; i++)
+		if (b[i] != a[i])
+		{
+			log_printf("mem: title %s %s=%lu now=%lu\n", memsig_name[i], what,
+				(unsigned long)a[i], (unsigned long)b[i]);
+			diff++;
+		}
+	return diff;
+}
+
 /* The title settled (its closed layers' fenced frees retired, no frame in
  * flight draws anything 3D): after boot, record the regions' use; after a
- * session, drop the studio cache and check every region is back to it. */
+ * session, drop the studio cache and check the regions. The first session
+ * leaves one-time allocations behind (cart only: plat/n64 gpu.c / gpu_fx.c
+ * make their uncached pools and tiny3d state at the first 3D frame,
+ * architecture 13): it is compared with boot and, if it differs, the heap
+ * map names the blocks (as at boot); it becomes the reference, and every
+ * later session must leave the title exactly as the first one did. */
 static void title_settle(void)
 {
 	uint32_t s[MEMSIG];
-	int i, diff = 0;
+	int diff;
 
 	if (eng.mem_check == 2)
 	{
@@ -660,20 +681,31 @@ static void title_settle(void)
 		mem_sig(eng.mem_boot);
 		log_printf("mem: title boot (heap %lu blocks %lu KB)\n",
 			(unsigned long)eng.mem_boot[0], (unsigned long)eng.mem_boot[1]);
+		mem_heap_map_dump();
 		return;
 	}
 	eng.mem_check = 0;
 	studio_flush();
 	mem_sig(s);
-	for (i = 0; i < MEMSIG; i++)
-		if (s[i] != eng.mem_boot[i])
-		{
-			log_printf("mem: title %s boot=%lu now=%lu\n", memsig_name[i],
-				(unsigned long)eng.mem_boot[i], (unsigned long)s[i]);
-			diff++;
-		}
-	log_printf("mem: title %s boot (heap %lu blocks %lu KB, %d fields)\n",
-		diff ? "DIFFERS from" : "same as", (unsigned long)s[0], (unsigned long)s[1], MEMSIG);
+	if (eng.mem_quits == 0)
+	{
+		diff = mem_cmp(eng.mem_boot, s, "boot");
+		log_printf("mem: title %s boot (heap %lu blocks %lu KB, %d fields)\n",
+			diff ? "DIFFERS from" : "same as", (unsigned long)s[0], (unsigned long)s[1], MEMSIG);
+		if (diff)
+			mem_heap_map_dump();
+		memcpy(eng.mem_quit, s, sizeof(s));
+		eng.mem_quits = 1;
+		return;
+	}
+	diff = mem_cmp(eng.mem_quit, s, "first_quit");
+	log_printf("mem: title %s first quit (heap %lu blocks %lu KB, %d fields, quit %u)\n",
+		diff ? "DIFFERS from" : "same as", (unsigned long)s[0], (unsigned long)s[1], MEMSIG,
+		eng.mem_quits + 1u);
+	if (diff)
+		mem_heap_map_dump();
+	if (eng.mem_quits < 255)
+		eng.mem_quits++;
 }
 
 static void eng_disconnect(void)

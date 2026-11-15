@@ -4,9 +4,10 @@
 |---|---|
 | `test/run/m0.sh` .. `m5.sh`, `coll.sh` | milestone gates (host, `--ares`); `m5.sh` runs the whole Uplink / Hazard / m4 routes |
 | `test/run/scene.sh` | the scene runner (below) |
+| `test/run/menu.sh` | the front end on ares, by hand: a playable ROM walked by the pad (architecture.md 13) |
 | `test/routes/*.route` | whole routes ([route-bytecode.md](../docs/formats/route-bytecode.md)) |
 | `test/scenes/*.route` | short scenes (below); `test/scenes/table.py` their perf table |
-| `test/m1` .. `test/m5`, `test/coll` | per-milestone suites and log checks the gates run |
+| `test/m1` .. `test/m5`, `test/m6`, `test/coll` | per-milestone suites and log checks the gates run (`test/m6/menu_host.sh`: a suite of `m5.sh`) |
 | `test/oracle` | GoldSrc oracle (dirty side, [README](oracle/README.md)) |
 
 ## Scenes: check a change in minutes
@@ -93,7 +94,7 @@ what makes a scene match. ares results are the same on build-vm and ares-host
 
 ```
 test/run/scene.sh [--ares|--host] [--profile] [--psamp] [--before TREE]
-                  [--route-log R=LOG ...] [--keep-rom] [-j N] SCENE... | all
+                  [--route-log R=LOG ...] [--keep-rom] [--cmd CMD ...] [-j N] SCENE... | all
 ```
 
 - host (default): `hl64-host` per scene at a fixed 1/30 s, `-j N` in
@@ -114,6 +115,9 @@ test/run/scene.sh [--ares|--host] [--profile] [--psamp] [--before TREE]
 - `--route-log uplink=<ares-uplink.log>`: beside each scene's window, the
   same window of a whole-route PROFILE log (`# scene-window`), to see that
   the scene reproduces the route.
+- `--cmd "[@F] CMD"`: one more debug command (hl64-host `--cmd` syntax) for
+  every scene, e.g. `--cmd "@2 set brightness 50"` to compare a setting's
+  cost; repeatable.
 - Env: `BUILD_DIR`, `HL64_CONTENT` (default the main cook
   `/scratch/hl64/tmp/Int6/c17`), `BEFORE_CONTENT`, `HL64_ARES_HOST`,
   `ARES_TIMEOUT` (per scene, 1800 s), `ARES_BIN` / `ARES_SLOTS` (local),

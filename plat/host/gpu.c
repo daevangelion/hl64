@@ -45,9 +45,12 @@ void gpu_begin(const gpu_view_t *v)
 {
 	memset(&cur, 0, sizeof(cur));
 	cur.hash = 2166136261u;
-	/* night vision is drawn state (a lit frame's hash is unchanged) */
+	/* night vision and the brightness lift are drawn state (a lit frame's
+	 * hash at brightness 0 is unchanged) */
 	if (v->nvg)
 		mix(&v->nvg, sizeof(v->nvg));
+	if (v->lift)
+		mix(&v->lift, sizeof(v->lift));
 }
 
 void gpu_end(void)

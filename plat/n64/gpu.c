@@ -64,6 +64,7 @@ static uint8_t		ramp_tb[4];	/* gpu_page_ramp tint + blend */
 static int		ramp_on;
 static int		nvg;		/* this frame: night vision (gpu_view_t.nvg) */
 static int		nvg_range;	/* the tiny3d fog range is set */
+static int		lift;		/* this frame: brightness lift (gpu_view_t.lift) */
 
 /* ---- strip index encoding ------------------------------------------------- */
 
@@ -130,6 +131,7 @@ void gpu_begin(const gpu_view_t *v)
 	if (nvg && !v->nvg)
 		t3d_fog_set_enabled(false);
 	nvg = v->nvg;
+	lift = nvg ? 0 : v->lift;
 	if (nvg && !nvg_range)
 	{
 		t3d_fog_set_range(GPU_NVG_NEAR, GPU_NVG_FAR);
@@ -151,6 +153,11 @@ int gpu_nvg(void)
 	return nvg;
 }
 
+int gpu_lift(void)
+{
+	return lift;
+}
+
 void gpu_world_state(void)
 {
 	if (nvg)
@@ -163,7 +170,10 @@ void gpu_world_state(void)
 		t3d_fog_set_enabled(true);
 	}
 	else
-		rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
+	{
+		rdpq_mode_combiner(N64_CC_LIFT);
+		rdpq_set_env_color(RGBA32(lift, lift, lift, 0));
+	}
 	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
 		| T3D_FLAG_NO_LIGHT | N64_CULL);
 }

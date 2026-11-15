@@ -102,7 +102,7 @@ GAME_SRC += $(GAME_SRC_CORE) $(GAME_SRC_MON) $(GAME_SRC_ITEMS) $(GAME_SRC_STUDIO
 ENGINE_SRC += engine/world/stream.c
 # M6 Menu: the front end (title, pause, settings, save / load screens)
 ENGINE_SRC += engine/ui/menu.c
-# TEMPORARY until m6-savegame lands (never committed)
+# PLACEHOLDER for m6-savegame's backend (save.h): its merge deletes this line
 ENGINE_SRC += engine/ui/save_stub.c
 # HLSDK sources kept as Valve wrote them: their unused locals, MSVC
 # pragmas and array-parameter styles are not ours to fix; HLSDK builds
@@ -299,10 +299,14 @@ $(UNIT_BIN): $(UNIT_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
 unit: $(UNIT_BIN)
 
+# Drivers linked without eng.c (test/m3/studio_doubles.c stands in for it)
+# leave out its only callers too: the front end (engine/ui).
+NO_ENG_OBJS := $(BUILD_DIR)/host/plat/host/main.o $(BUILD_DIR)/host/engine/core/eng.o \
+	$(BUILD_DIR)/host/engine/ui/%.o
+
 # Collision test driver (test/coll/colltest.c, run by test/coll/trace_tests.py).
 COLLTEST_BIN := $(BUILD_DIR)/host/hl64-colltest
-COLLTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o $(BUILD_DIR)/host/engine/core/eng.o,\
-	$(HOST_OBJS)) \
+COLLTEST_OBJS := $(filter-out $(NO_ENG_OBJS),$(HOST_OBJS)) \
 	$(BUILD_DIR)/host/test/coll/colltest.o $(BUILD_DIR)/host/test/m3/studio_doubles.o
 $(COLLTEST_BIN): $(COLLTEST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
@@ -311,8 +315,7 @@ colltest: $(COLLTEST_BIN)
 # Studio residency + animation API driver (test/m3/studio.c, run by
 # test/m3/studio_test.py).
 STUDIOTEST_BIN := $(BUILD_DIR)/host/hl64-studiotest
-STUDIOTEST_OBJS := $(filter-out $(BUILD_DIR)/host/plat/host/main.o $(BUILD_DIR)/host/engine/core/eng.o,\
-	$(HOST_OBJS)) \
+STUDIOTEST_OBJS := $(filter-out $(NO_ENG_OBJS),$(HOST_OBJS)) \
 	$(BUILD_DIR)/host/test/m3/studio.o $(BUILD_DIR)/host/test/m3/studio_doubles.o
 $(STUDIOTEST_BIN): $(STUDIOTEST_OBJS)
 	$(HOST_CC) -o $@ $^ $(HOST_LDFLAGS)
