@@ -2,8 +2,8 @@
 /*
  * fx.c -- host harness for docs/specs/render-fx.md (X1, X2, X3 exact-rate
  * part, X4 synthetic part, X5, X6, ADD: 2a over the cooked sprites),
- * dlights.md (D1, D2, D4 and the model term of 4) and lightstyles.md (L1,
- * L2, the model term of 4) on the real
+ * dlights.md (D1, D2, D4 night vision and the model term of 4) and
+ * lightstyles.md (L1, L2, the model term of 4) on the real
  * engine/render effects modules, the draw-list recorder and a cooked map
  * (the player start of the campaign's start map); test/m3/fx.py runs it.
  *
@@ -11,7 +11,7 @@
  *
  * Every test is self-contained or synthetic (entities, sprites and decals
  * made here); the retail-capture properties (X3 shapes, X4 screenshots,
- * X7, D5-D7, L5-L7) are not run.
+ * X7, D5-D6, L5-L7) are not run.
  */
 #include <math.h>
 #include <stdio.h>
@@ -1262,7 +1262,7 @@ static void test_screen(void)
 		: "fade in/out/hold, title timing (shake needs the player: not run)");
 }
 
-/* ---- dlights (D1, D2, D4, model term) -------------------------------------------------- */
+/* ---- dlights (D1, D2, model term, night vision) --------------------------------------- */
 
 static int live_count(void)
 {
@@ -1278,7 +1278,7 @@ static void test_dlights(void)
 	ren_dlight_t *a, *b, *c;
 	double t = 100.0;
 	int i;
-	float bright, end[3], eg[3], ang[3] = { 0, 0, 0 };
+	float eg[3];
 
 	begin();
 	/* D1: key reuse, oldest-dead reuse, decay to death, one-frame lights */
@@ -1344,32 +1344,6 @@ static void test_dlights(void)
 			}
 		CHECK(ren_dlight_falloff(100, 20, 85, 0) == 0, "minlight cutoff");
 	}
-	/* D4: brightness at 100 / 500 / 1000 / 2000 u, end point of the trace */
-	CHECK(ren_flashlight_bright(100) == 1 && ren_flashlight_bright(500) == 1, "near 1");
-	CHECK(fabsf(ren_flashlight_bright(1000) - 64.0f / 255) < 1e-6f, "1000 u %g",
-		(double)ren_flashlight_bright(1000));
-	CHECK(fabsf(ren_flashlight_bright(2000) - 16.0f / 255) < 1e-6f, "2000 u %g",
-		(double)ren_flashlight_bright(2000));
-	{
-		float far_g[3] = { 20000, 20000, 20000 };
-
-		ren_flashlight_place(far_g, ang, -1, end, &bright);
-		CHECK(fabsf(end[0] - 22000) < 0.1f && fabsf(bright - 16.0f / 255) < 1e-6f,
-			"open 2000 u end %g bright %g", (double)end[0], (double)bright);
-	}
-	for (i = 0; i < 3; i++)
-		eg[i] = L->start_org[i] + L->gofs[i];
-	{
-		float dir[3] = { 1, 0, 0 }, hit[3], n[3], d;
-
-		if (!ray(eg, dir, 2000, hit, n))
-			for (i = 0; i < 3; i++)
-				hit[i] = eg[i] + 2000 * dir[i];
-		ren_flashlight_place(eg, ang, -1, end, &bright);
-		d = hit[0] - eg[0];
-		CHECK(fabsf(end[0] - hit[0]) < 0.1f && fabsf(bright - ren_flashlight_bright(d)) < 1e-5f,
-			"wall end %g vs %g", (double)end[0], (double)hit[0]);
-	}
 	/* dlights.md 4: model term, elights on their own entity only */
 	{
 		float o[3] = { 0, 0, 0 };
@@ -1395,50 +1369,65 @@ static void test_dlights(void)
 			ren_dlight(i)->die = 0;
 		ren_dlight_frame(t + 20, 0);
 	}
-	/* flashlight pool (dlights.md 3): a flashlight 16 u off the wall ahead
-	 * of the start draws pool pieces and lights no vertex; the same light
-	 * as a plain dlight draws none */
+	/* night vision (architecture.md D12): the local player's EF_DIMLIGHT
+	 * is no light; the frame draws night vision and a world dlight 16 u
+	 * off the wall ahead of the start lights no vertex under it; the same
+	 * light without night vision does */
 	{
-		float g[3], hit[3], n[3], d[3] = { 1, 0, 0 };
+		float hit[3], n[3], d[3] = { 1, 0, 0 };
 		ren_stats_t rs;
-		uint32_t tris_flash, dlit_flash;
-		int k, pass;
+		gpu_stats_t gs;
+		uint32_t hash_nvg = 0;
+		int k, pass, before, made = !ent_is_live(ENT_PLAYER);
 
+		if (made)
+		{
+			CHECK(ent_alloc_at(ENT_PLAYER) != NULL, "no player slot");
+			ent_idc(ENT_PLAYER)->layer = (int8_t)L->slot;
+		}
+		ent_rnd(ENT_PLAYER)->effects |= EF_DIMLIGHT;
+		before = live_count();
+		ren_dlight_sources(t);
+		CHECK(live_count() == before, "the player's EF_DIMLIGHT made a light (%d live, %d before)",
+			live_count(), before);
 		for (k = 0; k < 3; k++)
-			g[k] = L->start_org[k] + L->gofs[k];
-		CHECK(ray(g, d, 4096, hit, n), "no wall ahead");
-		eye(g, 0, 0);
+			eg[k] = L->start_org[k] + L->gofs[k];
+		CHECK(ray(eg, d, 4096, hit, n), "no wall ahead");
+		eye(eg, 0, 0);
 		for (pass = 0; pass < 2; pass++)
 		{
-			ren_dlight_t *l = ren_dlight_alloc(1, t);
+			ren_dlight_t *l = ren_dlight_alloc(0, t);
 
 			for (k = 0; k < 3; k++)
 				l->origin[k] = hit[k] + 16 * n[k];
 			l->radius = 80;
 			l->die = t + 1;
 			l->color[0] = l->color[1] = l->color[2] = 255;
-			l->flash = (uint8_t)!pass;
+			if (pass)
+				ent_rnd(ENT_PLAYER)->effects &= (uint16_t)~EF_DIMLIGHT;
 			ren_frame(t);
 			ren_stats(&rs);
+			gpu_stats(&gs);
 			if (!pass)
 			{
-				tris_flash = rs.pool_tris;
-				dlit_flash = rs.dlit;
-				CHECK(rs.pool_tris > 0 && rs.pool_verts >= 3 * 8,
-					"flashlight pool tris %lu verts %lu", (unsigned long)rs.pool_tris,
-					(unsigned long)rs.pool_verts);
+				hash_nvg = gs.hash;
+				CHECK(rs.nvg == 1 && rs.dlit == 0 && rs.relit == 0 && rs.meshlets > 0,
+					"night vision: nvg %lu dlit %lu relit %lu meshlets %lu",
+					(unsigned long)rs.nvg, (unsigned long)rs.dlit, (unsigned long)rs.relit,
+					(unsigned long)rs.meshlets);
 			}
 			else
-				CHECK(rs.pool_tris == 0 && rs.dlit > dlit_flash,
-					"plain dlight: pool %lu dlit %lu (flash dlit %lu)",
-					(unsigned long)rs.pool_tris, (unsigned long)rs.dlit,
-					(unsigned long)dlit_flash);
+				CHECK(rs.nvg == 0 && rs.dlit > 0 && gs.hash != hash_nvg,
+					"lit: nvg %lu dlit %lu hash %08lx (night vision %08lx)",
+					(unsigned long)rs.nvg, (unsigned long)rs.dlit, (unsigned long)gs.hash,
+					(unsigned long)hash_nvg);
 			l->die = 0;
 			ren_dlight_frame(t + 1, 0);
 		}
-		finish("DLIGHT", "D1 pool, D2 falloff grid + minlight, D4 brightness + trace end, model term "
-			"(dlights.md 4), flashlight pool pieces drawn, not vertex-lit");
-		(void)tris_flash;
+		if (made)
+			ent_destroy(ENT_PLAYER);
+		finish("DLIGHT", "D1 pool, D2 falloff grid + minlight, model term (dlights.md 4), "
+			"night vision: the player's EF_DIMLIGHT no light, no vertex dlight, lit without");
 	}
 }
 

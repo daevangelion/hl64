@@ -167,7 +167,9 @@ Header 64 B:
   ([sc4-format.md](sc4-format.md) "Ramp", render-fx.md 2a), then
   `w × h / 2` CI4 bytes. Side ≤ 64, powers of two; quantisation as the
   world's TEXP pages (tools/cook/bake_world_tex.py build_ci4; masked: slot 0
-  transparent). RAMP is set on every texture of a model some entity of the
+  transparent, its colour the edge fill `fence_fill`; the cart's alpha
+  compare threshold is half the TEX × PRIM alpha, engine/render/gpu.h
+  `gpu_fence_ref`). RAMP is set on every texture of a model some entity of the
   cooked maps can draw Glow / TransAdd (its `model` key, its class's model
   or an env_shooter's `shootmodel`, for an entity with `rendermode` 3 / 5
   or named by an env_render that sets one: `tools/cook/hl_classes.py

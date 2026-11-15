@@ -17,8 +17,10 @@
  * values from engine/world. The flagged ranges are rewritten from the
  * specs: texture animation (431-453) from world-surfaces.md 4, the
  * dynamic-light falloff (634-649) from dlights.md 3. tiny3d / rdpq calls
- * live behind gpu.h. The flashlight is the pool pass over the drawn
- * list (dlights.md 3; world list only, movers not covered yet). OPEN
+ * live behind gpu.h. Night vision (architecture.md D12: the local
+ * player's EF_DIMLIGHT) is a GPU mode of the frame (gpu_view_t.nvg): the
+ * vertex light is not drawn then, so styled meshlets are not recoloured
+ * and no dynamic light touches the world. OPEN
  * seams (cwg-format.md): while the player is in an OPEN seam's approach
  * box, B's draw set is drawn across layers (draw_open_seam).
  *
@@ -49,10 +51,6 @@
 #define ZNEAR		4.0f
 #define ZFAR		8192.0f
 #define DL_PAIRS	512		/* dlit scratch per frame (vertex pairs) */
-#define FP_PAIRS	192		/* flashlight pool vertex pairs per frame */
-#define FP_IDX		512		/* flashlight pool strip indices per frame */
-#define FP_IDX_ALIGN	4		/* indices per 8 bytes: each batch's strip start (fp_flush) */
-_Static_assert(FP_IDX % FP_IDX_ALIGN == 0, "padded batch starts stay inside the pool");
 
 typedef struct {
 	const w64_meshlet_t	*m;
@@ -78,12 +76,11 @@ static struct {
 } oseam = { -1, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } };
 
 static w64_vert_t	*dl_buf[2];
-static w64_vert_t	*fp_v[2];	/* flashlight pool, double-buffered */
-static int16_t		*fp_i[2];
 static int		dl_used, dl_cur;
 static int		ndl;
 static const ren_dlight_t *dl[HL64_DLIGHTS];
 static float		norm5[32], norm6[64];
+static int		nvg;		/* this frame: night vision (gpu_view_t.nvg) */
 
 void ren_init(void)
 {
@@ -95,15 +92,10 @@ void ren_init(void)
 		sys_error("render: draw list %lu B > scratch region", (unsigned long)need);
 	vis = (vis_t *)s;
 	order = (uint16_t *)(s + HL64_REN_VIS_MAX * sizeof(vis_t));
-	if (2u * DL_PAIRS * sizeof(w64_vert_t) + 2u * FP_PAIRS * sizeof(w64_vert_t)
-		+ 2u * FP_IDX * sizeof(int16_t) > mem_region_bytes(MEM_DLIGHT))
-		sys_error("render: dlight scratch + flashlight pool > dlight region");
+	if (2u * DL_PAIRS * sizeof(w64_vert_t) > mem_region_bytes(MEM_DLIGHT))
+		sys_error("render: dlight scratch > dlight region");
 	dl_buf[0] = mem_region(MEM_DLIGHT);
 	dl_buf[1] = dl_buf[0] + DL_PAIRS;
-	fp_v[0] = dl_buf[1] + DL_PAIRS;
-	fp_v[1] = fp_v[0] + FP_PAIRS;
-	fp_i[0] = (int16_t *)(fp_v[1] + FP_PAIRS);
-	fp_i[1] = fp_i[0] + FP_IDX;
 	for (i = 0; i < 32; i++)
 		norm5[i] = (float)(i - 16) / 15.5f;
 	for (i = 0; i < 64; i++)
@@ -396,7 +388,9 @@ static void draw_list(wld_layer_t *L, int n, const float org[3], int lit)
 			last_bind = tp;
 			st.binds++;
 		}
-		if (m->style != W64_NONE)
+		/* night vision draws no vertex light: a style change waits for
+		 * the next lit frame (the meshlet's epoch stays behind) */
+		if (m->style != W64_NONE && !nvg)
 			relight(L, e->chunk_idx, e->chunk, m);
 		v = (const w64_vert_t *)(e->chunk + W64_MESHLET_VOFS(m));
 		if (lit && ndl)
@@ -623,330 +617,6 @@ void ren_mover_draw(int e, int gpu_mode, const uint8_t prim[4])
 		set_pages(H);
 }
 
-/* ---- flashlight pool (dlights.md 3) ----------------------------------- */
-
-#define FP_BATCH	64		/* vertices per gpu_draw */
-#define FP_SCALE	64.0f		/* pool positions: 1/64 u relative to the light */
-#define FP_POLY		12
-
-static const ren_dlight_t *flash;
-static float		fp_cs[9][2];	/* wedge j's direction: cos, sin of j pi / 4 */
-static int		fp_cs_ok;
-#define FP_MISS		0.5f		/* u a wedge's box must clear a triangle by */
-static int		fp_cur, fp_used, fp_iused;
-
-/* Keep the part of poly (n points) with m.x >= d. */
-static int fp_clip(float (*in)[3], int n, const float m[3], float d, float (*out)[3])
-{
-	int i, k, o = 0;
-
-	for (i = 0; i < n; i++)
-	{
-		const float *a = in[i], *b = in[(i + 1) % n];
-		float da = m[0] * a[0] + m[1] * a[1] + m[2] * a[2] - d;
-		float db = m[0] * b[0] + m[1] * b[1] + m[2] * b[2] - d;
-
-		if (da >= 0 && o < FP_POLY)
-			memcpy(out[o++], a, sizeof(out[0]));
-		if ((da >= 0) != (db >= 0) && o < FP_POLY)
-		{
-			float t = da / (da - db);
-
-			for (k = 0; k < 3; k++)
-				out[o][k] = a[k] + t * (b[k] - a[k]);
-			o++;
-		}
-	}
-	return o;
-}
-
-static float fp_dot(const float a[3], const float b[3])
-{
-	return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-static void fp_cross(const float a[3], const float b[3], float o[3])
-{
-	o[0] = a[1] * b[2] - a[2] * b[1];
-	o[1] = a[2] * b[0] - a[0] * b[2];
-	o[2] = a[0] * b[1] - a[1] * b[0];
-}
-
-/* Submit the batch [*v0, fp_used) pairs / [*i0, fp_iused) indices. The
- * next batch's indices start on the next 8-byte boundary (gpu.h
- * gpu_draw): the RSP DMA drops an index pointer's low 3 bits, and a
- * shifted strip both draws wrong triangles and, when the last index it
- * sees opens a strip, steps past the strip's end and runs on through DMEM
- * (ares: RSP CRASH in rspq_next_buffer, RDP busy, a frame after the
- * flashlight came on). Vertex pairs are 32 bytes: always aligned. */
-static void fp_flush(int *v0, int *i0)
-{
-	int nv = (fp_used - *v0) * 2, ni = fp_iused - *i0;
-
-	if (ni > 0)
-	{
-		gpu_writeback(&fp_v[fp_cur][*v0], (uint32_t)(fp_used - *v0) * sizeof(w64_vert_t));
-		gpu_writeback(&fp_i[fp_cur][*i0], (uint32_t)ni * sizeof(int16_t));
-		gpu_draw(&fp_v[fp_cur][*v0], nv, &fp_i[fp_cur][*i0], ni);
-	}
-	fp_iused = (fp_iused + FP_IDX_ALIGN - 1) & ~(FP_IDX_ALIGN - 1);
-	*v0 = fp_used;
-	*i0 = fp_iused;
-}
-
-/* The spot on one base triangle (p3 in drawn winding, layer-local; cooked
- * vertices vi of vp): 8 wedges of the falloff cone around the light's
- * foot, each clipped to the triangle; shade = base (barycentric) +
- * falloff x brightness before the light scale, st from the base's
- * gradients; strip winding = the base's. */
-static void fp_tri(const wld_layer_t *L, const float lo[3], float p3[3][3],
-	const w64_vert_t *vp, const int vi[3], int *v0, int *i0)
-{
-	float e1[3], e2[3], n[3], u[3], w[3], foot[3], len, pd, reach, area, tb[4];
-	float b = (float)flash->color[0] / 255.0f;
-	uint32_t ls = L->hdr.lightscale_x100;
-	unsigned stride = L->hdr.idx_stride ? L->hdr.idx_stride : 1;
-	int k, j, e;
-
-	for (k = 0; k < 3; k++)
-	{
-		e1[k] = p3[1][k] - p3[0][k];
-		e2[k] = p3[2][k] - p3[0][k];
-	}
-	fp_cross(e1, e2, n);
-	area = sqrtf(fp_dot(n, n));
-	if (area < 1e-3f)
-		return;
-	for (k = 0; k < 3; k++)
-		n[k] /= area;
-	pd = fp_dot(n, lo) - fp_dot(n, p3[0]);
-	reach = flash->radius - (pd < 0 ? -pd : pd);
-	if (reach < 1 || reach < flash->minlight)
-		return;
-	for (k = 0; k < 3; k++)
-		foot[k] = lo[k] - pd * n[k];
-	/* fan axes from the plane alone, not from the triangle's own edge:
-	 * coplanar neighbours cut the same wedges, so their pieces meet on
-	 * the shared edge at the same points (a per-triangle fan left
-	 * T-junctions there: a dotted crack along the diagonals on ares) */
-	{
-		float ax[3] = { 0, 0, 1 };
-
-		if (n[2] > 0.9f || n[2] < -0.9f)
-		{
-			ax[0] = 1;
-			ax[2] = 0;
-		}
-		fp_cross(ax, n, u);
-	}
-	len = sqrtf(fp_dot(u, u));
-	for (k = 0; k < 3; k++)
-		u[k] /= len;
-	fp_cross(n, u, w);
-	/* the wedge directions (the same hl_cosf / hl_sinf values, once) */
-	if (!fp_cs_ok)
-	{
-		for (j = 0; j <= 8; j++)
-		{
-			fp_cs[j][0] = hl_cosf((float)j * 0.785398f);
-			fp_cs[j][1] = hl_sinf((float)j * 0.785398f);
-		}
-		fp_cs_ok = 1;
-	}
-	/* the triangle in the fan's plane coordinates (u, w around the
-	 * foot): a wedge whose box it misses by FP_MISS cuts nothing from
-	 * it (its clip would come out empty), so it is not clipped */
-	for (k = 0; k < 3; k++)
-	{
-		float r[3], x, y;
-
-		for (e = 0; e < 3; e++)
-			r[e] = p3[k][e] - foot[e];
-		x = fp_dot(r, u);
-		y = fp_dot(r, w);
-		tb[0] = k ? (x < tb[0] ? x : tb[0]) : x;
-		tb[1] = k ? (y < tb[1] ? y : tb[1]) : y;
-		tb[2] = k ? (x > tb[2] ? x : tb[2]) : x;
-		tb[3] = k ? (y > tb[3] ? y : tb[3]) : y;
-	}
-	if (tb[0] > reach + FP_MISS || tb[2] < -reach - FP_MISS || tb[1] > reach + FP_MISS
-		|| tb[3] < -reach - FP_MISS)
-		return;
-	for (j = 0; j < 8; j++)
-	{
-		float poly[FP_POLY][3], tmp[FP_POLY][3];
-		float c0 = fp_cs[j][0], s0 = fp_cs[j][1], c1 = fp_cs[j + 1][0], s1 = fp_cs[j + 1][1];
-		float wx0 = reach * c0, wy0 = reach * s0, wx1 = reach * c1, wy1 = reach * s1;
-		int np = 3, i, first, lo_i = 0, hi_i, s;
-
-		if (tb[0] > (wx0 > wx1 ? (wx0 > 0 ? wx0 : 0) : (wx1 > 0 ? wx1 : 0)) + FP_MISS
-			|| tb[2] < (wx0 < wx1 ? (wx0 < 0 ? wx0 : 0) : (wx1 < 0 ? wx1 : 0)) - FP_MISS
-			|| tb[1] > (wy0 > wy1 ? (wy0 > 0 ? wy0 : 0) : (wy1 > 0 ? wy1 : 0)) + FP_MISS
-			|| tb[3] < (wy0 < wy1 ? (wy0 < 0 ? wy0 : 0) : (wy1 < 0 ? wy1 : 0)) - FP_MISS)
-			continue;
-		for (k = 0; k < 3; k++)
-		{
-			poly[0][k] = foot[k];
-			poly[1][k] = foot[k] + reach * (c0 * u[k] + s0 * w[k]);
-			poly[2][k] = foot[k] + reach * (c1 * u[k] + s1 * w[k]);
-		}
-		for (e = 0; e < 3 && np >= 3; e++)
-		{
-			const float *q0 = p3[e], *q1 = p3[(e + 1) % 3];
-			float ed[3], m[3];
-
-			for (k = 0; k < 3; k++)
-				ed[k] = q1[k] - q0[k];
-			fp_cross(n, ed, m);
-			if (fp_dot(m, p3[(e + 2) % 3]) < fp_dot(m, q0))
-				for (k = 0; k < 3; k++)
-					m[k] = -m[k];
-			np = fp_clip(poly, np, m, fp_dot(m, q0), tmp);
-			memcpy(poly, tmp, sizeof(poly[0]) * (size_t)np);
-		}
-		if (np < 3)
-			continue;
-		if ((fp_used - *v0) * 2 + np > FP_BATCH)
-			fp_flush(v0, i0);
-		if (fp_used + (np + 1) / 2 > FP_PAIRS || fp_iused + np > FP_IDX)
-			return;		/* the frame's pool is full */
-		first = (fp_used - *v0) * 2;
-		for (i = 0; i < np; i++)
-		{
-			w64_vert_t *o = &fp_v[fp_cur][fp_used + (i >> 1)];
-			int16_t *pos = (i & 1) ? o->posB : o->posA;
-			int16_t *st2 = (i & 1) ? o->stB : o->stA;
-			uint32_t *rgba = (i & 1) ? &o->rgbaB : &o->rgbaA;
-			float r[3], x[3], wt[3], base = 0, q, add, sv[2] = { 0, 0 };
-			uint32_t c8;
-			int t;
-
-			/* barycentric of the base triangle */
-			for (k = 0; k < 3; k++)
-				r[k] = poly[i][k] - p3[0][k];
-			fp_cross(r, e2, x);
-			wt[1] = fp_dot(x, n) / area;
-			fp_cross(e1, r, x);
-			wt[2] = fp_dot(x, n) / area;
-			wt[0] = 1 - wt[1] - wt[2];
-			for (t = 0; t < 3; t++)
-			{
-				const w64_vert_t *pr = &vp[vi[t] >> 1];
-				const int16_t *bst = (vi[t] & 1) ? pr->stB : pr->stA;
-
-				base += wt[t] * (float)(((vi[t] & 1) ? pr->rgbaB : pr->rgbaA) >> 24);
-				sv[0] += wt[t] * bst[0];
-				sv[1] += wt[t] * bst[1];
-			}
-			for (k = 0; k < 3; k++)
-				r[k] = poly[i][k] - foot[k];
-			q = sqrtf(fp_dot(r, r));
-			add = reach - q > 0 ? (reach - q) * b : 0;
-			c8 = (uint32_t)(base + add * (float)ls / 100.0f + 0.5f);
-			if (c8 > 255)
-				c8 = 255;
-			*rgba = c8 << 24 | c8 << 16 | c8 << 8 | (vp[vi[0] >> 1].rgbaA & 0xFF);
-			for (k = 0; k < 3; k++)
-				pos[k] = (int16_t)lrintf((poly[i][k] - lo[k]) * FP_SCALE);
-			st2[0] = (int16_t)lrintf(sv[0]);
-			st2[1] = (int16_t)lrintf(sv[1]);
-			if (!(i & 1))
-				o->normA = o->normB = vp[vi[0] >> 1].normA;
-		}
-		/* the convex piece as one strip: 0, 1, n-1, 2, n-2, ... */
-		hi_i = np - 1;
-		for (s = 0; s < np; s++)
-		{
-			int pick = (s == 0 || (s & 1)) ? lo_i++ : hi_i--;
-			uint16_t ix = (uint16_t)(L->hdr.idx_base + (unsigned)(first + pick) * stride);
-
-			fp_i[fp_cur][fp_iused++] = (int16_t)(s == 0 ? ix | W64_IDX_RESTART : ix);
-		}
-		fp_used += (np + 1) / 2;
-		st.pool_verts += (uint32_t)np;
-		st.pool_tris += (uint32_t)(np - 2);
-	}
-}
-
-/* The flashlight's second pass over the layer's drawn list (dlights.md 3):
- * decal depth, one matrix (the light, 1/64 u). */
-static void flash_pool(wld_layer_t *L, int n, const ren_dlight_t *fl)
-{
-	unsigned stride = L->hdr.idx_stride ? L->hdr.idx_stride : 1, base = L->hdr.idx_base;
-	float lo[3], r = fl->radius;
-	ren_mat_t mt;
-	int i, j, k, v0 = fp_used, i0 = fp_iused;
-
-	for (k = 0; k < 3; k++)
-		lo[k] = fl->origin[k] - L->gofs[k];
-	memset(&mt, 0, sizeof(mt));
-	for (k = 0; k < 3; k++)
-	{
-		mt.m[k][k] = 1.0f / FP_SCALE;
-		mt.m[3][k] = fl->origin[k] - eye_g[k];
-	}
-	mt.m[3][3] = 1.0f;
-	gpu_matrix_push(&mt);
-	gpu_decal_depth(1);
-	for (i = 0; i < n; i++)
-	{
-		const vis_t *e = &vis[i];
-		const w64_meshlet_t *m = e->m;
-		const w64_vert_t *vp = (const w64_vert_t *)(e->chunk + W64_MESHLET_VOFS(m));
-		const int16_t *idx = (const int16_t *)(e->chunk + W64_MESHLET_IOFS(m));
-		const w64_texp_t *tp = L->ch[L->dir->texp_first + e->page].data;
-		int ni = W64_MESHLET_NI(m), nv = W64_MESHLET_NV(m), s0 = 0;
-
-		for (k = 0; k < 3; k++)
-			if (lo[k] + r < m->bbox[k] || lo[k] - r > m->bbox[k + 3])
-				break;
-		if (k < 3)
-			continue;
-		if ((const void *)tp != last_bind)
-		{
-			fp_flush(&v0, &i0);
-			gpu_bind_page(tp, L->page_state + (uint32_t)e->page * WLD_PAGE_STATE);
-			last_bind = tp;
-			st.binds++;
-		}
-		for (j = 0; j < ni; j++)
-		{
-			int vi[3], t;
-			float p3[3][3];
-
-			if ((uint16_t)idx[j] & W64_IDX_RESTART)
-				s0 = j;
-			if (j - s0 < 2)
-				continue;
-			for (t = 0; t < 3; t++)
-			{
-				vi[t] = (int)(((uint16_t)idx[j - 2 + t] & 0x3FFF) - base) / (int)stride;
-				if (vi[t] < 0 || vi[t] >= nv)
-					break;
-			}
-			if (t < 3)
-				continue;
-			if ((j - s0) & 1)
-			{
-				t = vi[0];
-				vi[0] = vi[1];
-				vi[1] = t;
-			}
-			for (t = 0; t < 3; t++)
-			{
-				const int16_t *s = (vi[t] & 1) ? vp[vi[t] >> 1].posB : vp[vi[t] >> 1].posA;
-
-				for (k = 0; k < 3; k++)
-					p3[t][k] = s[k];
-			}
-			fp_tri(L, lo, p3, vp, vi, &v0, &i0);
-		}
-	}
-	fp_flush(&v0, &i0);
-	gpu_decal_depth(0);
-	gpu_matrix_pop();
-}
-
 static void draw_layer(wld_layer_t *L)
 {
 	const uint16_t *list;
@@ -1022,8 +692,6 @@ static void draw_layer(wld_layer_t *L)
 	push_translation(L->gofs);
 	draw_list(L, n, L->gofs, 1);
 	gpu_matrix_pop();
-	if (flash)
-		flash_pool(L, n, flash);
 
 	if (nmov)
 	{
@@ -1363,20 +1031,17 @@ void ren_frame(double time)
 		fr_n[2][k] = v.fwd[k] * sy + v.up[k] * cy;
 		fr_n[3][k] = v.fwd[k] * sy - v.up[k] * cy;
 	}
+	/* night vision: the local player's EF_DIMLIGHT (game/hl/player.c
+	 * FlashlightTurnOn); the world then takes no dynamic light */
+	nvg = ent_is_live(ENT_PLAYER) && (ent_rnd(ENT_PLAYER)->effects & EF_DIMLIGHT);
+	v.nvg = (uint8_t)nvg;
+	st.nvg = (uint32_t)nvg;
 	ndl = 0;
-	flash = NULL;
-	for (i = 0; i < HL64_DLIGHTS; i++)
+	for (i = 0; i < HL64_DLIGHTS && !nvg; i++)
 		if (ren_dlight_live(i) && ren_dlight(i)->world)
-		{
-			if (ren_dlight(i)->flash)
-				flash = ren_dlight(i);	/* the pool pass, not vertices */
-			else
-				dl[ndl++] = ren_dlight(i);
-		}
+			dl[ndl++] = ren_dlight(i);
 	dl_cur ^= 1;
 	dl_used = 0;
-	fp_cur ^= 1;
-	fp_used = fp_iused = 0;
 	last_bind = NULL;
 
 	gpu_begin(&v);

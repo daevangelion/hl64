@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Scene hl2-duct-flashlight (test/README.md): hldemo2's dark pipe duct with
-# the HEV flashlight on (dynamic light over the duct's world surfaces):
+# the HEV flashlight on (night vision, architecture.md D12):
 # uplink.route lines 66-135 (the soda room opens the duct: hl2-soda's ops),
 # window SHOT duct-dark .. SHOT vent-flashlight (2.5 s in the route), then
 # 8 s held at the duct end looking down it, flashlight still on (part

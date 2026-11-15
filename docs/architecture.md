@@ -211,7 +211,7 @@ information only.
 | think heap, active bitsets, grid tables | 12 | 6.3 KB (52%) | area tree + leaf lists | **measured** |
 | sound (16 voice buffers, 10 wav64, loops) | 104 | 76.1 KB (79% of 96) | M5 hazard route 80.9 KB (82832 B) × 1.25 > 100 KB → 104 | **measured** (route, m5-int2 `eb47299`; uplink 82080 B; the earlier `snd_ares.sh` peak was 78144 B) |
 | sprite cache / decals / particles | 64 / 106 / 12 | — / 51.7 KB (92% of the old 56 KB, m3-a) / — | 64 / 8 / 512 | decals: global sheet + 2 per-map placed-decal sheets (`DECL`, one per open layer) + piece vertices, cook-proved (`tools/cook/decals.py`): Uplink 76672 B (29856 + 2 × 11888 t0a0b + 23040), retail 86528 B; carve = retail × 1.25 → **106 KB** (`HL64_DECAL_TEXELS_KB`) |
-| dlight scratch + flashlight pool | 48 | not reported | same | |
+| dlight scratch | 32 | not reported | same | 2 × 512 vertex pairs × 32 B by construction (the flashlight pool's 14 KB went with D12) |
 | HUD sheets + font (ui8) | 128 | 63.5 KB (50%; 65024 B, font creditsfont) | similar | **measured** |
 | debug log ring (cart) | 8 | — | 16 KB console text | 12 |
 | per-frame scratch arena | 96 | not reported | — | |
@@ -862,8 +862,10 @@ builds per-frame lists straight from components (no client entity copies).
    frustum cull → counting sort by texture page → per page one TLUT+CI4
    bind, per meshlet one `t3d_vert_load` + one `t3d_tri_draw_strip` of the
    pre-encoded strip. Styled meshlets recoloured only when a style's value
-   changes (≤ 10 Hz). Dynamic lights on a scratch copy of touched meshlets;
-   flashlight as a decal-Z pool pass. OPEN-seam cross-layer draw per 5.4.
+   changes (≤ 10 Hz). Dynamic lights on a scratch copy of touched meshlets.
+   Night vision (D12, dlights.md 2) is a GPU mode of the frame: texel ×
+   green in the same one-cycle RDP mode, no dlight or restyle work.
+   OPEN-seam cross-layer draw per 5.4.
    Texture animation from the cooked sequence fields (world-surfaces.md).
 3. **Movers**: visible brush entities with their MOVR meshlets under the
    entity matrix; static opaque submodels are baked into sectors (a
@@ -873,8 +875,9 @@ builds per-frame lists straight from components (no client entity copies).
    rspq block (packing budget 2 ms/frame); per entity per frame the bone
    matrices from `game_studio_setup_bones` (D3) into a double-buffered
    pool and one block replay. Lighting: probe (base + one style term,
-   lightstyles.md 4) + dlights. View model: chrome runs CPU-skinned (chrome
-   needs bone-space normals), the other runs replayed from their blocks with
+   lightstyles.md 4) + dlights (night vision: the NVG colour instead).
+   View model: chrome runs CPU-skinned (chrome needs bone-space normals),
+   the other runs replayed from their blocks with
    the pose's bone matrices; posed at the eye with the view's angles (pitch
    negated as a model's, HLSDK V_CalcGunAngle) and drawn last in the
    front 3/10 of the depth range (GoldSrc's view model depth range): it
@@ -914,8 +917,9 @@ spatialise without conversion.
 ## 11. Input
 
 Pad → `usercmd` (stick turn + forward/back, C-buttons strafe/look, Z
-attack, R attack2, A jump, B use, L duck, D-down reload; D-up flashlight,
-D-left/D-right previous/next weapon, Start last weapon as one impulse per
+attack, R attack2, A jump, B use, L duck, D-down reload; D-up night vision
+(the flashlight impulse, D12), D-left/D-right previous/next weapon, Start
+last weapon as one impulse per
 press; one table in `engine/in/in.c`, documented in `docs/controls.md`);
 absolute stick turning scales by `dt`. The route VM injects held buttons
 and impulses into the same command; `ARES_TEST_INPUT` injects at the pad.
@@ -1239,3 +1243,4 @@ campaign graph's chapter boundaries; sizing is redone with the retail data.
 | D9 | Admit QUAKE-INTERFACE files (blocks M0 imports) | (a) amend PROVENANCE.md: importable when the same commit replaces every Quake binding the audit lists and rewrites its flagged ranges; provcheck verifies; (b) CLEAN-only | (a), now for fewer files: revision 2 already rewrites the route runner, console, area links and resource tables; (a) still saves ≈ 15k lines of streaming, seam, record, level-state, sound, studio-residency and sector/studio renderer code whose algorithms are ours |
 | D10 | GoldSrc oracle (blocks M2 fixtures) | (a) run Valve's Linux dedicated server (steamcmd app 90, anonymous) with a HLSDK-built probe game DLL and the player's Uplink maps on this machine, plus retail client captures when the user's Steam login is available; (b) no GoldSrc runs: specs from HLSDK and documentation only, old tree as fallback oracle | (a): server-side behaviour (traces, touches, physics, think timing, pmove via bots) becomes measured ground truth; black-box observation is allowed by PROVENANCE |
 | D11 | Code residency (M6; user direction: only active code resident, no libdragon DSOs) | (a) TLB-mapped fixed-virtual overlays in a 4 KB-frame arena, wired entries; (b) relocating loader into a first-fit arena; (c) fixed-slot overlays | (a): no relocation, no fragmentation, fixed addresses for debugging, clean faults; limit 30 entries (Uplink 18, retail [EST] ≈ 22), fallbacks in 7.4 |
+| D12 | Flashlight look (user decision 2026-11-15, **accepted**; a deliberate departure from GoldSrc) | (a) GoldSrc's flashlight: an 80 u light at the end of the view trace, drawn as a decal-Z pool pass over the world's base triangles (world zone 9.4–12.8 ms with it on vs 1.8–4.5 ms off on ares; 14 KB scratch); (b) Opposing Force-style night-vision goggle: the same `impulse 100` toggle, battery, HUD icon and sound, the frame drawn texel × bright green + green floor with distance fog to black in the world's one-cycle RDP mode, no light | (b): no extra pass or geometry; measured on ares within 0.3 ms of the lit frame (dlights.md 2, D6); the flashlight pool, its trace and its scratch are gone (dlight region 48 → 32 KB). Spec: dlights.md 2 |
