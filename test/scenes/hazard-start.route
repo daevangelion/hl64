@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Scene hazard-start (test/README.md): New Game at the Hazard Course start
+# (t0a0 info_player_start): the spawn's collision window is resident before
+# the first frame (no synchronous COLL read on frame 1: the io `blkmax`),
+# then the start room standing through the hologram's intro.
+# test/routes/hazard.route lines 15-20 (startmap .. stats t0a0) unchanged,
+# then 3 s at the start.
+# scene-window: hazard 1 t0a0
+startmap t0a0
+waitmap t0a0 300
+stats begin
+-duck
+god 1
+stats t0a0
+wait 3
+shot start
+stats end
+wait 0.2
+pass

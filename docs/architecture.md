@@ -359,7 +359,11 @@ SA2 §4.2 as built):
 - **open**: REND + TEXP of the eye leaf's visible sectors; MOVR of visible
   brush entities; COLL of grid cells within ±128 u of the player box and of
   solid/contents brushes touching that window; anything the renderer finds
-  missing is requested at open priority and skipped (pop-in counted).
+  missing is requested at open priority and skipped (pop-in counted). A
+  spawn (New Game, save load, `SETPOS`) reads the window's COLL, and the
+  submodel hulls of the pending records in it (a trigger the first frame's
+  touch wakes), as load I/O before the first frame: the move runs before
+  step 9 names the set, so frame 1 would read them synchronously.
 - **pin**: route look-ahead destinations (test builds), reachable
   teleport destinations, approached seam's B set, cook-generated script pins;
   lapse after 3 s or on arrival.
