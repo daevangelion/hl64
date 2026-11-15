@@ -15,8 +15,8 @@
  * Screens: the title (New Game, Hazard Course, Load Game, Configuration),
  * the pause menu (Start in play: Resume Game, Save Game, Load Game,
  * Configuration, Quit to Title), New Game's difficulty (settings.skill,
- * which the game reads), Configuration (brightness, sound volume, look
- * sensitivity, invert look: applied as they change, stored through
+ * which the game reads), Configuration (brightness, sound volume, music
+ * volume, look sensitivity, invert look: applied as they change, stored through
  * settings_store when the screen is left), the save / load slot lists
  * (include/hl64/save.h) and the quit confirmation.
  *
@@ -178,7 +178,7 @@ static const char *const scr_title[SCR_N] = {
 };
 
 enum { A_SCREEN, A_RESUME, A_START, A_HAZARD, A_SLOT, A_PAK, A_QUIT, A_BACK, A_SET };
-enum { SR_BRIGHT, SR_VOLUME, SR_SENS, SR_INVERT };
+enum { SR_BRIGHT, SR_VOLUME, SR_SENS, SR_INVERT, SR_MUSIC };
 
 typedef struct {
 	const char	*label, *desc;
@@ -317,7 +317,7 @@ static int items(int scr, int ingame, item_t *it)
 					"Learn to play in the Hazard Course.", A_HAZARD, 0 };
 		}
 		it[n++] = (item_t){ "Load Game", "Continue from a saved game.", A_SCREEN, SCR_LOAD };
-		it[n++] = (item_t){ "Configuration", "Brightness, sound volume and look controls.",
+		it[n++] = (item_t){ "Configuration", "Brightness, volumes and look controls.",
 			A_SCREEN, SCR_CONFIG };
 		if (ingame)
 			it[n++] = (item_t){ "Quit to Title",
@@ -334,6 +334,8 @@ static int items(int scr, int ingame, item_t *it)
 			A_SET, SR_BRIGHT };
 		it[n++] = (item_t){ "Sound Volume", "Sound volume. Left / right to change.",
 			A_SET, SR_VOLUME };
+		it[n++] = (item_t){ "Music Volume", "Music volume. Left / right to change.",
+			A_SET, SR_MUSIC };
 		it[n++] = (item_t){ "Look Speed", "Stick and C-button turning speed.",
 			A_SET, SR_SENS };
 		it[n++] = (item_t){ "Invert Look", "C-up looks down, C-down looks up.",
@@ -418,6 +420,10 @@ static void set_change(int row, int dir)
 		v = settings.vol_sfx + 10 * dir;
 		settings_set(SET_VOL_SFX, (float)v);
 		break;
+	case SR_MUSIC:
+		v = settings.vol_music + 10 * dir;
+		settings_set(SET_VOL_MUSIC, (float)v);
+		break;
 	case SR_SENS:
 		v = settings.look_sens + 25 * dir;
 		settings_set(SET_LOOK_SENS, (float)v);
@@ -428,8 +434,9 @@ static void set_change(int row, int dir)
 	}
 	M.dirty = 1;
 	sound(S_SLIDER);
-	log_printf("menu: set brightness=%u volume=%u look=%u invert=%u\n", settings.brightness,
-		settings.vol_sfx, settings.look_sens, settings.invert_y);
+	log_printf("menu: set brightness=%u volume=%u look=%u invert=%u music=%u\n",
+		settings.brightness, settings.vol_sfx, settings.look_sens, settings.invert_y,
+		settings.vol_music);
 }
 
 static void start(int map, const char *what)
@@ -730,6 +737,10 @@ static void row_value(const item_t *it, int y, int hi)
 			snprintf(t, sizeof(t), "%u", settings.vol_sfx);
 			bar(y, settings.vol_sfx, 0, 100, t);
 			break;
+		case SR_MUSIC:
+			snprintf(t, sizeof(t), "%u", settings.vol_music);
+			bar(y, settings.vol_music, 0, 100, t);
+			break;
 		case SR_SENS:
 			snprintf(t, sizeof(t), "%u%%", settings.look_sens);
 			bar(y, settings.look_sens, 25, 200, t);
@@ -914,8 +925,9 @@ void menu_init(int title)
 	layout_check();
 	logo_init();
 	if (title && settings_load(&settings) == 0)
-		log_printf("menu: settings loaded: brightness=%u volume=%u look=%u invert=%u\n",
-			settings.brightness, settings.vol_sfx, settings.look_sens, settings.invert_y);
+		log_printf("menu: settings loaded: brightness=%u volume=%u look=%u invert=%u music=%u\n",
+			settings.brightness, settings.vol_sfx, settings.look_sens, settings.invert_y,
+			settings.vol_music);
 	if (title)
 		log_printf("menu: title\n");
 }

@@ -32,6 +32,9 @@ sounds are derived from those maps' entity lumps, the class table
                         one the player's data lacks gets a warning naming
                         its referrer and is absent (no id; res.def ones stop)
   sound/sentences.txt   pruned to the referenced sentences
+  media/cdNN.wav64      the CD tracks the maps' trigger_cdaudio /
+                        target_cdaudio play, from the player's
+                        media/*.mp3 (tools/cook/hl_music.py)
   titles.txt            pruned to the env_message titles
   maps/<m>.w64          layer packages: tools/cook/bake_world_tex.py ->
                         <staging>/maps/<m>.wci4 (embedded and WAD
@@ -77,7 +80,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-from tools.cook import bake_hlhud, bake_logo, bake_ui, hl_classes, hl_sound_classes, hl_sound_refs
+from tools.cook import bake_hlhud, bake_logo, bake_ui, hl_classes, hl_music, hl_sound_classes
+from tools.cook import hl_sound_refs
 from tools.cook import decals, hl_sprite_cook
 from tools.cook.data import Data, DataError
 from tools.cook.hl_classes import BspError
@@ -435,6 +439,18 @@ def stage_sounds(data: Data, maps: List[str], ents, models: Dict[str, bytes],
         f"{len(refs.titles)} titles")
 
 
+def stage_music(data: Data, ents, ct: Content, staging: Path) -> None:
+    for t, who in hl_music.unknown_tracks(ents):
+        log(f"    warning: CD track {t} ({who}): no GoldSrc track file: plays nothing")
+    try:
+        done = hl_music.stage(data, ents, staging, ct.put_file, log)
+    except hl_music.MusicError as e:
+        raise CookError(str(e)) from None
+    for t, name, size in done:
+        log(f"    {hl_music.content_name(t)}: CD track {t} {name}, {size} B")
+    log(f"    {len(done)} CD tracks")
+
+
 def cook_world(data: Data, maps: List[str], ct: Content, staging: Path, hlecook: Path,
                ref_palette_path: Optional[Path], jobs: int, ids: hleids.Ids) -> None:
     cook = staging / "maps"
@@ -619,6 +635,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         models = stage_models(data, maps, ents, res, gibs, ct)
         log("== sounds, sentences, titles -> sound/, titles.txt ==")
         stage_sounds(data, maps, ents, models, res, ct, staging, a.jobs)
+        log("== CD music -> media/ ==")
+        stage_music(data, ents, ct, staging)
         log("== sprites -> sprites/*.sc4 ==")
         stage_sprites(data, maps, ents, res, ct)
         log("== decals -> gsfx/decals.i4 ==")

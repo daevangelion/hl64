@@ -84,3 +84,41 @@ the listener's own sounds: both ears = volume. Then × master volume.
 | S6 | pitch mapping and cap | self-contained |
 | S7 | sentence word order, modifiers, ≤ one frame gap, stop mid-sentence | host + retail capture of the dome scene |
 | S8 | ≤ 10 open waves, none closed under a voice | host + cart stats |
+| S9 | CD music: hldemo1 start plays track 3, hldemo3 dome_cd_track track 2, `cd stop`, a cut, the end of a track, the volume setting, the session end | host event log (test/m6/music_host.sh) + cart scene |
+
+## 6. CD music
+
+- Behaviour (HLSDK dlls/triggers.cpp): `trigger_cdaudio` (brush; the
+  player's touch or a use) and `target_cdaudio` (point; a use, or every
+  0.5 s from 1 s after spawn while the player is within its `radius` key,
+  `pev->scale`) call PlayCDTrack(`(int)health`) once and remove
+  themselves. Track −1 = the client's `cd stop`; N < −1 or N > 30 = "out
+  of range", nothing; otherwise `cd play N`: N plays once (not looped).
+- Track N → the player's `valve/media/` file (documentation, no engine
+  source: TWHL "Tutorial: Making Music Play in Maps" track table; VDC
+  "List of Half-Life 1 music"): 2 Half-Life01, 3 Prospero01, 4
+  Half-Life12, 5 Half-Life07, 6 Half-Life10, 7 Suspense01, 8 Suspense03,
+  9 Half-Life09, 10 Half-Life02, 11 Half-Life13, 12 Half-Life04, 13
+  Half-Life15, 14 Half-Life14, 15 Half-Life16, 16 Suspense02, 17
+  Half-Life03, 18 Half-Life08, 19 Prospero02, 20 Half-Life05, 21
+  Prospero04, 22 Half-Life11, 23 Half-Life06, 24 Prospero03, 25
+  Half-Life17, 26 Prospero05, 27 Suspense05, 28 Suspense07, 29
+  gamestartup (played by the client at launch; not in retail
+  `valve/media`); 1 (data track) and 30 have no file. Uplink plays 3
+  (hldemo1 `start_cd_audio` at hldemo_init_mm + 0 s, `end_cd_trigger_1`
+  at trigger_once \*149) and 2 (hldemo3 `dome_cd_track`,
+  dish_mm + 1.5 s); the Hazard Course none.
+- A play cuts the playing track. A track plays on through level
+  changes, loads (the client's music is not part of a saved game;
+  **[retail: music across a load]**) and the pause menu; it stops at its
+  end, at `cd stop` and when the session ends (New Game, end of section,
+  Quit to Title). Volume = master × `vol_music` (the Configuration
+  screen's Music Volume, GoldSrc's MP3 volume), separate from the sounds'
+  `vol_sfx`. **[retail S-mix: levels of music against sounds]**
+- Mechanism: the cook converts only the tracks the cooked maps' entities
+  name (`tools/cook/hl_music.py`): `media/cdNN.wav64`, 22050 Hz stereo
+  VADPCM 4-bit without Huffman (1.49 MB of ROM per minute). The music has
+  its own mixer voice (channels 16 and 17: a stereo VADPCM ring pair,
+  sized at boot on the first track) and stream slot, never a sound voice
+  or wave; its reads are AUDIO-class, ahead of the queue (≈ 25 KB/s, 2 KB
+  pieces).

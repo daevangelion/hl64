@@ -70,6 +70,8 @@ typedef struct {
 	 * sensitivity in percent of yawspeed / pitchspeed */
 	uint8_t		brightness;
 	uint8_t		look_sens;
+	/* CD music volume, percent (engine/snd snd_music_play; with vol_master) */
+	uint8_t		vol_music;
 } settings_t;
 
 /* The 3D passes' colour lift (of 255) at brightness b: added to every
@@ -115,7 +117,8 @@ extern settings_t settings;
 	X(AI_BUDGET, ai_budget, F32, 0, 1000000, 0) \
 	X(AI_HOLD, ai_hold, F32, 0, 2, 0) \
 	X(BRIGHTNESS, brightness, U8, 0, 100, 1) \
-	X(LOOK_SENS, look_sens, U8, 25, 200, 1)
+	X(LOOK_SENS, look_sens, U8, 25, 200, 1) \
+	X(VOL_MUSIC, vol_music, U8, 0, 100, 1)
 
 enum {
 #define SETTINGS_ENUM(id, field, type, lo, hi, persist) SET_##id,

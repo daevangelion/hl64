@@ -157,3 +157,8 @@ USE(CDecal_TriggerDecal)
 THINK(CGlow_Think)
 // ---- GameCore: trigger_autosave (M6 SaveGame) ----
 TOUCH(CTriggerSave_SaveTouch)
+// ---- Music: CD audio (triggers.cpp CTriggerCDAudio, CTargetCDAudio) ----
+TOUCH(CTriggerCDAudio_Touch)
+USE(CTriggerCDAudio_Use)
+THINK(CTargetCDAudio_Think)
+USE(CTargetCDAudio_Use)

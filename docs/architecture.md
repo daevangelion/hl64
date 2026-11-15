@@ -935,7 +935,9 @@ voice); wave reads in the `AUDIO` I/O class. The frame's pump is
 `mixer_try_play`, which queues the mixer's RSP rounds without waiting for
 them unless the AI is down to its last buffer (160 ms of AI buffers).
 GoldSrc channel semantics, attenuation and stereo model, loops,
-sentences: specs/sound.md. Sounds are
+sentences: specs/sound.md. CD music (trigger_cdaudio / target_cdaudio,
+specs/sound.md 6): cooked `media/cdNN.wav64` (stereo VADPCM 4-bit, 22050 Hz)
+on a dedicated mixer voice pair (channels 16, 17) and stream slot. Sounds are
 `res_t`; sentences are cooked (word `res_t` lists with VOX modifiers),
 nothing is parsed at run time. Positions are global, so both open layers
 spatialise without conversion.
@@ -998,7 +1000,8 @@ line for the highlighted button, the menu sounds of the player's
   goes on with its next word, an interrupted one-shot ends (a VADPCM wave
   only seeks to its start or loop start). Buttons held as a menu closes
   are ignored until released.
-- **Configuration**: brightness (0..100), sound volume (`vol_sfx`), look
+- **Configuration**: brightness (0..100), sound volume (`vol_sfx`), music
+  volume (`vol_music`), look
   speed (`look_sens`, 25..200 %), invert look; applied as they change,
   stored through `settings_store` when the screen is left, loaded at boot
   in playable builds. Brightness lifts the black level: `gpu_view_t.lift`
@@ -1009,7 +1012,7 @@ line for the highlighted button, the menu sounds of the player's
   ares (scene.sh `--cmd "@2 set brightness N"`): hl1-start 33.4 / 33.5 ms
   avg / p90 at 0, 50 and 100; hl2-yard 51.5 / 77.0, 51.5 / 76.6,
   51.5 / 77.0: no cost. The Configuration screen previews it on a grey
-  ramp. No music volume: the engine has no music path.
+  ramp. Music Volume (`vol_music`) sets the CD music's gain (specs/sound.md 6).
 - **Layout**: framebuffer pixels; the VI scans out all 320×240 inside
   libdragon's CRT-safe area (`VI_CRT_MARGIN`; the cart logs `vi: ...
   columns 0..319, rows 0..239 shown`), so a string is on screen when it is

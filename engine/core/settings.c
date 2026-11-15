@@ -52,6 +52,7 @@ void settings_reset(void)
 	settings.ai_budget = HL64_AI_BUDGET;
 	settings.ai_hold = HL64_AI_HOLD;
 	settings.look_sens = 100;
+	settings.vol_music = 100;
 }
 
 int settings_set(int id, float v)

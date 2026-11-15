@@ -288,7 +288,8 @@ typedef struct {
 	wav64_t		*wav;
 } cwave_t;
 
-static cwave_t	waves[SND_WAVES];
+/* SND_WAVES sound waves, then the music stream (snd_hw_stream_open) */
+static cwave_t	waves[SND_WAVES + 1];
 
 void snd_hw_init(void *mem, uint32_t bytes)
 {
@@ -312,7 +313,7 @@ void snd_hw_init(void *mem, uint32_t bytes)
 		sys_error("snd: cannot attach the snd:/ filesystem");
 	mem_heap_redirect(&redirect);
 	redirect.active = 1;
-	mixer_init(SND_VOICES);
+	mixer_init(SND_CHANNELS);
 	/*
 	 * Voice buffers now, not on a voice's first play: mixer_ch_play
 	 * allocates a voice's sample ring when it first sounds and keeps it
@@ -336,6 +337,11 @@ void snd_hw_init(void *mem, uint32_t bytes)
 		mixer_ch_set_vol(i, 1.0f, 1.0f);
 	}
 	wav64_close(silent);
+	/* the music voice: CD tracks at SND_HZ, no pitch; snd.c sizes its
+	 * ring at boot by playing the first track the cart has (a stereo
+	 * VADPCM wave holds a ring pair, on SND_MUSIC and the next channel) */
+	mixer_ch_set_limits(SND_MUSIC, 16, (float)SND_HZ, 0);
+	mixer_ch_set_vol(SND_MUSIC, 1.0f, 1.0f);
 	redirect.active = 0;
 	mixer_set_vol(1.0f);
 }
@@ -345,19 +351,22 @@ static uint32_t be32(const uint8_t *p)
 	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
 }
 
-int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
+/* Open the wav64 at [rom, rom + size) into slot i: 0 ok, -1 not a wave
+ * this cart plays, -2 no room. music: the music stream's rules (VADPCM
+ * without Huffman, no loop) instead of the sounds' (VADPCM or raw). */
+static int open_slot(int i, uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave,
+	int music)
 {
 	wav64_loadparms_t parms;
 	char path[32];
-	uint8_t h[HDR_BYTES];
-	uint32_t ext, need;
-	int i;
+	uint8_t h[HDR_BYTES + 4];
+	uint32_t ext, need, hb = music ? HDR_BYTES + 4 : HDR_BYTES;
 
 	*wave = NULL;
-	if (!rom || size < HDR_BYTES || (rom & 1))
+	if (!rom || size < hb || (rom & 1))
 		return -1;
-	io_read_audio(bounce, rom, HDR_BYTES);
-	memcpy(h, bounce, HDR_BYTES);
+	io_read_audio(bounce, rom, hb);
+	memcpy(h, bounce, hb);
 	/* wav64 asserts on what it cannot play: check first (version 10, VADPCM
 	 * or raw, mono / stereo, 16-bit, a loop only at the end, data inside
 	 * the file) */
@@ -365,13 +374,18 @@ int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
 		|| h[7] != 16 || !be32(h + 8) || !be32(h + 12) || be32(h + 16) > be32(h + 12)
 		|| be32(h + 20) || be32(h + 24) < HDR_BYTES || be32(h + 24) > size)
 		return -1;
-	for (i = 0; i < SND_WAVES && waves[i].wav; i++)
-		;
+	/* music: VADPCM whose bits the RSP decodes (a Huffman stream's decode
+	 * runs on the CPU: 0.8 ms more per frame, Music slice bench), played
+	 * once */
+	if (music && (h[5] != 1 || be32(h + 16) || be32(h + 24) < HDR_BYTES + 4 || (h[34] << 8 | h[35]) & 1))
+		return -1;
+	if (waves[i].wav)
+		return -2;
 	/* wav64 state + waveform + name + extended header (+ VADPCM Huffman
 	 * tables 3 x 256) in one block, then the file handle */
 	ext = be32(h + 24) - HDR_BYTES;
 	need = 256 + ((ext + 15u) & ~15u) + 3 * 256 + 64;
-	if (i == SND_WAVES || arena_largest() < need)
+	if (arena_largest() < need)
 		return -2;
 	/* wav64 opens (and closes) the file through snd_fs */
 	snprintf(path, sizeof(path), "snd:/%lx/%lx", (unsigned long)rom, (unsigned long)size);
@@ -390,6 +404,25 @@ int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
 	info->loop_len = (uint32_t)waves[i].wav->wave.loop_len;
 	*wave = &waves[i];
 	return 0;
+}
+
+int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
+{
+	int i;
+
+	for (i = 0; i < SND_WAVES && waves[i].wav; i++)
+		;
+	if (i == SND_WAVES)
+	{
+		*wave = NULL;
+		return -2;
+	}
+	return open_slot(i, rom, size, info, wave, 0);
+}
+
+int snd_hw_stream_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
+{
+	return open_slot(SND_WAVES, rom, size, info, wave, 1);
 }
 
 void snd_hw_close(void *wave)

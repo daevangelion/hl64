@@ -62,6 +62,16 @@ void	snd_init(void);
 void	snd_frame(const float listener[3], const float right[3], double dt);
 void	snd_entity_freed(int e);
 
+/* CD music (HLSDK PlayCDTrack: the client's `cd play N` / `cd stop`;
+ * docs/specs/sound.md 6): track N (2..30) plays once from the cart's
+ * media/cdNN.wav64 (tools/cook/hl_music.py: the player's MP3 of GoldSrc's
+ * track N) on the music voice, at vol_master x vol_music; a track the cart
+ * lacks plays nothing. The playing track gives way to the next play, ends
+ * at its end, and plays on through level changes, loads and the pause
+ * menu; snd_music_stop is `cd stop` and the session's end (eng.c). */
+void	snd_music_play(int track);
+void	snd_music_stop(void);
+
 /* The window runs from the last reset: emits..dropped and the peaks count
  * in it, us = mean snd_frame CPU (backend pump included) over its frames,
  * us_max the worst frame. mem = SOUND region bytes in use (tables + the
@@ -73,6 +83,7 @@ typedef struct {
 	uint32_t	us, us_max, frames;
 	uint32_t	pump_us;	/* mean backend pump (cart: mixer_try_play) per frame */
 	uint32_t	mem, mem_peak, mem_region;
+	uint32_t	music;		/* CD track playing now, 0 none */
 } snd_stats_t;
 void	snd_stats(snd_stats_t *s, int reset);
 /* Sounds and sentences started (snd_emit, snd_sentence calls) since boot:

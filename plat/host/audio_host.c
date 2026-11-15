@@ -8,7 +8,9 @@
  * advances by rate x dt at every pump, a looped wave wraps to its loop
  * start, a one-shot ends at its length. engine/snd/snd.c above it is the
  * cart's code, so voice allocation, loops, sentences and the event log are
- * the cart's.
+ * the cart's. The music stream (SND_MUSIC) also reads the bytes its
+ * samples take from the cart as it plays, in the cart's AUDIO-class
+ * pieces, so the host's audio I/O counts the cart's streaming.
  */
 #include <string.h>
 
@@ -17,10 +19,12 @@
 #include "engine/snd/snd_hw.h"
 
 #define HDR_BYTES	32
+#define PIECE		2048	/* plat/n64/audio.c BOUNCE: its AUDIO reads */
 
 typedef struct {
 	uint8_t		used;
 	snd_wave_info_t	inf;
+	uint32_t	data, bytes;	/* sample data: cart address, size */
 } hwave_t;
 
 typedef struct {
@@ -29,12 +33,13 @@ typedef struct {
 	double		end_off;	/* s into the last pump at which it ended, -1 */
 	float		rate;
 	uint8_t		playing;
+	uint32_t	read;		/* stream bytes read so far (SND_MUSIC) */
 } hvoice_t;
 
 typedef struct {
-	hwave_t		w[SND_WAVES];
-	hvoice_t	v[SND_VOICES];
-	uint8_t		hdr[32] __attribute__((aligned(16)));
+	hwave_t		w[SND_WAVES + 1];	/* the waves, then the music stream */
+	hvoice_t	v[SND_CHANNELS];
+	uint8_t		hdr[PIECE] __attribute__((aligned(16)));
 } host_audio_t;
 
 static host_audio_t	*H;
@@ -55,15 +60,18 @@ void snd_hw_init(void *mem, uint32_t bytes)
 	h_bytes = ((uint32_t)sizeof(host_audio_t) + 15u) & ~15u;
 }
 
-int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
+/* Open into slot i (snd_hw_open / snd_hw_stream_open, plat/n64/audio.c
+ * open_slot's rules): 0, -1 not a playable wave, -2 no room. */
+static int open_slot(int i, uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave,
+	int music)
 {
 	const uint8_t *h = H->hdr;
-	int i;
+	uint32_t hb = music ? HDR_BYTES + 4 : HDR_BYTES;
 
 	*wave = NULL;
-	if (!rom || size < HDR_BYTES || (rom & 1))
+	if (!rom || size < hb || (rom & 1))
 		return -1;
-	io_read_audio(H->hdr, rom, HDR_BYTES);
+	io_read_audio(H->hdr, rom, hb);
 	if (memcmp(h, "WV64", 4) || h[4] != 10 || (h[5] != 0 && h[5] != 1) || (h[6] != 1 && h[6] != 2)
 		|| h[7] != 16)
 		return -1;
@@ -76,22 +84,39 @@ int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
 	if (!info->freq || !info->len || info->loop_len > info->len || be32(h + 20)
 		|| be32(h + 24) < HDR_BYTES || be32(h + 24) > size)
 		return -1;
+	if (music && (h[5] != 1 || info->loop_len || be32(h + 24) < hb || (h[34] << 8 | h[35]) & 1))
+		return -1;
+	if (H->w[i].used)
+		return -2;
+	H->w[i].used = 1;
+	H->w[i].inf = *info;
+	H->w[i].data = rom + be32(h + 24);
+	H->w[i].bytes = size - be32(h + 24);
+	*wave = &H->w[i];
+	return 0;
+}
+
+int snd_hw_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
+{
+	int i;
+
 	for (i = 0; i < SND_WAVES; i++)
 		if (!H->w[i].used)
-		{
-			H->w[i].used = 1;
-			H->w[i].inf = *info;
-			*wave = &H->w[i];
-			return 0;
-		}
+			return open_slot(i, rom, size, info, wave, 0);
+	*wave = NULL;
 	return -2;
+}
+
+int snd_hw_stream_open(uint32_t rom, uint32_t size, snd_wave_info_t *info, void **wave)
+{
+	return open_slot(SND_WAVES, rom, size, info, wave, 1);
 }
 
 void snd_hw_close(void *wave)
 {
 	int v;
 
-	for (v = 0; v < SND_VOICES; v++)
+	for (v = 0; v < SND_CHANNELS; v++)
 		if (H->v[v].playing && H->v[v].w == wave)
 			sys_error("snd: wave closed under voice %d", v);
 	((hwave_t *)wave)->used = 0;
@@ -106,6 +131,7 @@ void snd_hw_play(int v, void *wave, uint32_t pos)
 	p->end_off = -1.0;
 	p->rate = (float)p->w->inf.freq;
 	p->playing = 1;
+	p->read = 0;
 }
 
 void snd_hw_stop(int v)
@@ -136,11 +162,32 @@ void snd_hw_vol(int v, float left, float right)
 	(void)right;
 }
 
+/* The music stream's cart reads up to its play position: the bytes of the
+ * samples played so far (the stream's mean bytes per sample), in
+ * PIECE-sized AUDIO reads as the cart's snd_fs. */
+static void stream_read(hvoice_t *p)
+{
+	const hwave_t *w = p->w;
+	uint32_t want = (uint32_t)((double)w->bytes * p->pos / (double)w->inf.len);
+
+	if (want > w->bytes)
+		want = w->bytes;
+	while (p->read < want)
+	{
+		uint32_t n = want - p->read, at = w->data + p->read, odd = at & 1u;
+
+		if (n > PIECE - 2)
+			n = PIECE - 2;
+		io_read_audio(H->hdr, at - odd, (n + odd + 1u) & ~1u);
+		p->read += n;
+	}
+}
+
 void snd_hw_pump(double dt)
 {
 	int v;
 
-	for (v = 0; v < SND_VOICES; v++)
+	for (v = 0; v < SND_CHANNELS; v++)
 	{
 		hvoice_t *p = &H->v[v];
 		const snd_wave_info_t *in;
@@ -167,6 +214,8 @@ void snd_hw_pump(double dt)
 			p->pos = in->len;
 			p->playing = 0;
 		}
+		if (v == SND_MUSIC)
+			stream_read(p);
 	}
 }
 

@@ -46,7 +46,8 @@
 	X(PAD, "pad", "uff", 1)			/* port 1 held as SYS_PAD_* buttons, stick x, y (-128..127) until the next pad command (engine/in) */ \
 	X(SAVE, "save", "u", 0)			/* slot: save the game at this frame boundary (engine/save) */ \
 	X(LOAD, "load", "u", 0)			/* slot: load it at the next frame boundary */ \
-	X(FLASH, "flash", "u", 1)		/* FlashRAM self-test: 0 probe + directory, 1 write / read back the last sector */
+	X(FLASH, "flash", "u", 1)		/* FlashRAM self-test: 0 probe + directory, 1 write / read back the last sector */ \
+	X(MUSIC, "music", "u", 1)		/* CD track: snd_music_play (0 = snd_music_stop) */
 
 enum {
 #define DBG_ENUM(id, name, args, test) DBG_##id,

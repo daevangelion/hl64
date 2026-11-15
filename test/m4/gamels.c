@@ -183,6 +183,7 @@ static const struct { const char *name; int carry; } hlsdk_carry[] = {
 	{ "trigger_once", 0 }, { "trigger_counter", 0 }, { "trigger_hurt", 0 },
 	{ "trigger_push", 0 }, { "trigger_teleport", 0 }, { "trigger_transition", 0 },
 	{ "trigger_changelevel", 0 }, { "trigger_endsection", 0 }, { "trigger_autosave", 0 },
+	{ "target_cdaudio", 0 }, { "trigger_cdaudio", 0 },
 	{ "info_target", 0 },
 	{ "info_landmark", 0 }, { "info_player_start", 0 }, { "info_teleport_destination", 0 },
 	{ "scripted_sequence", 0 }, { "aiscripted_sequence", 0 }, { "grenade", 1 },

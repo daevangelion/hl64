@@ -151,6 +151,8 @@ snap brightness
 tap $DOWN '^menu: select config Sound Volume'
 tap $LEFT '^menu: set '
 tap $LEFT '^menu: set '
+tap $DOWN '^menu: select config Music Volume'
+tap $LEFT '^menu: set '
 tap $DOWN '^menu: select config Look Speed'
 tap $RIGHT '^menu: set '
 snap settings
