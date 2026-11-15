@@ -144,7 +144,9 @@ void Mon_MaintainSchedule(int e)
 				t = Mon_GetTask(e);
 			}
 			Mon_TaskBegin(m);
+			Ai_StartTask(e, 1);
 			Mon_StartTask(e, t);
+			Ai_StartTask(e, 0);
 			if (!ent_is_live(e))
 				return;
 		}
@@ -185,7 +187,8 @@ void CBaseMonster_RunTask(int e, const Task_t *t)
 		target = EHGet(t->iTask == TASK_PLAY_SEQUENCE_FACE_TARGET ? m->m_hTargetEnt : m->m_hEnemy);
 		if (target >= 0)
 		{
-			VecSub(ent_cv(target)->origin, cv->origin, d);
+			OriginIn(target, e, d);
+			VecSub(d, cv->origin, d);
 			ent_phys(e)->ideal_yaw = UTIL_VecToYaw(d);
 			Mon_ChangeYaw(e, (int)ent_phys(e)->yaw_speed);
 		}
@@ -235,10 +238,13 @@ void CBaseMonster_RunTask(int e, const Task_t *t)
 			Mon_TaskFail(m);
 		else
 		{
+			float to[3];
+
+			OriginIn(target, e, to);
 			dist = mv_dist2d(m->m_vecMoveGoal, cv->origin);
-			if (dist < t->flData || mv_dist(m->m_vecMoveGoal, ent_cv(target)->origin) > t->flData * 0.5f)
+			if (dist < t->flData || mv_dist(m->m_vecMoveGoal, to) > t->flData * 0.5f)
 			{
-				VecCopy(ent_cv(target)->origin, m->m_vecMoveGoal);
+				VecCopy(to, m->m_vecMoveGoal);
 				dist = mv_dist2d(m->m_vecMoveGoal, cv->origin);
 				Mon_FRefreshRoute(e);
 			}
@@ -442,7 +448,8 @@ void CBaseMonster_StartTask(int e, const Task_t *t)
 	case TASK_FIND_NEAR_NODE_COVER_FROM_ENEMY:
 		if ((en = enemy_or_fail(m)) < 0)
 			return;
-		if (Mon_FindCover(e, ent_cv(en)->origin, view_ofs_of(en), 0, t->flData))
+		OriginIn(en, e, p);
+		if (Mon_FindCover(e, p, view_ofs_of(en), 0, t->flData))
 			Mon_TaskComplete(m);
 		else
 			Mon_TaskFail(m);
@@ -450,7 +457,8 @@ void CBaseMonster_StartTask(int e, const Task_t *t)
 	case TASK_FIND_FAR_NODE_COVER_FROM_ENEMY:
 		if ((en = enemy_or_fail(m)) < 0)
 			return;
-		if (Mon_FindCover(e, ent_cv(en)->origin, view_ofs_of(en), t->flData, Mon_CoverRadius(e)))
+		OriginIn(en, e, p);
+		if (Mon_FindCover(e, p, view_ofs_of(en), t->flData, Mon_CoverRadius(e)))
 			Mon_TaskComplete(m);
 		else
 			Mon_TaskFail(m);
@@ -458,7 +466,8 @@ void CBaseMonster_StartTask(int e, const Task_t *t)
 	case TASK_FIND_NODE_COVER_FROM_ENEMY:
 		if ((en = enemy_or_fail(m)) < 0)
 			return;
-		if (Mon_FindCover(e, ent_cv(en)->origin, view_ofs_of(en), 0, Mon_CoverRadius(e)))
+		OriginIn(en, e, p);
+		if (Mon_FindCover(e, p, view_ofs_of(en), 0, Mon_CoverRadius(e)))
 			Mon_TaskComplete(m);
 		else
 			Mon_TaskFail(m);
@@ -469,7 +478,7 @@ void CBaseMonster_StartTask(int e, const Task_t *t)
 		{
 			float org[3], vo[3];
 
-			VecCopy(ent_cv(cover)->origin, org);
+			OriginIn(cover, e, org);
 			VecCopy(view_ofs_of(cover), vo);
 			if (Mon_FindLateralCover(e, org, vo) ||
 				Mon_FindCover(e, org, vo, 0, Mon_CoverRadius(e)))
@@ -516,7 +525,8 @@ void CBaseMonster_StartTask(int e, const Task_t *t)
 		target = EHGet(m->m_hTargetEnt);
 		if (target >= 0)
 		{
-			Mon_MakeIdealYaw(e, ent_cv(target)->origin);
+			OriginIn(target, e, p);
+			Mon_MakeIdealYaw(e, p);
 			Mon_SetTurnActivity(e);
 		}
 		else
@@ -555,11 +565,12 @@ void CBaseMonster_StartTask(int e, const Task_t *t)
 			Mon_TaskFail(m);
 			break;
 		}
-		if (mv_dist(ent_cv(target)->origin, cv->origin) < 1)
+		OriginIn(target, e, p);
+		if (mv_dist(p, cv->origin) < 1)
 			Mon_TaskComplete(m);
 		else
 		{
-			VecCopy(ent_cv(target)->origin, m->m_vecMoveGoal);
+			VecCopy(p, m->m_vecMoveGoal);
 			if (!Mon_MoveToTarget(e, ACT_WALK, 2))
 				Mon_TaskFail(m);
 		}
@@ -571,8 +582,11 @@ void CBaseMonster_StartTask(int e, const Task_t *t)
 		{
 			Mon_TaskFail(m);
 			Mon_RouteClear(e);
+			Mon_TaskComplete(m);
+			break;
 		}
-		else if (mv_dist(ent_cv(target)->origin, cv->origin) < 1)
+		OriginIn(target, e, p);
+		if (mv_dist(p, cv->origin) < 1)
 			Mon_TaskComplete(m);
 		else
 		{
@@ -633,7 +647,7 @@ void CBaseMonster_StartTask(int e, const Task_t *t)
 	case TASK_GET_PATH_TO_ENEMY:
 		if ((en = enemy_or_fail(m)) < 0)
 			return;
-		VecCopy(ent_cv(en)->origin, p);
+		OriginIn(en, e, p);
 		if (Mon_BuildRoute(e, p, bits_MF_TO_ENEMY, en))
 			Mon_TaskComplete(m);
 		else if (Mon_BuildNearestRoute(e, p, view_ofs_of(en), 0, mv_dist(p, cv->origin)))
@@ -775,7 +789,10 @@ void CBaseMonster_StartTask(int e, const Task_t *t)
 	case TASK_PLANT_ON_SCRIPT:
 		target = EHGet(m->m_hTargetEnt);
 		if (target >= 0)
-			ent_set_origin(e, ent_cv(target)->origin);
+		{
+			OriginIn(target, e, p);
+			ent_set_origin(e, p);
+		}
 		Mon_TaskComplete(m);
 		break;
 	case TASK_FACE_SCRIPT:

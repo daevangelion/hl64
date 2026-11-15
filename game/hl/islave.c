@@ -98,7 +98,7 @@ static int Slv_IRelationship(int e, int other)
 static void Slv_CallForHelp(int e, float flDist, int enemy, const float lkp[3])
 {
 	name_t	nn = CBase(e)->netname;
-	float	d[3];
+	float	d[3], ro[3];
 	int	r;
 
 	if (nn == NAME_NONE)
@@ -107,7 +107,8 @@ static void Slv_CallForHelp(int e, float flDist, int enemy, const float lkp[3])
 	{
 		if (!ent_is_live(r) || !ent_priv(r) || CBase(r)->netname != nn)
 			continue;
-		VecSub(ent_cv(e)->origin, ent_cv(r)->origin, d);
+		OriginIn(r, e, ro);
+		VecSub(ent_cv(e)->origin, ro, d);
 		if (VecLen(d) < flDist && mon_is_monster(r))
 		{
 			Mon_Remember(MON(r), bits_MEMORY_PROVOKED);

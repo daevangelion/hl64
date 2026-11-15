@@ -372,13 +372,20 @@ SA2 §4.2 as built):
   player).
 - **pinned**: world hull-0 COLL while the layer is open.
 
-Eviction: queued-not-started first, then LRU among chunks not wanted this
-frame; prefetch never evicts a chunk used in the last 30 frames. Evicted
-REND / TEXP bytes free behind a two-frame fence (4.3); a request waits for
-them only while a run of adjacent free and fenced blocks would make its
-hole, and otherwise evicts on: fences elsewhere in a fragmented pool never
-make it and new ones are fenced every frame (a seam's B open waited 60
-frames for its 52 KB ENTS chunk on a 51712 B hole). The target
+Eviction: queued-not-started first; then, the pools being first-fit over
+address-ordered blocks, the cheapest run of consecutive free, fenced and
+evictable blocks that spans the request (weakest strongest victim class,
+then youngest victim oldest, then fewest bytes: the LRU order of single
+evictions, made to form a hole; one at a time they free scattered blocks a
+fragmented pool never joins); with the hole there but the pool's block
+descriptors used up, one victim whose free merges with a neighbour. A
+search classifies each block once per frame and target generation (its
+memo; naming clears it, a victim is re-checked before its drop), and the
+requests that would wait on the same fenced bytes (the pool's longest
+free + fenced run covers them, until it allocates) skip the search: one
+full walk per request was 55 ms of stream time in hl2-return-battle.
+Victims are chunks not used this frame or the last; prefetch never evicts
+a chunk used in the last 30 frames. The target
 set is recomputed only when one of its inputs changed (eye leaf, player
 cell, velocity bucket, pins, layer set); otherwise the previous frame's
 wants are re-asserted by generation number (no rebuild).
@@ -397,7 +404,10 @@ translation `T`). Requirements:
 3. Crossing: home := B; the player and riders re-base once into B's frame
    (`local += g_M(A) − g_M(B) + T`: the global position moves by exactly
    the seam's `T`, cwg-format.md); velocity,
-   angles, punch, inventory and the entity itself kept; twins copy A's state
+   angles, punch, inventory and the entity itself kept; carried entities
+   re-base by the landmark delta, their game state as GoldSrc's transition
+   restore leaves it (position fields moved, a monster's schedule and route
+   anew: `game_carried`); twins copy A's state
    to B (origin in B's frame, mover phase, think time, velocity) and A's copy retires
    silently; `changetarget` fires in B; changelevel touches ignored until a
    frame with none.
@@ -848,9 +858,16 @@ VR4300 hardware) but only the flashcart run proves it.
   grid node box, link/touch candidate tests, residency, rendering and
   sound distances. An interaction across layers (a trace, push, touch or
   rider near a seam) converts the other entity into the mover's frame by
-  `g_M(other) − g_M(own)`, as pmove's physents do. An entity changes layer
-  only when carried across a seam, re-basing once (5.4 step 3); twins are
-  already in B's frame.
+  `g_M(other) − g_M(own)`, as pmove's physents do; game code reading
+  another entity's position (an enemy, target, squad mate, inflictor)
+  converts it the same way (game/hl/util.h `OriginIn`, `CenterIn`,
+  `EyePositionIn`, `BodyTargetIn`). AI perception is per layer: a monster
+  neither sees (`FVisible`) nor hears (the sound list records each sound's
+  layer) an entity of another layer. The packed layers are disjoint and
+  sealed, so a converted trace could only end in a wall, and GoldSrc runs
+  one level at a time (an OPEN seam shows B, drawing only). An entity
+  changes layer only when carried across a seam, re-basing once (5.4
+  step 3); twins are already in B's frame.
 - Surface materials come from the cooked material table (no faces or
   texinfo on the cart).
 

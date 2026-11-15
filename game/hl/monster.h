@@ -380,6 +380,7 @@ typedef struct {
 	float		m_flExpireTime;
 	int		m_iNext;
 	int		m_iNextAudible;
+	int		m_iLayer;	/* hl64: m_vecOrigin's frame (Listen hears its own layer) */
 } CSound;
 
 /* CSoundEnt (game/hl/aisound.c): the world's sound list. */
@@ -1234,6 +1235,9 @@ uint64_t Ai_PausedUs(void);
 void	Ai_FrameStart(void);
 void	Ai_Drop(int e);
 void	Ai_DropAll(void);
+/* MaintainSchedule brackets StartTask (on 1, then 0): a think dropped
+ * inside it leaves the still-running task new */
+void	Ai_StartTask(int e, int on);
 float	*Ai_CoverTables(void);
 void	Ai_PrintCounts(void);
 void	Ai_ProfLine(void);

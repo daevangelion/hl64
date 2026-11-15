@@ -184,6 +184,12 @@ RAN+="controls_ares.sh "
 # test/run/menu.sh, runs by hand (docs/controls.md)
 suite ../m6/menu_host.sh menu-host bash test/m6/menu_host.sh "$BUILD_DIR/host/hl64-host" \
 	"$CONTENT" "$OUT/menu-host"
+# the AI regressions (test/m5/ai_layer.c): a task paused inside StartTask
+# survives a refused release and restarts after a drop; a grunt of hldemo2
+# neither sees, hears, tracks nor fires at the player home in hldemo1
+suite ai_layer.c ai-layer bash -c 'make --no-print-directory BUILD_DIR="$1" ailayertest >/dev/null \
+	&& "$1/host/hl64-ailayer" --root "$2" --stuck hldemo2 \
+	&& "$1/host/hl64-ailayer" --root "$2" --layer hldemo1 hldemo2' _ "$BUILD_DIR" "$CONTENT"
 for f in "$ROOT"/test/m5/*.py "$ROOT"/test/m5/*.sh; do
 	[[ -e "$f" ]] || continue
 	[[ "$RAN" == *" $(basename "$f") "* ]] || die "test/m5/$(basename "$f") is not wired into test/run/m5.sh"

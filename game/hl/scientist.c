@@ -200,11 +200,13 @@ static void Heal(int e)
 {
 	CScientist	*s = SCI(e);
 	int		t;
+	float		tp[3];
 
 	if (!CanHeal(e))
 		return;
 	t = EHGet(s->m_hTargetEnt);
-	if (mv_dist(ent_cv(t)->origin, ent_cv(e)->origin) > 100)
+	OriginIn(t, e, tp);
+	if (mv_dist(tp, ent_cv(e)->origin) > 100)
 		return;
 	TakeHealth(t, mon_skill(sk_scientistHeal), DMG_GENERIC);
 	s->m_healTime = gtime() + 60;
@@ -215,6 +217,7 @@ static void CScientist_StartTask(int e, const Task_t *t)
 	CScientist	*s = SCI(e);
 	CBaseMonster	*m = (CBaseMonster *)s;
 	int		en, tg;
+	float		tp[3];
 
 	switch (t->iTask)
 	{
@@ -254,13 +257,15 @@ static void CScientist_StartTask(int e, const Task_t *t)
 		break;
 	case TASK_MOVE_TO_TARGET_RANGE_SCARED:
 		tg = EHGet(s->m_hTargetEnt);
+		if (tg >= 0)
+			OriginIn(tg, e, tp);
 		if (tg < 0)
 			Mon_TaskFail(m);
-		else if (mv_dist(ent_cv(tg)->origin, ent_cv(e)->origin) < 1)
+		else if (mv_dist(tp, ent_cv(e)->origin) < 1)
 			Mon_TaskComplete(m);
 		else
 		{
-			VecCopy(ent_cv(tg)->origin, m->m_vecMoveGoal);
+			VecCopy(tp, m->m_vecMoveGoal);
 			if (!Mon_MoveToTarget(e, ACT_WALK_SCARED, 0.5f))
 				Mon_TaskFail(m);
 		}
@@ -276,7 +281,7 @@ static void CScientist_RunTask(int e, const Task_t *t)
 	CScientist	*s = SCI(e);
 	CBaseMonster	*m = (CBaseMonster *)s;
 	int		tg;
-	float		d[3], dist;
+	float		d[3], dist, tp[3];
 
 	switch (t->iTask)
 	{
@@ -294,10 +299,11 @@ static void CScientist_RunTask(int e, const Task_t *t)
 			Mon_TaskFail(m);
 		else
 		{
+			OriginIn(tg, e, tp);
 			dist = mv_dist2d(m->m_vecMoveGoal, ent_cv(e)->origin);
-			if (dist < t->flData || mv_dist(m->m_vecMoveGoal, ent_cv(tg)->origin) > t->flData * 0.5f)
+			if (dist < t->flData || mv_dist(m->m_vecMoveGoal, tp) > t->flData * 0.5f)
 			{
-				VecCopy(ent_cv(tg)->origin, m->m_vecMoveGoal);
+				VecCopy(tp, m->m_vecMoveGoal);
 				dist = mv_dist2d(m->m_vecMoveGoal, ent_cv(e)->origin);
 				Mon_FRefreshRoute(e);
 			}
@@ -322,7 +328,8 @@ static void CScientist_RunTask(int e, const Task_t *t)
 			tg = EHGet(s->m_hTargetEnt);
 			if (tg >= 0)
 			{
-				VecSub(ent_cv(tg)->origin, ent_cv(e)->origin, d);
+				OriginIn(tg, e, d);
+				VecSub(d, ent_cv(e)->origin, d);
 				ent_phys(e)->ideal_yaw = UTIL_VecToYaw(d);
 			}
 			Mon_ChangeYaw(e, (int)ent_phys(e)->yaw_speed);

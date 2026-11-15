@@ -92,6 +92,7 @@ void		__wrap_rec_fire_at(float t, name_t target, name_t killtarget, int activato
 int		__wrap_rec_key_f(gid_t16 gid, key_t16 k, float *out);
 void		__wrap_game_twin_copy(int from, int to);
 int		__wrap_game_carry(int e);
+void		__wrap_game_carried(int e, const float d[3]);
 
 static struct {
 	int		ready, hle_ready, open_null;
@@ -377,6 +378,14 @@ void __wrap_game_twin_copy(int from, int to)
 int __wrap_game_carry(int e)
 {
 	return D.carry[e];
+}
+
+/* the game's re-base of a carried entity's state (the driver's entities
+ * have none) */
+void __wrap_game_carried(int e, const float d[3])
+{
+	(void)e;
+	(void)d;
 }
 
 /* ---- helpers ------------------------------------------------------------------ */

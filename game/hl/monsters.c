@@ -686,7 +686,10 @@ void Mon_Listen(int e)
 		if (!s)
 			break;
 		VecSub(s->m_vecOrigin, ear, d);
-		if ((s->m_iType & iMySounds) && VecLen(d) <= s->m_iVolume * hearing)
+		/* hearing is per layer, as sight (FVisible): a sound of another
+		 * map is from a level GoldSrc would not have loaded */
+		if ((s->m_iType & iMySounds) && s->m_iLayer == ent_idc(e)->layer &&
+			VecLen(d) <= s->m_iVolume * hearing)
 		{
 			s->m_iNextAudible = m->m_iAudibleList;
 			if (CSound_FIsSound(s))
@@ -724,7 +727,8 @@ static int base_FInViewCone(int e, int other)
 	else
 		fov = MON(e)->m_flFieldOfView;
 	UTIL_MakeVectors(ent_cv(e)->angles);
-	VecSub(ent_cv(other)->origin, ent_cv(e)->origin, los);
+	OriginIn(other, e, los);
+	VecSub(los, ent_cv(e)->origin, los);
 	mv_norm2d(los, los);
 	mv_norm2d(fwd, gpGlobals.v_forward);
 	return los[0] * fwd[0] + los[1] * fwd[1] > fov;
@@ -1191,7 +1195,7 @@ int Mon_FRefreshRoute(int e)
 		while (pc >= 0 && i < ROUTE_SIZE)
 		{
 			m->m_Route[i].iType = bits_MF_TO_PATHCORNER;
-			VecCopy(ent_cv(pc)->origin, m->m_Route[i].vecLocation);
+			OriginIn(pc, e, m->m_Route[i].vecLocation);
 			pc = GetNextTarget(pc);
 			if (pc < 0)
 				m->m_Route[i].iType |= bits_MF_IS_GOAL;
@@ -1208,7 +1212,12 @@ int Mon_FRefreshRoute(int e)
 	case MOVEGOAL_TARGETENT:
 		t = EHGet(m->m_hTargetEnt);
 		if (t >= 0)
-			ret = Mon_BuildRoute(e, ent_cv(t)->origin, bits_MF_TO_TARGETENT, t);
+		{
+			float org[3];
+
+			OriginIn(t, e, org);
+			ret = Mon_BuildRoute(e, org, bits_MF_TO_TARGETENT, t);
+		}
 		break;
 	case MOVEGOAL_NODE:
 		ret = Mon_FGetNodeRoute(e, m->m_vecMoveGoal);
@@ -1374,7 +1383,8 @@ void Mon_CheckAttacks(int e, int target, float dist)
 	float		los[3], fwd[3], dot;
 
 	UTIL_MakeVectors(ent_cv(e)->angles);
-	VecSub(ent_cv(target)->origin, ent_cv(e)->origin, los);
+	OriginIn(target, e, los);
+	VecSub(los, ent_cv(e)->origin, los);
 	mv_norm2d(los, los);
 	mv_norm2d(fwd, gpGlobals.v_forward);
 	dot = los[0] * fwd[0] + los[1] * fwd[1];
@@ -1394,7 +1404,7 @@ int CBaseMonster_CheckEnemy(int e, int enemy)
 {
 	CBaseMonster	*m = MON(e);
 	int		updated = 0, i;
-	float		pos[3], d, d2, sz;
+	float		org[3], pos[3], d, d2, sz;
 	const float	*o = ent_cv(e)->origin;
 	const col_ent_t	*ec = ent_cv(enemy);
 
@@ -1409,7 +1419,10 @@ int CBaseMonster_CheckEnemy(int e, int enemy)
 		Mon_ClearConditions(m, bits_COND_SEE_ENEMY | bits_COND_ENEMY_OCCLUDED);
 		return 0;
 	}
-	VecCopy(ec->origin, pos);
+	/* the enemy in this monster's frame: the player after a crossing is
+	 * in another layer (FVisible: never seen there) */
+	OriginIn(enemy, e, org);
+	VecCopy(org, pos);
 	d = mv_dist(pos, o);
 	sz = ec->maxs[2] - ec->mins[2];
 	pos[2] += sz * 0.5f;
@@ -1426,7 +1439,7 @@ int CBaseMonster_CheckEnemy(int e, int enemy)
 	if (Mon_HasConditions(m, bits_COND_SEE_ENEMY))
 	{
 		updated = 1;
-		VecCopy(ec->origin, m->m_vecEnemyLKP);
+		VecCopy(org, m->m_vecEnemyLKP);
 		if (mon_is_monster(enemy))
 		{
 			if (Mon_FInViewCone(enemy, e))
@@ -1441,7 +1454,7 @@ int CBaseMonster_CheckEnemy(int e, int enemy)
 	else if (!Mon_HasConditions(m, bits_COND_ENEMY_OCCLUDED | bits_COND_SEE_ENEMY) && d <= 256)
 	{
 		updated = 1;
-		VecCopy(ec->origin, m->m_vecEnemyLKP);
+		VecCopy(org, m->m_vecEnemyLKP);
 	}
 	if (d >= m->m_flDistTooFar)
 		Mon_SetConditions(m, bits_COND_ENEMY_TOOFAR);
@@ -1486,10 +1499,13 @@ void Mon_PushEnemy(int e, int enemy, const float lkp[3])
 	VecCopy(lkp, m->m_vecOldEnemy[i]);
 }
 
+/* HLSDK PopEnemy, except that an old enemy of another layer stays
+ * remembered but is not taken back while it is there (RunAI moved it to
+ * this memory when it left): the fight resumes when it returns. */
 int Mon_PopEnemy(int e)
 {
 	CBaseMonster	*m = MON(e);
-	int		i, o;
+	int		i, o, l = ent_idc(e)->layer;
 
 	for (i = MAX_OLD_ENEMIES - 1; i >= 0; i--)
 	{
@@ -1498,6 +1514,8 @@ int Mon_PopEnemy(int e)
 		{
 			if (IsAlive(o))
 			{
+				if (ent_idc(o)->layer != l)
+					continue;
 				m->m_hEnemy = m->m_hOldEnemy[i];
 				VecCopy(m->m_vecOldEnemy[i], m->m_vecEnemyLKP);
 				return 1;
@@ -2193,7 +2211,10 @@ void CBaseMonster_StartMonster(int e)
 		m->m_pGoalEnt = EHANDLE(g);
 		if (g >= 0)
 		{
-			Mon_MakeIdealYaw(e, ent_cv(g)->origin);
+			float org[3];
+
+			OriginIn(g, e, org);
+			Mon_MakeIdealYaw(e, org);
 			m->m_movementGoal = MOVEGOAL_PATHCORNER;
 			m->m_movementActivity = cv->movetype == MOVETYPE_FLY ? ACT_FLY : ACT_WALK;
 			Mon_FRefreshRoute(e);
@@ -2742,7 +2763,7 @@ int Mon_GetEnemy(int e)
 				Mon_PushEnemy(e, EHGet(m->m_hEnemy), m->m_vecEnemyLKP);
 				Mon_SetConditions(m, bits_COND_NEW_ENEMY);
 				m->m_hEnemy = EHANDLE(ne);
-				VecCopy(ent_cv(ne)->origin, m->m_vecEnemyLKP);
+				OriginIn(ne, e, m->m_vecEnemyLKP);
 			}
 			owner = ent_cv(ne)->owner;
 			if (owner != COL_NONE && mon_is_monster(owner) && (ent_cv(owner)->flags & FL_MONSTER) &&
@@ -2790,7 +2811,20 @@ void Mon_SetState(int e, int state)
 void CBaseMonster_RunAI(int e)
 {
 	CBaseMonster	*m = MON(e);
-	int		en;
+	int		en, left = 0;
+
+	/* Nobody fights across levels: GoldSrc freezes the level the player
+	 * left. An enemy in another layer (the player past a seam) goes into
+	 * the old-enemy memory, which Mon_PopEnemy takes it back from once it
+	 * is in this layer again; the monster drops out of combat (and can be
+	 * released) instead of chasing a point beyond its own map. */
+	en = EHGet(m->m_hEnemy);
+	if (en >= 0 && ent_idc(en)->layer != ent_idc(e)->layer)
+	{
+		Mon_PushEnemy(e, en, m->m_vecEnemyLKP);
+		m->m_hEnemy = EH_NONE;
+		left = 1;
+	}
 
 	/* HLSDK tests pev->flags & SF_MONSTER_GAG (bit 1 of flags: FL_SWIM) */
 	if ((m->m_MonsterState == MONSTERSTATE_IDLE || m->m_MonsterState == MONSTERSTATE_ALERT) &&
@@ -2822,6 +2856,10 @@ void CBaseMonster_RunAI(int e)
 			m->m_hEnemy = EH_NONE;
 		Mon_CheckAmmo(e);
 	}
+	/* the combat schedule ends (its enemy is gone, no other took its
+	 * place): MaintainSchedule's COMBAT-without-enemy rule moves to ALERT */
+	if (left && EHGet(m->m_hEnemy) < 0 && m->m_MonsterState == MONSTERSTATE_COMBAT)
+		Mon_TaskFail(m);
 	Mon_FCheckAITrigger(e);
 	Mon_PrescheduleThink(e);
 	if (!ent_is_live(e))

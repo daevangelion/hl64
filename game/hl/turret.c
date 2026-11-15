@@ -95,9 +95,13 @@ static int FBoxVisible(int looker, int target, float out[3])
 {
 	const col_ent_t	*t = ent_cv(target);
 	col_trace_t	tr;
-	float		eye[3], tgt[3];
+	float		eye[3], tgt[3], dl[3];
 	int		i;
 
+	/* sight is per layer (as FVisible): the box points are in the target's
+	 * frame, a trace to them from the looker's eye would be meaningless */
+	if (LayerDelta(target, looker, dl))
+		return 0;
 	/* don't look through water */
 	if ((waterlevel_of(looker) != 3 && waterlevel_of(target) == 3) ||
 		(waterlevel_of(looker) == 3 && waterlevel_of(target) == 0))
@@ -280,7 +284,7 @@ void CBaseTurret_ActiveThink(int e)
 		}
 	}
 	VecAdd(ent_cv(e)->origin, t->view_ofs, mid);
-	BodyTarget(en, mid, midEnemy);
+	BodyTargetIn(en, e, mid, midEnemy);
 	/* look for a new target? */
 	fEnemyVisible = FBoxVisible(e, en, midEnemy);
 	VecSub(midEnemy, mid, dir);

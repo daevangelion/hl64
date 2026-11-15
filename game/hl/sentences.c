@@ -206,10 +206,11 @@ void SENTENCEG_Stop(int e, res_t group, int ipick)
 
 /* ---- name-or-class searches (UTIL_FindEntityGeneric) ------------------------ */
 
-static int find_generic(name_t n, cls_t cls, const float org[3], float radius)
+/* distances from entity ref (candidates in another layer are far) */
+static int find_generic(name_t n, cls_t cls, int ref, float radius)
 {
 	int	t, it = 0, best = -1;
-	float	maxd2 = radius * radius, d;
+	float	maxd2 = radius * radius, d, o[3];
 
 	if (n != NAME_NONE && (t = rec_next_named(n, &it)) >= 0)
 		return t;
@@ -221,7 +222,8 @@ static int find_generic(name_t n, cls_t cls, const float org[3], float radius)
 		t = ent_next_class(-1, cls, -1);
 	while (t >= 0)
 	{
-		d = mv_dist(ent_cv(t)->origin, org);
+		OriginIn(t, ref, o);
+		d = mv_dist(o, ent_cv(ref)->origin);
 		d = d * d;
 		if (maxd2 > d)
 		{
@@ -335,7 +337,7 @@ static void StartSentence(gid_t16 gid, int t)
 	{
 		if (lc == CLS_PLAYER)
 			radius = 4096;
-		listener = find_generic(ln, lc, ent_cv(t)->origin, radius);
+		listener = find_generic(ln, lc, t, radius);
 	}
 	if (RES_KIND(sent) == RES_K_SENTENCE)
 	{

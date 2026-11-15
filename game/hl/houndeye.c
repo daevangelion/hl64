@@ -283,7 +283,7 @@ static void He_SonicAttack(int e)
 		dmg = mon_skill(sk_houndeyeDmgBlast);
 		if (n > 1)
 			dmg = dmg + dmg * (HOUNDEYE_SQUAD_BONUS * (float)(n - 1));
-		Center(r, c);
+		CenterIn(r, e, c);
 		dist = mv_dist(c, ent_cv(e)->origin);
 		dmg -= (dist / HOUNDEYE_MAX_ATTACK_RADIUS) * dmg;
 		if (!FVisible(e, r))
@@ -427,6 +427,7 @@ static void He_PrescheduleThink(int e)
 	CHoundeye	*h = HOUND(e);
 	int16_t		*skin = &ent_cv(e)->skin;
 	int		i, mem, n = 0;
+	float		mo[3];
 
 	if (h->m_MonsterState == MONSTERSTATE_COMBAT && h->m_Activity == ACT_RUN &&
 		RANDOM_FLOAT(0, 1) < 0.2f)
@@ -446,7 +447,8 @@ static void He_PrescheduleThink(int e)
 			if (mem >= 0)
 			{
 				n++;
-				VecAdd(h->m_vecPackCenter, ent_cv(mem)->origin, h->m_vecPackCenter);
+				OriginIn(mem, e, mo);
+				VecAdd(h->m_vecPackCenter, mo, h->m_vecPackCenter);
 			}
 		}
 		VecScale(h->m_vecPackCenter, 1.0f / (float)n, h->m_vecPackCenter);

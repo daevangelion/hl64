@@ -146,7 +146,7 @@ void CGib_SpawnHeadGib(int victim)
 		pl = ent_client_in_pvs(g);
 		if (RANDOM_LONG(0, 100) <= 5 && pl > 0)
 		{
-			EyePosition(pl, d);
+			EyePositionIn(pl, g, d);
 			VecSub(d, o, d);
 			VecNorm(d, v);
 			VecScale(v, 300, v);
@@ -546,7 +546,7 @@ static void attack_dir(int e, int inflictor, float out[3])
 	VecSet(out, 0, 0, 0);
 	if (inflictor >= 0 && ent_is_live(inflictor))
 	{
-		Center(inflictor, a);
+		CenterIn(inflictor, e, a);
 		a[2] -= 10;
 		Center(e, b);
 		VecSub(a, b, a);
@@ -599,7 +599,7 @@ int CBaseMonster_TakeDamage(int e, int inflictor, int attacker, float flDamage, 
 		{
 			en = EHGet(m->m_hEnemy);
 			if (en < 0 || inflictor == en || !Mon_HasConditions(m, bits_COND_SEE_ENEMY))
-				VecCopy(ent_cv(inflictor)->origin, m->m_vecEnemyLKP);
+				OriginIn(inflictor, e, m->m_vecEnemyLKP);
 		}
 		else
 			VecMA(ent_cv(e)->origin, 64, g_vecAttackDir, m->m_vecEnemyLKP);

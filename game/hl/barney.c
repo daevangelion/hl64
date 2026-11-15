@@ -129,7 +129,7 @@ static int CBarney_CheckRangeAttack1(int e, float dot, float dist)
 {
 	CBarney		*b = BA(e);
 	col_trace_t	tr;
-	float		so[3], st[3], bt[3];
+	float		so[3], st[3], bt[3], eo[3];
 	int		en = EHGet(b->m_hEnemy);
 
 	if (dist <= 1024 && dot >= 0.5f)
@@ -138,8 +138,9 @@ static int CBarney_CheckRangeAttack1(int e, float dot, float dist)
 		{
 			VecCopy(ent_cv(e)->origin, so);
 			so[2] += 55;
-			BodyTarget(en, so, bt);
-			VecSub(bt, ent_cv(en)->origin, st);
+			BodyTargetIn(en, e, so, bt);
+			OriginIn(en, e, eo);
+			VecSub(bt, eo, st);
 			VecAdd(st, b->m_vecEnemyLKP, st);
 			UTIL_TraceLine(so, st, dont_ignore_monsters, e, &tr);
 			b->m_checkAttackTime = gtime() + 1;
@@ -253,7 +254,11 @@ static int CBarney_TakeDamage(int e, int inflictor, int attacker, float dmg, int
 		en = EHGet(b->m_hEnemy);
 		if (en < 0)
 		{
-			if ((b->m_afMemory & bits_MEMORY_SUSPICIOUS) || IsFacing(attacker, ent_cv(e)->origin))
+			float ref[3];
+
+			/* the attacker's frame: its view is tested against e's position */
+			OriginIn(e, attacker, ref);
+			if ((b->m_afMemory & bits_MEMORY_SUSPICIOUS) || IsFacing(attacker, ref))
 			{
 				Mon_PlaySentence(e, RESID(GRP_BA_MAD), 4, VOL_NORM, ATTN_NORM);
 				Mon_Remember((CBaseMonster *)b, bits_MEMORY_PROVOKED);

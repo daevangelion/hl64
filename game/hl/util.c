@@ -767,12 +767,78 @@ void BodyTarget(int e, const float src[3], float out[3])
 	Center(e, out);
 }
 
+int LayerDelta(int other, int e, float d[3])
+{
+	const float *a, *b;
+	int lo = ent_idc(other)->layer, le = ent_idc(e)->layer;
+
+	if (lo == le)
+	{
+		VecSet(d, 0, 0, 0);
+		return 0;
+	}
+	a = eng_layer_origin(lo);
+	b = eng_layer_origin(le);
+	VecSub(a, b, d);
+	return d[0] != 0 || d[1] != 0 || d[2] != 0;
+}
+
+void OriginIn(int other, int e, float out[3])
+{
+	float d[3];
+
+	if (LayerDelta(other, e, d))
+		VecAdd(ent_cv(other)->origin, d, out);
+	else
+		VecCopy(ent_cv(other)->origin, out);
+}
+
+void CenterIn(int other, int e, float out[3])
+{
+	float d[3];
+
+	Center(other, out);
+	if (LayerDelta(other, e, d))
+		VecAdd(out, d, out);
+}
+
+void EyePositionIn(int other, int e, float out[3])
+{
+	float d[3];
+
+	EyePosition(other, out);
+	if (LayerDelta(other, e, d))
+		VecAdd(out, d, out);
+}
+
+void BodyTargetIn(int other, int e, const float src[3], float out[3])
+{
+	float d[3], s[3];
+
+	if (!LayerDelta(other, e, d))
+	{
+		BodyTarget(other, src, out);
+		return;
+	}
+	VecSub(src, d, s);
+	BodyTarget(other, s, out);
+	VecAdd(out, d, out);
+}
+
+/* Sight is per layer: an entity of another layer is never visible. Open
+ * layers are placed disjoint, at least 128 u apart, and each map is
+ * sealed (cwg-format.md "Placement"), so the trace to its eyes converted
+ * into e's frame (OriginIn) could only end in a wall; GoldSrc, one level
+ * at a time, never sees across a changelevel either (an OPEN seam's view
+ * of B is drawing only, architecture.md 5.4). */
 int FVisible(int e, int other)
 {
 	col_trace_t tr;
 	float a[3], b[3];
 	int wl = ent_phys(e)->waterlevel, owl = ent_phys(other)->waterlevel;
 
+	if (ent_idc(other)->layer != ent_idc(e)->layer)
+		return 0;
 	if (ent_cv(other)->flags & FL_NOTARGET)
 		return 0;
 	if ((wl != 3 && owl == 3) || (wl == 3 && owl == 0))
@@ -1036,17 +1102,19 @@ int CBaseEntity_TakeDamage(int e, int inflictor, int attacker, float damage, int
 	if (inflictor >= 0)
 	{
 		VecBModelOrigin(e, org);
-		VecSub(ent_cv(inflictor)->origin, org, tmp);
+		OriginIn(inflictor, e, tmp);
+		VecSub(tmp, org, tmp);
 		VecNorm(tmp, g_vecAttackDir);
 	}
 	if (inflictor >= 0 && (cv->movetype == MOVETYPE_WALK || cv->movetype == MOVETYPE_STEP) &&
 	    (attacker < 0 || ent_cv(attacker)->solid != SOLID_TRIGGER))
 	{
-		const col_ent_t *ic = ent_cv(inflictor);
+		float c[3];
 		int i;
 
+		CenterIn(inflictor, e, c);
 		for (i = 0; i < 3; i++)
-			tmp[i] = cv->origin[i] - (ic->absmin[i] + ic->absmax[i]) * 0.5f;
+			tmp[i] = cv->origin[i] - c[i];
 		VecNorm(tmp, dir);
 		VecSub(cv->maxs, cv->mins, size);
 		force = (float)(damage * ((32 * 32 * 72.0) / (size[0] * size[1] * size[2])) * 5);
@@ -1237,7 +1305,16 @@ void RadiusDamage(const float src_in[3], int inflictor, int attacker, float dama
 			continue;
 		if (!in_water && ent_phys(e)->waterlevel == 3)
 			continue;
-		BodyTarget(e, src, spot);
+		/* e's body in this frame (the sphere finds open neighbours'
+		 * entities converted; their body target too) */
+		if (ent_frame_delta(e, d))
+		{
+			VecSub(src, d, dir);
+			BodyTarget(e, dir, spot);
+			VecAdd(spot, d, spot);
+		}
+		else
+			BodyTarget(e, src, spot);
 		UTIL_TraceLine(src, spot, dont_ignore_monsters, inflictor, &tr);
 		if (tr.frac == 1.0f || tr.ent == e)
 		{

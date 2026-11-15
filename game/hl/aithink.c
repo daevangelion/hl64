@@ -50,7 +50,10 @@
  *     freed, or at a map open / close, a dehydrate or twin copy, New Game.
  *     Paused at an anim event (MonsterThink's execution half, which reads
  *     the monster afresh) only the freeing, death, layer or think
- *     function change end it.
+ *     function change end it. A think dropped inside StartTask whose task
+ *     is still running leaves the task new: HLSDK runs StartTask whole,
+ *     and a task only StartTask ends (TASK_FIND_COVER_FROM_ENEMY) would
+ *     otherwise run forever; the next think starts it again.
  *   - Conditions something else sets on the monster while its think is
  *     paused (TakeDamage's LIGHT / HEAVY_DAMAGE, another monster's) are
  *     held back from the rest of the think and set when it ends: an HLSDK
@@ -112,7 +115,7 @@ typedef struct {
 	fn_t		think;
 	float		t_start;
 	uint32_t	order, slice_points, frame_seen, reserve;
-	uint8_t		old, tail;
+	uint8_t		old, tail, in_start;	/* in_start: inside StartTask */
 	uint64_t	paused_us;	/* PROFILE: time spent paused */
 	/* conditions something else set on the monster while the think was
 	 * paused (TakeDamage's damage bits, another monster's): an HLSDK
@@ -128,7 +131,7 @@ typedef struct {
 
 /* counts since boot (`stats N ai:`: work units, host = cart) */
 static struct {
-	uint32_t	spread, pauses, resumes, drops, defers, overruns, absorbed, waits;
+	uint32_t	spread, pauses, resumes, drops, restarts, defers, overruns, absorbed, waits;
 	uint32_t	max_paused, max_frames;
 	uint32_t	holds, held_runs, held_aged, held_drops, max_held, max_late_ms;
 	uint32_t	held_over;
@@ -212,13 +215,24 @@ static void ai_land(const ai_ctx_t *c)
 }
 
 /* end a paused think here: its stack is abandoned (it holds nothing but
- * its own frames); a live monster loses the route it was building */
+ * its own frames); a live monster loses the route it was building, and a
+ * task whose StartTask it abandoned (its own schedule, still running) is
+ * new again */
 static void ai_drop(ai_ctx_t *c)
 {
 	int live = ent_of(c->h) == c->e && ent_is_live(c->e) && MON(c->e) == c->m;
+	CBaseMonster *m = c->m;
 
 	if (live)
+	{
 		Mon_RouteClear(c->e);
+		if (c->in_start && m->m_pSchedule == c->sched && m->m_iScheduleIndex == c->sidx &&
+			m->m_iTaskStatus == TASKSTATUS_RUNNING)
+		{
+			m->m_iTaskStatus = TASKSTATUS_NEW;
+			ac.restarts++;
+		}
+	}
 	ai_land(c);
 	ac.drops++;
 	ai_free(c);
@@ -503,6 +517,12 @@ void Ai_PausePoint(int e)
 		Ai_Pause(e, 0);
 }
 
+void Ai_StartTask(int e, int on)
+{
+	if (cur && cur->e == e && co_running() == ai_index(cur))
+		cur->in_start = (uint8_t)on;
+}
+
 void Ai_FrameStart(void)
 {
 	ai_ctx_t	*c, *order[HL64_AI_CONTEXTS];
@@ -723,15 +743,15 @@ void Ai_DropAll(void)
 
 void Ai_PrintCounts(void)
 {
-	log_printf(" spread=%lu pauses=%lu resumes=%lu waits=%lu drops=%lu defers=%lu overruns=%lu "
-		"absorbed=%lu max_paused=%lu max_frames=%lu holds=%lu held_runs=%lu held_aged=%lu "
-		"held_over=%lu held_drops=%lu max_held=%lu max_late_ms=%lu",
+	log_printf(" spread=%lu pauses=%lu resumes=%lu waits=%lu drops=%lu restarts=%lu defers=%lu "
+		"overruns=%lu absorbed=%lu max_paused=%lu max_frames=%lu holds=%lu held_runs=%lu "
+		"held_aged=%lu held_over=%lu held_drops=%lu max_held=%lu max_late_ms=%lu",
 		(unsigned long)ac.spread, (unsigned long)ac.pauses, (unsigned long)ac.resumes,
-		(unsigned long)ac.waits, (unsigned long)ac.drops, (unsigned long)ac.defers,
-		(unsigned long)ac.overruns, (unsigned long)ac.absorbed, (unsigned long)ac.max_paused,
-		(unsigned long)ac.max_frames, (unsigned long)ac.holds, (unsigned long)ac.held_runs,
-		(unsigned long)ac.held_aged, (unsigned long)ac.held_over, (unsigned long)ac.held_drops,
-		(unsigned long)ac.max_held, (unsigned long)ac.max_late_ms);
+		(unsigned long)ac.waits, (unsigned long)ac.drops, (unsigned long)ac.restarts,
+		(unsigned long)ac.defers, (unsigned long)ac.overruns, (unsigned long)ac.absorbed,
+		(unsigned long)ac.max_paused, (unsigned long)ac.max_frames, (unsigned long)ac.holds,
+		(unsigned long)ac.held_runs, (unsigned long)ac.held_aged, (unsigned long)ac.held_over,
+		(unsigned long)ac.held_drops, (unsigned long)ac.max_held, (unsigned long)ac.max_late_ms);
 }
 
 /* `prof ai_ctx` (after `prof ai`): the counts and each context's deepest

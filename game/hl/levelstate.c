@@ -1019,9 +1019,6 @@ uint32_t game_dehydrate(int e, void *buf, uint32_t max)
 
 	if (e <= ENT_PLAYER || !ent_is_live(e))
 		return 0;
-	/* a think paused over frames (aithink.c) ends here: the saved state
-	 * is the one between thinks */
-	Ai_Drop(e);
 	s = &st[ent_idc(e)->cls < CLS__COUNT ? ent_idc(e)->cls : 0];
 	t = sv_table_of(e);
 	if (!t)
@@ -1032,15 +1029,20 @@ uint32_t game_dehydrate(int e, void *buf, uint32_t max)
 		return 0;
 	}
 	q = quiet(e, t, rec_slot_closing(ent_idc(e)->layer));
+	if (q == 0)
+	{
+		/* refused (the release retries every REC_RELEASE_RETRY): a
+		 * think paused over frames (aithink.c) goes on */
+		s->refused++;
+		return 0;
+	}
+	/* released: a paused think ends here, so the saved state is the one
+	 * between thinks */
+	Ai_Drop(e);
 	if (q < 0)
 	{
 		s->transient++;
 		ent_destroy(e);
-		return 0;
-	}
-	if (q == 0)
-	{
-		s->refused++;
 		return 0;
 	}
 	n = encode(e, scratch, sizeof scratch);
@@ -1426,6 +1428,41 @@ int game_carry(int e)
 		return 0;	/* the world is in no PVS list */
 	caps = ObjectCaps(e);
 	return !(caps & FCAP_DONT_SAVE) && (caps & FCAP_ACROSS_TRANSITION) != 0;
+}
+
+/* HLSDK saves a moving entity with the level it leaves and restores it in
+ * the next: its FIELD_POSITION_VECTOR fields move by the landmark offset
+ * (SV_POS), and Restore runs (a monster: no schedule, no route). Left in
+ * A's frame, a carried monster would chase its enemy's last known
+ * position (and its move goal) at A-local numbers read in B. */
+void game_carried(int e, const float d[3])
+{
+	const sv_table_t *t, *ch[8];
+	uint8_t *p;
+	uint16_t cflags;
+	float v[3];
+	int n, i, j, k;
+
+	if (!ent_is_live(e) || !(t = sv_table_of(e)) || !(p = (uint8_t *)ent_priv(e)))
+		return;
+	Ai_Drop(e);
+	cflags = chain_flags(t);
+	n = chain(t, ch);
+	for (i = 0; i < n; i++)
+		for (j = 0; j < ch[i]->nf; j++)
+		{
+			const sv_field_t *f = &ch[i]->f[j];
+
+			if (field_type(ch[i], f, cflags) != SV_POS)
+				continue;
+			for (k = 0; k < f->n; k++)
+			{
+				memcpy(v, p + f->ofs + k * sv_size[SV_POS], sizeof(v));
+				VecAdd(v, d, v);
+				memcpy(p + f->ofs + k * sv_size[SV_POS], v, sizeof(v));
+			}
+		}
+	sv_restored(e);
 }
 
 /* ---- slot close ---------------------------------------------------------------------- */

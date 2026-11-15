@@ -298,7 +298,7 @@ void	game_player_geiger_range(float range) __attribute__((weak));
 
 void CTriggerHurt_RadiationThink(int e)
 {
-	const col_ent_t *c = ent_cv(e), *pc;
+	const col_ent_t *c = ent_cv(e);
 	float s1[3], s2[3], d[3];
 	int i, pl;
 
@@ -306,12 +306,10 @@ void CTriggerHurt_RadiationThink(int e)
 	pl = ent_client_in_pvs(e);
 	if (pl > 0)
 	{
-		pc = ent_cv(pl);
+		/* the player's centre in the trigger's frame */
+		CenterIn(pl, e, s2);
 		for (i = 0; i < 3; i++)
-		{
 			s1[i] = (c->absmin[i] + c->absmax[i]) * 0.5f;
-			s2[i] = (pc->absmin[i] + pc->absmax[i]) * 0.5f;
-		}
 		VecSub(s1, s2, d);
 		if (game_player_geiger_range)
 			game_player_geiger_range(VecLen(d));
@@ -567,7 +565,9 @@ const game_class_t gc_TRIGGER_TRANSITION = {
 /* ---- trigger_changelevel ---------------------------------------------------- */
 
 /* InTransitionVolume: no trigger_transition named like the landmark, or
- * the player intersects one of them. */
+ * the player intersects one of them. Only the volumes of the player's own
+ * map count: an open neighbour's (the approached map has its own copy of
+ * the name) is in another frame, and GoldSrc has only the current level. */
 static int InTransitionVolume(int ent, name_t volume)
 {
 	int it = 0, v, in = 1;
@@ -578,7 +578,7 @@ static int InTransitionVolume(int ent, name_t volume)
 		return 1;
 	while ((v = rec_next_named(volume, &it)) >= 0)
 	{
-		if (ent_idc(v)->cls != CLS_TRIGGER_TRANSITION)
+		if (ent_idc(v)->cls != CLS_TRIGGER_TRANSITION || ent_idc(v)->layer != ent_idc(ent)->layer)
 			continue;
 		if (Intersects(v, ent))
 			return 1;
