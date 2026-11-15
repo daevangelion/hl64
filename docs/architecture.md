@@ -1080,10 +1080,17 @@ stages the restored game again at once (test builds' `restore_check`)
 and it must equal S's saved state byte for byte, every scene. (b)
 Continuation: A's and B's save streams at T+N equal byte for byte and
 their `stats` player / entity lines at T+1 and T+N equal — required for
-hl2-yard, hazard-seam and seam-2to3 (T = 810, N = 60: after the switch;
-windows before it meet game rules that follow residency, warm in A, cold
+hl2-yard (600:150), hazard-seam (85:150) and seam-2to3 (810:90). A
+manual save on the cart takes 28–72 frames (the coder's 8 ms steps), and
+an autosave asked meanwhile waits for it, so in A (which saved at T) the
+autosaves come later than in B: T+N lies after them and after A's own
+save (hazard-seam: after the return crossing's autosave; seam-2to3:
+after the switch, room for the 72-frame save at T); on the cart the T+N
+save may queue behind an autosave, so ares runs quit 90 frames later.
+Earlier seam-2to3 windows (before the switch) meet game rules that
+follow residency, warm in A, cold
 after B's load: infodecal retries change free times, the hitbox pose
-memo forgets entries whose animation is not resident); reported only for
+memo forgets entries whose animation is not resident. Reported only for
 hl2-return-battle (`:report`), where a map opens inside the window and
 its completion frame follows the render pool's state, so hydration and
 AI-think drops land at other frames. Cost: every autosave ok and every

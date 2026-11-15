@@ -88,6 +88,9 @@ BE=()
 run() {
 	local d=$1 r=$2 t=$3 n=$4 code=0 cmds
 	local e=$((t + n + 3))
+	# the cart codes a save over many frames: a T+N save queued behind an
+	# autosave must start before the quit (a quit waits only for one running)
+	[[ $MODE == ares ]] && e=$((t + n + 90))
 	mkdir -p "$d/$r"
 	cmds=(--cmd "@1 fixed_dt 33333" --cmd "@$((t + 1)) stats $((1000 + t + 1))"
 		--cmd "@$((t + n)) stats $((1000 + t + n))")
