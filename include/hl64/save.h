@@ -94,9 +94,14 @@ int	settings_store(const settings_t *s);	/* async (save_busy); 0 started, -1 bus
 /* Boot: probe the flash and the Pak, read the directory (eng_boot). */
 void	save_init(void);
 /* eng_frame, first thing every frame: steps the writers, applies a
- * scheduled load or autosave, polls the Pak. Returns 1 while a snapshot or
- * a load holds the frame (the caller runs no game step, no route, no debug
- * commands that frame), else 0. */
+ * scheduled load or autosave, polls the Pak. Returns SAVE_HOLD while a
+ * manual save or a load holds the frame (the caller runs no game step, no
+ * route, no debug commands that frame; it shows the progress and runs
+ * the sound, which is muted around such holds), SAVE_HOLD_QUIET for an
+ * autosave's snapshot frame (as SAVE_HOLD, but nothing is drawn or
+ * shown: the last frame stays on screen), else 0. */
+#define SAVE_HOLD	1
+#define SAVE_HOLD_QUIET	2
 int	save_frame(void);
 
 #endif

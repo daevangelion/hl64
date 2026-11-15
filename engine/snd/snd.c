@@ -104,6 +104,7 @@ typedef struct {
 	snd_stats_t	st;
 	uint32_t	frames;
 	uint64_t	us_sum, pump_sum;
+	uint8_t		mute;		/* snd_mute: output gain 0 */
 } snd_state_t;
 
 static snd_state_t	*S;
@@ -122,6 +123,8 @@ static int clamp_pitch(int p)
 
 static float master(void)
 {
+	if (S->mute)
+		return 0.0f;
 	return (float)settings.vol_master * (float)settings.vol_sfx * 1e-4f;
 }
 
@@ -842,6 +845,19 @@ void snd_stop_all(void)
 	for (i = 0; i < SND_VOICES; i++)
 		if (S->v[i].busy)
 			voice_free(i, "new game");
+}
+
+void snd_mute(int on)
+{
+	int v;
+
+	if (!S || !on == !S->mute)
+		return;
+	S->mute = (uint8_t)(on != 0);
+	for (v = 0; v < SND_VOICES; v++)
+		if (S->v[v].busy)
+			voice_apply(v);
+	snd_logf("snd %lu %s\n", (unsigned long)S->frame, on ? "mute" : "unmute");
 }
 
 void snd_voice_info(int v, snd_voice_info_t *o)

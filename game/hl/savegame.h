@@ -84,8 +84,9 @@ uint32_t	Gs_PoseSaveState(int op);	/* pose.c: the server pose memo */
  * state before the load, no client events replayed) */
 void		Gs_LatchLoadDone(void);
 
-/* aithink.c: game_save_settle */
+/* aithink.c: game_save_settle, game_save_pending */
 void		Ai_Settle(void);
+int		Ai_Pending(void);
 
 /* the fx beams a private block names, made again after a load (the engine
  * starts the effects empty): garg.c, islave.c, tripmine.c */

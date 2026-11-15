@@ -918,21 +918,43 @@ int eng_load_state(void)
 	return sv_failed() ? -1 : 0;
 }
 
+/* Step 10 sound: listener = the view (global eye, right vector) of the
+ * last drawn frame. */
+static void snd_step(uint32_t dt)
+{
+	float yaw = ren_cam.ang[1] * (3.14159265f / 180.0f);
+	float pitch = ren_cam.ang[0] * (3.14159265f / 180.0f);
+	float roll = ren_cam.ang[2] * (3.14159265f / 180.0f);
+	float sy = hl_sinf(yaw), cy = hl_cosf(yaw), sp = hl_sinf(pitch), cp = hl_cosf(pitch);
+	float sr = hl_sinf(roll), cr = hl_cosf(roll);
+	float right[3] = { -sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp };
+
+	snd_frame(ren_cam.org, right, (double)dt * 1e-6);
+}
+
 /* A frame a save or a load holds (save_frame): no game step, no world, no
- * route or debug commands, the frame count stays; I/O and the present go
- * on so the chain keeps moving and the screen stays live. */
-static void eng_save_hold_frame(uint32_t dt)
+ * route or debug commands, the frame count stays; I/O and the sound go on
+ * (the sound muted around a manual save's or a load's long holds). A
+ * SAVE_HOLD frame is shown (the menu's progress over the cleared frame);
+ * an autosave's SAVE_HOLD_QUIET frame shows nothing new: the last frame
+ * stays on screen. */
+static void eng_save_hold_frame(uint32_t dt, int hold)
 {
 	io_frame_begin(dt);
 	io_pump();
-	while (!sys_frame_try_begin())
-		io_pump();
-	if (eng.world)
+	snd_step(dt);
+	io_pump();
+	if (hold == SAVE_HOLD)
 	{
-		d2_begin();
-		d2_end();
+		while (!sys_frame_try_begin())
+			io_pump();
+		if (eng.world)
+		{
+			d2_begin();
+			d2_end();
+		}
+		sys_frame_end();
 	}
-	sys_frame_end();
 	log_flush();
 }
 
@@ -942,6 +964,7 @@ void eng_frame(void)
 	uint32_t dt = (vi - eng.last_vi) * sys_vi_period_us();
 	in_cmd_t cmd;
 	double gdt;
+	int hold;
 
 	/* 1 plat: dt from the VI clock, clamped (D6 i); test builds may fix it */
 	SEAMPROF_BEGIN();
@@ -955,9 +978,10 @@ void eng_frame(void)
 	if (eng.timescale != 1.0f)
 		dt = (uint32_t)(dt * eng.timescale + 0.5f);
 	/* a save's snapshot or a load in progress holds the frame */
-	if (save_frame())
+	hold = save_frame();
+	if (hold)
 	{
-		eng_save_hold_frame(dt);
+		eng_save_hold_frame(dt, hold);
 		return;
 	}
 	/* the end section fired last frame (the route VM saw it at step 13):
@@ -1049,18 +1073,8 @@ void eng_frame(void)
 	 * placements, persistent render fades, shake */
 	fx_frame(eng.time, gdt);
 	SEAMPROF_STEP(FXSIM);
-	/* 10 sound: listener = the view (global eye, right vector) of the last
-	 * drawn frame */
-	{
-		float yaw = ren_cam.ang[1] * (3.14159265f / 180.0f);
-		float pitch = ren_cam.ang[0] * (3.14159265f / 180.0f);
-		float roll = ren_cam.ang[2] * (3.14159265f / 180.0f);
-		float sy = hl_sinf(yaw), cy = hl_cosf(yaw), sp = hl_sinf(pitch), cp = hl_cosf(pitch);
-		float sr = hl_sinf(roll), cr = hl_cosf(roll);
-		float right[3] = { -sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp };
-
-		snd_frame(ren_cam.org, right, (double)dt * 1e-6);
-	}
+	/* 10 sound */
+	snd_step(dt);
 	SEAMPROF_STEP(SND);
 	io_pump();
 

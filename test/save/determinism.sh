@@ -21,11 +21,13 @@
 #     map opens, whose completion frame follows the render pool's state
 #     (warm in A, cold after B's load), not the game's.
 # C against A tells whether the save itself (its settle: paused AI thinks,
-# opens in flight) changed the game. Gate: a save's, a load's or an
-# autosave's (slot 0, any run) cost per frame <= 67 ms: the larger of its
-# `longest held frame` (frames it held: no game step, all of it ours) and
-# its `worst step` (its own work in a frame the game also ran); its
-# `longest frame` (game included) is in the run logs.
+# opens in flight) changed the game. Gate: every autosave (slot 0, any
+# run) ok, and its cost per frame <= 67 ms: the larger of its `longest
+# held frame` (frames it held: no game step, all of it ours) and its
+# `worst step` (its own work in a frame the game also ran); its `longest
+# frame` (game included) is in the run logs. A manual save's and a load's
+# cost per frame and whole time are reported, not gated (architecture.md
+# 14: the game is paused behind the menu's progress, the sound muted).
 #
 #   test/save/determinism.sh [--ares] [--pak] SCENE:T:N[:report] ...
 #
@@ -140,12 +142,13 @@ mkdir -p "$OUT"
 SUM="$OUT/summary.md"
 echo "# saved-game determinism ($MODE, $(date -u +%FT%TZ), content $CONTENT)" >"$SUM"
 echo >>"$SUM"
-echo "| scene | T | N | (a) B's re-save = S's image | (b) streams A/B at T+N | stats T+1 | stats T+N | C vs A (save no-op) | longest save frame | longest load frame | autosaves: longest frame | image |" >>"$SUM"
+echo "| scene | T | N | (a) B's re-save = S's image | (b) streams A/B at T+N | stats T+1 | stats T+N | C vs A (save no-op) | save: longest frame, time | load: longest frame, time | autosaves: longest frame | image |" >>"$SUM"
 echo "|---|---|---|---|---|---|---|---|---|---|---|---|" >>"$SUM"
-# the frame gate (architecture.md 14): a save's, an autosave's or a load's
-# cost per frame, us: max(longest held frame, worst step) of its log line
+# a save's, an autosave's or a load's cost per frame, us: max(longest held
+# frame, worst step) of its log line; its whole time, ms
 cost() { sed -n 's/.*worst step \([0-9]*\) us, longest held frame \([0-9]*\) us.*/\1 \2/p' \
 	| awk '{print ($1 > $2 ? $1 : $2)}'; }
+whole() { sed -n 's/.* \([0-9]*\) ms$/\1/p'; }
 FRAME_MAX=67000
 FAIL=0
 for c in "${CASES[@]}"; do
@@ -180,28 +183,37 @@ for c in "${CASES[@]}"; do
 	ws=$( { grep -hE "^save: save slot $SL (ok|FAILED)" "$d/S/run.log" || true;
 		grep -hE "^save: save slot 1 (ok|FAILED)" "$d/A/run.log" || true; } \
 		| cost | sort -n | tail -1)
+	ts=$( { grep -hE "^save: save slot $SL (ok|FAILED)" "$d/S/run.log" || true;
+		grep -hE "^save: save slot 1 (ok|FAILED)" "$d/A/run.log" || true; } \
+		| whole | sort -n | tail -1)
 	wl=$( (grep -E "^save: load slot $SL " "$d/B/run.log" || true) \
 		| cost | head -1)
+	tl=$( (grep -E "^save: load slot $SL " "$d/B/run.log" || true) \
+		| whole | head -1)
 	img=$( (grep -E "^save: slot 1 seq" "$d/A/run.log" || true) \
 		| sed -n 's/.*: \([0-9]* B state -> [0-9]* B image\).*/\1/p' | head -1)
 	nok=$(( $(grep -c "^save: save slot $SL ok" "$d/S/run.log" || true) \
 		+ $(grep -c "^save: save slot 1 ok" "$d/A/run.log" || true) ))
 	[[ $nok == 3 ]] || { ws="$ws (a save FAILED)"; FAIL=1; }
 	grep -q "^save: load slot $SL ok" "$d/B/run.log" || { wl="$wl (load FAILED)"; FAIL=1; }
-	# the autosaves of every run (slot 0: trigger_autosave, seam crossings)
+	ws="${ws:-?} us, ${ts:-?} ms"
+	wl="${wl:-?} us, ${tl:-?} ms"
+	# the autosaves of every run (slot 0: trigger_autosave, seam crossings):
+	# each ok, each frame within the gate
 	wa=$( (grep -hE "^save: save slot 0 (ok|FAILED)" "$d"/{S,A,B,C}/run.log || true) \
 		| cost | sort -n | tail -1)
 	na=$(cat "$d"/{S,A,B,C}/run.log | grep -c "^save: save slot 0 ok" || true)
-	for v in "${ws%% *}" "${wl%% *}" ${wa:+"$wa"}; do
-		[[ -n $v && $v -le $FRAME_MAX ]] || FAIL=1
-	done
+	nf=$(cat "$d"/{S,A,B,C}/run.log | grep -c "^save: save slot 0 FAILED" || true)
+	[[ -z $wa || $wa -le $FRAME_MAX ]] || FAIL=1
+	[[ $nf == 0 ]] || FAIL=1
 	wa="${na} ok${wa:+, $wa us}"
+	[[ $nf == 0 ]] || wa="$wa, $nf FAILED"
 	for r in S A B C; do
 		[[ $(cat "$d/$r/exit") == 0 ]] || { eq="$eq, run $r exit $(cat "$d/$r/exit")"; FAIL=1; }
 	done
 	[[ $CF == 1 ]] || eq="$eq (reported)"
-	echo "| $s | $t | $n | $rs | $eq | ${st[0]} | ${st[1]} | $noop | ${ws:-?} us | ${wl:-?} us | $wa | ${img:-?} |" >>"$SUM"
-	echo "save: $s T=$t N=$n: restore $rs, streams $eq, stats ${st[*]}, C vs A $noop, save ${ws:-?} us, load ${wl:-?} us, autosaves $wa, ${img:-?}"
+	echo "| $s | $t | $n | $rs | $eq | ${st[0]} | ${st[1]} | $noop | $ws | $wl | $wa | ${img:-?} |" >>"$SUM"
+	echo "save: $s T=$t N=$n: restore $rs, streams $eq, stats ${st[*]}, C vs A $noop, save $ws, load $wl, autosaves $wa, ${img:-?}"
 done
 cat "$SUM"
 exit $FAIL

@@ -669,6 +669,19 @@ void Ai_Settle(void)
 	eng_set_frame_layer(layer);
 }
 
+/* Ai_Settle would do something: a think paused or queued. */
+int Ai_Pending(void)
+{
+	int i;
+
+	if (nheld > 0)
+		return 1;
+	for (i = 0; i < HL64_AI_CONTEXTS; i++)
+		if (ctx[i].state == AC_PAUSED)
+			return 1;
+	return 0;
+}
+
 void Ai_Drop(int e)
 {
 	ai_ctx_t *c;

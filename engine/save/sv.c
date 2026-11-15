@@ -55,6 +55,7 @@ static struct {
 	uint32_t	cap, pos, len;
 	uint8_t		over, failed;
 	const char	*why;
+	uint8_t		*scratch;	/* sv_work_area: the coder's work area while it is idle */
 	/* coder: raw[0, len) -> out */
 	uint32_t	*head;		/* [NHEAD] position + 1 of the hash's last occurrence, 0 none */
 	uint16_t	*prev;		/* [WIN] by position: distance back to the hash's previous one, 0 none */
@@ -79,6 +80,8 @@ static struct {
 	const char	*part_name[PARTS];
 	uint32_t	part_raw[PARTS], part_coded[PARTS];
 	uint64_t	part_us[PARTS], end_us;	/* the staging clock at each mark, at the end */
+	uint64_t	check_t0;	/* sv_check_time(1)'s clock */
+	uint32_t	check_us;	/* the check windows so far, left out of the clock */
 	int		nparts, part_at;
 #endif
 } V;
@@ -101,18 +104,19 @@ static const uint8_t dext[SYM_D] = {
 
 /* ---- writer: staging ---------------------------------------------------- */
 
-void sv_write_begin(void *raw, uint32_t cap)
+void sv_write_begin(void *raw, uint32_t cap, void *work)
 {
 	memset(&V, 0, sizeof(V));
 	V.raw = raw;
 	V.cap = cap;
+	V.scratch = work;
 }
 
 uint32_t sv_write_end(void)
 {
 	V.len = V.pos;
 #ifdef HL64_TEST
-	V.end_us = sys_time_us();
+	V.end_us = sys_time_us() - V.check_us;
 #endif
 	return V.over || V.failed ? 0 : V.pos;
 }
@@ -120,6 +124,12 @@ uint32_t sv_write_end(void)
 uint32_t sv_write_pos(void)
 {
 	return V.pos;
+}
+
+void *sv_work_area(uint32_t *bytes)
+{
+	*bytes = V.scratch ? SV_WORK_BYTES : 0;
+	return V.scratch;
 }
 
 void sv_put(const void *p, uint32_t n)
@@ -140,9 +150,22 @@ void sv_part(const char *name)
 	if (V.nparts < PARTS)
 	{
 		V.part_name[V.nparts] = name;
-		V.part_us[V.nparts] = sys_time_us();
+		V.part_us[V.nparts] = sys_time_us() - V.check_us;
 		V.part_raw[V.nparts++] = V.pos;
 	}
+}
+
+void sv_check_time(int on)
+{
+	if (on)
+		V.check_t0 = sys_time_us();
+	else
+		V.check_us += (uint32_t)(sys_time_us() - V.check_t0);
+}
+
+uint32_t sv_check_us(void)
+{
+	return V.check_us;
 }
 #endif
 
@@ -674,11 +697,12 @@ uint32_t sv_decode_end(void)
 
 /* ---- reader: staging ------------------------------------------------------ */
 
-void sv_read_begin(const void *raw, uint32_t n)
+void sv_read_begin(const void *raw, uint32_t n, void *work)
 {
 	memset(&V, 0, sizeof(V));
 	V.raw = (uint8_t *)raw;
 	V.len = n;
+	V.scratch = work;
 }
 
 uint32_t sv_read_pos(void)
@@ -789,43 +813,86 @@ uint32_t sv_crc32(uint32_t crc, const void *p, uint32_t n)
 /* ---- delta rows ----------------------------------------------------------- */
 
 /* Per group of 8 words a mask byte (bit k: word k differs from ref), then
- * the differing words; the n % 4 tail bytes as they are. */
+ * the differing words; the n % 4 tail bytes as they are. With room for
+ * the worst case the row goes straight into the staging, word loads when
+ * both rows are word-aligned (component rows, private blocks). */
 void sv_put_delta(const void *p, const void *ref, uint32_t n)
 {
 	const uint8_t *s = p, *r = ref;
 	uint32_t w = n / 4, g, k;
 
+	if (!V.over && V.cap - V.pos >= (w + 7) / 8 + 4 * w + (n & 3u))
+	{
+		uint8_t *o = V.raw + V.pos;
+
+		if (!(((uintptr_t)s | (uintptr_t)r) & 3u))
+		{
+			const uint32_t *a = (const uint32_t *)p, *b = (const uint32_t *)ref;
+
+			for (g = 0; g < w; g += 8)
+			{
+				uint32_t e = w - g < 8 ? w - g : 8, m = 0;
+				uint8_t *mo = o++;
+
+				for (k = 0; k < e; k++)
+				{
+					uint32_t v = a[g + k];
+
+					if (v != (b ? b[g + k] : 0u))
+					{
+						m |= 1u << k;
+						memcpy(o, &v, 4);
+						o += 4;
+					}
+				}
+				*mo = (uint8_t)m;
+			}
+		}
+		else
+			for (g = 0; g < w; g += 8)
+			{
+				uint32_t e = w - g < 8 ? w - g : 8, m = 0;
+				uint8_t *mo = o++;
+
+				for (k = 0; k < e; k++)
+				{
+					uint32_t v, x = 0;
+
+					memcpy(&v, s + 4 * (g + k), 4);
+					if (r)
+						memcpy(&x, r + 4 * (g + k), 4);
+					if (v != x)
+					{
+						m |= 1u << k;
+						memcpy(o, &v, 4);
+						o += 4;
+					}
+				}
+				*mo = (uint8_t)m;
+			}
+		memcpy(o, s + 4 * w, n & 3u);
+		V.pos = (uint32_t)(o + (n & 3u) - V.raw);
+		return;
+	}
+	/* no room for it: what it would need (the snapshot fails as too big) */
 	for (g = 0; g < w; g += 8)
 	{
-		uint32_t m = 0, e = w - g < 8 ? w - g : 8, a[8], b = 0;
+		uint32_t m = 0, e = w - g < 8 ? w - g : 8, b = 0;
 
 		for (k = 0; k < e; k++)
 		{
-			memcpy(&a[k], s + 4 * (g + k), 4);
+			uint32_t a;
+
+			memcpy(&a, s + 4 * (g + k), 4);
 			if (r)
 				memcpy(&b, r + 4 * (g + k), 4);
-			if (a[k] != b)
+			if (a != b)
 				m |= 1u << k;
-		}
-		/* the mask and its words straight into the staging (one check) */
-		if (!V.over && V.cap - V.pos >= 1u + 4u * 8u)
-		{
-			uint8_t *o = V.raw + V.pos;
-
-			*o++ = (uint8_t)m;
-			for (k = 0; k < e; k++)
-				if (m & (1u << k))
-				{
-					memcpy(o, &a[k], 4);
-					o += 4;
-				}
-			V.pos = (uint32_t)(o - V.raw);
-			continue;
 		}
 		sv_u8(m);
 		for (k = 0; k < e; k++)
 			if (m & (1u << k))
-				sv_put(&a[k], 4);
+				sv_put(s + 4 * (g + k), 4);
 	}
 	sv_put(s + 4 * w, n & 3u);
 }

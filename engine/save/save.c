@@ -103,8 +103,21 @@ _Static_assert(sizeof(slot_hdr_t) <= HDR_BYTES, "slot header");
 enum {
 	ST_IDLE, ST_SNAP, ST_WRITE, ST_SETTINGS, ST_LOAD_READ, ST_LOAD_DROP, ST_LOAD_OPEN,
 	ST_PAK_WRITE, ST_PAK_READ, ST_CODE, ST_DECODE,
+	ST_MUTE,	/* held frames between the mute and a manual operation's long hold */
 	ST_END		/* the operation ended last frame: its log line, then idle */
 };
+
+/* A manual save's snapshot and a load's restore hold a frame up to a few
+ * hundred ms, longer than the cart's sound output queue (plat/n64 main.c
+ * AUDIO_LATENCY_MS, 160 ms): the sound is muted first and MUTE_FRAMES
+ * frames (>= 167 ms at 60 Hz) fill the queue with silence, so it runs dry
+ * on silence instead of cutting into a sound. A frame count, not a time:
+ * held frames move I/O, the same on the host and the cart. */
+#define MUTE_FRAMES	10
+/* A manual save with a layer open in flight lets it finish in held frames
+ * (at most this many) before the snapshot: settle's synchronous open
+ * cannot wait for the fenced frees a running game's pools hold. */
+#define OPEN_WAIT_FRAMES	90
 
 /* A directory entry: the slot's current copy. */
 typedef struct {
@@ -121,6 +134,10 @@ static struct {
 	int8_t		result;
 	uint8_t		drop;		/* held frames left before the reopen */
 	uint8_t		auto_ask;	/* an autosave waits for a quiet frame boundary */
+	uint8_t		muted;		/* this operation muted the sound (snd_mute) */
+	uint8_t		mute_left;	/* frames until the mute's silence fills the queue */
+	uint8_t		next;		/* ST_MUTE: the state after it */
+	uint8_t		open_wait;	/* ST_SNAP: held frames spent on a layer open */
 	uint8_t		wsect, wnsect;	/* the write's pool run */
 	uint32_t	seq;		/* newest sequence seen */
 	uint8_t		*img;		/* SAVE region: header + image */
@@ -147,6 +164,8 @@ static struct {
 	uint64_t	last;		/* the previous save_frame call */
 	const char	*what;		/* the ended operation, for its log line */
 	uint64_t	t0;
+	float		org[3];		/* the player's origin at the snapshot (its log line) */
+	uint32_t	auto_wait;	/* frames the asked autosave has waited */
 } SV;
 
 static uint8_t set_buf[SET_BYTES] __attribute__((aligned(16)));
@@ -681,6 +700,20 @@ static void settle(void)
 	rec_settle();
 }
 
+/* Nothing for settle to do now: no monster think paused or queued, every
+ * open layer ready, no HLE slot opening, no map precache hold. */
+static int settled(void)
+{
+	int s;
+
+	if (game_save_pending() || !rec_settled())
+		return 0;
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+		if (wld_layers[s].open && wld_layers[s].ready == 0)
+			return 0;
+	return 1;
+}
+
 /* Every section in its order (sv_part: test builds' size table by part). */
 static void sections_save(void)
 {
@@ -730,18 +763,27 @@ static int sections_load(void)
 	return 0;
 }
 
-/* The snapshot frame: settle, then every section staged (plain copies);
- * the coder runs over it in the following frames (ST_CODE). */
+/* The snapshot frame: settle, then every section staged (plain copies)
+ * and the header's description of that state (its layers, map, time);
+ * the coder runs over it in the following frames (ST_CODE), while the
+ * game goes on. */
 static int snapshot(int slot)
 {
-	uint64_t t0 = sys_time_us(), t1;
-	uint32_t raw;
+	slot_hdr_t *h = (slot_hdr_t *)SV.img;
+	uint64_t t0, t1;
+	uint32_t raw, check = 0;
+	int s, nl = 0;
 
+	t0 = sys_time_us();
 	settle();
 	t1 = sys_time_us();
-	sv_write_begin(SV.raw, SV.raw_cap);
+	sv_write_begin(SV.raw, SV.raw_cap, SV.work);
 	sections_save();
 	raw = sv_write_end();
+#ifdef HL64_TEST
+	check = sv_check_us();
+	SV.check_us += check;
+#endif
 	if (!raw)
 	{
 		log_printf("save: slot %d: %s: %lu B of state (staging %lu B)\n", slot,
@@ -750,20 +792,37 @@ static int snapshot(int slot)
 		return -1;
 	}
 	SV.raw_len = raw;
-	log_printf("save: slot %d snapshot: settle %lu us, staging %lu us\n", slot,
-		(unsigned long)(t1 - t0), (unsigned long)(sys_time_us() - t1));
+	log_printf("save: slot %d snapshot: settle %lu us, staging %lu us", slot,
+		(unsigned long)(t1 - t0), (unsigned long)(sys_time_us() - t1 - check));
+	if (slot == 0)
+		log_printf(" (autosave asked %lu frames before)", (unsigned long)SV.auto_wait);
+	log_printf("\n");
 	memset(SV.img, 0, HDR_BYTES);
+	h->game_time = (float)eng_clock_time();
+	h->skill = settings.skill;
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+	{
+		const wld_layer_t *L = wld_layer(s);
+
+		h->layer_map[s] = L ? L->map : WLD_NO_MAP;
+		h->layer_crc[s] = L ? L->hdr.dir_crc : 0;
+		nl += L != NULL;
+	}
+	h->nlayers = (uint8_t)nl;
+	strncpy(h->map, wld_map_name(phy_player_map()), sizeof(h->map) - 1);
+	strncpy(h->title, title_of(h->map), sizeof(h->title) - 1);
+	memcpy(SV.org, phy_player()->origin, sizeof(SV.org));
 	sv_code_begin(SV.img + HDR_BYTES, SAVE_IMAGE_MAX, SV.work);
 	return 0;
 }
 
-/* The image is coded: its header, then the write to list index slot. */
+/* The image is coded: the rest of its header (the snapshot wrote what
+ * describes the state), then the write to list index slot. */
 static int seal(int slot)
 {
 	slot_hdr_t *h = (slot_hdr_t *)SV.img;
-	const ent_player_t *pl = phy_player();
 	uint32_t raw = SV.raw_len, n = sv_code_end(), nsect;
-	int s, nl = 0, at;
+	int at;
 
 	if (!n)
 	{
@@ -798,21 +857,8 @@ static int seal(int slot)
 	h->raw_bytes = raw;
 	h->img_bytes = n;
 	h->img_crc = sv_crc32(0, SV.img + HDR_BYTES, n);
-	h->game_time = (float)eng_clock_time();
-	h->skill = settings.skill;
 	h->slot = (uint8_t)(slot < FLASH_SLOTS ? (uint32_t)slot : PAK_SLOT);
 	h->nsect = (uint8_t)(slot < FLASH_SLOTS ? nsect : 0);
-	for (s = 0; s < HL64_WORLD_LAYERS; s++)
-	{
-		const wld_layer_t *L = wld_layer(s);
-
-		h->layer_map[s] = L ? L->map : WLD_NO_MAP;
-		h->layer_crc[s] = L ? L->hdr.dir_crc : 0;
-		nl += L != NULL;
-	}
-	h->nlayers = (uint8_t)nl;
-	strncpy(h->map, wld_map_name(phy_player_map()), sizeof(h->map) - 1);
-	strncpy(h->title, title_of(h->map), sizeof(h->title) - 1);
 	h->hdr_crc = sv_crc32(0, SV.img + 8, HDR_BYTES - 8);
 	log_printf("save: slot %d seq %lu: %lu B state -> %lu B image (%lu%%, crc %08lx), %s %d+%lu, "
 		"%s t=%.3f org %.1f %.1f %.1f\n", slot, (unsigned long)h->seq, (unsigned long)raw,
@@ -820,7 +866,7 @@ static int seal(int slot)
 		slot < FLASH_SLOTS ? "sectors" : "Pak entry",
 		slot < FLASH_SLOTS ? at + (int)POOL_FIRST : slot - FLASH_SLOTS,
 		(unsigned long)(slot < FLASH_SLOTS ? nsect : 1), h->map, (double)h->game_time,
-		(double)pl->origin[0], (double)pl->origin[1], (double)pl->origin[2]);
+		(double)SV.org[0], (double)SV.org[1], (double)SV.org[2]);
 	if (slot >= FLASH_SLOTS)
 		return pak_begin(slot - FLASH_SLOTS);
 	SV.wsect = (uint8_t)at;
@@ -885,7 +931,7 @@ static void restore_check(void)
 			(unsigned long)SV.raw_len);
 		return;
 	}
-	sv_write_begin(SV.raw + off, SV.raw_cap - off);
+	sv_write_begin(SV.raw + off, SV.raw_cap - off, SV.work);
 	sections_save();
 	n = sv_write_end();
 	while (i < n && i < SV.raw_len && a[i] == b[i])
@@ -911,9 +957,10 @@ static void restore_check(void)
 static int restore(void)
 {
 	const slot_hdr_t *h = &SV.hdr;
-	uint64_t t0 = sys_time_us(), t1, t2, t3;
+	uint64_t t0, t1, t2, t3;
 	int s;
 
+	t0 = sys_time_us();
 	/* the New Game shell: the game's campaign state at its start */
 	game_new_campaign();
 	for (s = 0; s < HL64_WORLD_LAYERS; s++)
@@ -935,7 +982,7 @@ static int restore(void)
 		}
 	}
 	t1 = sys_time_us();
-	sv_read_begin(SV.raw, SV.raw_len);
+	sv_read_begin(SV.raw, SV.raw_len, SV.work);
 	if (sections_load())
 	{
 		log_printf("load: slot %d: %s (at %lu B of state)\n", SV.slot,
@@ -982,8 +1029,18 @@ static void op_begin(int st, int slot)
 	SV.st = (uint8_t)st;
 	SV.slot = (int8_t)slot;
 	SV.pgen = SV.pak_gen;
+	SV.open_wait = 0;
 	SV.us_max = SV.us_sum = SV.frames = SV.frame_max = SV.held_max = 0;
 	SV.t0 = sys_time_us();
+}
+
+/* A manual save or a load: the sound goes silent now; its long hold waits
+ * MUTE_FRAMES frames (ST_MUTE); ST_END turns it back on. */
+static void mute_begin(void)
+{
+	snd_mute(1);
+	SV.muted = 1;
+	SV.mute_left = MUTE_FRAMES;
 }
 
 /* The entry behind list index slot, NULL none. */
@@ -999,14 +1056,19 @@ int save_write(int slot)
 {
 	if (SV.st != ST_IDLE || slot < 1 || !entry(slot) || !phy_player_active())
 		return -1;
-	op_begin(ST_SNAP, slot);
+	op_begin(ST_MUTE, slot);
+	SV.next = ST_SNAP;
+	mute_begin();
 	return 0;
 }
 
 void save_autosave(void)
 {
-	if (SV.chip && phy_player_active())
+	if (SV.chip && phy_player_active() && !SV.auto_ask)
+	{
 		SV.auto_ask = 1;
+		SV.auto_wait = 0;
+	}
 }
 
 int save_load(int slot)
@@ -1019,6 +1081,7 @@ int save_load(int slot)
 	SV.pnew = d->note;
 	SV.poff = 0;
 	SV.plen = d->bytes;
+	mute_begin();
 	return 0;
 }
 
@@ -1047,7 +1110,11 @@ static void op_end(int result, const char *what)
 }
 
 /* An asked autosave starts at a quiet frame boundary: a player, no seam
- * window or crossing. */
+ * window or crossing, and nothing for settle to do (settled: no paused
+ * or queued monster think, no open in flight), so the autosave changes
+ * nothing in the game and its one held frame is the staging alone (the
+ * 67 ms frame gate, architecture 14). Which boundary that is follows
+ * from the game's state alone. */
 static int autosave_due(void)
 {
 	if (!SV.auto_ask)
@@ -1057,8 +1124,11 @@ static int autosave_due(void)
 		SV.auto_ask = 0;
 		return 0;
 	}
-	if (!seam_quiet())
+	if (!seam_quiet() || !settled())
+	{
+		SV.auto_wait++;
 		return 0;
+	}
 	SV.auto_ask = 0;
 	op_begin(ST_SNAP, 0);
 	return 1;
@@ -1087,11 +1157,38 @@ static void load_drop(void)
 	SV.st = ST_LOAD_DROP;
 }
 
+/* A layer open in flight (open, not ready yet). */
+static int layers_opening(void)
+{
+	int s;
+
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+		if (wld_layers[s].open && wld_layers[s].ready == 0)
+			return 1;
+	return 0;
+}
+
+/* A held frame of a manual save whose snapshot waits for a layer open: the
+ * open steps as the streamer steps it (one stage a frame) and the world's
+ * frame count goes on, so the fenced frees its room waits for retire. */
+static void open_wait_step(void)
+{
+	int s;
+
+	wld_frame(wld_frame_no);
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+		if (wld_layers[s].open && wld_layers[s].ready == 0)
+			wld_open_step(&wld_layers[s], 16 * 1024);
+}
+
 int save_frame(void)
 {
 	uint64_t t0 = sys_time_us();
 	uint32_t us, frame = SV.last ? (uint32_t)(t0 - SV.last) - SV.check_us : 0;
 	int hold = 0, r;
+
+	if (SV.mute_left)
+		SV.mute_left--;
 
 	/* the frame that just ended belonged to the operation running now */
 	SV.last = t0;
@@ -1110,13 +1207,27 @@ int save_frame(void)
 			(unsigned long)SV.frames, (unsigned long)SV.us_max, (unsigned long)SV.held_max,
 			(unsigned long)SV.frame_max, (unsigned long)((t0 - SV.t0) / 1000u));
 		SV.st = ST_IDLE;
+		if (SV.muted)
+		{
+			snd_mute(0);
+			SV.muted = 0;
+		}
 		/* fall through */
 	case ST_IDLE:
 		if (!autosave_due())
 			return 0;
 		/* fall through */
 	case ST_SNAP:
-		hold = 1;
+		/* an autosave's one held frame shows nothing new: the last frame
+		 * stays on screen */
+		hold = SV.slot == 0 ? SAVE_HOLD_QUIET : SAVE_HOLD;
+		if (layers_opening() && SV.open_wait < OPEN_WAIT_FRAMES)
+		{
+			if (!SV.open_wait++)
+				log_printf("save: slot %d: a layer open in flight: it finishes first\n", SV.slot);
+			open_wait_step();
+			break;
+		}
 		if (snapshot(SV.slot))
 			op_end(-1, "save");
 		else
@@ -1142,8 +1253,25 @@ int save_frame(void)
 			op_end(-1, "load");
 			break;
 		}
-		hold = 1;
+		hold = SAVE_HOLD;
+		if (SV.mute_left)
+		{
+			SV.st = ST_MUTE;
+			SV.next = ST_LOAD_DROP;
+			break;
+		}
 		load_drop();
+		break;
+	case ST_MUTE:
+		/* the frame is shown (the menu's progress) and the sound runs:
+		 * the output queue fills with the mute's silence */
+		hold = SAVE_HOLD;
+		if (SV.mute_left)
+			break;
+		if (SV.next == ST_LOAD_DROP)
+			load_drop();
+		else
+			SV.st = SV.next;
 		break;
 	case ST_WRITE:
 	case ST_SETTINGS:

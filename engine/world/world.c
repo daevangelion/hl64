@@ -928,11 +928,13 @@ static int make_room(wld_chunk_t *ch, int p, uint32_t size, int cls)
 	do
 	{
 		/* evicted REND / TEXP bytes free behind their fence: once the
-		 * fenced bytes could make the hole (the largest free block plus
-		 * every fenced byte covers the request), wait for them (two
-		 * frames) instead of evicting the rest of the pool; a pool whose
-		 * free bytes are fragmented evicts on until they could */
-		if (pl->fenced && mem_pool_largest(pl) + pl->fenced >= size && !weaker_queued(p, cls))
+		 * fenced bytes would make the hole (a run of free and fenced
+		 * blocks covers the request), wait for them (two frames) instead
+		 * of evicting the rest of the pool; fenced bytes elsewhere never
+		 * make it and new ones are fenced every frame, so a pool whose
+		 * holes are fragmented evicts on until they would (architecture.md
+		 * 5.3) */
+		if (pl->fenced && mem_pool_largest_fenced(pl) >= size && !weaker_queued(p, cls))
 			return 0;
 		if (!evict_one(p, cls))
 		{

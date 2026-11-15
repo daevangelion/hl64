@@ -108,5 +108,7 @@ look 0 177
 wait 0.5
 shot hldemo3-arrival
 stats end
-wait 0.2
+# 2.5 s past the window: the saved-game gate's T+N save (test/run/m5.sh
+# seam-2to3:810:60) after the cart's ~41-frame save at T
+wait 2.5
 pass

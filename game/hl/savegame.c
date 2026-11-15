@@ -178,6 +178,11 @@ void game_save_settle(void)
 	Ai_Settle();
 }
 
+int game_save_pending(void)
+{
+	return Ai_Pending();
+}
+
 /* ---- file-scope state ------------------------------------------------------------ */
 
 /* game/hud: the HUD the saving game showed (fades, pickup history,

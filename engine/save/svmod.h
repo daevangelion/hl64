@@ -20,9 +20,11 @@ int	eng_clock_load(void);
 void	rng_save(void);
 int	rng_load(void);
 /* engine/ent/rec.c: settle (open in-flight HLE slots, land map precache
- * holds), HLE slots (reopened at their saved blocks), timers, uses,
- * holders, runtime ids, twins, frozen maps, the dehydrate store */
+ * holds; rec_settled: 1 when there is none), HLE slots (reopened at their
+ * saved blocks), timers, uses, holders, runtime ids, twins, frozen maps,
+ * the dehydrate store */
 void	rec_settle(void);
+int	rec_settled(void);
 void	rec_save(void);
 int	rec_load(void);
 /* engine/ent/ent.c (+ heap.c, grid.c, priv.c): components, slot state,

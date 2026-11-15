@@ -225,14 +225,48 @@ static void mark_free(void)
 	}
 }
 
+/* Per 32-byte block of the region the owner + 1 of the used block that
+ * starts there (0 none), from one walk of the live entities, in the
+ * stream's work area (sv_work_area); NULL when it is too small:
+ * owner_of walks the live entities per block then. */
+static uint16_t *owner;
+
 static int owner_of(uint16_t h)
 {
 	int e;
 
+	if (owner)
+		return (int)owner[(uint32_t)(h - 1) / 2u] - 1;
 	for (e = ent_next_live(-1); e >= 0; e = ent_next_live(e))
 		if (ent_c.id[e].priv == h)
 			return e;
 	return -1;
+}
+
+/* The work area: the owner map, then the rest of it (*rest, *nrest bytes;
+ * 16-aligned) for the caller. */
+static void owners_build(uint8_t **rest, uint32_t *nrest)
+{
+	uint32_t bytes, need = ((S.npages * PAGE_BYTES / 32u) * 2u + 15u) & ~15u;
+	uint8_t *sc = sv_work_area(&bytes);
+	int e;
+
+	owner = NULL;
+	*rest = NULL;
+	*nrest = 0;
+	if (!sc || bytes < need)
+		return;
+	owner = (uint16_t *)sc;
+	memset(owner, 0, need);
+	for (e = ent_next_live(-1); e >= 0; e = ent_next_live(e))
+	{
+		uint16_t h = ent_c.id[e].priv;
+
+		if (h && (uint32_t)(h - 1) * 16u < S.npages * PAGE_BYTES)
+			owner[(uint32_t)(h - 1) / 2u] = (uint16_t)(e + 1);
+	}
+	*rest = sc + need;
+	*nrest = bytes - need;
 }
 
 static uint32_t priv_size(uint16_t h)
@@ -265,18 +299,26 @@ static int priv_copy(int e, const uint8_t *b, uint8_t *copy, uint32_t bs)
 	return 0;
 }
 
+/* Per entity class, the converted copy (priv_copy) of its last block
+ * saved, the next block's reference, kept in the work area after the owner
+ * map while it has room (a class without one converts that block again). */
+static uint8_t *cls_copy[RC__N];
+
 void ent_priv_save_all(void)
 {
 	static uint8_t tmp[1024] __attribute__((aligned(16)));
 	static uint8_t ref[1024] __attribute__((aligned(16)));
-	uint32_t p;
+	uint8_t *arena;
+	uint32_t p, room;
 
 	sv_u32(S.npages);
 	sv_put(S.cls, S.npages);
 	sv_put(S.used, 2u * S.npages);
 	sv_put(S.head, sizeof(S.head));
 	mark_free();
+	owners_build(&arena, &room);
 	memset(cls_last, 0, sizeof(cls_last));
+	memset(cls_copy, 0, sizeof(cls_copy));
 	for (p = 0; p < S.npages; p++)
 	{
 		uint8_t mask[PAGE_MASK];
@@ -313,20 +355,37 @@ void ent_priv_save_all(void)
 				const uint8_t *pb = block(cls_last[c]);
 				int pe;
 
-				block_class(pb, &pe);
-				if (!priv_copy(pe, pb, ref, bs))
-					r = ref;
+				if (cls_copy[c])
+					r = cls_copy[c];
+				else
+				{
+					block_class(pb, &pe);
+					if (!priv_copy(pe, pb, ref, bs))
+						r = ref;
+				}
 			}
 			sv_put_delta(tmp, r, bs);
-			if (c >= 0)
-				cls_last[c] = handle_of(b);
+			if (c < 0)
+				continue;
+			cls_last[c] = handle_of(b);
+			/* a class's blocks all have its size: its copy keeps its place */
+			if (!cls_copy[c] && room >= bs)
+			{
+				cls_copy[c] = arena;
+				arena += bs;
+				room -= bs;
+			}
+			if (cls_copy[c])
+				memcpy(cls_copy[c], tmp, bs);
 		}
 	}
+	owner = NULL;
 }
 
 int ent_priv_load_all(void)
 {
-	uint32_t p, n = sv_get_u32();
+	uint8_t *rest;
+	uint32_t p, nrest, n = sv_get_u32();
 	int c;
 
 	if (n != S.npages)
@@ -348,6 +407,7 @@ int ent_priv_load_all(void)
 			break;
 		}
 	}
+	owners_build(&rest, &nrest);
 	for (p = 0; p < S.npages && !sv_failed(); p++)
 	{
 		uint8_t mask[PAGE_MASK];
@@ -380,6 +440,7 @@ int ent_priv_load_all(void)
 		S.st.live[S.cls[p]] += S.used[p];
 		S.st.bytes_live += S.used[p] * bs;
 	}
+	owner = NULL;
 	for (c = 0; c < NCLASS; c++)
 	{
 		S.st.peak[c] = S.st.live[c];

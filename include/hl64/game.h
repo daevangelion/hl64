@@ -126,6 +126,10 @@ void	game_cut_refs(int slot);
  * on as in one that loads the save), so no game state lives on a
  * coroutine stack or in the held queue. */
 void	game_save_settle(void);
+/* 1 when game_save_settle would do anything now (a monster think paused
+ * or queued): an autosave waits for a frame boundary where it would not,
+ * so taking it changes nothing and costs no settle (architecture 14). */
+int	game_save_pending(void);
 /* e's private block (size bytes, a copy about to be written): pointers to
  * ids. 0, or -1 when it cannot be saved. */
 int	game_priv_save(int e, void *copy, uint32_t size);

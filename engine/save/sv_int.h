@@ -11,12 +11,17 @@
 /* Work memory of the coder (16-aligned): its hash heads and chain links. */
 #define SV_WORK_BYTES	(24u * 1024u)
 
-/* Writer: the sections' bytes go to raw[0, cap). */
-void		sv_write_begin(void *raw, uint32_t cap);
+/* Writer: the sections' bytes go to raw[0, cap); work (SV_WORK_BYTES, the
+ * coder's, idle until sv_code_begin) is the sections' sv_work_area. */
+void		sv_write_begin(void *raw, uint32_t cap, void *work);
 /* The staged size, 0 when it did not fit cap (or a section failed). */
 uint32_t	sv_write_end(void);
 /* Bytes put so far (past cap too: what it would need). */
 uint32_t	sv_write_pos(void);
+#ifdef HL64_TEST
+/* Time the sv_check_time windows took since sv_write_begin (us). */
+uint32_t	sv_check_us(void);
+#endif
 
 /* Coder over the staged bytes (after sv_write_end) into out[0, cap):
  * sv_code_step works for about budget_us, 1 while bytes are left; then
@@ -33,8 +38,8 @@ void		sv_decode_begin(const void *in, uint32_t n, void *raw, uint32_t cap);
 int		sv_decode_step(uint32_t budget_us);
 uint32_t	sv_decode_end(void);
 
-/* Reader over the decoded raw[0, n). */
-void		sv_read_begin(const void *raw, uint32_t n);
+/* Reader over the decoded raw[0, n); work as for the writer. */
+void		sv_read_begin(const void *raw, uint32_t n, void *work);
 /* Bytes got so far. */
 uint32_t	sv_read_pos(void);
 /* The first failure's reason, NULL when none. */

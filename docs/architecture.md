@@ -373,7 +373,12 @@ SA2 §4.2 as built):
 - **pinned**: world hull-0 COLL while the layer is open.
 
 Eviction: queued-not-started first, then LRU among chunks not wanted this
-frame; prefetch never evicts a chunk used in the last 30 frames. The target
+frame; prefetch never evicts a chunk used in the last 30 frames. Evicted
+REND / TEXP bytes free behind a two-frame fence (4.3); a request waits for
+them only while a run of adjacent free and fenced blocks would make its
+hole, and otherwise evicts on: fences elsewhere in a fragmented pool never
+make it and new ones are fenced every frame (a seam's B open waited 60
+frames for its 52 KB ENTS chunk on a 51712 B hole). The target
 set is recomputed only when one of its inputs changed (eye leaf, player
 cell, velocity bucket, pins, layer set); otherwise the previous frame's
 wants are re-asserted by generation number (no rebuild).
@@ -996,22 +1001,36 @@ stamps and timing stats are not saved. Coder: hash chains + Huffman
 (`save_frame`, first in `eng_frame`) what is in flight settles (paused
 monster thinks finish, layer / HLE slot opens complete, precache holds
 land; the same settle runs in every load of it), the snapshot frame copies
-the state into the save region, then the coder runs in 8 ms steps over the
-following frames and the flash writer programs it (4 ms per frame) or the
-Pak writer writes 256 B per frame (≈ 6 ms on ares, 0.72 ms per 32 B
-block). The directory is updated from the read-back of every write.
-**Autosave**: `trigger_autosave` and every finished seam crossing ask for
-one; it is taken at the first quiet frame boundary (a player, no seam
-window or crossing, nothing of ours running); a load drops the request.
+the state into the save region and writes the header's description of it
+(layers, map, time), then the coder runs in 8 ms steps over the following
+frames and the flash writer programs it (4 ms per frame) or the Pak writer
+writes 256 B per frame (≈ 6 ms on ares, 0.72 ms per 32 B block). The
+directory is updated from the read-back of every write. A manual save
+mutes the sound (`snd_mute`: gains 0, no sound's state changes) and holds
+10 shown frames first, so the 160 ms output queue is silence when the
+long snapshot frame lets it run dry; a layer open in flight finishes in
+held frames before the snapshot (a synchronous open in a running game
+cannot wait for its pools' fenced frees). Staging: entity rows from
+`ent_s.touched` down (every slot above it is as boot left it), one pass;
+delta rows with word loads; private blocks with an owner map and each
+class's converted reference kept in the coder's idle work area
+(`sv_work_area`). **Autosave**: `trigger_autosave` and every finished
+seam crossing ask for one; it is taken at the first frame boundary that
+is quiet (a player, no seam window or crossing) and settled (no paused
+or queued think, no open in flight: the autosave changes nothing and
+holds one frame, `SAVE_HOLD_QUIET`, which shows nothing new); a load
+drops the request.
 
-**Load** (`save_load`, works from the title): the image is read and checked
-first (a bad one leaves the session alone), decoded in 8 ms steps, then
-the session is dropped as at an end section, the world's fenced frees
-retire over 3 held frames, the saved layers reopen in their saved slots
-and every section is read back: entities into their own slots with their
+**Load** (`save_load`, works from the title): the sound is muted, the
+image read and checked first (a bad one leaves the session alone),
+decoded in 8 ms steps, then (at least 10 frames after the mute) the
+session is dropped as at an end section, the world's fenced frees retire
+over 3 held frames, the saved layers reopen in their saved slots and
+every section is read back: entities into their own slots with their
 serials, private blocks at their own handles, HLE slots at their own
 blocks, the clock (before the engine frame) and the random stream exactly.
-No spawn function runs; the game resumes at the next frame.
+No spawn function runs; the game resumes at the next frame. The menu
+shows "Saving..." / "Loading..." over the held frames (`SAVE_HOLD`).
 
 **Gate** (`test/save/determinism.sh [--ares] [--pak] SCENE:T:N[:report]`,
 run by `test/run/m5.sh`): run S saves at T and quits; A saves at T and
@@ -1021,19 +1040,19 @@ stages the restored game again at once (test builds' `restore_check`)
 and it must equal S's saved state byte for byte, every scene. (b)
 Continuation: A's and B's save streams at T+N equal byte for byte and
 their `stats` player / entity lines at T+1 and T+N equal — required for
-hl2-yard, hazard-seam and seam-2to3; reported only for hl2-return-battle
-(`:report`), where a map opens inside the window and its completion
-frame follows the render pool's state (warm in A, cold after B's load:
-the open's 52 KB ENTS chunk waits on fenced frees in A), so hydration
-and AI-think drops land at other frames (host: 36 monster rows differ at
-T+N, player state equal; streaming stays as fast as main by decision).
-Cost: every frame a save, autosave or load holds and every step it takes
-in a running frame ≤ 67 ms. **Not met on the cart yet** (ares, flash,
-this tree): snapshot staging 48–108 ms (ent slots 32 ms and private
-blocks 28 ms of hl2-yard's 84 ms), settle of a battle's paused thinks up
-to 126 ms, and the load's one restore frame 160–254 ms (layer opens
-61–107 ms, sections 88–146 ms, session drop 23 ms). Host and ares both
-pass (a) and (b).
+hl2-yard, hazard-seam and seam-2to3 (T = 810, N = 60: after the switch;
+windows before it meet game rules that follow residency, warm in A, cold
+after B's load: infodecal retries change free times, the hitbox pose
+memo forgets entries whose animation is not resident); reported only for
+hl2-return-battle (`:report`), where a map opens inside the window and
+its completion frame follows the render pool's state, so hydration and
+AI-think drops land at other frames. Cost: every autosave ok and every
+frame it holds or step it takes ≤ 67 ms (gated); a manual save's and a
+load's frames and whole time are reported (the game is paused behind the
+menu, the sound muted). Known gaps: placed static decals are not saved
+(an infodecal is gone once placed); at the Uplink route's hldemo2 ->
+hldemo1 return the state (≈ 65.7 KB) codes to 30748 B, 28 B over
+`SAVE_IMAGE_MAX`, and that autosave fails.
 
 ## 15. Test and profiling
 

@@ -3580,6 +3580,20 @@ void rec_settle(void)
 	}
 }
 
+int rec_settled(void)
+{
+	int s;
+
+	for (s = 0; s < REC_SLOTS; s++)
+	{
+		const rmap_t *m = &R.map[s];
+
+		if ((m->phase != PH_CLOSED && m->phase != PH_READY) || (m->phase == PH_READY && m->pre_wait))
+			return 0;
+	}
+	return 1;
+}
+
 /* ---- saved games (architecture.md 14) --------------------------------------------- */
 
 void rec_slot_records(uint32_t *out)

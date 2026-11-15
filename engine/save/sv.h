@@ -32,9 +32,17 @@ void		sv_put_delta(const void *p, const void *ref, uint32_t n);
  * for the per-part size log; the stream's bytes are unchanged. */
 #ifdef HL64_TEST
 void		sv_part(const char *name);
+/* on 1 / off 0: a test-only check runs between them; its time is left out
+ * of the snapshot's and the frame's figures (engine/save/save.c) */
+void		sv_check_time(int on);
 #else
 #define sv_part(name)	((void)(name))
 #endif
+
+/* Memory a section may use while the stream is written or read (the
+ * coder's work area, idle then), 16-aligned; *bytes its size. Nothing in
+ * it lasts from one section to the next. */
+void		*sv_work_area(uint32_t *bytes);
 
 /* ---- reader ------------------------------------------------------------- */
 

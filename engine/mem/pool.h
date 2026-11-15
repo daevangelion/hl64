@@ -73,6 +73,9 @@ mem_blk_t	*mem_pool_alloc_high(mem_pool_t *p, uint32_t size, void **owner);
 void		mem_pool_free(mem_pool_t *p, mem_blk_t *b, uint32_t fence);
 void		mem_pool_retire(mem_pool_t *p, uint32_t done_frame);
 uint32_t	mem_pool_largest(const mem_pool_t *p);
+/* The largest hole once every fenced block has retired: the longest run of
+ * adjacent free and fenced blocks. */
+uint32_t	mem_pool_largest_fenced(const mem_pool_t *p);
 uint32_t	mem_pool_free_bytes(const mem_pool_t *p);
 /* Slide the live blocks of [start, end) down onto the free space among them
  * (the range holds no locked or fenced block), leaving one hole at its top;

@@ -162,6 +162,8 @@ static int create_at(int i)
 	ent_s.rank[i] = ENT_RANK_RUNTIME | (ent_s.seq++ & 0x7FFFFFFFu);
 	if (i >= ent_s.top)
 		ent_s.top = (uint16_t)(i + 1);
+	if (i >= ent_s.touched)
+		ent_s.touched = (uint16_t)(i + 1);
 	if (++ent_s.live > ent_s.live_peak)
 		ent_s.live_peak = ent_s.live;
 	ent_sets_update(i);
@@ -887,11 +889,13 @@ static void srow_fill(srow_t *row, const srow_t *from, const uint8_t *mask, uint
 /* The slots up to the last one not in its never-used state, each as a
  * delta row against srow_ref with the derived words (srow_abs, srow_box)
  * predicted from the row itself: slots, serials, links and the
- * slot-reuse rule's inputs come back exactly. */
+ * slot-reuse rule's inputs come back exactly. The last such slot is below
+ * ent_s.touched (every slot from there up is its never-used reference:
+ * no record names an entity there either), found from there down. */
 void ent_save(void)
 {
 	srow_t row, ref;
-	int i, n = 0;
+	int i, n;
 
 	sv_part("ent slots");
 	sv_tag(SV_TAG('E', 'N', 'T', '2'));
@@ -900,12 +904,12 @@ void ent_save(void)
 	sv_u16(ent_s.live);
 	sv_u16((uint16_t)(int16_t)frame_layer);
 	rec_slot_records(slot_rec);
-	for (i = 0; i < HL64_MAX_ENTITIES; i++)
+	for (n = ent_s.touched; n > 0; n--)
 	{
-		srow_get(i, &row);
-		srow_ref(i, &ref);
+		srow_get(n - 1, &row);
+		srow_ref(n - 1, &ref);
 		if (memcmp(&row, &ref, sizeof(row)))
-			n = i + 1;
+			break;
 	}
 	sv_u16((uint32_t)n);
 	for (i = 0; i < n; i++)
@@ -916,6 +920,23 @@ void ent_save(void)
 		srow_box(&row, &ref);
 		sv_put_delta(&row, &ref, sizeof(row));
 	}
+#ifdef HL64_TEST
+	/* the touched mark's rule, checked (its time is not the save's) */
+	sv_check_time(1);
+	for (i = ent_s.touched; i < HL64_MAX_ENTITIES; i++)
+	{
+		srow_get(i, &row);
+		srow_ref(i, &ref);
+		if (memcmp(&row, &ref, sizeof(row)))
+		{
+			log_printf("save: ent slot %d at or above the touched mark %u is not its never-used "
+				"state\n", i, (unsigned)ent_s.touched);
+			sv_fail("ent: touched mark");
+			break;
+		}
+	}
+	sv_check_time(0);
+#endif
 	sv_part("ent sets");
 	ent_sets_save();
 	sv_part("ent grid");
@@ -942,6 +963,7 @@ int ent_load(void)
 		|| frame_layer < -1 || frame_layer >= HL64_WORLD_LAYERS)
 		sv_fail("ent: slot counts");
 	rec_slot_records(slot_rec);
+	ent_s.touched = (uint16_t)n;
 	for (i = 0; i < HL64_MAX_ENTITIES && !sv_failed(); i++)
 	{
 		srow_ref(i, &row);
@@ -963,6 +985,10 @@ int ent_load(void)
 			break;
 		}
 		live += row.id.state == ENT_ST_LIVE;
+		/* a slot past the saved rows is its reference: never-used, or the
+		 * entity a record names (not as boot left it) */
+		if (i >= ent_s.touched && (gid_t16)(slot_rec[i] & 0xFFFFu) != GID_NONE)
+			ent_s.touched = (uint16_t)(i + 1);
 		srow_set(i, &row);
 	}
 	if (!sv_failed() && live != ent_s.live)
