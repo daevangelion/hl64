@@ -61,7 +61,9 @@
 					   units): the seam budget's */
 #define IO_KB_BINS		66		/* per-frame async KB histogram: 0..64, more */
 
-enum { IO_PRIO_OPEN, IO_PRIO_SEAM, IO_PRIO_PREFETCH, IO_NPRIO };
+/* queue priorities, strongest first; NEAR: engine/world's near class
+ * (thinking monsters' collision boxes) */
+enum { IO_PRIO_OPEN, IO_PRIO_SEAM, IO_PRIO_NEAR, IO_PRIO_PREFETCH, IO_NPRIO };
 enum { IO_IDLE, IO_QUEUED, IO_ACTIVE, IO_DONE };
 
 typedef struct io_req_s

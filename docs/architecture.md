@@ -371,14 +371,30 @@ SA2 §4.2 as built):
 - **pin**: route look-ahead destinations (test builds), reachable
   teleport destinations, approached seam's B set, cook-generated script pins;
   lapse after 3 s or on arrival.
+- **near**: a thinking monster's box + 128 u (its linked box, + v·0.5 s)
+  and the hulls of the brush entities in it, live and pending (triggers,
+  walls, breakables its move would wake and test in the same frame:
+  `rec_pending_models`, the pending grid): its next think's walk and
+  `CheckLocalMove` trace there. Above prefetch, below the pins (a seam's
+  set evicts them). Its own DMA priority (`IO_PRIO_NEAR`, after SEAM). A
+  near request that finds no room is retried each frame while the retry
+  list is under half full, then degrades like prefetch (monsters' boxes
+  never force a whole naming every frame).
 - **prefetch**: eye-leaf sets at eye + v·{0.25, 0.5, 1} s; collision window
-  + v·0.5 s; cells of moving monsters/projectiles; hulls of brush entities
-  in the box spanned by thinking monsters and projectiles; cells of the
+  + v·0.5 s; cells of moving monsters/projectiles (a thinking monster's
+  box part is near) and a moving monster's route span to its waypoint
+  (`game_move_goal`, ≤ 1024 u); hulls of brush entities, live and pending,
+  in those boxes; cells of the
   hydration candidates' spawn boxes and of the boxes the thinks of a
   neighbour map's spawner logic records due within 1 s will create
   entities in (`game_spawner_box`: a monstermaker's child far from the
   player).
 - **pinned**: world hull-0 COLL while the layer is open.
+
+An entity window (≤ 64 per frame) holds ≤ 16 brush models, the box's
+first; they are queried again when a cell range changed, the box moved
+64 u (half the margin: a model is named ≥ 64 u before the box meets it),
+and every 30 frames (brush entities hydrate and release).
 
 Eviction: queued-not-started first; then, the pools being first-fit over
 address-ordered blocks, the cheapest run of consecutive free, fenced and
@@ -396,7 +412,12 @@ Victims are chunks not used this frame or the last; prefetch never evicts
 a chunk used in the last 30 frames. The target
 set is recomputed only when one of its inputs changed (eye leaf, player
 cell, velocity bucket, pins, layer set); otherwise the previous frame's
-wants are re-asserted by generation number (no rebuild).
+wants are re-asserted by generation number (no rebuild). While a new set
+is named, chunks the previous generation wanted keep its class (near at
+most) for eviction: the new set's open and pin requests evict them as
+before, its near and prefetch requests do not (one layer's requests,
+named first, evicted a monster's still-wanted box in the other before the
+naming reached it; its next think read them synchronously).
 
 ### 5.4 Campaign, portals, seams
 
