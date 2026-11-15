@@ -190,6 +190,12 @@ suite ../m6/menu_host.sh menu-host bash test/m6/menu_host.sh "$BUILD_DIR/host/hl
 suite ai_layer.c ai-layer bash -c 'make --no-print-directory BUILD_DIR="$1" ailayertest >/dev/null \
 	&& "$1/host/hl64-ailayer" --root "$2" --stuck hldemo2 \
 	&& "$1/host/hl64-ailayer" --root "$2" --layer hldemo1 hldemo2' _ "$BUILD_DIR" "$CONTENT"
+# brush entity boxes (test/m5/brushbox.c): every brush entity's box, abs
+# box and spawn origin (door travel) as GoldSrc's brush_ents, origins after
+# 3 s (pushables on the floor)
+suite brushbox.py brushbox bash -c 'make --no-print-directory BUILD_DIR="$1" brushboxtest >/dev/null \
+	&& python3 test/m5/brushbox.py "$1/host/hl64-brushbox" --root "$2" --fixtures "$3"' \
+	_ "$BUILD_DIR" "$CONTENT" "$FIX"
 for f in "$ROOT"/test/m5/*.py "$ROOT"/test/m5/*.sh; do
 	[[ -e "$f" ]] || continue
 	[[ "$RAN" == *" $(basename "$f") "* ]] || die "test/m5/$(basename "$f") is not wired into test/run/m5.sh"
