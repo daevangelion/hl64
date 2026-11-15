@@ -234,6 +234,13 @@ void		wld_stream_new_game(void);
  * BSP model); an input of the target set (OPEN COLL, and + v * 0.5 s for
  * prefetch). */
 void		wld_stream_coll(const float lo[3], const float hi[3], const uint32_t *models, int n);
+/* A spawn (New Game, save load, setpos), after wld_stream_coll gave the
+ * player's window: its COLL chunks (the window's grid cells and brush
+ * models, as the OPEN set names them) and those of the n brush models
+ * (slot << 16 | BSP model) the caller adds, named in the standing
+ * generation and read now as load I/O, so the first frame's move reads
+ * none. */
+void		wld_stream_coll_load(const uint32_t *models, int n);
 /* engine/ent rec, once per pump scan of a slot: the spawn boxes (map-local
  * lo[3], hi[3]; a DROP_TO_FLOOR's reach below included) of its hydration
  * candidates and prefetch ring, nearest first, and a brush record's own

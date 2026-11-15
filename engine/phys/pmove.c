@@ -26,6 +26,7 @@
 #include "hl64/ent.h"
 #include "hl64/game.h"
 #include "hl64/grid.h"
+#include "hl64/rec.h"
 #include "engine/core/dbg.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
@@ -44,6 +45,9 @@ const float phy_pm_maxs[4][3] = {
 	{ 16, 16, 36 }, { 16, 16, 18 }, { 0, 0, 0 }, { 32, 32, 32 } };
 
 #define VIEW_HEIGHT	28.0f	/* HLSDK VEC_VIEW */
+#define SPAWN_REACH	128.0f	/* a spawn's pending records: the collision window's
+				   margin (engine/coll COL_WINDOW) */
+#define SPAWN_MODELS	16
 static struct {
 	ent_player_t		pl;		/* origin home-local */
 	col_ent_t		*e;		/* entity slot 1 (global) */
@@ -672,6 +676,7 @@ int phy_player_spawn(int map, const float org[3], const float ang[3])
 		game_player_spawn(ENT_PLAYER);
 		eng_set_frame_layer(layer);
 	}
+	phy_player_coll_load();
 	return 0;
 }
 
@@ -721,6 +726,44 @@ int phy_player_rebase(int map_b, const float T[3], int ground_b)
 	return 0;
 }
 
+/* The player's collision window (the box in global coordinates, into
+ * mins / maxs) to the stream, in the home frame (col_want's brush model
+ * query). */
+static void coll_window(float mins[3], float maxs[3])
+{
+	const ent_player_t *pl = &P.pl;
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		mins[k] = pl->origin[k] + pl->mins[k] + P.hofs[k];
+		maxs[k] = pl->origin[k] + pl->maxs[k] + P.hofs[k];
+	}
+	col_want(mins, maxs);
+}
+
+/* The window's COLL and the submodels of the pending records in it (a
+ * trigger the first frame's touch wakes reads its hull then). */
+void phy_player_coll_load(void)
+{
+	float mins[3], maxs[3];
+	uint32_t m[SPAWN_MODELS];
+	int k, layer;
+
+	if (!P.active || !P.home)
+		return;
+	layer = eng_frame_layer();
+	eng_set_frame_layer(P.home->slot);
+	coll_window(mins, maxs);
+	for (k = 0; k < 3; k++)
+	{
+		mins[k] -= SPAWN_REACH;
+		maxs[k] += SPAWN_REACH;
+	}
+	wld_stream_coll_load(m, rec_pending_models(mins, maxs, m, SPAWN_MODELS));
+	eng_set_frame_layer(layer);
+}
+
 void phy_player_frame(const in_cmd_t *cmd, double time)
 {
 	ent_player_t *pl = &P.pl;
@@ -743,12 +786,7 @@ void phy_player_frame(const in_cmd_t *cmd, double time)
 	{
 		float mins[3], maxs[3];
 
-		for (k = 0; k < 3; k++)
-		{
-			mins[k] = pl->origin[k] + pl->mins[k] + P.hofs[k];
-			maxs[k] = pl->origin[k] + pl->maxs[k] + P.hofs[k];
-		}
-		col_want(mins, maxs);
+		coll_window(mins, maxs);
 	}
 
 	/* step 2: the command's game side (buttons, impulse), the player's

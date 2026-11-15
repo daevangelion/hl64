@@ -144,6 +144,7 @@ static struct {
 	uint32_t	cmodel[COLL_MODELS];
 	int		ncmodel;
 	uint32_t	coll_gen;
+	uint8_t		coll_sync;	/* wld_stream_coll_load: name() reads now */
 	/* moving entities' collision windows, in entity order (ent_scan) */
 	ewin_t		ew[ENT_WINDOWS];
 	int		nwin;
@@ -220,6 +221,8 @@ static void failed(wld_layer_t *L, int c, uint32_t e, int flag)
 
 static void name(wld_layer_t *L, int c, int cls)
 {
+	if (S.coll_sync)
+		wld_chunk_sync(L, c);
 	if (!wld_name(L, c, cls))
 		failed(L, c, (uint32_t)L->slot << 16 | (uint32_t)c, RETRY_CHUNK);
 }
@@ -1461,6 +1464,23 @@ void wld_stream_coll(const float lo[3], const float hi[3], const uint32_t *model
 	}
 	if (changed)
 		S.coll_gen++;
+}
+
+void wld_stream_coll_load(const uint32_t *models, int n)
+{
+	int s;
+
+	if (!S.have_coll)
+		return;
+	io_set_load(1);
+	S.coll_sync = 1;
+	for (s = 0; s < HL64_WORLD_LAYERS; s++)
+		if (wld_layer(s))
+			name_cells(wld_layer(s), S.ccell[s], WLD_CLS_OPEN);
+	name_models(S.cmodel, S.ncmodel, WLD_CLS_OPEN);
+	name_models(models, n, WLD_CLS_OPEN);
+	S.coll_sync = 0;
+	io_set_load(0);
 }
 
 void wld_stream_missing(uint32_t n)

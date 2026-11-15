@@ -40,6 +40,10 @@ ent_player_t	*phy_player(void);
  * inventory kept; the ground entity becomes `ground_b` (B's twin of the
  * mover the player stands on, -1 none). Returns 0, -1 when B is not open. */
 int		phy_player_rebase(int map_b, const float T[3], int ground_b);
+/* A spawn's collision residency (New Game, setpos, save load): the
+ * window around the player (as the frame's move gives it) read now as
+ * load I/O, so the first frame's move reads no COLL chunk. */
+void		phy_player_coll_load(void);
 
 /* Frame step 5 (pmove-host.md 1): physents, game_pm_move, write-back,
  * link with trigger touches, impact touches for the pmove touch list.

@@ -3203,6 +3203,38 @@ int rec_wake_box(const float gmins[3], const float gmaxs[3])
 	return wake_box(gmins, gmaxs, NULL, 0);
 }
 
+int rec_pending_models(const float gmins[3], const float gmaxs[3], uint32_t *out, int max)
+{
+	int s, i, k, n = 0;
+
+	if (!R.map)
+		return 0;
+	for (s = 0; s < REC_SLOTS; s++)
+	{
+		const rmap_t *m = &R.map[s];
+		const float *g;
+
+		if (!m->open || !wld_layer(s))
+			continue;
+		g = wld_layer(s)->gofs;
+		for (i = 0; i < m->npend && n < max; i++)
+		{
+			const rrt_t *t = &m->rt[m->plist[i]];
+			res_t r;
+
+			for (k = 0; k < 3; k++)
+				if (t->hi[k] < gmins[k] - g[k] || t->lo[k] > gmaxs[k] - g[k])
+					break;
+			if (k < 3)
+				continue;
+			r = rec_key_res(gid_of(m, m->plist[i]), RK_MODEL);
+			if (r != RES_NONE && RES_KIND(r) == RES_K_SUBMODEL && (int)RES_SUB_SLOT(r) == s)
+				out[n++] = (uint32_t)s << 16 | RES_SUB_NUM(r);
+		}
+	}
+	return n;
+}
+
 /* A pusher meets what rests on it. GoldSrc spawned every map entity at
  * map start, so a func_pushable, a monster or an item placed above a
  * pusher had fallen (gravity, DROP_TO_FLOOR) onto it before the pusher

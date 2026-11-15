@@ -126,6 +126,11 @@ int		rec_wake_pusher(const float gmins[3], const float gmaxs[3], uint16_t *woken
 /* A pusher woke e and it found no floor to settle on: release leaves it
  * while it falls (REC_PUSH_HOLD). */
 void		rec_hold_falling(int e);
+/* The brush submodels (slot << 16 | BSP model) of the pending and dry
+ * records of every open slot whose box meets the GLOBAL box, at most max:
+ * what a wake there would bring into the collision (a spawn's first frame
+ * touching a trigger record). Hydrates nothing. */
+int		rec_pending_models(const float gmins[3], const float gmaxs[3], uint32_t *out, int max);
 
 /* HLSDK FireTargets: every live / woken entity with the name gets
  * game_use; logic records get game_logic_use; caller is an entity slot or

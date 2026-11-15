@@ -55,6 +55,7 @@ a09abb2 + m5-remote (ares-host) and 30f8f01 (build-vm).
 | `hl1-garg` | hldemo1 | glimpse, cave-in, vent, garg_vent_break, the garg kills garg_sci_1 | op 512 .. SHOT garg-look | 37 | 50 | |
 | `hl1-garg-end` | hldemo1 | garg chain, rollcar, ending, end section, restart (the one long scene) | SHOT garg-look .. op 534 | 103 | 286 (a09abb2: FAIL, the garg stalls after kickcar on ares) | |
 | `hazard-seam` | t0a0c <-> t0a0d | Hazard touch switch c -> d and back d -> c | (hazard.route 538-552, then back) | 9 | 7 | 161 |
+| `hazard-start` | t0a0 | Hazard New Game: the spawn's collision window resident before frame 1 (io blkmax), the start room through the hologram intro | (hazard.route 15-20, then 3 s) | 4 | 5 | |
 | `addglow` | hldemo1 | additive env_glow poses, TransTexture strips, MP5 grenade smoke ([addblend.route](routes/addblend.route)'s poses) | whole scene | 14 | 20 | 482 |
 | `alpha-edge` | hldemo2 | '{' fence textures close up: shotgun-room door #659 window ({fence2), east walkway railing #230 ({rail2); shots door-near/far, rail-near/far (blue alpha-edge fringes) | whole scene (off-route poses) | 3 | 5 | |
 

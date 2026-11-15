@@ -1184,10 +1184,13 @@ static int restore(void)
 			(unsigned long)sv_read_pos(), (unsigned long)h->raw_bytes);
 		return -1;
 	}
-	/* every model with interest: its infos now (load I/O), as New Game */
+	/* every model with interest: its infos now (load I/O), as New Game;
+	 * the collision window around the player (no sync read on the
+	 * first frame) */
 	t2 = sys_time_us();
 	io_set_load(1);
 	studio_preload();
+	phy_player_coll_load();
 	io_set_load(0);
 	t3 = sys_time_us();
 	game_load_done();
