@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# Scene hl1-button (test/README.md): '+' textures over time and a button's
+# alternate (docs/specs/world-surfaces.md 4). The dome view of hl1-dome
+# (uplink.route lines 27-31): its monitors (+0scrn, +0lab1_comp10b/c/e,
+# 3 frames at 5 per second) shot 0.3 s apart (2-4 tenths: another frame);
+# then uplink.route lines 34-50: the elevator opens, its button (func_button
+# *27, +0elev_up2) before and right after +use (frame 1: +aelev_up2).
+# scene-window: uplink start elevator
+startmap hldemo1
+waitmap hldemo1 60
+setpos -2048 744 36
+wait 2
+stats begin
+setpos -2048 -496 70 0 270
+wait 4
+setpos -2000 -620 196 0 270
+wait 26
+shot screens-a
+wait 0.3
+shot screens-b
+wait 12
+setpos -2327 -230 196 0 180
+waitmoved startele1 15
+setpos -2500 -100 196 0 0
+wait 1
+shot button-off
++use
+wait 0.3
+-use
+shot button-on
+stats end
+wait 0.2
+pass

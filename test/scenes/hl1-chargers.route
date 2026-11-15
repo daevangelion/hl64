@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# Scene hl1-chargers (test/README.md): texture alternates of brush entities
+# (docs/specs/world-surfaces.md 4: entity frame != 0 shows the '+a'
+# sequence). hldemo1's wall chargers by the NRC corridor: the HEV charger
+# (func_recharge *52, +0recharge) drained with +use until its 75 juice is
+# gone (CRecharge sets frame 1: +arecharge); then the health charger beside
+# it (func_healthcharger *51, +0medkit) in use: the player is at full
+# health, so it keeps its juice and frame 0 (GoldSrc shows no texture
+# change while a charger is in use). Shots: both full, HEV empty, health in
+# use. Not a window of uplink.route (the route uses neither charger).
+startmap hldemo1
+waitmap hldemo1 60
+setpos -2048 744 36
+wait 2
+stats begin
+setpos -1400 -424 36 0 0
+wait 1
+shot chargers-full
+setpos -1360 -456 36 0 0
++use
+wait 14
+-use
+setpos -1400 -424 36 0 0
+wait 0.5
+shot hev-empty
+setpos -1360 -392 36 0 0
++use
+wait 1.5
+shot health-inuse
+-use
+stats end
+wait 0.2
+pass

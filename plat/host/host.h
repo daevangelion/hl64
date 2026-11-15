@@ -24,4 +24,8 @@ void	host_flash_set_path(const char *path);
  * (formatted when missing). Without it: nothing. */
 void	host_pak_set(const char *arg);
 
+/* gpu.c (the draw-list recorder): how many times the last finished frame
+ * (gpu_end) bound this page (gpu_bind_page; host tests). */
+int	host_gpu_bound(const void *page);
+
 #endif

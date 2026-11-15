@@ -13,10 +13,17 @@
 #include "engine/core/sys.h"
 #include "engine/render/addblend.h"
 #include "engine/render/gpu.h"
+#include "plat/host/host.h"
+
+#define BOUND_MAX	1024
 
 static gpu_stats_t	cur, done;
 static uint8_t		ramp_tb[4];	/* gpu_page_ramp tint + blend */
 static int		ramp_on;
+/* the frame's bound pages in bind order (host_gpu_bound); [0] being
+ * recorded, [1] the last finished frame */
+static const void	*bound[2][BOUND_MAX];
+static int		nbound[2];
 
 static void mix(const void *p, uint32_t n)
 {
@@ -45,6 +52,7 @@ void gpu_begin(const gpu_view_t *v)
 {
 	memset(&cur, 0, sizeof(cur));
 	cur.hash = 2166136261u;
+	nbound[0] = 0;
 	/* night vision and the brightness lift are drawn state (a lit frame's
 	 * hash at brightness 0 is unchanged) */
 	if (v->nvg)
@@ -56,6 +64,17 @@ void gpu_begin(const gpu_view_t *v)
 void gpu_end(void)
 {
 	done = cur;
+	memcpy(bound[1], bound[0], (size_t)nbound[0] * sizeof(bound[0][0]));
+	nbound[1] = nbound[0];
+}
+
+int host_gpu_bound(const void *page)
+{
+	int i, n = 0;
+
+	for (i = 0; i < nbound[1]; i++)
+		n += bound[1][i] == page;
+	return n;
 }
 
 void gpu_matrix_push(const ren_mat_t *m)
@@ -88,6 +107,8 @@ void gpu_bind_page(const w64_texp_t *p, uint8_t *state)
 		mix(prim, 4);
 		mix(env, 4);
 	}
+	if (nbound[0] < BOUND_MAX)
+		bound[0][nbound[0]++] = p;
 	cur.binds++;
 }
 
