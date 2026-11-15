@@ -85,8 +85,8 @@ hold at the same points (K9, K10).
   slice (a think's run between pause points, timed alone) to PROFILE ares
   runs of routes m4 and uplink (47215 slices, the cart's own counts;
   non-negative least squares), rounded up ~5 %: cart µs / units over the
-  frames above 12000 units, m4 / uplink, p50 0.94 / 0.93, p90 1.04 /
-  1.05, p99 1.12 / 1.24 (the earlier fit, per frame on the 17
+  frames above 12000 units, m4 / uplink, p50 0.94 / 0.88, p90 1.04 /
+  0.98, p99 1.12 / 1.10 (the earlier fit, per frame on the 17
   `test/scenes` scenes without the lookup, query and resume counts: 1.07
   / 1.04, 1.21 / 1.18, 1.39 / 1.36: a frame of 6 grunt think starts took
   27 ms at 18857 units). The frame's budget is setting `ai_budget`
