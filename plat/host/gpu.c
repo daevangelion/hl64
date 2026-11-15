@@ -98,6 +98,11 @@ void gpu_state_lost(void)
 {
 }
 
+void gpu_fence_ref(int ref)
+{
+	(void)ref;
+}
+
 void gpu_decal_depth(int on)
 {
 	mix(&on, sizeof(on));

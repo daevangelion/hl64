@@ -39,8 +39,10 @@ a multiple of 8.
   palette-index usage summed over every frame at full size (the most used
   colour, then the most used of each of 15 luminance bands, then
   popularity); every index maps to the nearest picked colour
-  (green-weighted). Alpha-test: index 255 owns entry 0, alpha bit clear;
-  no other index maps to it.
+  (green-weighted). Alpha-test: index 255 owns entry 0, alpha bit clear,
+  its colour the edge fill (`tools/cook/bake_world_tex.py fence_fill`: the
+  mean colour of the opaque texels next to an index-255 texel over every
+  frame, not index 255's own, blue in blood.spr); no other index maps to it.
 - Index-alpha (GoldSrc: the texel's alpha is its palette index, its colour
   the palette's last colour): index *i* → entry round(*i* × 15 / 255), the
   16 alpha levels 17 *k*; `tlut[k]` = the colour × 17 *k* / 255 with the

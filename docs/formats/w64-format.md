@@ -184,9 +184,13 @@ ci4_ofs           CI4 texels, w × h / 2 bytes; 48, or 88 with RAMP
 ```
 
 Bound as one texture per page: TLUT upload, CI4 `TILE0`, infinite wrap,
-alpha compare for fence pages. Pages hold a single texture (vertex alpha
-0xFF, `alpha_to_tile` off); only pages some cooked face can bind are
-emitted.
+alpha compare for fence pages (threshold 128, `GPU_FENCE_REF` in
+engine/render/gpu.h: half coverage of the bilinear-filtered alpha bit).
+A fence page's TLUT[0] colour is the cook's edge fill (bake_world_tex.py
+`fence_fill`: the mean colour of the opaque texels next to a transparent
+one), not palette index 255's blue, so filtered alpha edges carry the
+fence's own colour. Pages hold a single texture (vertex alpha 0xFF,
+`alpha_to_tile` off); only pages some cooked face can bind are emitted.
 
 RAMP pages: every page a `MOVR` submodel binds whose entity can draw
 Glow 3 / TransAdd 5 — `rendermode` 3 or 5 in its keys, or its targetname

@@ -84,6 +84,7 @@ void gpu_fx_end(void)
 	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
 		| T3D_FLAG_NO_LIGHT | N64_CULL);
 	gpu_state_lost();	/* alpha compare now off, whatever the world's cache says */
+	gpu_fence_ref(GPU_FENCE_REF);
 	cur.pairs = (uint32_t)used;
 	done = cur;
 }
@@ -133,6 +134,10 @@ void gpu_fx_mode(int m, const uint8_t prim[4])
 		rdpq_mode_zoverride(true, 0, 0);
 	rdpq_mode_alphacompare(r->acompare);
 	gpu_state_lost();	/* a translucent brush's page bind re-applies its fence */
+	/* a fence page's coverage: half under TEX x SHADE (TransAlpha brushes:
+	 * shade alpha 255); TEX x PRIM (TransTexture) never reads the texel
+	 * alpha and the additive ramp scales it by the blend: 1 as before */
+	gpu_fence_ref(r->combiner == GPU_FX_CC_TEX_SHADE ? GPU_FENCE_REF : 1);
 	rdpq_mode_tlut(r->tlut == GPU_FX_TLUT_RGBA16 ? TLUT_RGBA16
 		: r->tlut == GPU_FX_TLUT_IA16 ? TLUT_IA16 : TLUT_NONE);
 	rdpq_mode_filter(FILTER_BILINEAR);

@@ -56,7 +56,8 @@ static int		vp_ready;
 static T3DMat4FP	*mats;		/* 2 x MATS_PER_FRAME, uncached */
 static T3DMat4FP	*proj;		/* 2 x (world, view model), uncached */
 static int		mat_frame, mat_n;
-static int		fence = -1;
+static int		fence = -1;	/* alpha compare threshold set (0 off), -1 unknown */
+static int		fence_ref = GPU_FENCE_REF;	/* gpu_fence_ref */
 static gpu_stats_t	cur, done;
 static uint8_t		ramp_tb[4];	/* gpu_page_ramp tint + blend */
 static int		ramp_on;
@@ -129,6 +130,7 @@ void gpu_begin(const gpu_view_t *v)
 	rdpq_mode_persp(true);
 	rdpq_mode_zbuf(true, true);
 	fence = -1;
+	fence_ref = GPU_FENCE_REF;
 	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
 		| T3D_FLAG_NO_LIGHT | N64_CULL);
 }
@@ -196,7 +198,7 @@ extern void __rdpq_autosync_use(uint32_t res);
 
 void gpu_bind_page(const w64_texp_t *p, uint8_t *state)
 {
-	int f = (p->flags & W64_TEXF_FENCE) != 0;
+	int f = (p->flags & W64_TEXF_FENCE) ? fence_ref : 0;
 
 	if (rdl_shape(p->w, p->h))
 	{
@@ -251,6 +253,19 @@ void gpu_page_ramp(const uint8_t tint_blend[4])
 void gpu_state_lost(void)
 {
 	fence = -1;
+}
+
+void gpu_fence_ref(int ref)
+{
+	ref = ref < 1 ? 1 : ref > 255 ? 255 : ref;
+	if (ref == fence_ref)
+		return;
+	fence_ref = ref;
+	if (fence > 0)
+	{
+		fence = ref;
+		rdpq_mode_alphacompare(ref);
+	}
 }
 
 void gpu_decal_depth(int on)

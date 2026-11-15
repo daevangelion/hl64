@@ -13,7 +13,9 @@ with one PI DMA into one heap block and no conversion on the cart:
     the most used of each of 15 luminance bands, then popularity); every
     index maps to the nearest picked colour (green-weighted);
   * ALPHTEST sprites (blood): index 255 owns the first entry, alpha bit
-    clear; no other index maps to it;
+    clear, its colour the edge fill (bake_world_tex.fence_fill: the mean
+    colour of the opaque texels next to a transparent one); no other
+    index maps to it;
   * INDEXALPHA sprites (smoke): the index is the texel's alpha and the
     colour is the palette's last colour (GoldSrc); the 16 entries are 16
     alpha levels (index i -> entry round(i * 15 / 255), level 17 k), the
@@ -47,6 +49,7 @@ from pathlib import Path
 from typing import List
 
 from tools.cook import addramp
+from tools.cook.bake_world_tex import fence_fill
 
 MAGIC = 0x53433431  # 'SC41'
 VERSION = 3
@@ -177,7 +180,12 @@ def _palette(typ_texformat, pal, frames):
     tlut = [((r >> 3) << 11) | ((g >> 3) << 6) | ((b >> 3) << 1) | 1
             for r, g, b in rgb]
     if alpha:
-        tlut[0] &= ~1
+        # the transparent entry's colour: the edge fill (bake_world_tex
+        # fence_fill), not index 255's (blue in blood.spr / bloodspray.spr),
+        # so the cart's bilinear filter blends cut-out edges towards the
+        # sprite's own colour
+        r, g, b = fence_fill([(px, w, h) for _l, _u, w, h, px, _e in frames], pal, 255)
+        tlut[0] = ((r >> 3) << 11) | ((g >> 3) << 6) | ((b >> 3) << 1)
     remap = []
     for i in range(256):
         if alpha and i == 255:

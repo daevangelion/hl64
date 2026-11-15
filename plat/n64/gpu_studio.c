@@ -162,6 +162,7 @@ void gpu_studio_end(void)
 		rdpq_mode_tlut(TLUT_RGBA16);
 	ramp = 0;
 	rdpq_mode_blender(0);
+	gpu_fence_ref(GPU_FENCE_REF);
 	rdpq_mode_zbuf(true, true);
 	t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH
 		| T3D_FLAG_NO_LIGHT | N64_CULL);
@@ -183,6 +184,9 @@ static void set_mode(const gpu_studio_ent_t *e)
 	}
 	if (!add)
 		rdpq_set_prim_color(RGBA32(e->rgba[0], e->rgba[1], e->rgba[2], e->rgba[3]));
+	/* masked skins: half coverage of TEX x PRIM alpha; the additive ramp
+	 * scales the texel alpha by its blend: 1 as before */
+	gpu_fence_ref(add ? 1 : (e->rgba[3] + 1) / 2);
 	switch (e->mode)
 	{
 	case GPU_STUDIO_BLEND:
