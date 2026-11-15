@@ -38,7 +38,7 @@
 #   is a fresh ares launch that loads what S's ares wrote (save, quit,
 #   relaunch, load).
 # Env: BUILD_DIR (default build), HL64_CONTENT (default
-#   /scratch/hl64/tmp/Int8/c22), ARES_TIMEOUT (s per run, default 1800).
+#   /scratch/hl64/tmp/Int9/c23), ARES_TIMEOUT (s per run, default 1800).
 # Out: $BUILD_DIR/save/<host|ares>[-pak]/<scene>-<T>/{S,A,B,C}/ logs,
 #   images; summary.md beside them. Exit 0 every scene equal, 1 a
 #   difference or a failed gate, 2 usage.
@@ -47,7 +47,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-build}"
 case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$ROOT/$BUILD_DIR" ;; esac
-CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/Int8/c22}"
+CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/Int9/c23}"
 MODE=host
 CASES=()
 PAK=0

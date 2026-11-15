@@ -39,7 +39,7 @@
 #                      for a slot, test/run/ares.sh)
 #   SCENE ... | all    names under test/scenes (without .route)
 # Env:   BUILD_DIR (scratch, default build), HL64_CONTENT (cooked content,
-#        default /scratch/hl64/tmp/Int8/c22), BEFORE_CONTENT,
+#        default /scratch/hl64/tmp/Int9/c23), BEFORE_CONTENT,
 #        ARES_TIMEOUT (s per scene, default 1800), HL64_ARES_HOST / ARES_BIN /
 #        ARES_SLOTS (test/run/ares.sh), DISPLAY_NUM, MAKE_JOBS (default 4)
 # Out:   $BUILD_DIR/scenes/<host|ares>/<scene>/{route.rbc,route.dump,
@@ -51,7 +51,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-build}"
 case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$ROOT/$BUILD_DIR" ;; esac
-CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/Int8/c22}"
+CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/Int9/c23}"
 usage() {
 	echo "usage: test/run/scene.sh [--ares|--host] [--profile] [--psamp] [--before TREE]" \
 		"[--route-log R=LOG ...] [--keep-rom] [--cmd CMD ...] [-j N] SCENE... | all" >&2

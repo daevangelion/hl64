@@ -26,7 +26,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-build}"
 case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$ROOT/$BUILD_DIR" ;; esac
-CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/Int8/c22}"
+CONTENT="${HL64_CONTENT:-/scratch/hl64/tmp/Int9/c23}"
 T=85
 [[ -f "$CONTENT/campaign.rtb" ]] || { echo "flashcut: no $CONTENT/campaign.rtb: cook the content" >&2; exit 2; }
 
