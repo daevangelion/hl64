@@ -90,9 +90,12 @@ host fail.pak fail-load.log "@1 load 3" "@60 quit 0" || fail "fail load: hl64-ho
 grep -q '^save: load slot 3 ok' fail-load.log || fail "fail: load"
 [[ "$(seq_saved fail-save.log)" == "$(seq_loaded fail-load.log)" ]] || fail "fail: loaded seq"
 # after the failure: the Pak mounted again (forced remount) and listed
-sed -n '/^pak: injected write failure/,$p' fail-save.log | grep -q '^pak: mounted' || fail "fail: no remount"
-sed -n '/^pak: injected write failure/,$p' fail-save.log | grep -q '^save: Controller Pak: [0-9]* of our notes' \
-	|| fail "fail: the Pak not listed again"
+# (grep reads to the end: an early `grep -q` exit can SIGPIPE sed, which
+# pipefail turns into a failure)
+sed -n '/^pak: injected write failure/,$p' fail-save.log | grep '^pak: mounted' >/dev/null \
+	|| fail "fail: no remount"
+sed -n '/^pak: injected write failure/,$p' fail-save.log | grep '^save: Controller Pak: [0-9]* of our notes' \
+	>/dev/null || fail "fail: the Pak not listed again"
 echo "pakfail: failed transfer: save FAILED, Pak remounted and listed again, next save ok over the headerless note, reload seq $(seq_loaded fail-load.log) ok"
 
 # 3. too large for a note (the cap lowered to 1000 B, HL64_HOST_PAK_IMAGE_MAX):
