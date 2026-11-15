@@ -76,6 +76,7 @@ static const ProbeCapture s_caps[] =
 	{ "W-water",    "trace-and-hulls",      Cap_WWater, G_M3 },
 	{ "L-illum",    "lightstyles",          Cap_LIllum, G_M3 },
 	{ "P-botpush",  "physics-movetypes",    Cap_PBotPush, G_M3 },
+	{ "P-tracktrain", "physics-movetypes",  Cap_PTracktrain, G_M3 },
 	{ "A-order",    "area-links-and-touch", Cap_AOrder, G_LIVE },
 };
 #define NUM_CAPS ( (int)( sizeof( s_caps ) / sizeof( s_caps[0] ) ) )
@@ -858,6 +859,7 @@ void Probe_Init( void )
 	if ( sc && *sc ) g_probeScale = (float)atof( sc );
 	g_engfuncs.pfnAddServerCommand( (char *)"probe_run", Cmd_ProbeRun );
 	g_engfuncs.pfnAddServerCommand( (char *)"probe_quit", Cmd_ProbeQuit );
+	Probe_TrainInit();
 }
 
 void Probe_Precache( void )
@@ -878,12 +880,14 @@ void Probe_Precache( void )
 	s_earlyLen = 0;
 	s_earlyFrames = 0;
 	s_precacheTime = gpGlobals->time;
+	Probe_TrainPrecache();
 }
 
 void Probe_StartFrame( void )
 {
 	g_probeFrame++;
 	EarlyFrame();
+	Probe_TrainFrame();
 	if ( s_numQueued == 0 || gpGlobals->time < s_startAt ) return;
 	if ( !s_prepared )
 	{

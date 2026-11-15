@@ -23,6 +23,7 @@
 
 FILE *g_scenFile;
 int g_scenId;
+bool g_scenStop;
 
 #define SCEN_MAX 32
 static EHANDLE s_own[SCEN_MAX];
@@ -85,6 +86,14 @@ void Scen_Begin( ScenRun &r, const ScenDef *defs, int n, FILE *f )
 	s_nown = s_ntrack = 0;
 }
 
+void Scen_BeginAt( ScenRun &r, const ScenDef *defs, int n, FILE *f, int first )
+{
+	Scen_Begin( r, defs, n, f );
+	if ( first <= 0 ) return;
+	r.cur = first - 1;	// the caller wrote the scenarios before `first`
+	s_skipped = true;
+}
+
 static void PrState( ScenRun &r )
 {
 	fprintf( r.f, "{\"sc\":%d,\"f\":%d,\"t\":%.9g,\"ft\":%.9g,\"e\":[", r.cur, r.frame, (double)gpGlobals->time, (double)gpGlobals->frametime );
@@ -104,7 +113,7 @@ bool Scen_Step( ScenRun &r )
 	{
 		PrState( r );
 		const ScenDef &d = r.defs[r.cur];
-		if ( r.frame < d.frames )
+		if ( r.frame < d.frames && !g_scenStop )
 		{
 			if ( d.tick ) d.tick( r.frame );
 			r.frame++;
@@ -121,6 +130,7 @@ bool Scen_Step( ScenRun &r )
 	const ScenDef &d = r.defs[r.cur];
 	g_scenId = g_probeCase = r.cur;
 	s_skipped = false;
+	g_scenStop = false;
 	r.frame = 0;
 	fprintf( r.f, "{\"scenario\":%d,\"name\":\"%s\",\"frames\":%d,\"t\":%.9g}\n", r.cur, d.name, d.frames, (double)gpGlobals->time );
 	if ( !d.setup() )

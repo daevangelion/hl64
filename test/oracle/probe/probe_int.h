@@ -145,6 +145,8 @@ extern ProbePmFn g_probePmPost;
 struct ScenDef { const char *name; int frames; bool ( *setup )( void ); void ( *tick )( int f ); };
 struct ScenRun { const ScenDef *defs; int n; int cur; int frame; FILE *f; float hostFramerate; };
 void Scen_Begin( ScenRun &r, const ScenDef *defs, int n, FILE *f );
+// Scen_Begin, then run from scenario `first` (the caller wrote the earlier ones).
+void Scen_BeginAt( ScenRun &r, const ScenDef *defs, int n, FILE *f, int first );
 bool Scen_Step( ScenRun &r );		// true when every scenario has run
 void Scen_Track( edict_t *e );
 CBaseEntity *Scen_Own( CBaseEntity *e );
@@ -152,6 +154,7 @@ CProbeEnt *Scen_Ent( int solid, int movetype, const Vector &mins, const Vector &
 bool Scen_Skip( const char *reason );	// prints the skip line, returns false
 extern FILE *g_scenFile;			// the running capture's file (setup / tick output)
 extern int g_scenId;
+extern bool g_scenStop;			// a tick sets it to end the running scenario after this frame
 // An unrotated map brush model that fills its bounds (27-point test), with
 // x and y size in [minXY, maxXY] and z size in [minZ, maxZ]; NULL if none.
 // `centred`: model bounds centre within 4 u of the model origin in x and y.
@@ -202,5 +205,12 @@ bool Cap_KSettle( int step );
 bool Cap_WWater( int step );
 bool Cap_LIllum( int step );
 bool Cap_PBotPush( int step );
+bool Cap_PTracktrain( int step );
+
+// P-tracktrain hooks: engine function wrappers (GameDLLInit), state reset
+// (CWorld::Precache), the spawn recording and think wrappers (StartFrame).
+void Probe_TrainInit( void );
+void Probe_TrainPrecache( void );
+void Probe_TrainFrame( void );
 
 #endif
