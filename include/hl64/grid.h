@@ -88,6 +88,8 @@ typedef struct {
 	uint16_t	linked, peak_bucket;
 } ent_grid_stats_t;
 void		ent_grid_stats(ent_grid_stats_t *s);
+/* ent_grid_stats' queries alone (cheap: the AI work units count them) */
+uint32_t	ent_grid_queries(void);
 
 /* ---- touches (engine/phys/touch.c) ---------------------------------------------- */
 

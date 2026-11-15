@@ -62,27 +62,35 @@ is *when* its work runs, so that no frame carries more monster AI than a
 budget. Budgets count work units, never time, so host and cart pause and
 hold at the same points (K9, K10).
 
-- **Work units** (`aiw_units`, ≈ 1 µs of cart CPU each): 340 per think
-  begun, 580 per RunAI sensing run (Look / Listen / GetEnemy), 5 per Look
-  box candidate, 160 per Look FVisible, 50 per collision trace, 2 per BSP
-  node a trace visits, 16 per entity candidate of a move's box, 140 per
-  `CheckLocalMove`, 175 per walk step, 760 per FindNearestNode search, 23
-  per Dijkstra node expanded, 1150 per anim event, 1040 per sound or
-  sentence started, 580 per decal, 55 per bone of a server pose computed,
-  70 per server pose begun (its frame, controllers, root transform), 26
-  per hitbox cull test, 62 per hitbox a line trace walks. A server pose
+- **Work units** (`aiw_units`, ≈ 1 µs of cart CPU each): 160 per think
+  begun, 520 per RunAI sensing run (Look / Listen / GetEnemy), 12 per Look
+  box candidate, 135 per Look FVisible, 36 per collision trace, 5 per 4
+  BSP nodes a trace visits, 30 per entity candidate of a move's box, 410
+  per `CheckLocalMove` (its walk steps count as their traces, lookups and
+  queries), 25 per BuildRoute, 33 per cover candidate, 380 per
+  FindNearestNode search and 39 per trace of it, 35 per Dijkstra node
+  expanded, 730 per anim event, 1105 per sound or sentence started, 1280
+  per decal, 83 per bone of a server pose computed, 65 per server pose
+  begun (its frame, controllers, root transform), 42 per hitbox cull test,
+  43 per BSP point → leaf lookup (contents, PVS: `wld_point_leaf`), 70 per
+  entity box query (`ent_query_in`), 365 per paused think continued (its
+  slice starts cold). A server pose
   computes only the bones asked for: a hitbox trace the chains of the
   hitboxes its line can meet (a bone's subtree is skipped when the line
   passes beyond the subtree's bound from the bone's parent;
   trace-and-hulls.md 4.5), an attachment or bone position its bone's
   chain; the game's memo keeps each pose's computed bones (4 poses), so a
   bone is computed once per pose (memo misses; the renderer never fills
-  the game's memo, so the count is the same on every machine). Fitted to
-  the PROFILE `ai: frame` lines (the cart's own counts) of ares runs of
-  the 17 `test/scenes` scenes (4043 frames; non-negative least squares,
-  r² 0.985, rms 0.9 ms), rounded up ~4 %: cart µs / units p50 0.96, p90
-  1.06, p99 1.20 over the frames above 10000 units. The frame's budget is
-  setting `ai_budget` (default `HL64_AI_BUDGET` 18000).
+  the game's memo, so the count is the same on every machine). Fitted per
+  slice (a think's run between pause points, timed alone) to PROFILE ares
+  runs of routes m4 and uplink (47215 slices, the cart's own counts;
+  non-negative least squares), rounded up ~5 %: cart µs / units over the
+  frames above 12000 units, m4 / uplink, p50 0.94 / 0.93, p90 1.04 /
+  1.05, p99 1.12 / 1.24 (the earlier fit, per frame on the 17
+  `test/scenes` scenes without the lookup, query and resume counts: 1.07
+  / 1.04, 1.21 / 1.18, 1.39 / 1.36: a frame of 6 grunt think starts took
+  27 ms at 18857 units). The frame's budget is setting `ai_budget`
+  (default `HL64_AI_BUDGET` 18000).
 - **Contexts**: with `ai_spread 1` every monster think runs on one of 6
   cooperative contexts (own stack, own cover-search tables). A think
   nested in a think runs inline; thinks before game time 2.5 s run whole.

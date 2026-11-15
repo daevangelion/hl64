@@ -490,6 +490,7 @@ void Ai_Pause(int e, int tail)
 	c->state = AC_PAUSED;
 	before = c->m->m_afConditions;
 	co_yield();
+	mon_aiw.resumes++;
 	/* continued (ai_valid: the monster is live and its own). Conditions
 	 * set meanwhile wait for the think's end: a garg in a NOINTERRUPT
 	 * scripted_sequence paused in PrescheduleThink (after RunAI's
