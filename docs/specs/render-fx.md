@@ -196,7 +196,12 @@ All in fixed pools, randomness from the render random stream:
   skipped within 8 u of the beam's previous decal [own: the hldemo3
   welder's laser lays a 16 u decal every 2.5 u; half a decal apart keeps
   the trail and a third of the decals]; the game random draw for the
-  decal is made either way.
+  decal is made either way. A beam's end sparks (`SF_BEAM_SPARKSTART` /
+  `SPARKEND`, HLSDK `CBeam::DoSparks` at every strike: 10 a second for an
+  `env_laser`) come at most every 0.15 s per beam [own, GoldSrc departure:
+  every other laser strike; on ares the hldemo3 welding window (fx-beams3
+  `welder`..`welder-late`) costs +2.8 ms a frame over main with it,
+  +3.7..4.0 without]; only the effects random stream is skipped.
 - **TE_FIZZ** (`env_bubbles`, HLSDK `CBubbling`). HLSDK fixes the game
   side: the message carries the entity, `sprites/bubble.spr` and the
   `density` key as a byte; the first think 2 s after spawn (0.1 s after a
