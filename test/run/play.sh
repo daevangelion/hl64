@@ -4,7 +4,8 @@
 # Playable-ROM boot-and-play check (by hand, before delivering a ROM): ares
 # (test/run/ares.sh: here, or on HL64_ARES_HOST=ares-host in about 2 min) boots
 # a playable ROM (no HL64_TEST) to its title menu; the pad picks New Game,
-# Easy (A, A: each pressed until the cart logs the menu's answer). Once
+# Easy (A, A: taps, test/ares-tap.patch: ares releases each in the frame the
+# cart logs the menu's answer). Once
 # the cart logs PLAY_AT (default the intro's `teleport: player`:
 # hldemo1's title room hands the player to the corridor) and PLAY_DELAY s
 # more have passed, the patched ares' ARES_TEST_INPUT pad file plays a
@@ -91,10 +92,13 @@ waitfor() {	# waitfor REGEX: 0 once the log has it, 1 when ares ended first
 		sleep 0.5
 	done
 }
-tap() {	# tap PAD REGEX: hold PAD until the log has one more REGEX line
+TAPN=0
+tap() {	# tap PAD REGEX: one press of PAD, released by ares in the frame the
+	# cart logs one more REGEX line (test/ares-tap.patch; as menu.sh)
 	local n0
 	n0=$(grep -cE "$2" "$LOG" 2>/dev/null || true)
-	pad "$1" 0 0
+	TAPN=$((TAPN + 1))
+	echo "$1 0 0 $TAPN $2" >"$PAD.tmp" && mv "$PAD.tmp" "$PAD"
 	until (( $(grep -cE "$2" "$LOG" 2>/dev/null || true) > n0 )); do
 		kill -0 "$APID" 2>/dev/null || { pad 0 0 0; return 1; }
 		sleep 0.2
