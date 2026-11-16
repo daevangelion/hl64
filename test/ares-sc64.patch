@@ -1,0 +1,127 @@
+SC64 command busy time for the test harness (hl64; on the series before it).
+
+meeq/ares' SC64 (ares/n64/sc64, Christopher Bonhage) runs every command at once: CMD_BUSY is
+never seen set. ARES_SC64_SECTOR_US=<us> (default 0: unchanged) keeps SD_READ / SD_WRITE
+busy for sectors * <us> of emulated time after the data moved (it moves at once): a
+Queue::SC64_Command event then clears CMD_BUSY and raises CMD_IRQ_PENDING when the command
+asked for it (CMD_IRQ_REQUEST), as the immediate path does. So the cart's pacing of
+background SD fills sees non-instant commands; timing fidelity is not a goal.
+
+diff --git a/ares/n64/cpu/cpu.cpp b/ares/n64/cpu/cpu.cpp
+index 41964d4..f5a7b8b 100644
+--- a/ares/n64/cpu/cpu.cpp
++++ b/ares/n64/cpu/cpu.cpp
+@@ -114,6 +114,7 @@ auto CPU::synchronize() -> void {
+     case Queue::DD_BM_Request:  return dd.bmRequest();
+     case Queue::DD_Motor_Mode:  return dd.motorChange();
+     case Queue::GDB_Poll:      return cpu.gdbPoll();
++    case Queue::SC64_Command:  return sc64.complete();
+     }
+   });
+ 
+diff --git a/ares/n64/n64.hpp b/ares/n64/n64.hpp
+index 5c410d4..7c66b3f 100644
+--- a/ares/n64/n64.hpp
++++ b/ares/n64/n64.hpp
+@@ -94,6 +94,7 @@ namespace ares::Nintendo64 {
+       DD_BM_Request,
+       DD_Motor_Mode,
+       GDB_Poll,
++      SC64_Command,
+     };
+   };
+   extern Queue queue;
+diff --git a/ares/n64/sc64/sc64.cpp b/ares/n64/sc64/sc64.cpp
+index e284321..b413ce8 100644
+--- a/ares/n64/sc64/sc64.cpp
++++ b/ares/n64/sc64/sc64.cpp
+@@ -184,6 +184,12 @@ auto SC64::open(string location, bool readOnly_, u32 hostPort_) -> void {
+   hostPort = hostPort_ <= 65535 ? hostPort_ : 0;
+   if(hostPort) host.open(hostPort, true);
+ 
++  //test harness pacing: a modelled SD transfer time (the data moves at once, CMD_BUSY
++  //stays set; default 0 = synchronous)
++  sectorBusyUs = 0;
++  if(auto e = getenv("ARES_SC64_SECTOR_US"); e && e[0]) sectorBusyUs = (u32)strtoul(e, nullptr, 0);
++  if(sectorBusyUs) print("SC64 SD_READ/SD_WRITE busy ", sectorBusyUs, " us per sector\n");
++
+   sdram.allocate(SdramSize, 0);
+   if(cartridge.rom.size) {
+     auto length = min<u32>(cartridge.rom.size, sdram.size);
+@@ -203,6 +209,7 @@ auto SC64::open(string location, bool readOnly_, u32 hostPort_) -> void {
+ }
+ 
+ auto SC64::close() -> void {
++  queue.remove(Queue::SC64_Command);
+   registers = {};
+   updateInterrupt();
+   hostConnected = false;
+@@ -228,6 +235,7 @@ auto SC64::close() -> void {
+ }
+ 
+ auto SC64::power(bool reset) -> void {
++  queue.remove(Queue::SC64_Command);
+   // BlockRAM is serialized unconditionally, so keep it allocated even when the cart is disabled.
+   if(!buffer) buffer.allocate(BlockRamSize, 0);
+ 
+@@ -1154,14 +1162,14 @@ auto SC64::execute(u8 command) -> void {
+     auto result = transfer(false, registers.data0, registers.data1);
+     if(result != SdError::Ok) { error(result); return; }
+     sdSector += registers.data1;
+-    complete();
++    completeAfter(registers.data1);
+     return;
+   }
+   case Command::SdWrite: {
+     auto result = transfer(true, registers.data0, registers.data1);
+     if(result != SdError::Ok) { error(result); return; }
+     sdSector += registers.data1;
+-    complete();
++    completeAfter(registers.data1);
+     return;
+   }
+   case Command::DiskMappingSet:
+@@ -1206,6 +1214,14 @@ auto SC64::execute(u8 command) -> void {
+   }
+ }
+ 
++//SD_READ / SD_WRITE: done at once, or busy sectors * ARES_SC64_SECTOR_US of emulated time
++//(1 s = 187.5M queue clocks) before complete() clears CMD_BUSY and raises CMD_IRQ_PENDING
++auto SC64::completeAfter(u32 sectors) -> void {
++  if(!sectorBusyUs) return complete();
++  u64 clocks = u64(sectors) * sectorBusyUs * 375 / 2;
++  cpu.queueInsert(Queue::SC64_Command, (u32)min<u64>(clocks, 0xffff'ffffull));
++}
++
+ auto SC64::setByteSwap(u8* data, u32 size) -> void {
+   if(!byteSwap) return;
+   for(u32 address_ = 0; address_ < size; address_ += 2)
+diff --git a/ares/n64/sc64/sc64.hpp b/ares/n64/sc64/sc64.hpp
+index f83d7e9..f186ea6 100644
+--- a/ares/n64/sc64/sc64.hpp
++++ b/ares/n64/sc64/sc64.hpp
+@@ -259,6 +259,7 @@ struct SC64 : PIDevice {
+   u32 sdSector = 0;
+   u64 sectorCount = 0;
+   u32 hostPort = 0;
++  u32 sectorBusyUs = 0;  //ARES_SC64_SECTOR_US: SD_READ / SD_WRITE stay busy this long per sector
+   std::vector<u8> hostInput;
+   HostMode hostMode = HostMode::Unknown;
+   std::deque<Packet> hostPendingPackets;
+@@ -295,6 +296,7 @@ struct SC64 : PIDevice {
+   auto piReadHalf(PIDeviceTiming timing) -> maybe<u16> override;
+   auto piWriteHalf(u16 data, PIDeviceTiming timing) -> void override;
+   auto serialize(serializer& s) -> void;
++  auto complete() -> void;  //public: the Queue::SC64_Command event ends a busy command
+ 
+ private:
+   auto resetConfigs() -> void;
+@@ -331,7 +333,7 @@ private:
+   auto sdStatus() const -> u32;
+   auto writeSdInfo(u32 address) -> bool;
+   auto execute(u8 command) -> void;
+-  auto complete() -> void;
++  auto completeAfter(u32 sectors) -> void;
+   auto error(ErrorType type, u32 code) -> void;
+   auto error(CfgError code) -> void { error(ErrorType::Cfg, (u32)code); }
+   auto error(SdError code) -> void { error(ErrorType::Sd, (u32)code); }

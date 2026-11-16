@@ -41,16 +41,30 @@
 # same layout) before boot; ARES_PAK_OUT=<file> gets the Pak's image when the
 # guest exits through the harness, like ARES_FLASH_* (test/ares-pak.patch).
 #
+# SummerCart64 (meeq/ares' emulation, ares/n64/sc64; off unless asked for):
+# ARES_SD_IN=<file> runs the ROM on an SC64 (its SDRAM is the ROM window,
+# KEY-locked registers at 0x1FFF0000) whose SD card is a copy of that raw
+# image (a whole number of 512-byte sectors). The copy is written in place by
+# the cart's SD_WRITE: ARES_SD_OUT=<file> is that copy (it holds the writes
+# even when the run is stopped or times out), else a temporary file removed
+# after the run. ARES_SC64=1 without ARES_SD_IN: an SC64 with no card.
+# ARES_SC64_SECTOR_US=<us> (test/ares-sc64.patch): SD_READ / SD_WRITE stay
+# busy that long per sector (default 0: at once). Relative paths: to DIR;
+# remote runs stage the IN file and fetch the OUT file.
+#
 # Where: HL64_ARES_HOST unset / empty / local: on this machine, holding one
 # of ARES_SLOTS (default 2) slot locks /tmp/hl64-ares.slot<i> while ares
 # runs (every ares user on the machine takes one). HL64_ARES_HOST=<host>
 # (ares-host): test/run/ares-remote.sh, the same run on that host (its own
 # slots, results copied back to the same paths).
-# Env: ARES_BIN (local, default ~/src/products/ares/build/desktop-ui/ares),
-# ARES_SLOTS, ARES_TIMEOUT, DISPLAY_NUM (xvfb.sh), and the harness variables
-# ares reads (ARES_TEST_INPUT, ARES_HOST_SCREENSHOT, ARES_HOST_SHOT_EVERY_MS,
-# ARES_HOST_SHOT_MAX, ARES_HOST_SHOT_DIR, ARES_HOST_PRINTF, ARES_TRACE_CPU),
-# passed through (remote: forwarded).
+# The patched ares: test/run/ares-build.sh (meeq/ares at a pinned commit plus
+# test/ares-*.patch).
+# Env: ARES_BIN (local, default ~/hl64-ares-sc64/build/desktop-ui/ares, as
+# test/run/ares-build.sh builds it), ARES_SLOTS, ARES_TIMEOUT, DISPLAY_NUM
+# (xvfb.sh), and the harness variables ares reads (ARES_TEST_INPUT,
+# ARES_HOST_SCREENSHOT, ARES_HOST_SHOT_EVERY_MS, ARES_HOST_SHOT_MAX,
+# ARES_HOST_SHOT_DIR, ARES_SC64, ARES_SC64_SECTOR_US), passed through
+# (remote: forwarded).
 
 # ares_flash_check DIR: ARES_FLASH_IN must be a file (else 2); ARES_FLASH_OUT's
 # directory is made and a stale file there removed.
@@ -80,6 +94,20 @@ ares_pak_check() {
 	fi
 }
 
+# ares_sd_check DIR: ARES_SD_IN must be a file (else 2); ARES_SD_OUT's
+# directory is made and a stale file there removed.
+ares_sd_check() {
+	local dir=$1 f
+	if [[ -n "${ARES_SD_IN:-}" ]]; then
+		f=$(ares_abs "$dir" "$ARES_SD_IN")
+		[[ -f "$f" ]] || { echo "ares: ARES_SD_IN $f is not a file" >&2; return 2; }
+	fi
+	if [[ -n "${ARES_SD_OUT:-}" ]]; then
+		f=$(ares_abs "$dir" "$ARES_SD_OUT")
+		mkdir -p "$(dirname "$f")" && rm -f "$f"
+	fi
+}
+
 ares_abs() {	# ares_abs DIR PATH: PATH, relative ones to DIR
 	case "$2" in /*) echo "$2" ;; *) echo "$1/$2" ;; esac
 }
@@ -87,11 +115,11 @@ ares_abs() {	# ares_abs DIR PATH: PATH, relative ones to DIR
 ARES_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=xvfb.sh
 . "$ARES_SH_DIR/xvfb.sh"
-ARES_BIN="${ARES_BIN:-$HOME/src/products/ares/build/desktop-ui/ares}"
+ARES_BIN="${ARES_BIN:-$HOME/hl64-ares-sc64/build/desktop-ui/ares}"
 ARES_SETTINGS=(--system "Nintendo 64" --setting Video/Driver=Vulkan --setting Audio/Driver=None
 	--setting Input/Driver=SDL --setting General/HomebrewMode=true)
-ARES_FWD_VARS=(ARES_HOST_SCREENSHOT ARES_HOST_SHOT_EVERY_MS ARES_HOST_SHOT_MAX ARES_HOST_PRINTF
-	ARES_TRACE_CPU)
+ARES_FWD_VARS=(ARES_HOST_SCREENSHOT ARES_HOST_SHOT_EVERY_MS ARES_HOST_SHOT_MAX ARES_SC64
+	ARES_SC64_SECTOR_US)
 
 ares_host() {	# the host ares_run uses: local or HL64_ARES_HOST
 	case "${HL64_ARES_HOST:-local}" in
@@ -102,7 +130,7 @@ ares_host() {	# the host ares_run uses: local or HL64_ARES_HOST
 
 ares_setup() {
 	if [[ $(ares_host) == local ]]; then
-		[[ -x "$ARES_BIN" ]] || { echo "patched ares not found at $ARES_BIN (set ARES_BIN)" >&2; return 2; }
+		[[ -x "$ARES_BIN" ]] || { echo "patched ares not found at $ARES_BIN (test/run/ares-build.sh, or set ARES_BIN)" >&2; return 2; }
 		xvfb_start || return 2
 		trap '[[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null || true' EXIT
 	else
@@ -154,14 +182,28 @@ ares_slot_drop() {
 }
 
 # ares_exec DIR ROM LOG TIMEOUT: ares itself, on DISPLAY_NUM (no slot, no
-# copies); its pid to ARES_PID_FILE when set; with ARES_TAIL=1 LOG is also
-# copied to stdout while ares runs. Sets ARES_WALL / ARES_LOAD; returns
-# ares' status.
+# copies but the SD card's); its pid to ARES_PID_FILE when set; with
+# ARES_TAIL=1 LOG is also copied to stdout while ares runs. Sets ARES_WALL /
+# ARES_LOAD; returns ares' status.
 ares_exec() {
-	local dir=$1 rom=$2 log=$3 to=$4 t0 c=0 pid tpid=
+	local dir=$1 rom=$2 log=$3 to=$4 t0 c=0 pid tpid= card= tmpcard=
+	# the SC64 is off unless asked for (settings.bml must not decide)
+	local sc=(--setting Nintendo64/SC64=false)
+	if [[ -n "${ARES_SD_IN:-}" ]]; then
+		if [[ -n "${ARES_SD_OUT:-}" ]]; then
+			card=$(ares_abs "$dir" "$ARES_SD_OUT")
+		else
+			card=$(mktemp "${TMPDIR:-/tmp}/ares-sd.XXXXXX")
+			tmpcard=$card
+		fi
+		cp "$(ares_abs "$dir" "$ARES_SD_IN")" "$card" || { ARES_WALL=0; ARES_LOAD=-; return 2; }
+		sc=(--setting Nintendo64/SC64=true --setting "Nintendo64/SC64SDImage=$card")
+	elif [[ ${ARES_SC64:-0} == 1 ]]; then
+		sc=(--setting Nintendo64/SC64=true --setting Nintendo64/SC64SDImage=)
+	fi
 	t0=$(date +%s.%N)
 	(cd "$dir" && DISPLAY="$DISPLAY_NUM" ARES_TEST_HARNESS=1 \
-		exec timeout -k 3 "$to" "$ARES_BIN" "${ARES_SETTINGS[@]}" "$rom" >"$log" 2>&1) &
+		exec timeout -k 3 "$to" "$ARES_BIN" "${ARES_SETTINGS[@]}" "${sc[@]}" "$rom" >"$log" 2>&1) &
 	pid=$!
 	[[ -z "${ARES_PID_FILE:-}" ]] || echo "$pid" >"$ARES_PID_FILE"
 	if [[ ${ARES_TAIL:-0} -eq 1 ]]; then
@@ -172,6 +214,7 @@ ares_exec() {
 	fi
 	ares_wait "$pid" || c=$?
 	[[ -z "$tpid" ]] || wait "$tpid" || true
+	[[ -z "$tmpcard" ]] || rm -f "$tmpcard"
 	ARES_WALL=$(echo "$(date +%s.%N) $t0" | awk '{printf "%.0f", $1 - $2}')
 	ARES_LOAD=$(cut -d' ' -f1 /proc/loadavg)
 	return "$c"
@@ -180,7 +223,8 @@ ares_exec() {
 ares_run() {
 	local dir=$1 rom=$2 log=$3 to=${4:-${ARES_TIMEOUT:-1800}} c=0
 	ARES_STOP=0
-	{ ares_flash_check "$dir" && ares_pak_check "$dir"; } || { ARES_WALL=0; ARES_LOAD=-; return 2; }
+	{ ares_flash_check "$dir" && ares_pak_check "$dir" && ares_sd_check "$dir"; } \
+		|| { ARES_WALL=0; ARES_LOAD=-; return 2; }
 	ARES_RAN_ON=$(ares_host)
 	if [[ $ARES_RAN_ON != local ]]; then
 		local st

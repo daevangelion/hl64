@@ -5,6 +5,8 @@
 | `test/run/m0.sh` .. `m5.sh`, `coll.sh` | milestone gates (host, `--ares`); `m5.sh` runs the whole Uplink / Hazard / m4 routes |
 | `test/run/scene.sh` | the scene runner (below) |
 | `test/run/menu.sh` | the front end on ares, by hand: a playable ROM walked by the pad (architecture.md 13) |
+| `test/run/sc64.sh`, `test/sc64/` | the SummerCart64 interface on ares: a test ROM against an SD card image (below) |
+| `test/run/ares-build.sh`, `test/ares-*.patch` | the patched ares every ares run uses (below) |
 | `test/routes/*.route` | whole routes ([route-bytecode.md](../docs/formats/route-bytecode.md)) |
 | `test/scenes/*.route` | short scenes (below); `test/scenes/table.py` their perf table |
 | `test/m1` .. `test/m5`, `test/m6`, `test/coll` | per-milestone suites and log checks the gates run (`test/m6/menu_host.sh`: a suite of `m5.sh`) |
@@ -158,3 +160,40 @@ HL64_ARES_HOST=ares-host BUILD_DIR=/scratch/hl64/builds/Me/sc test/run/scene.sh 
 test/scenes/table.py <ares-uplink.log>@vent-flashlight:grunts-fight \
     /scratch/hl64/builds/Me/sc/scenes/ares/hl2-yard/ares.log --label route --label scene
 ```
+
+## The ares build
+
+Every ares run (`test/run/ares.sh`, locally or with `HL64_ARES_HOST`) uses
+one build: `test/run/ares-build.sh [DIR]` (or `HL64_ARES_HOST=ares-host
+test/run/ares-build.sh` for the host's `~/hl64-ares-sc64`) fetches ares as
+Christopher Bonhage's fork [meeq/ares](https://github.com/meeq/ares) has it
+at the commit the script pins (branch `sc64`: ares master of 2026-09 plus
+his SummerCart64 emulation in `ares/n64/sc64`; ares and the fork are under
+the ISC licence, their code is fetched, never copied here), applies
+`test/ares-testharness.patch`, `ares-large-rom-isviewer.patch`,
+`ares-flash.patch`, `ares-pak.patch`, `ares-sc64.patch` (ours; each says
+what it does) and builds `DIR/build/desktop-ui/ares`.
+
+SC64 runs (`ARES_SD_IN` / `ARES_SD_OUT` / `ARES_SC64` /
+`ARES_SC64_SECTOR_US`, `test/run/ares.sh`): the cart's SDRAM is the ROM
+window (the ROM copied in, 64 MiB), registers at 0x1FFF0000 behind the KEY
+unlock, the SD card a copy of the IN image written in place. What meeq's
+emulation covers, as read from its source at the pin: the register flow
+(SCR / DATA0 / DATA1, CMD_ERROR codes), CMD_IRQ_REQUEST raising the cart
+interrupt (shared with the 64DD line), CONFIG_GET / SET with
+ROM_WRITE_ENABLE gating PI writes to the SDRAM, SD_CARD_OP (init, status,
+info, byte swap), SD_SECTOR_SET / SD_READ / SD_WRITE into the SDRAM or the
+data buffer, TIME_GET, USB to a TCP host (none in our runs: libdragon's USB
+log is dropped) and the IS64 ring buffer. Not covered: save writeback to the
+SD card (accepted, never done), 64DD disk mapping (accepted, ignored),
+flash (erase / program fail, the extended ROM and shadow are absent), the
+SC64's own SRAM / FlashRAM (ares' usual save chips stay). Commands are
+synchronous there: `ares-sc64.patch` adds the optional busy time per
+sector. With the harness the ISViewer sits ahead of the SDRAM (the log):
+PI writes to ROM offsets 0x3ff0000-0x3ffffff go to it, not to the SDRAM.
+
+`test/run/sc64.sh` checks it: `test/sc64/sc64test.c` (unlock, identifier,
+ROM_WRITE_ENABLE on / off, SD_CARD_OP, SD_READ polled and by interrupt with
+the busy time, PI DMA back, SD_WRITE round trip, an error past the card's
+end, libdragon's libcart) on `test/sc64/mkimage.py`'s 1 MiB image, then
+the image file after the run.
