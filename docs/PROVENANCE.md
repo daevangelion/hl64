@@ -26,6 +26,14 @@ Quake, quakegeneric, Xash3D or GoldSrc engine code.
 - Half Life 1 SDK (`ValveSoftware/halflife`): game/ code and the engine
   interface headers it defines; copied code stays under `game/`.
 - libdragon, tiny3d and their documentation.
+- SummerCart64 (`Polprzewodnikowy/SummerCart64`, GPL-3.0; read-only clone
+  at `/scratch/ref/SummerCart64`, commit `a1e7996`): its `docs/`
+  (N64-side memory map, registers, commands, config options) is the
+  interface hl64 implements against. Its `fw/` (FPGA RTL) and
+  `sw/` (MCU firmware) may be **read for behaviour and timing facts only**
+  (SDRAM arbitration, SD clock, command latency), cited by path:line in
+  design docs (`docs/sc64-stream.md`). Never copy, paraphrase or
+  translate SC64 code into hl64 or into the ares patch.
 - Files marked CLEAN in `docs/provenance-audit.md` (our own code from the
   quakegeneric N64 work), copied with their history noted in the commit.
 - Files marked QUAKE-INTERFACE in `docs/provenance-audit.md` (decision D9,
