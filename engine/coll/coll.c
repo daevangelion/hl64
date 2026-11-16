@@ -27,6 +27,7 @@
 #include "engine/core/hlmath.h"
 #include "engine/core/log.h"
 #include "engine/core/sys.h"
+#include "engine/save/flq.h"
 #include "engine/save/sv.h"
 #include "engine/save/svmod.h"
 #include "engine/world/wld.h"
@@ -1124,6 +1125,7 @@ void col_move(const float start[3], const float mins[3], const float maxs[3], co
 	int mclip = pass && (pass->flags & COL_FL_MONSTERCLIP);
 	float lo[3], hi[3], wend[3], wfrac;
 
+	flq_tick();	/* a save's next flash page (flq.c): traces fill the AI's time */
 	col_trace_world(start, mins, maxs, end, tr);
 	/* the world stops it at the start (or it is all-solid): no entity is
 	 * clipped (trace-and-hulls.md 4.4 step 1) [probe:measured P-push corpse] */

@@ -1182,7 +1182,11 @@ monster thinks finish, layer / HLE slot opens complete, precache holds
 land, animation reads finish; the same settle runs in every load of it), the snapshot frame copies
 the state into the save region and writes the header's description of it
 (layers, map, time), then the coder runs in 8 ms steps over the following
-frames and the flash writer programs it (4 ms per frame) or the Pak writer
+frames and the flash writer programs it (4 ms per frame: a step first in
+the frame, then ticks between the frame's later steps start each next
+operation soon after the chip ends one, `flq.c`; ares' MX29L1101 takes
+3.5 ms a page and 85 ms a sector erase, so a 13 KB image is written in
+≈ 0.6 s, ≈ 12 frames) or the Pak writer
 writes 256 B per frame (≈ 6 ms on ares, 0.72 ms per 32 B block). The
 directory is updated from the read-back of every write. A manual save
 mutes the sound (`snd_mute`: gains 0, no sound's state changes) and holds

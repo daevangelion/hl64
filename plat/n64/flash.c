@@ -12,7 +12,9 @@
  * What differs is blocking: libdragon's flashram_write / flashram_erase
  * wait hundreds of milliseconds for the chip. Here erase and program only
  * START the operation and return; sys_flash_poll reads the status register
- * the next frame (engine/save/flq.c). Nothing ever busy-waits on the chip.
+ * later in the frame or the next (engine/save/flq.c: its frame step and the
+ * ticks between the frame's steps, a short wait at most when the chip is
+ * due within 0.5 ms). Nothing waits on the chip longer than that.
  *
  * PI ownership: engine/io's chain launches ROM pieces from the PI interrupt
  * (plat/n64/cart.c). Every register access and DMA here runs with the chain

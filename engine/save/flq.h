@@ -17,8 +17,18 @@
  * caller and must not change until flq_busy() is 0. 0 started, -1 busy /
  * no chip / bad range. */
 int	flq_write(uint32_t off, const void *src, uint32_t len);
-/* One frame's step: work for at most budget_us, then return. */
+/* One frame's step (save.c, first in the frame): work for at most
+ * budget_us, then return; it starts the frame's flash budget. */
 void	flq_step(uint32_t budget_us);
+/* Between the frame's later steps (the call points are listed in flq.c):
+ * when the operation in flight has likely ended, poll it and start the
+ * next one; a no-op while no write runs, before the operation's usual
+ * time, or once the frame's budget is spent. Main thread only (the PI
+ * accesses hold the I/O chain). */
+void	flq_tick(void);
+/* The ticks' time since the last call (save.c adds it to its step
+ * statistics). */
+uint32_t flq_take_tick_us(void);
 int	flq_busy(void);		/* 1 while a write runs */
 int	flq_result(void);	/* last write: 0 ok, -1 failed (erase / program error) */
 

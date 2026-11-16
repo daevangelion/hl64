@@ -17,6 +17,7 @@
 #include "engine/core/sys.h"
 #include "engine/ent/ent.h"
 #include "engine/phys/phys.h"
+#include "engine/save/flq.h"
 #include "engine/save/sv.h"
 #include "engine/save/svmod.h"
 
@@ -266,6 +267,7 @@ void phy_entities_frame(double time, double dt)
 			continue;
 		}
 		step(i, time, dt);
+		flq_tick();	/* a save's next flash page (flq.c) */
 	}
 	ent_pass.active = 0;
 	ent_pass.cursor = -1;

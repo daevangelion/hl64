@@ -178,6 +178,7 @@ static struct {
 	uint8_t		*work, *raw;
 	uint32_t	raw_cap, raw_len;
 	uint32_t	us_max, us_sum, frames;	/* this operation's held / step frames */
+	uint32_t	step_us;	/* the last step's time (its frame's flash ticks join it) */
 	uint32_t	frame_max;	/* its longest whole frame (save_frame to save_frame) */
 	uint32_t	check_us;	/* test builds: restore_check's time, left out of both */
 	uint32_t	held_max;	/* its longest frame it held (snapshot, load): all ours */
@@ -1384,16 +1385,24 @@ int save_frame(void)
 {
 	uint64_t t0 = sys_time_us();
 	uint32_t us, frame = SV.last ? (uint32_t)(t0 - SV.last) - SV.check_us : 0;
+	uint32_t tick = flq_take_tick_us();
 	int hold = 0, r;
 
 	if (SV.mute_left)
 		SV.mute_left--;
 
-	/* the frame that just ended belonged to the operation running now */
+	/* the frame that just ended belonged to the operation running now; the
+	 * flash writer's ticks in it (flq.c) are part of its step */
 	SV.last = t0;
 	SV.check_us = 0;
 	if (SV.st != ST_IDLE && frame > SV.frame_max)
 		SV.frame_max = frame;
+	if (SV.st != ST_IDLE && tick)
+	{
+		SV.us_sum += tick;
+		if (SV.step_us + tick > SV.us_max)
+			SV.us_max = SV.step_us + tick;
+	}
 	/* a frame this module held (no game step): all of it is ours */
 	if (SV.held && frame > SV.held_max)
 		SV.held_max = frame;
@@ -1540,6 +1549,7 @@ int save_frame(void)
 		break;
 	}
 	us = (uint32_t)(sys_time_us() - t0) - SV.check_us;
+	SV.step_us = us;
 	if (SV.st != ST_IDLE || hold)
 	{
 		SV.frames++;
@@ -1547,7 +1557,6 @@ int save_frame(void)
 		if (us > SV.us_max)
 			SV.us_max = us;
 	}
-	SV.held = (uint8_t)hold;
 	return hold;
 }
 

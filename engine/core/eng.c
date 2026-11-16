@@ -52,6 +52,7 @@
 #include "engine/render/trans.h"
 #include "engine/render/ren.h"
 #include "engine/world/wld.h"
+#include "engine/save/flq.h"
 #include "engine/save/sv.h"
 #include "engine/save/svmod.h"
 #include "engine/in/in.h"
@@ -1109,6 +1110,15 @@ int eng_load_state(void)
 	eng.last_vi = sys_vi_count();
 	return sv_failed() ? -1 : 0;
 }
+
+/* The I/O pump and the flash writer's tick with it (flq.c: a save's next
+ * page starts soon after the chip ends one, not a frame later). */
+static void pump(void)
+{
+	io_pump();
+	flq_tick();
+}
+
 /* Step 10 sound: listener = the view (global eye, right vector) of the
  * last drawn frame. */
 static void snd_step(uint32_t dt)
@@ -1134,16 +1144,16 @@ static void snd_step(uint32_t dt)
 static void menu_only_frame(uint32_t dt, int tick, int hold)
 {
 	io_frame_begin(dt);
-	io_pump();
+	pump();
 	if (!hold && !phy_player_active())
 		wld_frame(eng.frame);
 	snd_step(dt);
-	io_pump();
+	pump();
 	if (hold != SAVE_HOLD_QUIET)
 	{
 		while (!sys_frame_try_begin())
-			io_pump();
-		io_pump();
+			pump();
+		pump();
 		d2_begin();
 		menu_draw();
 		d2_end();
@@ -1219,7 +1229,7 @@ void eng_frame(void)
 	/* 3 io (test builds: completions published, the frame's pieces
 	 * planned; the PI interrupt chains them through the frame, io.h) */
 	io_frame_begin(dt);
-	io_pump();
+	pump();
 	SEAMPROF_STEP(IO);
 
 	/* 4 game: the frame's clock (dt 0 in the settle frames), due logic
@@ -1228,9 +1238,11 @@ void eng_frame(void)
 	rec_run_timers(eng_clock_time(), gdt);
 	game_start_frame();
 	SEAMPROF_STEP(LOGIC);
+	flq_tick();
 	/* 5 player: pmove host */
 	phy_player_frame(&cmd, eng.time);
 	SEAMPROF_STEP(PLAYER);
+	flq_tick();
 	/* 6 active set */
 	phy_entities_frame(eng.time, gdt);
 	/* the clock advances by the frame time (f64) after step 6 */
@@ -1239,7 +1251,7 @@ void eng_frame(void)
 	SEAMPROF_STEP(ACTIVE);
 	/* io: resume a chain paused by the steps' sync / audio reads (wave
 	 * loads of the sounds the game started), io.h */
-	io_pump();
+	pump();
 	/* 7-10 world, hydration, residency, sound (M1-M4) */
 	if (eng.world)
 	{
@@ -1249,6 +1261,7 @@ void eng_frame(void)
 		 * leave */
 		seam_frame();
 		SEAMPROF_STEP(SEAM);
+		flq_tick();
 		/* 8 hydration pump around the seam anchors (global positions:
 		 * the player, and through the approached seam's T) */
 		{
@@ -1258,6 +1271,7 @@ void eng_frame(void)
 			rec_frame(n ? (const float (*)[3])anchors : NULL, n);
 		}
 		SEAMPROF_STEP(HYDRATE);
+		flq_tick();
 		/* 9 residency target set (engine/world/stream.c): the player's
 		 * eye and velocity in its home frame; the free camera's view */
 		if (phy_player_active())
@@ -1280,26 +1294,28 @@ void eng_frame(void)
 			wld_stream_frame(ren_cam.map, eye, still);
 		}
 		SEAMPROF_STEP(STREAM);
-		io_pump();
+		pump();
 		wld_style_tick(eng.time);
 		ren_dlight_frame(eng.time, (double)dt * 1e-6);
 		ren_dlight_sources(eng.time);
 		studio_frame();
 		SEAMPROF_STEP(SCENE);
+		flq_tick();
 	}
 	/* effects on the game clock: temp entities, particles, beams, decal
 	 * placements, persistent render fades, shake */
 	fx_frame(eng.time, gdt);
 	SEAMPROF_STEP(FXSIM);
+	flq_tick();
 	/* 10 sound */
 	snd_step(dt);
 	SEAMPROF_STEP(SND);
-	io_pump();
+	pump();
 
 	/* 11-12 render into a free framebuffer; submit for paced present */
 	while (!sys_frame_try_begin())
-		io_pump();
-	io_pump();
+		pump();
+	pump();
 	SEAMPROF_STEP(WAIT);
 	if (eng.world)
 	{
@@ -1308,6 +1324,7 @@ void eng_frame(void)
 		ren_view_frame(eng.time, (double)dt * 1e-6);
 		ren_frame(eng.time);
 		SEAMPROF_STEP(RENDER);
+		flq_tick();
 		/* the HUD after the 3D frame (architecture.md 9.8) */
 		game_hud_frame(eng.time, (double)dt * 1e-6);
 		d2_begin();
@@ -1318,7 +1335,7 @@ void eng_frame(void)
 		eng.rollup_world_us += r.world_us;
 		if (r.world_us > eng.rollup_world_max)
 			eng.rollup_world_max = r.world_us;
-		io_pump();
+		pump();
 	}
 	sys_frame_end();
 	SEAMPROF_STEP(SUBMIT);

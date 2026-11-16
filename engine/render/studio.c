@@ -54,6 +54,7 @@
 #include "engine/render/gpu_studio.h"
 #include "engine/render/ren.h"
 #include "engine/render/trans.h"
+#include "engine/save/flq.h"
 #include "engine/save/sv.h"
 #include "engine/save/svmod.h"
 #include "engine/world/wld.h"
@@ -1288,6 +1289,7 @@ void studio_frame(void)
 		int mi;
 
 		live[e >> 5] |= 1u << (e & 31);
+		flq_tick();	/* a save's next flash page (flq.c) */
 		if (!is_studio(e))
 		{
 			s->valid = 0;
@@ -2009,6 +2011,7 @@ void studio_draw(double time)
 				draw_entity(cand[i].e, time, L, list, cnt, eye, -1, 0, sh);
 			else
 				ren_trans_studio(cand[i].e, cand[i].dist);
+			flq_tick();	/* a save's next flash page (flq.c) */
 		}
 	}
 	gpu_studio_end();

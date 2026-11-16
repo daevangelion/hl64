@@ -42,6 +42,7 @@
 #include "engine/core/sys.h"
 #include "engine/io/io.h"
 #include "engine/render/ren.h"
+#include "engine/save/flq.h"
 #include "engine/world/wld_int.h"
 
 #define PREF_COLL_S	0.5f		/* collision window + v * 0.5 s */
@@ -235,6 +236,7 @@ static void name(wld_layer_t *L, int c, int cls)
 		wld_chunk_sync(L, c);
 	if (!wld_name(L, c, cls))
 		failed(L, c, (uint32_t)L->slot << 16 | (uint32_t)c, RETRY_CHUNK);
+	flq_tick();	/* a save's next flash page (flq.c): naming runs long */
 }
 
 /* A map-local box meets a sector of list (the renderer's mover / entity

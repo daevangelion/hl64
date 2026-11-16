@@ -7,8 +7,25 @@
  * flight first, starts the next one only when the chip is idle, and leaves
  * as soon as one is running or its time budget is spent: a write spans
  * many frames and nothing ever waits on the chip. A chip that finishes at
- * once (the host's image, ares) lets one step run several operations, up
- * to the budget.
+ * once (the host's image) lets one step run several operations, up to the
+ * budget.
+ *
+ * Between the frame's steps flq_tick polls again (eng.c's frame steps and
+ * io pumps, the active pass's entity steps, col_move, the stream's
+ * naming, the studio pose and draw loops: main-thread points spread over
+ * the frame), so the next operation starts soon after the chip ends one
+ * rather than at the next frame: a page program of a few ms would
+ * otherwise cost a whole frame, and a 13 KB save some 100 frames (ares'
+ * MX29L1101: 3.5 ms a page, 85 ms a sector erase). A tick polls only once
+ * the operation has run as long as the shortest of its kind seen so far
+ * ended (est[]: an upper bound of the chip's time, so that poll finds it
+ * ended; a tick up to FQ_SPIN_US before that waits for it), then again
+ * after an eighth of its run so far (FQ_POLL_US at least). Every tick
+ * counts against the frame's budget that flq_step started and starts only
+ * with FQ_TICK_US of it left, so the frame's flash time stays within it.
+ * Each poll / start holds the I/O chain (plat/n64/flash.c), so a tick at
+ * any of those points is ordered against the streamer's DMA. With no
+ * write running a tick is one test.
  *
  * Per sector: erase, then program its pages in order. Pages whose 128
  * bytes are all 0xFF are not programmed (the erase left them so); the
@@ -25,6 +42,12 @@
 #define FQ_SECTOR	(128u * FQ_PAGE)
 #define FQ_PAGES	(FQ_SECTOR / FQ_PAGE)	/* per sector */
 #define FQ_BYTES	(8u * FQ_SECTOR)
+#define FQ_POLL_US	500u	/* least gap of a tick's polls of a busy chip */
+#define FQ_SPIN_US	500u	/* a tick this close to est[] waits for the end */
+/* A tick's worst cost: a poll, a program's start (~0.2 ms on ares), and
+ * the wait for a ROM piece in flight when it holds the chain (IO_PIECE,
+ * ~0.4 ms): a tick starts only with this much of the frame's budget left */
+#define FQ_TICK_US	600u
 
 enum { OP_NONE, OP_ERASE, OP_PROGRAM };
 
@@ -45,12 +68,22 @@ static struct {
 	uint8_t		op;		/* operation in flight on the chip */
 	uint8_t		erase_next;	/* the sector's erase starts next */
 	int		result;
+	uint64_t	op_t0;		/* the operation in flight started */
+	uint64_t	poll_t;		/* a poll last found it running */
 	/* the write's log */
 	uint32_t	off;
 	uint64_t	t0;
-	uint32_t	steps, erased, programmed, blank, step_max;
-	tm_t		erase_t, program_t, poll_t;
+	uint32_t	steps, ticks, erased, programmed, blank, step_max;
+	uint32_t	fr_max;		/* the most flash time in one frame */
+	tm_t		erase_t, program_t, poll_t_us;
 } q;
+
+/* Per operation kind: the shortest start-to-end a poll saw (0 none yet).
+ * Kept across writes: the chip's times do not change. */
+static uint32_t est[3];
+/* The frame's flash time (flq_step's and the ticks') and its budget (the
+ * last flq_step's); the ticks' time since flq_take_tick_us. */
+static uint32_t fr_us, fr_budget, tick_us;
 
 /* The 16-byte-aligned page the driver programs from when a page of src is
  * partial or src is not 16-aligned. The chip's page buffer is loaded from
@@ -86,15 +119,51 @@ static void finish(void)
 {
 	q.running = 0;
 	q.result = 0;
+	if (fr_us > q.fr_max)
+		q.fr_max = fr_us;
 	log_printf("flash: wrote 0x%x + %u B: %u erases, %u programs, %u blank pages skipped, "
-		"%u steps, %u ms, longest step %u us\n",
+		"%u steps + %u ticks, %u ms, longest step %u us, most in a frame %u us\n",
 		(unsigned)q.off, (unsigned)q.len, (unsigned)q.erased, (unsigned)q.programmed,
-		(unsigned)q.blank, (unsigned)q.steps, (unsigned)((sys_time_us() - q.t0) / 1000u),
-		(unsigned)q.step_max);
+		(unsigned)q.blank, (unsigned)q.steps, (unsigned)q.ticks,
+		(unsigned)((sys_time_us() - q.t0) / 1000u), (unsigned)q.step_max, (unsigned)q.fr_max);
 	log_printf("flash: call us (n avg max): erase %u %u %u, program %u %u %u, poll %u %u %u\n",
 		(unsigned)q.erase_t.n, (unsigned)tm_avg(&q.erase_t), (unsigned)q.erase_t.max,
 		(unsigned)q.program_t.n, (unsigned)tm_avg(&q.program_t), (unsigned)q.program_t.max,
-		(unsigned)q.poll_t.n, (unsigned)tm_avg(&q.poll_t), (unsigned)q.poll_t.max);
+		(unsigned)q.poll_t_us.n, (unsigned)tm_avg(&q.poll_t_us), (unsigned)q.poll_t_us.max);
+}
+
+/* An operation started: its clock (est[] and the ticks' gaps count from
+ * here). */
+static void started(int op)
+{
+	q.op = (uint8_t)op;
+	q.op_t0 = sys_time_us();
+	q.poll_t = q.op_t0;
+}
+
+/* Poll the operation in flight: 1 it runs, 0 it ended (the chip is idle),
+ * -1 it failed (the write ended). */
+static int poll_op(void)
+{
+	uint64_t tp = sys_time_us();
+	uint32_t run = (uint32_t)(tp - q.op_t0);
+	int r = sys_flash_poll();
+
+	tm_add(&q.poll_t_us, tp);
+	if (r > 0)
+	{
+		q.poll_t = tp;
+		return 1;
+	}
+	if (r < 0)
+	{
+		fail(q.op == OP_ERASE ? "erase reported an error" : "program reported an error");
+		return -1;
+	}
+	if (!est[q.op] || run < est[q.op])
+		est[q.op] = run;
+	q.op = OP_NONE;
+	return 0;
 }
 
 /* Page pg of src (pg < npages): bytes in range, the rest 0xFF. */
@@ -147,7 +216,7 @@ static int next_op(void)
 			}
 			q.erase_next = 0;
 			q.page = 0;
-			q.op = OP_ERASE;
+			started(OP_ERASE);
 			q.erased++;
 			return 1;
 		}
@@ -175,7 +244,7 @@ static int next_op(void)
 				fail("program did not start");
 				return 0;
 			}
-			q.op = OP_PROGRAM;
+			started(OP_PROGRAM);
 			q.programmed++;
 			return 1;
 		}
@@ -207,7 +276,7 @@ int flq_write(uint32_t off, const void *src, uint32_t len)
 	q.nsec = (len + FQ_SECTOR - 1) / FQ_SECTOR;
 	q.npages = (len + FQ_PAGE - 1) / FQ_PAGE;
 	q.running = 1;
-	q.op = OP_ERASE;
+	started(OP_ERASE);
 	q.erased = 1;
 	q.t0 = t0;
 	tm_add(&q.erase_t, t0);
@@ -219,35 +288,69 @@ void flq_step(uint32_t budget_us)
 	uint64_t t0;
 	uint32_t us;
 
+	if (q.running && fr_us > q.fr_max)
+		q.fr_max = fr_us;
+	fr_budget = budget_us;
+	fr_us = 0;
 	if (!q.running)
 		return;
 	t0 = sys_time_us();
 	q.steps++;
 	for (;;)
 	{
-		if (q.op != OP_NONE)
-		{
-			uint64_t tp = sys_time_us();
-			int r = sys_flash_poll();
-
-			tm_add(&q.poll_t, tp);
-			if (r > 0)
-				break;
-			if (r < 0)
-			{
-				fail(q.op == OP_ERASE ? "erase reported an error" : "program reported an error");
-				break;
-			}
-			q.op = OP_NONE;
-		}
+		if (q.op != OP_NONE && poll_op())
+			break;
 		if (!next_op())
 			break;
 		if (sys_time_us() - t0 >= budget_us)
 			break;
 	}
 	us = (uint32_t)(sys_time_us() - t0);
+	fr_us = us;
 	if (us > q.step_max)
 		q.step_max = us;
+}
+
+void flq_tick(void)
+{
+	uint64_t t0;
+	uint32_t us;
+
+	if (!q.running || fr_us + FQ_TICK_US > fr_budget)
+		return;
+	t0 = sys_time_us();
+	if (q.op != OP_NONE)
+	{
+		uint32_t run = (uint32_t)(t0 - q.op_t0), gap = run / 8u, e = est[q.op];
+
+		if (gap < FQ_POLL_US)
+			gap = FQ_POLL_US;
+		if (run < e)
+		{
+			/* about to end: wait for it here rather than for a later
+			 * tick, within the frame's budget */
+			if (e - run > FQ_SPIN_US || fr_us + (e - run) + FQ_TICK_US > fr_budget)
+				return;
+			while ((uint32_t)(sys_time_us() - q.op_t0) < e)
+				;
+		}
+		else if (t0 - q.poll_t < gap)
+			return;
+	}
+	q.ticks++;
+	if (q.op == OP_NONE || !poll_op())
+		next_op();
+	us = (uint32_t)(sys_time_us() - t0);
+	fr_us += us;
+	tick_us += us;
+}
+
+uint32_t flq_take_tick_us(void)
+{
+	uint32_t us = tick_us;
+
+	tick_us = 0;
+	return us;
 }
 
 int flq_busy(void)
