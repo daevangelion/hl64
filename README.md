@@ -121,8 +121,8 @@ Their environment variables are listed at the top of each script:
 `HL64_FIXTURES` (GoldSrc oracle fixtures made by `test/oracle/run.sh`, which
 needs a dedicated server: [test/oracle/README.md](test/oracle/README.md)).
 The scripts' default paths are under `/scratch`; set the variables
-instead. Checks whose inputs are missing are skipped or reported as a
-missing prerequisite (exit 2).
+instead. The gates hard-link the cooked content into `BUILD_DIR`, so keep
+`HL64_CONTENT` and `BUILD_DIR` on the same filesystem.
 
 ## 6. Emulator (ares) harness
 

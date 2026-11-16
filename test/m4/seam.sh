@@ -27,7 +27,10 @@ cd "$(dirname "$0")/../.."
 CONTENT=${1:-${HL64_CONTENT:-/scratch/hl64/tmp/Int9/c23}}
 STAGING=${2:-$CONTENT.stage}
 B=${BUILD_DIR:-/scratch/hl64/builds/Seam}
-T=$(mktemp -d "${TMPDIR:-/tmp}/seamtest.XXXXXX")
+# under BUILD_DIR: the content copies below are hard links, which need the
+# content's filesystem (as the gates' $BUILD_DIR copies), not /tmp's
+mkdir -p "$B"
+T=$(mktemp -d "$B/seamtest.XXXXXX")
 trap 'rm -rf "$T"' EXIT
 fail=0
 bad() { echo "FAIL $*"; fail=1; }
