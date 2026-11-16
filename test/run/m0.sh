@@ -11,7 +11,7 @@
 # Usage: test/run/m0.sh [--ares]
 # Env:   BUILD_DIR (default build; put scratch on /scratch),
 #        HL64_ARES_HOST / ARES_BIN (test/run/ares.sh; ARES_BIN default
-#        ~/src/products/ares/build/desktop-ui/ares),
+#        ~/hl64-ares-sc64/build/desktop-ui/ares, test/run/ares-build.sh),
 #        ARES_TIMEOUT seconds (default 300), DISPLAY_NUM (optional X server)
 # Exit:  0 pass, 1 gate failure, 2 prerequisite missing.
 set -euo pipefail

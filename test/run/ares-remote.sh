@@ -33,16 +33,18 @@
 #       ARES_PAK_IN / ARES_PAK_OUT (ares.sh: controller 1's Controller Pak
 #       image before / after; IN staged to <id>/pak/in.pak, OUT fetched
 #       from <id>/pak/out.pak).
-# Host setup (once): the patched ares at ~/hl64-ares/build/desktop-ui/ares
-# (test/ares-testharness.patch, test/ares-large-rom-isviewer.patch,
-# test/ares-flash.patch, test/ares-pak.patch; same CMake options as the
-# local build), its
-# settings in ~/hl64-ares/xdg/ares
-# (XDG_DATA_HOME of every remote run), Xvfb, a Vulkan ICD. Measured on
-# ares-host (hl2-yard scene ROM): the NVIDIA ICD and Mesa lavapipe (what a
-# GPU-less machine like build-vm runs) give the same log and shots;
-# NVIDIA ran it in 63 s alone, 144 s each with 8 at once (lavapipe 86 s /
-# 283 s).
+#       ARES_SD_IN / ARES_SD_OUT (ares.sh: the SC64 SD card image before /
+#       after; IN staged to <id>/sd/in.img (rsync delta against the last one
+#       sent), OUT fetched from <id>/sd/out.img), ARES_SC64,
+#       ARES_SC64_SECTOR_US (forwarded).
+# Host setup (once): `HL64_ARES_HOST=<host> test/run/ares-build.sh` builds
+# the patched ares (meeq/ares at its pin + test/ares-*.patch) into
+# ~/hl64-ares-sc64 on the host: build/desktop-ui/ares, xdg/ (XDG_DATA_HOME of
+# every remote run); the host needs Xvfb and a Vulkan ICD. Measured on ares-host
+# (hl2-yard scene ROM, the ares build before this one): the NVIDIA ICD and
+# Mesa lavapipe (what a GPU-less machine like build-vm runs) give the
+# same log and shots; NVIDIA ran it in 63 s alone, 144 s each with 8 at once
+# (lavapipe 86 s / 283 s).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,8 +63,8 @@ if [[ "${1:-}" == --remote-side ]]; then
 	ARES_STOP=0
 	trap 'ARES_STOP=1' TERM INT
 	echo "$$" >"$R/side.pid"
-	ARES_BIN="$HOME/hl64-ares/build/desktop-ui/ares"
-	export XDG_DATA_HOME="$HOME/hl64-ares/xdg"
+	ARES_BIN="$HOME/hl64-ares-sc64/build/desktop-ui/ares"
+	export XDG_DATA_HOME="$HOME/hl64-ares-sc64/xdg"
 	export VK_ICD_FILENAMES="${HL64_ARES_REMOTE_ICD:-/usr/share/vulkan/icd.d/nvidia_icd.json}"
 	[[ -n "${ARES_TEST_INPUT:-}" ]] && export ARES_TEST_INPUT="$R/input/$ARES_TEST_INPUT"
 	[[ -n "${ARES_HOST_SHOT_DIR:-}" ]] && { mkdir -p "$R/shots"; export ARES_HOST_SHOT_DIR="$R/shots"; }
@@ -70,6 +72,8 @@ if [[ "${1:-}" == --remote-side ]]; then
 	[[ -n "${ARES_FLASH_OUT:-}" ]] && { mkdir -p "$R/flash"; export ARES_FLASH_OUT="$R/$ARES_FLASH_OUT"; }
 	[[ -n "${ARES_PAK_IN:-}" ]] && export ARES_PAK_IN="$R/$ARES_PAK_IN"
 	[[ -n "${ARES_PAK_OUT:-}" ]] && { mkdir -p "$R/pak"; export ARES_PAK_OUT="$R/$ARES_PAK_OUT"; }
+	[[ -n "${ARES_SD_IN:-}" ]] && export ARES_SD_IN="$R/$ARES_SD_IN"
+	[[ -n "${ARES_SD_OUT:-}" ]] && { mkdir -p "$R/sd"; export ARES_SD_OUT="$R/$ARES_SD_OUT"; }
 	mkdir -p "$R/run"
 	c=0
 	if ares_slot_take "$HOME/hl64-runs/.slot" "${HL64_ARES_REMOTE_SLOTS:-8}"; then
@@ -91,6 +95,13 @@ if [[ "${1:-}" == --remote-side ]]; then
 	mkdir -p "$HOME/hl64-runs/.basis/rom"
 	ln -f "$R/rom/$rom" "$HOME/hl64-runs/.basis/rom/.$rom.$$" \
 		&& mv -f "$HOME/hl64-runs/.basis/rom/.$rom.$$" "$HOME/hl64-runs/.basis/rom/$rom"
+	# and the SD card's (the run's copy of IN goes: the basis keeps it)
+	if [[ -n "${ARES_SD_IN:-}" ]]; then
+		mkdir -p "$HOME/hl64-runs/.basis/sd"
+		ln -f "$ARES_SD_IN" "$HOME/hl64-runs/.basis/sd/.in.img.$$" \
+			&& mv -f "$HOME/hl64-runs/.basis/sd/.in.img.$$" "$HOME/hl64-runs/.basis/sd/in.img" \
+			&& rm -f "$ARES_SD_IN"
+	fi
 	# keep the newest KEEP_RUNS run directories (ids sort by start time)
 	find "$HOME/hl64-runs" -mindepth 1 -maxdepth 1 -type d -name '2*' -printf '%f\n' | sort -r \
 		| tail -n +$((KEEP_RUNS + 1)) | while read -r old; do rm -rf "${HOME:?}/hl64-runs/$old"; done
@@ -104,8 +115,8 @@ SSH=(ssh -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=10)
 export RSYNC_RSH="${SSH[*]}"
 
 if [[ "${1:-}" == --check ]]; then
-	"${SSH[@]}" -n "$SSH_TO" 'test -x ~/hl64-ares/build/desktop-ui/ares && command -v Xvfb >/dev/null' \
-		|| { echo "ares-remote: $SSH_TO unreachable or no ~/hl64-ares/build/desktop-ui/ares / Xvfb there" >&2; exit 2; }
+	"${SSH[@]}" -n "$SSH_TO" 'test -x ~/hl64-ares-sc64/build/desktop-ui/ares && command -v Xvfb >/dev/null' \
+		|| { echo "ares-remote: $SSH_TO unreachable or no ~/hl64-ares-sc64/build/desktop-ui/ares (test/run/ares-build.sh) / Xvfb there" >&2; exit 2; }
 	exit 0
 fi
 
@@ -162,6 +173,18 @@ fi
 if [[ -n "${ARES_PAK_OUT:-}" ]]; then
 	PAK_OUT="$(abs "$ARES_PAK_OUT")"
 	FWD+=(ARES_PAK_OUT=pak/out.pak)
+fi
+SD_OUT=
+if [[ -n "${ARES_SD_IN:-}" ]]; then
+	SIN="$(abs "$ARES_SD_IN")"
+	[[ -f "$SIN" ]] || { echo "ares-remote: no ARES_SD_IN file $SIN" >&2; exit 2; }
+	mkdir -p "$ST/sd"
+	ln -s "$SIN" "$ST/sd/in.img"
+	FWD+=(ARES_SD_IN=sd/in.img)
+	if [[ -n "${ARES_SD_OUT:-}" ]]; then
+		SD_OUT="$(abs "$ARES_SD_OUT")"
+		FWD+=(ARES_SD_OUT=sd/out.img)
+	fi
 fi
 # shellcheck source=ares.sh
 . "$HERE/ares.sh"
@@ -242,6 +265,16 @@ if [[ "$(cat "$ST/back/exit")" != 143 ]] || "${SSH[@]}" -n "$SSH_TO" "test -f $R
 		else
 			echo "ares-remote: the run left no Pak image (no exit through the harness)" >&2
 		fi
+	fi
+fi
+# the SD card (written in place: there is one after a stop or timeout too)
+if [[ -n "$SD_OUT" ]]; then
+	mkdir -p "$(dirname "$SD_OUT")"
+	if "${SSH[@]}" -n "$SSH_TO" "test -f $RR/sd/out.img"; then
+		rsync -tz "$SSH_TO:$RR/sd/out.img" "$SD_OUT" || { echo "ares-remote: copy back of the SD image failed" >&2; exit 255; }
+		"${SSH[@]}" -n "$SSH_TO" "rm -f $RR/sd/out.img" || true
+	else
+		echo "ares-remote: the run left no SD image (stopped before ares started)" >&2
 	fi
 fi
 [[ -z "${ARES_STAT_FILE:-}" ]] || cp "$ST/back/wall" "$ARES_STAT_FILE"

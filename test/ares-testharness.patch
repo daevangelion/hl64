@@ -1,5 +1,34 @@
+Test harness for ares (hl64; ours, under ares' ISC licence): on meeq/ares 00ebb5bb9d (the
+pin in test/run/ares-build.sh), the first of the series test/run/ares-build.sh applies.
+
+ - cartridge/testharness.cpp (new): with ARES_TEST_HARNESS set, a PI device whose registers
+   sit at 0x13fe0000-0x13fe001f, attached ahead of the cart ROM / SC64 SDRAM: CMD (+0x00:
+   1 screenshot of an RDRAM framebuffer to ares-test-NNNN.ppm, 2 exit with ARG0 as the
+   process status), ARG0..2, MAGIC "TEST" (+0x10; plat/n64/harness.h).
+   Host-side VI shots: ARES_HOST_SCREENSHOT=1 + ARES_HOST_SHOT_EVERY_MS=<ms> dump the VI's
+   framebuffer to $ARES_HOST_SHOT_DIR/ares-shot-NNNN-<tag>.ppm when it first shows a
+   picture, then every <ms> of wall time (checked once per VI frame; ARES_HOST_SHOT_MAX,
+   default 240), one "[ares] screenshot <path> (...)" line each (test/run/menu.sh, play.sh).
+ - cartridge/isviewer.cpp: with the harness the ISViewer log goes to stdout.
+ - controller/gamepad/gamepad.cpp: ARES_TEST_INPUT=<file> ("<buttons-hex> <x> <y>", the
+   controller word's bits) is merged into controller reads; each new press logs
+   "TESTHARNESS inject ...".
+ - vi/vi.cpp: the per-frame hook of the host shots.
+
+diff --git a/ares/n64/CMakeLists.txt b/ares/n64/CMakeLists.txt
+index cc5398c..bb7583d 100644
+--- a/ares/n64/CMakeLists.txt
++++ b/ares/n64/CMakeLists.txt
+@@ -92,6 +92,7 @@ ares_add_sources(
+     cartridge/rtc.cpp
+     cartridge/serialization.cpp
+     cartridge/slot.cpp
++    cartridge/testharness.cpp
+     cartridge/slot.hpp
+ )
+ 
 diff --git a/ares/n64/cartridge/cartridge.cpp b/ares/n64/cartridge/cartridge.cpp
-index 0eb65ad..1b2bb73 100644
+index 41bdff8..f01e7d9 100644
 --- a/ares/n64/cartridge/cartridge.cpp
 +++ b/ares/n64/cartridge/cartridge.cpp
 @@ -8,6 +8,7 @@ Cartridge& cartridge = cartridgeSlot.cartridge;
@@ -10,30 +39,56 @@ index 0eb65ad..1b2bb73 100644
  #include "debugger.cpp"
  #include "serialization.cpp"
  
-@@ -54,6 +55,8 @@ auto Cartridge::connect() -> void {
+@@ -55,6 +56,10 @@ auto Cartridge::connect() -> void {
      isviewer.tracer->setTerminal(true);
    }
  
++  //the test harness registers come first: ahead of the ROM / SC64 SDRAM they overlay
 +  testharness.load();
++  if(testharness.enabled()) pi.attach(testharness, 0);
 +
-   debugger.load(node);
- 
-   power(false);
+   if(system.sc64Enabled) {
+     sc64.open(system.sc64SDImage, system.sc64SDImageReadOnly, system.sc64USBHostPort);
+   }
+@@ -80,6 +85,7 @@ auto Cartridge::disconnect() -> void {
+   pi.detach(ramDevice);
+   pi.detach(flash);
+   pi.detach(isviewer);
++  pi.detach(testharness);
+   pi.detach(sc64);
+   debugger.unload(node);
+   rom.reset();
 diff --git a/ares/n64/cartridge/cartridge.hpp b/ares/n64/cartridge/cartridge.hpp
-index 9efbf30..f2f5309 100644
+index b3cbc28..552b67e 100644
 --- a/ares/n64/cartridge/cartridge.hpp
 +++ b/ares/n64/cartridge/cartridge.hpp
-@@ -52,6 +52,22 @@ struct Cartridge {
-     auto writeWord(u32 address, u32 data) -> void;
+@@ -120,6 +120,40 @@ struct Cartridge {
+     auto writeHalf(u32 address, u16 data) -> void;
    } isviewer;
  
 +  //fake PI device for automated testing; see testharness.cpp
-+  struct TestHarness {
++  struct TestHarness : PIDevice {
 +    bool active = false;
 +    u32  arg0 = 0, arg1 = 0, arg2 = 0;
 +    u32  shots = 0;
++    u32  piAddr = 0;
++    u32  pending = 0;
++
++    //host-side VI shots (ARES_HOST_SCREENSHOT)
++    bool hostShots = false;
++    bool sawVi = false;
++    u32  hostIndex = 0;
++    u32  everyMs = 0;
++    u32  maxPeriodic = 240;
++    u32  periodic = 0;
++    u64  lastMs = 0;
++    string hostDir = ".";
 +
 +    auto enabled() -> bool { return active; }
++
++    auto piAddress(u32 address, PIDeviceTiming timing) -> bool override;
++    auto piReadHalf(PIDeviceTiming timing) -> maybe<u16> override;
++    auto piWriteHalf(u16 data, PIDeviceTiming timing) -> void override;
 +
 +    //testharness.cpp
 +    auto load() -> void;
@@ -41,52 +96,129 @@ index 9efbf30..f2f5309 100644
 +    auto writeWord(u32 address, u32 data) -> void;
 +    auto screenshot() -> void;
 +    auto exitEmulator() -> void;
++    auto frame() -> void;
++    auto hostShot(const char* tag) -> void;
 +  } testharness;
 +
    struct RTC {
      Cartridge& self;
      RTC(Cartridge &self) : self(self) {}
+diff --git a/ares/n64/cartridge/isviewer.cpp b/ares/n64/cartridge/isviewer.cpp
+index 39d6ee2..21eb730 100644
+--- a/ares/n64/cartridge/isviewer.cpp
++++ b/ares/n64/cartridge/isviewer.cpp
+@@ -23,6 +23,13 @@ auto Cartridge::ISViewer::readHalf(u32 address) -> u16 {
+ }
+ 
+ auto Cartridge::ISViewer::messageChar(char c) -> void {
++  //headless test harness: the log goes to stdout, without the trace logger UI (which would
++  //print it a second time when enabled)
++  if(cartridge.testharness.enabled()) {
++    fputc(c, stdout);
++    if(c == '\n') fflush(stdout);
++    return;
++  }
+   if(!tracer->enabled()) return;
+   tracer->notify(c);
+ }
 diff --git a/ares/n64/cartridge/testharness.cpp b/ares/n64/cartridge/testharness.cpp
 new file mode 100644
-index 0000000..d9c6d3b
+index 0000000..212cdb8
 --- /dev/null
 +++ b/ares/n64/cartridge/testharness.cpp
-@@ -0,0 +1,86 @@
-+// Test harness peripheral for automated ROM testing (quakegeneric N64 port).
+@@ -0,0 +1,201 @@
++// Test harness peripheral for automated ROM testing (hl64).
 +//
-+// A fake PI-bus device at 0x13fe0000-0x13fe0fff, modeled on ISViewer's
-+// integration. Guest ROMs drive the emulator: capture a screenshot of any
-+// RDRAM framebuffer, or exit the emulator with a status code, so CI scripts
-+// can run a ROM to completion and collect artifacts without GUI automation.
-+// On real hardware the address range is open bus and the writes are inert.
++// A fake PI-bus device whose registers sit at 0x13fe0000-0x13fe001f. Guest
++// ROMs drive the emulator: capture a screenshot of any RDRAM framebuffer, or
++// exit the emulator with a status code, so scripts can run a ROM to
++// completion and collect artifacts without GUI automation. On real hardware
++// the range is cart ROM / open bus and the writes are inert.
 +//
-+// Enabled only when the ARES_TEST_HARNESS environment variable is set.
++// Enabled only when the ARES_TEST_HARNESS environment variable is set. It is
++// attached ahead of the cartridge ROM (and SC64 SDRAM), so its 32 bytes
++// shadow whatever a ROM holds there.
 +//
 +// Register map (32-bit CPU accesses):
 +//   +0x00  CMD   (w): 1 = screenshot, 2 = exit
 +//   +0x04  ARG0  (w): screenshot: RDRAM byte address of framebuffer
 +//                     exit: process exit code
 +//   +0x08  ARG1  (w): screenshot: (width << 16) | height
++//                     exit: optional context printed with the status
 +//   +0x0c  ARG2  (w): screenshot: bytes per pixel (2 = RGBA5551, 4 = RGBA8888)
-+//   +0x10  MAGIC (r): 0x54455354 "TEST" — presence probe for the guest
++//   +0x10  MAGIC (r): 0x54455354 "TEST" -- presence probe for the guest
++//
++// Host-side VI shots (independent of the guest): ARES_HOST_SCREENSHOT=1 and
++// ARES_HOST_SHOT_EVERY_MS=<ms> dump the VI framebuffer to
++// $ARES_HOST_SHOT_DIR (default .)/ares-shot-NNNN-<tag>.ppm when the VI first
++// shows a picture and then every <ms> of wall time (checked once per frame),
++// at most ARES_HOST_SHOT_MAX (default 240); each dump logs one
++// "[ares] screenshot <path> (...)" line.
 +
 +auto Cartridge::TestHarness::load() -> void {
 +  active = getenv("ARES_TEST_HARNESS") != nullptr;
++  arg0 = arg1 = arg2 = 0;
 +  shots = 0;
++  piAddr = 0;
++  pending = 0;
 +  if(active) {
 +    printf("TESTHARNESS enabled at 0x13fe0000\n");
 +    fflush(stdout);
 +  }
++
++  hostShots = false;
++  sawVi = false;
++  hostIndex = 0;
++  everyMs = 0;
++  maxPeriodic = 240;
++  periodic = 0;
++  lastMs = 0;
++  hostDir = ".";
++  if(auto d = getenv("ARES_HOST_SHOT_DIR"); d && d[0]) hostDir = d;
++  if(auto e = getenv("ARES_HOST_SCREENSHOT"); e && e[0] && e[0] != '0') {
++    hostShots = true;
++    printf("[ares] ARES_HOST_SCREENSHOT -> %s/*.ppm\n", (const char*)hostDir);
++  }
++  if(auto p = getenv("ARES_HOST_SHOT_EVERY_MS"); p && p[0]) {
++    everyMs = (u32)strtoul(p, nullptr, 0);
++    if(everyMs && hostShots) printf("[ares] ARES_HOST_SHOT_EVERY_MS=%u\n", everyMs);
++  }
++  if(auto p = getenv("ARES_HOST_SHOT_MAX"); p && p[0]) {
++    maxPeriodic = (u32)strtoul(p, nullptr, 0);
++    if(!maxPeriodic) maxPeriodic = 240;
++  }
++  fflush(stdout);
++}
++
++auto Cartridge::TestHarness::piAddress(u32 address, PIDeviceTiming) -> bool {
++  if(!active) return false;
++  if(address < 0x13fe'0000 || address > 0x13fe'001f) return false;
++  piAddr = address & 0x1f;
++  return true;
++}
++
++auto Cartridge::TestHarness::piReadHalf(PIDeviceTiming) -> maybe<u16> {
++  if(piAddr > 0x1f) return nothing;
++  u32 word = readWord(piAddr & ~3);
++  u16 data = piAddr & 2 ? u16(word) : u16(word >> 16);
++  piAddr += 2;
++  return data;
++}
++
++auto Cartridge::TestHarness::piWriteHalf(u16 data, PIDeviceTiming) -> void {
++  if(piAddr > 0x1f) return;
++  pi.writeForceFinish();  //test channel, be gentle
++  if(piAddr & 2) writeWord(piAddr & ~3, pending | data);
++  else pending = u32(data) << 16;
++  piAddr += 2;
 +}
 +
 +auto Cartridge::TestHarness::readWord(u32 address) -> u32 {
-+  address &= 0xfff;
 +  if(address == 0x10) return 0x54455354;  //"TEST"
 +  return 0;
 +}
 +
 +auto Cartridge::TestHarness::writeWord(u32 address, u32 data) -> void {
-+  address &= 0xfff;
 +  switch(address) {
 +  case 0x04: arg0 = data; return;
 +  case 0x08: arg1 = data; return;
@@ -95,7 +227,6 @@ index 0000000..d9c6d3b
 +    if(data == 1) return screenshot();
 +    if(data == 2) return exitEmulator();
 +    return;
-+  default: return;
 +  }
 +}
 +
@@ -108,60 +239,117 @@ index 0000000..d9c6d3b
 +  if(!width || !height || width > 1024 || height > 1024) return;
 +  if(bpp != 2 && bpp != 4) return;
 +
-+  char name[64];
-+  snprintf(name, sizeof(name), "ares-test-%04u.ppm", shots++);
-+  FILE* fp = fopen(name, "wb");
-+  if(!fp) return;
-+
++  char path[64];
++  snprintf(path, sizeof(path), "ares-test-%04u.ppm", shots++);
++  FILE* fp = fopen(path, "wb");
++  if(!fp) {
++    printf("TESTHARNESS screenshot open failed: %s\n", path);
++    fflush(stdout);
++    return;
++  }
 +  fprintf(fp, "P6\n%u %u\n255\n", width, height);
 +  for(u32 pixel : range(width * height)) {
 +    u8 r, g, b;
 +    if(bpp == 2) {
-+      u16 px = rdram.ram.read<Half>(base + pixel * 2, "TestHarness");
++      u16 px = rdram.ram.read<Half>(base + pixel * 2, RBusDevice::UNKNOWN);
 +      r = px >> 11 & 31; g = px >> 6 & 31; b = px >> 1 & 31;
 +      r = r << 3 | r >> 2; g = g << 3 | g >> 2; b = b << 3 | b >> 2;
 +    } else {
-+      u32 px = rdram.ram.read<Word>(base + pixel * 4, "TestHarness");
++      u32 px = rdram.ram.read<Word>(base + pixel * 4, RBusDevice::UNKNOWN);
 +      r = px >> 24; g = px >> 16; b = px >> 8;
 +    }
 +    fputc(r, fp); fputc(g, fp); fputc(b, fp);
 +  }
 +  fclose(fp);
-+
-+  printf("TESTHARNESS screenshot %s (%ux%u bpp%u from 0x%06x)\n",
-+    name, width, height, bpp, base);
++  printf("TESTHARNESS screenshot %s (%ux%u bpp%u from 0x%06x)\n", path, width, height, bpp, base);
 +  fflush(stdout);
 +}
 +
 +auto Cartridge::TestHarness::exitEmulator() -> void {
-+  printf("TESTHARNESS exit %u\n", arg0);
++  //arg1/arg2: optional context from guest crash handlers (e.g. EPC and cause)
++  if(arg1 || arg2) printf("TESTHARNESS exit %u (arg1=0x%08x arg2=0x%08x)\n", arg0, arg1, arg2);
++  else printf("TESTHARNESS exit %u\n", arg0);
 +  fflush(stdout);
 +  ::_Exit((int)arg0);
 +}
++
++//once per VI frame (VI::main): the host-side periodic shots
++auto Cartridge::TestHarness::frame() -> void {
++  if(!hostShots || !everyMs || periodic >= maxPeriodic) return;
++  if(!vi.io.colorDepth || !vi.io.dramAddress || !vi.io.width) return;
++  u64 now = chrono::millisecond();
++  if(!sawVi) {
++    sawVi = true;
++    lastMs = now;
++    periodic++;
++    return hostShot("vi-first");
++  }
++  if(now - lastMs < everyMs) return;
++  lastMs = now;
++  char tag[16];
++  snprintf(tag, sizeof(tag), "t%04u", periodic++);
++  hostShot(tag);
++}
++
++//the VI's framebuffer as the VI registers describe it: width pixels, (vend - vstart) / 2 rows
++auto Cartridge::TestHarness::hostShot(const char* tag) -> void {
++  u32 base = vi.io.dramAddress & 0x007f'ffff;
++  u32 width = vi.io.width;
++  if(width < 1 || width > 640) width = 320;
++  u32 v0 = vi.io.vstart, v1 = vi.io.vend;
++  u32 height = v1 > v0 ? (v1 - v0) >> 1 : 240;
++  if(height < 1 || height > 480) height = 240;
++  u32 bpp = vi.io.colorDepth == 3 ? 4 : 2;
++
++  char path[1024];
++  snprintf(path, sizeof(path), "%s/ares-shot-%04u-%s.ppm", (const char*)hostDir, hostIndex++, tag);
++  FILE* fp = fopen(path, "wb");
++  if(!fp) {
++    printf("[ares] screenshot open failed: %s\n", path);
++    fflush(stdout);
++    return;
++  }
++  fprintf(fp, "P6\n%u %u\n255\n", width, height);
++  for(u32 y : range(height)) {
++    for(u32 x : range(width)) {
++      u8 r, g, b;
++      if(bpp == 2) {
++        u16 px = rdram.ram.read<Half>(base + (y * width + x) * 2, RBusDevice::UNKNOWN);
++        r = px >> 11 & 31; g = px >> 6 & 31; b = px >> 1 & 31;
++        r = r << 3 | r >> 2; g = g << 3 | g >> 2; b = b << 3 | b >> 2;
++      } else {
++        u32 px = rdram.ram.read<Word>(base + (y * width + x) * 4, RBusDevice::UNKNOWN);
++        r = px >> 24; g = px >> 16; b = px >> 8;
++      }
++      fputc(r, fp); fputc(g, fp); fputc(b, fp);
++    }
++  }
++  fclose(fp);
++  printf("[ares] screenshot %s (%ux%u bpp%u fb=0x%06x tag=%s)\n", path, width, height, bpp, base, tag);
++  fflush(stdout);
++}
 diff --git a/ares/n64/controller/gamepad/gamepad.cpp b/ares/n64/controller/gamepad/gamepad.cpp
-index 2da6bde..eb83df8 100644
+index 2da6bde..c25e9c7 100644
 --- a/ares/n64/controller/gamepad/gamepad.cpp
 +++ b/ares/n64/controller/gamepad/gamepad.cpp
-@@ -432,6 +432,33 @@ auto Gamepad::read() -> n32 {
+@@ -432,6 +432,31 @@ auto Gamepad::read() -> n32 {
      data.bit(28) = 0;  //Start
    }
  
-+  //test harness: merge injected state from the file named by ARES_TEST_INPUT.
-+  //file holds one line: "<buttons-hex> <stick_x> <stick_y>", where buttons use
-+  //this word's bit layout (bit31=A, 30=B, 29=Z, 28=Start, 27-24=dU/dD/dL/dR,
-+  //21=L, 20=R, 19-16=cU/cD/cL/cR) and the stick is in raw -85..85 units.
++  //test harness: merge injected state from the file named by ARES_TEST_INPUT. The file
++  //holds one line: "<buttons-hex> <stick_x> <stick_y>", buttons in this word's bit layout
++  //(bit31=A, 30=B, 29=Z, 28=Start, 27-24=dU/dD/dL/dR, 21=L, 20=R, 19-16=cU/cD/cL/cR), the
++  //stick in raw -85..85 units
 +  static const char* injectPath = getenv("ARES_TEST_INPUT");
 +  if(injectPath) {
 +    if(FILE* fp = fopen(injectPath, "r")) {
 +      unsigned buttons = 0; int sx = 0, sy = 0;
 +      if(fscanf(fp, "%x %d %d", &buttons, &sx, &sy) >= 1) {
-+        if(buttons || sx || sy) {
-+          static u32 lastLogged = ~0u;
-+          if(buttons != lastLogged) {
-+            printf("TESTHARNESS inject buttons=%08x stick=%d,%d\n", buttons, sx, sy);
-+            fflush(stdout);
-+            lastLogged = buttons;
-+          }
++        static u32 lastLogged = 0;
++        if(buttons != lastLogged) {
++          if(buttons) printf("TESTHARNESS inject buttons=%08x stick=%d,%d\n", buttons, sx, sy);
++          fflush(stdout);
++          lastLogged = buttons;
 +        }
 +        data = data | buttons;
 +        if(sx || sy) {
@@ -176,32 +364,15 @@ index 2da6bde..eb83df8 100644
    return data;
  }
  
-diff --git a/ares/n64/pi/bus.hpp b/ares/n64/pi/bus.hpp
-index 5ff3b72..fc1ff2c 100644
---- a/ares/n64/pi/bus.hpp
-+++ b/ares/n64/pi/bus.hpp
-@@ -48,6 +48,10 @@ inline auto PI::busRead(u32 address) -> u32 {
-   if(cartridge.isviewer.enabled() && address >= 0x13ff'0000 && address <= 0x13ff'ffff) {
-     return cartridge.isviewer.read<Size>(address);
-   }
-+  if(cartridge.testharness.enabled() && address >= 0x13fe'0000 && address <= 0x13fe'0fff) {
-+    if constexpr(Size == Word) return cartridge.testharness.readWord(address);
-+    return unmapped;
-+  }
-   if(address <= 0x1000'0000 + cartridge.rom.size - 1) {
-     return cartridge.rom.read<Size>(address);
-   }
-@@ -104,6 +108,13 @@ inline auto PI::busWrite(u32 address, u32 data) -> void {
-       debug(unhandled, "[PI::busWrite] attempt to write to ISViewer: ROM is too big so ISViewer is disabled");
-     }
-   }
-+  if(cartridge.testharness.enabled() && address >= 0x13fe'0000 && address <= 0x13fe'0fff) {
-+    if constexpr(Size == Word) {
-+      writeForceFinish();  //test channel, be gentle
-+      cartridge.testharness.writeWord(address, data);
-+    }
-+    return;
-+  }
-   if(address <= 0x1000'0000 + cartridge.rom.size - 1) {
-     return cartridge.rom.write<Size>(address, data);
-   }
+diff --git a/ares/n64/vi/vi.cpp b/ares/n64/vi/vi.cpp
+index 698d02f..473cba2 100644
+--- a/ares/n64/vi/vi.cpp
++++ b/ares/n64/vi/vi.cpp
+@@ -95,6 +95,7 @@ auto VI::main() -> void {
+         refreshed = true;
+         screen->frame();
+         ri.checkRefresh();
++        cartridge.testharness.frame();
+       }
+ 
+       if(io.halfLinesPerField.bit(0)) { // progressive
