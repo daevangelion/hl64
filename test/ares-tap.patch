@@ -1,0 +1,120 @@
+Pad taps for the test harness (hl64; on the series before it).
+
+An ARES_TEST_INPUT line "<buttons-hex> <x> <y> <tap> <regex>" (tap > 0; the regex, POSIX
+extended, is the rest of the line) holds that press from the first controller read that
+sees a new tap number until a complete ISViewer log line matches the regex, then injects
+nothing until another tap number: the press ends in the emulated frame the cart answers it,
+so a menu never sees it long enough to auto-repeat, however fast ares runs against the
+script driving the file (test/run/menu.sh). Logs "TESTHARNESS tap N" and
+"TESTHARNESS tap N released". Lines with three fields work as before.
+
+diff --git a/ares/n64/cartridge/cartridge.hpp b/ares/n64/cartridge/cartridge.hpp
+index 552b67e..265a6cd 100644
+--- a/ares/n64/cartridge/cartridge.hpp
++++ b/ares/n64/cartridge/cartridge.hpp
+@@ -1,3 +1,5 @@
++#include <regex.h>
++
+ struct Cartridge {
+   Node::Peripheral node;
+   VFS::Pak pak;
+@@ -138,6 +140,14 @@ struct Cartridge {
+     u64  lastMs = 0;
+     string hostDir = ".";
+ 
++    //pad taps (ARES_TEST_INPUT tap number + regex): held until a log line matches
++    u32     tapId = 0;
++    bool    tapHeld = false;
++    bool    tapCompiled = false;
++    regex_t tapRe;
++    char    logLine[512];
++    u32     logLen = 0;
++
+     auto enabled() -> bool { return active; }
+ 
+     auto piAddress(u32 address, PIDeviceTiming timing) -> bool override;
+@@ -152,6 +162,8 @@ struct Cartridge {
+     auto exitEmulator() -> void;
+     auto frame() -> void;
+     auto hostShot(const char* tag) -> void;
++    auto tapHolds(u32 tap, const char* until) -> bool;
++    auto logChar(char c) -> void;
+   } testharness;
+ 
+   struct RTC {
+diff --git a/ares/n64/cartridge/isviewer.cpp b/ares/n64/cartridge/isviewer.cpp
+index 5c3338d..4707489 100644
+--- a/ares/n64/cartridge/isviewer.cpp
++++ b/ares/n64/cartridge/isviewer.cpp
+@@ -42,6 +42,7 @@ auto Cartridge::ISViewer::messageChar(char c) -> void {
+   if(cartridge.testharness.enabled()) {
+     fputc(c, stdout);
+     if(c == '\n') fflush(stdout);
++    cartridge.testharness.logChar(c);
+     return;
+   }
+   if(!tracer->enabled()) return;
+diff --git a/ares/n64/cartridge/testharness.cpp b/ares/n64/cartridge/testharness.cpp
+index a223221..8fa2da5 100644
+--- a/ares/n64/cartridge/testharness.cpp
++++ b/ares/n64/cartridge/testharness.cpp
+@@ -265,3 +265,35 @@ auto Cartridge::TestHarness::hostShot(const char* tag) -> void {
+   printf("[ares] screenshot %s (%ux%u bpp%u fb=0x%06x tag=%s)\n", path, width, height, bpp, base, tag);
+   fflush(stdout);
+ }
++
++//Pad taps: an ARES_TEST_INPUT line "<buttons-hex> <x> <y> <tap> <regex>" (tap > 0, regex
++//POSIX extended, the rest of the line) holds its buttons and stick from the first controller
++//read that sees a new tap number until a complete ISViewer log line matches the regex; from
++//then on that tap injects nothing until the file names another number. The press ends in the
++//emulated frame the cart answers it, so it is one press however fast ares runs against the
++//script that writes the file (no menu auto-repeat). Returns whether the tap is held.
++auto Cartridge::TestHarness::tapHolds(u32 tap, const char* until) -> bool {
++  if(tap != tapId) {
++    if(tapCompiled) regfree(&tapRe);
++    tapId = tap;
++    tapCompiled = regcomp(&tapRe, until, REG_EXTENDED | REG_NOSUB) == 0;
++    tapHeld = tapCompiled;
++    printf("TESTHARNESS tap %u%s\n", tap, tapCompiled ? "" : ": bad regex");
++    fflush(stdout);
++  }
++  return tapHeld;
++}
++
++auto Cartridge::TestHarness::logChar(char c) -> void {
++  if(c != '\n') {
++    if(c != '\r' && logLen < sizeof(logLine) - 1) logLine[logLen++] = c;
++    return;
++  }
++  logLine[logLen] = 0;
++  logLen = 0;
++  if(tapHeld && regexec(&tapRe, logLine, 0, nullptr, 0) == 0) {
++    tapHeld = false;
++    printf("TESTHARNESS tap %u released\n", tapId);
++    fflush(stdout);
++  }
++}
+diff --git a/ares/n64/controller/gamepad/gamepad.cpp b/ares/n64/controller/gamepad/gamepad.cpp
+index de93e4e..1e4b2b2 100644
+--- a/ares/n64/controller/gamepad/gamepad.cpp
++++ b/ares/n64/controller/gamepad/gamepad.cpp
+@@ -462,12 +462,16 @@ auto Gamepad::read() -> n32 {
+   //test harness: merge injected state from the file named by ARES_TEST_INPUT. The file
+   //holds one line: "<buttons-hex> <stick_x> <stick_y>", buttons in this word's bit layout
+   //(bit31=A, 30=B, 29=Z, 28=Start, 27-24=dU/dD/dL/dR, 21=L, 20=R, 19-16=cU/cD/cL/cR), the
+-  //stick in raw -85..85 units
++  //stick in raw -85..85 units; an optional "<tap> <regex>" after them makes the line one
++  //press released by the cart's log (TestHarness::tapHolds)
+   static const char* injectPath = getenv("ARES_TEST_INPUT");
+   if(injectPath) {
+     if(FILE* fp = fopen(injectPath, "r")) {
+-      unsigned buttons = 0; int sx = 0, sy = 0;
+-      if(fscanf(fp, "%x %d %d", &buttons, &sx, &sy) >= 1) {
++      unsigned buttons = 0, tap = 0; int sx = 0, sy = 0;
++      char until[256] = "";
++      int n = fscanf(fp, "%x %d %d %u %255[^\n]", &buttons, &sx, &sy, &tap, until);
++      if(n >= 5 && tap && !cartridge.testharness.tapHolds(tap, until)) buttons = 0, sx = 0, sy = 0;
++      if(n >= 1) {
+         static u32 lastLogged = 0;
+         if(buttons != lastLogged) {
+           if(buttons) printf("TESTHARNESS inject buttons=%08x stick=%d,%d\n", buttons, sx, sy);

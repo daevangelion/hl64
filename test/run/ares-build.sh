@@ -12,6 +12,7 @@
 #   test/ares-flash.patch              ARES_FLASH_IN / ARES_FLASH_OUT
 #   test/ares-pak.patch                ARES_PAK_IN / ARES_PAK_OUT
 #   test/ares-sc64.patch               ARES_SC64_SECTOR_US (SD command busy time)
+#   test/ares-tap.patch                pad taps released by the cart's log
 # The fork's code is fetched, never copied into this repo.
 #
 #   test/run/ares-build.sh [DIR]   here: DIR (default ~/hl64-ares-sc64) gets
@@ -28,7 +29,7 @@ set -euo pipefail
 
 ARES_URL=https://github.com/meeq/ares
 ARES_PIN=00ebb5bb9d4f1da5b1a5233919fbf2e89e7e7e2f
-PATCHES=(ares-testharness ares-large-rom-isviewer ares-flash ares-pak ares-sc64)
+PATCHES=(ares-testharness ares-large-rom-isviewer ares-flash ares-pak ares-sc64 ares-tap)
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ "${HL64_ARES_HOST:-local}" != local && -z "${ARES_BUILD_REMOTE_SIDE:-}" ]]; then

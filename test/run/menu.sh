@@ -10,13 +10,15 @@
 # made: `menu: load done`, play goes on) -> walk -> Start (pause) -> Start
 # (resume) -> walk -> Start -> Quit to Title -> confirm, then a second
 # session: New Game -> Easy -> play -> Start -> Quit to Title. Every press is
-# held until the cart logs the menu's answer (`menu: ...` lines), so the
-# script follows the cart at any emulation speed. After each step that
-# shows a screen the latest VI shot is kept by name (shots/<name>.ppm) and
-# sheet.png lays them out with their names. The shots are ares' raw read
-# of the framebuffer's first 216 rows (its VI output height with the CRT
-# margin), so the description line (rows 214..232, all scanned out by the
-# VI: plat/n64/main.c) is cut off in them; `menu: layout ok` proves it fits.
+# a tap (test/ares-tap.patch): ares holds it until the cart logs the menu's
+# answer (`menu: ...` lines) and releases it in that frame, so the script
+# follows the cart at any emulation speed and no press auto-repeats. After
+# each step that shows a screen the latest VI shot is kept by name
+# (shots/<name>.ppm) and sheet.png lays them out with their names. The
+# shots are ares' raw read of the framebuffer's first 216 rows (its VI
+# output height with the CRT margin), so the description line (rows
+# 214..232, all scanned out by the VI: plat/n64/main.c) is cut off in
+# them; `menu: layout ok` proves it fits.
 # PASS: every step answered; the load done; `menu: layout ok`; the second quit's title
 # `mem: title same as first quit` (the first quit's against boot is
 # reported: one-time allocations, eng.c title_settle); no `error:` line,
@@ -97,11 +99,16 @@ waitfor() {	# waitfor REGEX [N]: once the log has N (default 1) such lines;
 		sleep 0.3
 	done
 }
-tap() {	# tap PAD REGEX: hold PAD until the log has one more REGEX line
+TAPN=0
+tap() {	# tap PAD REGEX: one press of PAD, released by ares itself in the frame
+	# the cart logs one more REGEX line (test/ares-tap.patch), so the
+	# menu's auto-repeat never sees it held however fast ares runs; the
+	# script waits for that line, then clears the file
 	local n0
 	STEP="$1 -> $2"
 	n0=$(grep -cE "$2" "$LOG" 2>/dev/null || true)
-	pad "$1" 0 0
+	TAPN=$((TAPN + 1))
+	echo "$1 0 0 $TAPN $2" >"$PAD.tmp" && mv "$PAD.tmp" "$PAD"
 	until (( $(grep -cE "$2" "$LOG" 2>/dev/null || true) > n0 )); do
 		kill -0 "$APID" 2>/dev/null || fail "ares ended at step '$STEP'"
 		sleep 0.2

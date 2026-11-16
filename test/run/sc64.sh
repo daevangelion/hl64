@@ -25,6 +25,7 @@ BUILD_DIR="${BUILD_DIR:-build}"
 case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$ROOT/$BUILD_DIR" ;; esac
 OUT="$BUILD_DIR/sc64"
 fail() { echo "SC64 FAIL: $*" >&2; exit 1; }
+mkdir -p "$OUT"
 
 make -C "$ROOT/test/sc64" --no-print-directory BUILD_DIR="$OUT/rom" >"$BUILD_DIR/sc64-rom.log" 2>&1 \
 	|| { tail -20 "$BUILD_DIR/sc64-rom.log" >&2; echo "sc64 ROM build failed" >&2; exit 2; }

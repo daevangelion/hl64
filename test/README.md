@@ -171,8 +171,8 @@ at the commit the script pins (branch `sc64`: ares master of 2026-09 plus
 his SummerCart64 emulation in `ares/n64/sc64`; ares and the fork are under
 the ISC licence, their code is fetched, never copied here), applies
 `test/ares-testharness.patch`, `ares-large-rom-isviewer.patch`,
-`ares-flash.patch`, `ares-pak.patch`, `ares-sc64.patch` (ours; each says
-what it does) and builds `DIR/build/desktop-ui/ares`.
+`ares-flash.patch`, `ares-pak.patch`, `ares-sc64.patch`, `ares-tap.patch`
+(ours; each says what it does) and builds `DIR/build/desktop-ui/ares`.
 
 SC64 runs (`ARES_SD_IN` / `ARES_SD_OUT` / `ARES_SC64` /
 `ARES_SC64_SECTOR_US`, `test/run/ares.sh`): the cart's SDRAM is the ROM
