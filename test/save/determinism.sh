@@ -156,11 +156,15 @@ FRAME_MAX=67000
 # save latency (test/save/latency.py, ares only: the host's image file ends
 # every operation at once): an autosave's chip time (its flash writes) and a
 # manual save's request -> commit. Measured on the meeq ares (2026-11-16,
-# flash ticks): autosaves 0.6-0.8 s of chip time (13 KB), manual saves
-# 1.9-7.2 s request -> commit (hl2-return-battle's 7.2 s is mostly its coder:
-# 6.4 s with the old instant chip); limits ~1.25x those.
-AUTO_CHIP_MS=1000
+# flash ticks): autosaves 0.45-1.06 s of chip time (13 KB: one write took
+# 0.57 s in S and C and 1.06 s in A of the same scene, ares' frame times vary
+# with the host's load), FlashRAM manual
+# saves 1.8-7.1 s request -> commit (hl2-return-battle's 7.1 s is mostly its
+# coder: 6.4 s with the old instant chip), Pak manual saves up to 11.8 s (256 B
+# per frame; 11.6 s on the old harness); limits ~1.25-1.3x those.
+AUTO_CHIP_MS=1400
 MANUAL_MS=9000
+[[ $PAK == 1 ]] && MANUAL_MS=15000
 LAT=()
 [[ $MODE == ares ]] && LAT=(--auto-chip-ms "$AUTO_CHIP_MS" --manual-ms "$MANUAL_MS")
 FAIL=0
@@ -229,9 +233,10 @@ for c in "${CASES[@]}"; do
 	lat=ok
 	python3 "$ROOT/test/save/latency.py" "${LAT[@]}" "$d"/{S,A,B,C}/run.log >"$d/latency.txt" \
 		|| { lat=FAIL; FAIL=1; }
-	lat="$lat (autosave chip max $(sed -n 's/.* autosave ok: .*, chip \([0-9]*\) ms.*/\1/p' "$d/latency.txt" \
-		| sort -n | tail -1) ms, manual request->commit max $(sed -n \
-		's/.* manual [A-Z]*[a-z]*: .*request->commit \([0-9]*\) ms.*/\1/p' "$d/latency.txt" | sort -n | tail -1) ms)"
+	la=$(sed -n 's/.* autosave ok: .*, chip \([0-9]*\) ms.*/\1/p' "$d/latency.txt" | sort -n | tail -1)
+	lm=$(sed -n 's/.* manual [A-Z]*[a-z]*: .*request->commit \([0-9]*\) ms.*/\1/p' "$d/latency.txt" \
+		| sort -n | tail -1)
+	lat="$lat (autosave chip max ${la:--} ms, manual request->commit max ${lm:--} ms)"
 	echo "| $s | $t | $n | $rs | $eq | ${st[0]} | ${st[1]} | $noop | $ws | $wl | $wa | ${img:-?} | $lat |" >>"$SUM"
 	echo "save: $s T=$t N=$n: restore $rs, streams $eq, stats ${st[*]}, C vs A $noop, save $ws, load $wl, autosaves $wa, ${img:-?}, latency $lat"
 	sed 's/^/  /' "$d/latency.txt"

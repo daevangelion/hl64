@@ -1186,7 +1186,7 @@ frames and the flash writer programs it (4 ms per frame: a step first in
 the frame, then ticks between the frame's later steps start each next
 operation soon after the chip ends one, `flq.c`; ares' MX29L1101 takes
 3.5 ms a page and 85 ms a sector erase, so a 13 KB image is written in
-≈ 0.6 s, ≈ 12 frames) or the Pak writer
+≈ 0.6–1.1 s, 11–20 frames) or the Pak writer
 writes 256 B per frame (≈ 6 ms on ares, 0.72 ms per 32 B block). The
 directory is updated from the read-back of every write. A manual save
 mutes the sound (`snd_mute`: gains 0, no sound's state changes) and holds
@@ -1245,8 +1245,9 @@ after the switch, room for the ~95-frame save at T: every window is at
 least 1.5x its save); on the cart the T+N
 save may queue behind an autosave, so ares runs quit 90 frames later.
 Every save's latency is reported (`test/save/latency.py`: coder frames,
-chip ms, request -> commit ms) and on ares an autosave over 1000 ms of
-chip time or a manual save over 9 s request -> commit fails the gate.
+chip ms, request -> commit ms) and on ares an autosave over 1400 ms of
+chip time or a manual save over 9 s (Controller Pak: 15 s) request ->
+commit fails the gate (measured maxima 1.06 s, 7.1 s, 11.8 s).
 Earlier seam-2to3 windows (before the switch) meet game rules that
 follow residency, warm in A, cold
 after B's load: infodecal retries change free times, animations a
