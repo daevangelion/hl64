@@ -108,7 +108,8 @@ look 0 177
 wait 0.5
 shot hldemo3-arrival
 stats end
-# 4.5 s past the window: the saved-game gate's T+N save (test/run/m5.sh
-# seam-2to3:810:90) after the cart's ~72-frame save at T
+# 4.5 s past the window (the game runs on after `pass`: the saved-game
+# gate's T+N save, test/run/m5.sh seam-2to3:810:150, comes after the
+# cart's ~95-frame save at T)
 wait 4.5
 pass

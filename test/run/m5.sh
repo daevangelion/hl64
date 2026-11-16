@@ -249,10 +249,14 @@ done
 # failed-transfer paths) and test/save/flashcut.sh (FlashRAM power cuts in
 # every erase / program of a save in the pool's worst case: no save lost,
 # at worst the latest settings change). seam-2to3 saves at 810, right after the
-# hldemo2 -> hldemo3 switch, with room for the cart's ~72-frame save before
-# T+N; earlier windows meet residency-dependent game rules (infodecal
-# retries, the hitbox pose memo) that differ warm (A) / cold (B) ----
-SAVE_CASES=(hl2-yard:600:150 hazard-seam:85:150 seam-2to3:810:90 hl2-return-battle:400:300:report)
+# hldemo2 -> hldemo3 switch; N=150: its save at T takes ~95 frames on ares
+# with the FlashRAM's real times (MX29L1101: 3.5 ms a page, 85 ms an erase;
+# ~77 with the old instant chip), so 90 left it finishing at T+N (every
+# window here is >= 1.5x its scene's save); earlier windows meet
+# residency-dependent game rules (infodecal retries, the hitbox pose memo)
+# that differ warm (A) / cold (B). determinism.sh also reports every save's
+# latency (test/save/latency.py) and fails slow ones on ares ----
+SAVE_CASES=(hl2-yard:600:150 hazard-seam:85:150 seam-2to3:810:150 hl2-return-battle:400:300:report)
 for pk in flash pak; do
 	CODE=0
 	BUILD_DIR="$BUILD_DIR/save-gate" HL64_CONTENT="$CONTENT" "$ROOT/test/save/determinism.sh" \

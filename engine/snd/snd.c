@@ -42,6 +42,7 @@
 #include "engine/core/dbg.h"
 #include "engine/core/sys.h"
 #include "engine/mem/carve.h"
+#include "engine/save/flq.h"
 #include "engine/save/sv.h"
 #include "engine/save/svmod.h"
 #include "engine/snd/snd_hw.h"
@@ -1284,6 +1285,7 @@ void snd_frame(const float listener[3], const float right[3], double dt)
 				snd_logf("snd %lu virtual L%d\n", (unsigned long)S->frame, i);
 		}
 	music_frame();
+	flq_tick();	/* a save's next flash page (flq.c), before the mixer */
 	{
 		uint64_t p0 = sys_time_us();
 

@@ -46,6 +46,7 @@
 #include "engine/render/gpu_fx.h"
 #include "engine/render/ren.h"
 #include "engine/render/trans.h"
+#include "engine/save/flq.h"
 #include "engine/world/wld.h"
 
 #define ZNEAR		4.0f
@@ -1095,14 +1096,20 @@ void ren_frame(double time)
 			draw_layer(L);
 			ghost_movers(L);
 			open_seams(L);
+			flq_tick();	/* a save's next flash page (flq.c) */
 		}
 	st.world_us = (uint32_t)(sys_time_us() - t0);
 	/* frame step 11 (architecture.md 3.2): studio, particles,
-	 * translucent, decals, view model; the HUD follows */
+	 * translucent, decals, view model; the HUD follows (a save's next
+	 * flash page between them, flq.c) */
 	studio_draw(time);
+	flq_tick();
 	fx_draw_particles();
+	flq_tick();
 	fx_draw_trans();
+	flq_tick();
 	fx_draw_decals();
+	flq_tick();
 	studio_draw_view();
 	gpu_end();
 	last = st;

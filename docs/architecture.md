@@ -1235,13 +1235,18 @@ stages the restored game again at once (test builds' `restore_check`)
 and it must equal S's saved state byte for byte, every scene. (b)
 Continuation: A's and B's save streams at T+N equal byte for byte and
 their `stats` player / entity lines at T+1 and T+N equal — required for
-hl2-yard (600:150), hazard-seam (85:150) and seam-2to3 (810:90). A
-manual save on the cart takes 28–72 frames (the coder's 8 ms steps), and
+hl2-yard (600:150), hazard-seam (85:150) and seam-2to3 (810:150). A
+manual save on the cart takes ~45–95 frames on ares (the coder's 8 ms
+steps, then the FlashRAM's real write time), and
 an autosave asked meanwhile waits for it, so in A (which saved at T) the
 autosaves come later than in B: T+N lies after them and after A's own
 save (hazard-seam: after the return crossing's autosave; seam-2to3:
-after the switch, room for the 72-frame save at T); on the cart the T+N
+after the switch, room for the ~95-frame save at T: every window is at
+least 1.5x its save); on the cart the T+N
 save may queue behind an autosave, so ares runs quit 90 frames later.
+Every save's latency is reported (`test/save/latency.py`: coder frames,
+chip ms, request -> commit ms) and on ares an autosave over 1000 ms of
+chip time or a manual save over 9 s request -> commit fails the gate.
 Earlier seam-2to3 windows (before the switch) meet game rules that
 follow residency, warm in A, cold
 after B's load: infodecal retries change free times, animations a

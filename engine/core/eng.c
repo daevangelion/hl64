@@ -1322,6 +1322,7 @@ void eng_frame(void)
 		ren_stats_t r;
 
 		ren_view_frame(eng.time, (double)dt * 1e-6);
+		flq_tick();
 		ren_frame(eng.time);
 		SEAMPROF_STEP(RENDER);
 		flq_tick();

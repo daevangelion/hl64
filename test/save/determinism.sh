@@ -145,14 +145,24 @@ mkdir -p "$OUT"
 SUM="$OUT/summary.md"
 echo "# saved-game determinism ($MODE, $(date -u +%FT%TZ), content $CONTENT)" >"$SUM"
 echo >>"$SUM"
-echo "| scene | T | N | (a) B's re-save = S's image | (b) streams A/B at T+N | stats T+1 | stats T+N | C vs A (save no-op) | save: longest frame, time | load: longest frame, time | autosaves: longest frame | image |" >>"$SUM"
-echo "|---|---|---|---|---|---|---|---|---|---|---|---|" >>"$SUM"
+echo "| scene | T | N | (a) B's re-save = S's image | (b) streams A/B at T+N | stats T+1 | stats T+N | C vs A (save no-op) | save: longest frame, time | load: longest frame, time | autosaves: longest frame | image | latency |" >>"$SUM"
+echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|" >>"$SUM"
 # a save's, an autosave's or a load's cost per frame, us: max(longest held
 # frame, worst step) of its log line; its whole time, ms
 cost() { sed -n 's/.*worst step \([0-9]*\) us, longest held frame \([0-9]*\) us.*/\1 \2/p' \
 	| awk '{print ($1 > $2 ? $1 : $2)}'; }
 whole() { sed -n 's/.* \([0-9]*\) ms$/\1/p'; }
 FRAME_MAX=67000
+# save latency (test/save/latency.py, ares only: the host's image file ends
+# every operation at once): an autosave's chip time (its flash writes) and a
+# manual save's request -> commit. Measured on the meeq ares (2026-11-16,
+# flash ticks): autosaves 0.6-0.8 s of chip time (13 KB), manual saves
+# 1.9-7.2 s request -> commit (hl2-return-battle's 7.2 s is mostly its coder:
+# 6.4 s with the old instant chip); limits ~1.25x those.
+AUTO_CHIP_MS=1000
+MANUAL_MS=9000
+LAT=()
+[[ $MODE == ares ]] && LAT=(--auto-chip-ms "$AUTO_CHIP_MS" --manual-ms "$MANUAL_MS")
 FAIL=0
 for c in "${CASES[@]}"; do
 	IFS=: read -r s t n mode <<<"$c"
@@ -215,8 +225,16 @@ for c in "${CASES[@]}"; do
 		[[ $(cat "$d/$r/exit") == 0 ]] || { eq="$eq, run $r exit $(cat "$d/$r/exit")"; FAIL=1; }
 	done
 	[[ $CF == 1 ]] || eq="$eq (reported)"
-	echo "| $s | $t | $n | $rs | $eq | ${st[0]} | ${st[1]} | $noop | $ws | $wl | $wa | ${img:-?} |" >>"$SUM"
-	echo "save: $s T=$t N=$n: restore $rs, streams $eq, stats ${st[*]}, C vs A $noop, save $ws, load $wl, autosaves $wa, ${img:-?}"
+	# every save's coder frames, chip time and request -> commit
+	lat=ok
+	python3 "$ROOT/test/save/latency.py" "${LAT[@]}" "$d"/{S,A,B,C}/run.log >"$d/latency.txt" \
+		|| { lat=FAIL; FAIL=1; }
+	lat="$lat (autosave chip max $(sed -n 's/.* autosave ok: .*, chip \([0-9]*\) ms.*/\1/p' "$d/latency.txt" \
+		| sort -n | tail -1) ms, manual request->commit max $(sed -n \
+		's/.* manual [A-Z]*[a-z]*: .*request->commit \([0-9]*\) ms.*/\1/p' "$d/latency.txt" | sort -n | tail -1) ms)"
+	echo "| $s | $t | $n | $rs | $eq | ${st[0]} | ${st[1]} | $noop | $ws | $wl | $wa | ${img:-?} | $lat |" >>"$SUM"
+	echo "save: $s T=$t N=$n: restore $rs, streams $eq, stats ${st[*]}, C vs A $noop, save $ws, load $wl, autosaves $wa, ${img:-?}, latency $lat"
+	sed 's/^/  /' "$d/latency.txt"
 done
 cat "$SUM"
 exit $FAIL

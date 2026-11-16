@@ -1047,8 +1047,10 @@ static int seal(int slot)
 		log_printf("sector %u", (unsigned)h->sect[0]);
 	else
 		log_printf("Pak entry %d", slot - FLASH_SLOTS);
-	log_printf(", %s t=%.3f org %.1f %.1f %.1f\n", h->map, (double)h->game_time,
-		(double)SV.org[0], (double)SV.org[1], (double)SV.org[2]);
+	/* frames since the request: settle, snapshot and the coder's steps
+	 * (test/save/latency.py) */
+	log_printf(", %s t=%.3f org %.1f %.1f %.1f, coded in %lu frames\n", h->map, (double)h->game_time,
+		(double)SV.org[0], (double)SV.org[1], (double)SV.org[2], (unsigned long)SV.frames + 1u);
 	if (!flash)
 		return pak_begin(slot - FLASH_SLOTS) ? SAVE_ERR : 0;
 	memcpy(SV.wsect, h->sect, sizeof(SV.wsect));

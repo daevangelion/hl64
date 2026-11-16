@@ -37,6 +37,7 @@
 #include "engine/render/gpu_studio.h"
 #include "engine/render/ren.h"
 #include "engine/render/trans.h"
+#include "engine/save/flq.h"
 #include "engine/save/sv.h"
 #include "engine/save/svmod.h"
 #include "engine/world/wld.h"
@@ -530,7 +531,10 @@ void fx_draw_trans(void)
 		items[j] = x;
 	}
 	for (i = 0; i < nitems; i++)
+	{
 		draw_item(&items[i]);
+		flq_tick();	/* a save's next flash page (flq.c) */
+	}
 	ds.items = (uint32_t)nitems;
 	ds.cutouts = (uint32_t)ncuts;
 	fx_s.st.trans_drawn += (uint32_t)(nitems + ncuts);

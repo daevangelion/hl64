@@ -10,22 +10,23 @@
  * once (the host's image) lets one step run several operations, up to the
  * budget.
  *
- * Between the frame's steps flq_tick polls again (eng.c's frame steps and
- * io pumps, the active pass's entity steps, col_move, the stream's
- * naming, the studio pose and draw loops: main-thread points spread over
- * the frame), so the next operation starts soon after the chip ends one
- * rather than at the next frame: a page program of a few ms would
- * otherwise cost a whole frame, and a 13 KB save some 100 frames (ares'
- * MX29L1101: 3.5 ms a page, 85 ms a sector erase). A tick polls only once
- * the operation has run as long as the shortest of its kind seen so far
- * ended (est[]: an upper bound of the chip's time, so that poll finds it
- * ended; a tick up to FQ_SPIN_US before that waits for it), then again
- * after an eighth of its run so far (FQ_POLL_US at least). Every tick
- * counts against the frame's budget that flq_step started and starts only
- * with FQ_TICK_US of it left, so the frame's flash time stays within it.
- * Each poll / start holds the I/O chain (plat/n64/flash.c), so a tick at
- * any of those points is ordered against the streamer's DMA. With no
- * write running a tick is one test.
+ * Between the frame's steps flq_tick polls again (main-thread points
+ * spread over the frame: eng.c's frame steps and io pumps, the active
+ * pass's entity steps, col_move, the stream's naming, the studio pose and
+ * draw loops, the render passes and translucent items, the sound frame
+ * before the mixer), so the next operation starts soon after the chip
+ * ends one rather than at the next frame: a page program of a few ms
+ * would otherwise cost a whole frame, and a 13 KB save some 100 frames
+ * (ares' MX29L1101: 3.5 ms a page, 85 ms a sector erase). A tick polls
+ * only once the operation has run as long as the shortest of its kind
+ * seen so far ended (est[]: an upper bound of the chip's time, so that
+ * poll finds it ended), then again after an eighth of its run so far
+ * (FQ_POLL_US at least); it never waits. Every tick counts against the
+ * frame's budget that flq_step started and starts only with FQ_TICK_US of
+ * it left, so the frame's flash time stays within it. Each poll / start
+ * holds the I/O chain (plat/n64/flash.c), so a tick at any of those points
+ * is ordered against the streamer's DMA. With no write running a tick is
+ * one test.
  *
  * Per sector: erase, then program its pages in order. Pages whose 128
  * bytes are all 0xFF are not programmed (the erase left them so); the
@@ -43,7 +44,6 @@
 #define FQ_PAGES	(FQ_SECTOR / FQ_PAGE)	/* per sector */
 #define FQ_BYTES	(8u * FQ_SECTOR)
 #define FQ_POLL_US	500u	/* least gap of a tick's polls of a busy chip */
-#define FQ_SPIN_US	500u	/* a tick this close to est[] waits for the end */
 /* A tick's worst cost: a poll, a program's start (~0.2 ms on ares), and
  * the wait for a ROM piece in flight when it holds the chain (IO_PIECE,
  * ~0.4 ms): a tick starts only with this much of the frame's budget left */
@@ -321,20 +321,11 @@ void flq_tick(void)
 	t0 = sys_time_us();
 	if (q.op != OP_NONE)
 	{
-		uint32_t run = (uint32_t)(t0 - q.op_t0), gap = run / 8u, e = est[q.op];
+		uint32_t run = (uint32_t)(t0 - q.op_t0), gap = run / 8u;
 
 		if (gap < FQ_POLL_US)
 			gap = FQ_POLL_US;
-		if (run < e)
-		{
-			/* about to end: wait for it here rather than for a later
-			 * tick, within the frame's budget */
-			if (e - run > FQ_SPIN_US || fr_us + (e - run) + FQ_TICK_US > fr_budget)
-				return;
-			while ((uint32_t)(sys_time_us() - q.op_t0) < e)
-				;
-		}
-		else if (t0 - q.poll_t < gap)
+		if (run < est[q.op] || t0 - q.poll_t < gap)
 			return;
 	}
 	q.ticks++;
